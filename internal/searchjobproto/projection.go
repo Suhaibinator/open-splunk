@@ -141,6 +141,7 @@ func Progress(job searchjobs.Job, now time.Time) (*opensplunk.SearchProgress, er
 	}
 	return &opensplunk.SearchProgress{
 		StateVersion: job.Version,
+		CaptureRows:  job.CaptureRows, CaptureBytes: job.CaptureBytes, CaptureComplete: job.CaptureComplete, PreviewTruncated: job.PreviewTruncated,
 		Phase:        executionPhase(job.State),
 		ScannedRows:  job.ScannedRows,
 		ScannedBytes: job.ScannedBytes,
@@ -231,4 +232,19 @@ func Source(source searchjobs.JobSource) (*opensplunk.SearchJobSource, error) {
 		return nil, errors.New("invalid search-job source origin")
 	}
 	return result, nil
+}
+
+// ProjectCapture carries storage and live-preview semantics on HTTP metadata.
+// Progress uses the same values for WebSocket transports.
+func ProjectCapture(job searchjobs.Job, result *opensplunk.SearchJob) {
+	if result == nil {
+		return
+	}
+	result.CaptureComplete = job.CaptureComplete
+	result.PreviewTruncated = job.PreviewTruncated
+	result.CaptureRows = job.CaptureRows
+	result.CaptureBytes = job.CaptureBytes
+	if job.OrganizationID != "" {
+		result.OrganizationId = new(job.OrganizationID)
+	}
 }

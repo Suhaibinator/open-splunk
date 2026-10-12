@@ -12,6 +12,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
@@ -116,7 +117,7 @@ func (handler *apiHandler) createLookup(request *http.Request, input *opensplunk
 		}
 	}
 	return invokeLookup(handler, request, input, call, func(response *opensplunk.CreateLookupResponse, scope lookupservice.Scope) bool {
-		if response == nil || !validLookupProjection(response.GetLookup(), scope) {
+		if response == nil || response.GetLookup().GetOwnerId() != scope.OwnerID || !validLookupProjection(response.GetLookup(), scope) {
 			return false
 		}
 		if response.GetReplayed() {
@@ -229,7 +230,12 @@ func (handler *apiHandler) lookupScope(request *http.Request) (lookupservice.Sco
 	if err != nil {
 		return lookupservice.Scope{}, err
 	}
-	return lookupservice.Scope{TenantID: principal.TenantID(), OwnerID: principal.OwnerID()}, nil
+	result := lookupservice.Scope{TenantID: principal.TenantID(), OwnerID: principal.OwnerID()}
+	if scope, ok := authorization.FromContext(request.Context()); ok {
+		result.OrganizationID = scope.OrganizationID
+		result.SiteAdministrator = scope.Subject.IsSiteAdmin()
+	}
+	return result, nil
 }
 
 func mapLookupCallError(ctx context.Context, err error) error {
@@ -293,7 +299,7 @@ func rejectUnknownLookupDefinition(definition *opensplunk.LookupDefinition) erro
 }
 
 func validLookupProjection(lookup *opensplunk.Lookup, scope lookupservice.Scope) bool {
-	if lookup == nil || lookup.GetDefinition() == nil || lookup.GetTenantId() != scope.TenantID || lookup.GetOwnerId() != scope.OwnerID ||
+	if lookup == nil || lookup.GetDefinition() == nil || lookup.GetTenantId() != scope.TenantID || (!scope.SiteAdministrator && lookup.GetOwnerId() != scope.OwnerID) || !validLookupManagementIdentity(lookup.GetOwnerId(), 255) ||
 		lookup.GetVersion() == 0 || lookup.GetVersion() > math.MaxInt64 || !validLookupManagementIdentity(lookup.GetLookupId(), 128) ||
 		!boundedLookupDefinitionRepeatedShape(lookup.GetDefinition()) || !validLookupColumns(lookup.GetColumns(), false) ||
 		lookup.GetRowCount() > lookupasset.MaximumRows || lookup.GetCanonicalSizeBytes() == 0 || lookup.GetCanonicalSizeBytes() > lookupasset.MaximumSourceBytes ||

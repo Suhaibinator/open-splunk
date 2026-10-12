@@ -350,17 +350,19 @@ type StoreBatch struct {
 // HECStageAdmission contains only stable server-derived control-plane
 // identities. TokenID is the token record ID, never credential material.
 type HECStageAdmission struct {
-	TokenID               string
-	TokenVersion          uint64
-	AuthorizedIndexes     []HECIndexAuthority
-	RequestID             string
-	AcknowledgmentEnabled bool
-	Channel               string
-	CreatedAt             time.Time
+	OrganizationID               int64
+	RequireOrganizationOwnership bool
+	TokenID                      string
+	TokenVersion                 uint64
+	AuthorizedIndexes            []HECIndexAuthority
+	RequestID                    string
+	AcknowledgmentEnabled        bool
+	Channel                      string
+	CreatedAt                    time.Time
 }
 
 // HECIndexAuthority is the minimum immutable index snapshot needed for the
-// durable SQLite boundary to close an independent index-update race. It never
+// durable PostgreSQL boundary to close an independent index-update race. It never
 // carries client metadata or policy expressions.
 type HECIndexAuthority struct {
 	Name    string

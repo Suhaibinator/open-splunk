@@ -105,7 +105,7 @@ func TestRuntimeSearchAttemptAuditMaximumPersistsAndRejectsReopenMismatch(t *tes
 	directory := t.TempDir()
 	databasePath := filepath.Join(directory, "control.db")
 	masterKeyPath := filepath.Join(directory, "server.key")
-	database, err := control.Open(ctx, databasePath)
+	database, err := openTestControl(t, ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestRuntimeSearchAttemptAuditMaximumPersistsAndRejectsReopenMismatch(t *tes
 		"tenant-search-attempt-cap",
 		searchhistory.SearchAttemptAuditEvent{
 			OccurredAt:  time.Date(2026, time.August, 4, 12, 0, 0, 0, time.UTC),
-			OwnerID:     "single-user",
+			OwnerID:     "1",
 			SearchJobID: "job-configured-cap",
 		},
 	)
@@ -153,7 +153,7 @@ func TestRuntimeSearchAttemptAuditMaximumPersistsAndRejectsReopenMismatch(t *tes
 	if err := database.SQLDB().QueryRowContext(ctx, `
 		SELECT maximum_retained_attempts
 		FROM search_attempt_audit_tenant_state
-		WHERE tenant_id = ?
+		WHERE tenant_id = $1
 	`, "tenant-search-attempt-cap").Scan(&persistedMaximum); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestRuntimeSearchAttemptAuditMaximumPersistsAndRejectsReopenMismatch(t *tes
 	}
 	databaseClosed = true
 
-	reopened, err := control.Open(ctx, databasePath)
+	reopened, err := openTestControl(t, ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}

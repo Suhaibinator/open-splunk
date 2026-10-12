@@ -9,6 +9,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestCollectorTokenRateLimitsRoundTripAndAuthenticateFreshIndexPolicy(t *testing.T) {
@@ -40,7 +41,7 @@ func TestCollectorTokenRateLimitsRoundTripAndAuthenticateFreshIndexPolicy(t *tes
 		Name:                "rate-limited collector",
 		AllowedIndexNames:   []string{"main"},
 		BoundCollectorID:    testCollectorID,
-		IngestionRateLimits: tokenLimits,
+		IngestionRateLimits: tokenLimits, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -136,7 +137,7 @@ func TestCollectorTokenRateLimitsRejectInvalidAndCorruptPolicy(t *testing.T) {
 		BoundCollectorID:  testCollectorID,
 		IngestionRateLimits: ingestquota.Limits{
 			MaxEventsPerSecond: ingestquota.HardMaxEventsPerSecond + 1,
-		},
+		}, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("invalid create error = %v, want ErrInvalidArgument", err)
@@ -145,7 +146,7 @@ func TestCollectorTokenRateLimitsRejectInvalidAndCorruptPolicy(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "valid",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(valid): %v", err)
@@ -155,13 +156,13 @@ func TestCollectorTokenRateLimitsRejectInvalidAndCorruptPolicy(t *testing.T) {
 		t.Fatalf("Conn(): %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(ctx, connection, false); err != nil {
 		t.Fatalf("ignore checks: %v", err)
 	}
 	if _, err := connection.ExecContext(ctx, `
 		UPDATE ingestion_tokens
-		SET max_ingest_events_per_second = ?
-		WHERE ingestion_token_id = ?`,
+		SET max_ingest_events_per_second = $1
+		WHERE ingestion_token_id = $2`,
 		int64(ingestquota.HardMaxEventsPerSecond+1),
 		issued.Token.ID,
 	); err != nil {
@@ -196,7 +197,7 @@ func TestCollectorTokenPruningReclaimsDurableQuotaBucket(t *testing.T) {
 		issued, createErr := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 			Name:              name,
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		})
 		if createErr != nil {
 			t.Fatalf("CreateCollectorToken(%q): %v", name, createErr)
@@ -210,7 +211,7 @@ func TestCollectorTokenPruningReclaimsDurableQuotaBucket(t *testing.T) {
 				next_byte_admission_unix_nano,
 				updated_at_unix_micro,
 				token_owner_id
-			) VALUES ('tenant-a', 'token', ?, 1, 0, 1, 0, 1, ?)`,
+			) VALUES ('tenant-a', 'token', $1, 1, 0, 1, 0, 1, $2)`,
 			issued.Token.ID,
 			issued.Token.ID,
 		); insertErr != nil {
@@ -247,7 +248,7 @@ func TestCollectorTokenPruningReclaimsDurableQuotaBucket(t *testing.T) {
 		if err := database.SQLDB().QueryRowContext(ctx, `
 			SELECT count(*)
 			FROM ingest_quota_buckets
-			WHERE scope_kind = 'token' AND scope_id = ?`, tokenID,
+			WHERE scope_kind = 'token' AND scope_id = $1`, tokenID,
 		).Scan(&count); err != nil {
 			t.Fatal(err)
 		}

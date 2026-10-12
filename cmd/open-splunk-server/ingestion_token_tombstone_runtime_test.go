@@ -28,7 +28,7 @@ import (
 
 func TestRuntimePrunedRevokedCollectorTokenRemainsUnauthorized(t *testing.T) {
 	ctx := context.Background()
-	database, err := control.Open(
+	database, err := openTestControl(t,
 		ctx,
 		filepath.Join(t.TempDir(), "pruned-token-runtime.db"),
 	)
@@ -64,7 +64,7 @@ func TestRuntimePrunedRevokedCollectorTokenRemainsUnauthorized(t *testing.T) {
 	}
 	pruned, err := tokens.CreateCollectorToken(
 		ctx,
-		auth.CreateCollectorTokenRequest{
+		auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 			Name:              "token pruned after revocation",
 			AllowedIndexNames: []string{"main"},
 			BoundCollectorID:  prunedCollectorID,
@@ -83,7 +83,7 @@ func TestRuntimePrunedRevokedCollectorTokenRemainsUnauthorized(t *testing.T) {
 
 	retained, err := tokens.CreateCollectorToken(
 		ctx,
-		auth.CreateCollectorTokenRequest{
+		auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 			Name:              "most recently revoked token",
 			AllowedIndexNames: []string{"main"},
 			BoundCollectorID:  retainedCollector,

@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
@@ -14,7 +16,7 @@ import (
 )
 
 func TestPublicReceiptsIsolateConfiguredScopeAndRejectAdministrativeRoutes(t *testing.T) {
-	db, err := control.Open(t.Context(), t.TempDir()+"/control.db")
+	db, err := control.Open(t.Context(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}

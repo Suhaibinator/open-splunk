@@ -8,9 +8,9 @@ import (
 	"strings"
 
 	"fortio.org/safecast"
-	"gorm.io/gorm"
-
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"gorm.io/gorm"
 )
 
 type normalizedListRequest struct {
@@ -32,14 +32,14 @@ type tenantEventAggregate struct {
 func validateAllTenantIntegrity(database *gorm.DB) error {
 	var invalidTenantWidth int64
 	query := database.Raw(`
-		SELECT EXISTS (
+		SELECT CASE WHEN EXISTS (
 			SELECT 1
 			FROM audit_tenant_state
-			WHERE typeof(tenant_id) <> 'text'
-			   OR length(CAST(tenant_id AS BLOB)) NOT BETWEEN 1 AND ?
+			WHERE pg_typeof(tenant_id)::text <> 'text'
+			   OR octet_length(tenant_id) NOT BETWEEN 1 AND ?
 			LIMIT 1
 		)
-	`, maximumTenantIDBytes).Scan(&invalidTenantWidth)
+	 THEN 1 ELSE 0 END`, maximumTenantIDBytes).Scan(&invalidTenantWidth)
 	if query.Error != nil {
 		return query.Error
 	}
@@ -49,7 +49,7 @@ func validateAllTenantIntegrity(database *gorm.DB) error {
 
 	var orphanedEvent int64
 	query = database.Raw(`
-		SELECT EXISTS (
+		SELECT CASE WHEN EXISTS (
 			SELECT 1
 			FROM audit_events AS event
 			LEFT JOIN audit_tenant_state AS state
@@ -57,7 +57,7 @@ func validateAllTenantIntegrity(database *gorm.DB) error {
 			WHERE state.tenant_id IS NULL
 			LIMIT 1
 		)
-	`).Scan(&orphanedEvent)
+	 THEN 1 ELSE 0 END`).Scan(&orphanedEvent)
 	if query.Error != nil {
 		return query.Error
 	}
@@ -150,7 +150,7 @@ func (store *Store) List(
 		}
 	}
 
-	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(store.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return ListPage{}, mapStoreError(ctx, "begin audit list", tx.Error)
 	}

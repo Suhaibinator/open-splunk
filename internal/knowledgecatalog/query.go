@@ -54,29 +54,34 @@ const exactAuthorizedProjectionJoinSQL = `candidate.tenant_id = authorized_regis
 
 func applyProjectionAuthorization(query *gorm.DB, scope normalizedScope) *gorm.DB {
 	// Authorization is derived from the current registry authority, then joined
-	// to its exact immutable projection inside each forced-index branch. A stale,
+	// to its exact immutable projection inside each authorization branch. The dependent LATERAL point lookup prevents PostgreSQL from choosing a
+	// tenant-wide projection scan before authorization. A stale,
 	// orphaned, or scope-escalated projection can therefore neither enter nor
 	// consume the bounded driver before the outer integrity joins run.
 	driver := fmt.Sprintf(`(
 		SELECT candidate.tenant_id, candidate.knowledge_object_id, candidate.object_version
-		FROM knowledge_objects AS authorized_registry INDEXED BY knowledge_objects_authorized_global_idx
-		CROSS JOIN knowledge_object_list_projections AS candidate ON %s
-		WHERE authorized_registry.tenant_id = ? AND authorized_registry.sharing_scope = 'global'
+		FROM knowledge_objects AS authorized_registry
+		JOIN LATERAL (SELECT candidate.* FROM knowledge_object_list_projections AS candidate WHERE %s LIMIT 1) AS candidate ON true
+		WHERE authorized_registry.tenant_id = ? AND authorized_registry.organization_id = ? AND authorized_registry.app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = authorized_registry.organization_id) AND authorized_registry.sharing_scope = 'global'
 		UNION ALL
 		SELECT candidate.tenant_id, candidate.knowledge_object_id, candidate.object_version
-		FROM knowledge_objects AS authorized_registry INDEXED BY knowledge_objects_authorized_app_idx
-		CROSS JOIN knowledge_object_list_projections AS candidate ON %s
-		WHERE authorized_registry.tenant_id = ? AND authorized_registry.sharing_scope = 'app'
+		FROM knowledge_objects AS authorized_registry
+		JOIN LATERAL (SELECT candidate.* FROM knowledge_object_list_projections AS candidate WHERE %s LIMIT 1) AS candidate ON true
+		WHERE authorized_registry.tenant_id = ? AND authorized_registry.organization_id = ? AND authorized_registry.app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = authorized_registry.organization_id) AND authorized_registry.sharing_scope = 'app'
 		  AND authorized_registry.app_id IN ?
 		UNION ALL
 		SELECT candidate.tenant_id, candidate.knowledge_object_id, candidate.object_version
-		FROM knowledge_objects AS authorized_registry INDEXED BY knowledge_objects_authorized_private_idx
-		CROSS JOIN knowledge_object_list_projections AS candidate ON %s
-		WHERE authorized_registry.tenant_id = ? AND authorized_registry.sharing_scope = 'private'
-		  AND authorized_registry.owner_id = ? AND authorized_registry.app_id IN ?
+		FROM knowledge_objects AS authorized_registry
+		JOIN LATERAL (SELECT candidate.* FROM knowledge_object_list_projections AS candidate WHERE %s LIMIT 1) AS candidate ON true
+		WHERE authorized_registry.tenant_id = ? AND authorized_registry.organization_id = ? AND authorized_registry.app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = authorized_registry.organization_id) AND authorized_registry.sharing_scope = 'private'
+		  AND (authorized_registry.owner_id = ? OR ?) AND authorized_registry.app_id IN ?
 		LIMIT %d
 	) AS authorized_projection
-	CROSS JOIN knowledge_object_list_projections AS projection`,
+	JOIN LATERAL (SELECT projection.* FROM knowledge_object_list_projections AS projection
+	 WHERE projection.tenant_id = authorized_projection.tenant_id
+	 AND projection.knowledge_object_id = authorized_projection.knowledge_object_id
+	 AND projection.object_version = authorized_projection.object_version
+	 LIMIT 1) AS projection ON true`,
 		exactAuthorizedProjectionJoinSQL,
 		exactAuthorizedProjectionJoinSQL,
 		exactAuthorizedProjectionJoinSQL,
@@ -84,9 +89,9 @@ func applyProjectionAuthorization(query *gorm.DB, scope normalizedScope) *gorm.D
 	)
 	return query.Table(
 		driver,
-		scope.tenantID,
-		scope.tenantID, scope.readableAppIDs,
-		scope.tenantID, scope.ownerID, scope.readableAppIDs,
+		scope.tenantID, scope.organizationID,
+		scope.tenantID, scope.organizationID, scope.readableAppIDs,
+		scope.tenantID, scope.organizationID, scope.ownerID, scope.siteAdministrator, scope.readableAppIDs,
 	).Where(`authorized_projection.tenant_id = projection.tenant_id
 		AND authorized_projection.knowledge_object_id = projection.knowledge_object_id
 		AND authorized_projection.object_version = projection.object_version`).
@@ -102,38 +107,39 @@ func applyCurrentAuthorization(
 	driverConfig currentAuthorizationDriver,
 ) *gorm.DB {
 	// Keep the authorized identities as the outer query's finite driver. An IN
-	// membership predicate lets SQLite choose a tenant-wide order index and test
+	// membership predicate lets PostgreSQL choose a tenant-wide order index and test
 	// hidden rows one by one; this derived UNION instead scans only the three
 	// authorized branches. Any ORDER BY sorter is therefore bounded by the
 	// already-validated visible identity count. The defensive LIMIT both caps
-	// projection corruption and prevents the SQLite flattener from turning the
-	// driver back into membership probes.
+	// projection corruption. The dependent LATERAL point lookup below also
+	// prevents PostgreSQL from moving an outer catalog scan ahead of this cap.
+	_, outerAlias, _ := strings.Cut(driverConfig.outerTable, " AS ")
 	driver := fmt.Sprintf(`(
 		SELECT %s
-		FROM %s INDEXED BY %s
-		WHERE tenant_id = ? AND sharing_scope = 'global'
+		FROM %s /* %s */
+		WHERE tenant_id = ? AND organization_id = ? AND app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = knowledge_objects.organization_id) AND sharing_scope = 'global'
 		UNION ALL
 		SELECT %s
-		FROM %s INDEXED BY %s
-		WHERE tenant_id = ? AND sharing_scope = 'app' AND app_id IN ?
+		FROM %s /* %s */
+		WHERE tenant_id = ? AND organization_id = ? AND app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = knowledge_objects.organization_id) AND sharing_scope = 'app' AND app_id IN ?
 		UNION ALL
 		SELECT %s
-		FROM %s INDEXED BY %s
-		WHERE tenant_id = ? AND sharing_scope = 'private'
-		  AND owner_id = ? AND app_id IN ?
+		FROM %s /* %s */
+		WHERE tenant_id = ? AND organization_id = ? AND app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = knowledge_objects.organization_id) AND sharing_scope = 'private'
+		  AND (owner_id = ? OR ?) AND app_id IN ?
 		LIMIT %d
 	) AS %s
-	CROSS JOIN %s`,
+	JOIN LATERAL (SELECT %s.* FROM %s WHERE %s LIMIT 1) AS %s ON true`,
 		driverConfig.identityColumns, driverConfig.table, driverConfig.globalIndex,
 		driverConfig.identityColumns, driverConfig.table, driverConfig.appIndex,
 		driverConfig.identityColumns, driverConfig.table, driverConfig.privateIndex,
 		maximumObjectsPerTenant+1,
-		driverConfig.driverAlias, driverConfig.outerTable)
+		driverConfig.driverAlias, outerAlias, driverConfig.outerTable, driverConfig.joinIdentity, outerAlias)
 	return query.Table(
 		driver,
-		scope.tenantID,
-		scope.tenantID, scope.readableAppIDs,
-		scope.tenantID, scope.ownerID, scope.readableAppIDs,
+		scope.tenantID, scope.organizationID,
+		scope.tenantID, scope.organizationID, scope.readableAppIDs,
+		scope.tenantID, scope.organizationID, scope.ownerID, scope.siteAdministrator, scope.readableAppIDs,
 	).Where(driverConfig.joinIdentity).Where(driverConfig.tenantColumn+" = ?", scope.tenantID)
 }
 
@@ -142,12 +148,13 @@ func applyCurrentAuthorization(
 // Keeping this separate prevents a broad current-table scan from accidentally
 // losing its authorization-leading driver through a string prefix.
 func applyPointGetAuthorization(query *gorm.DB, scope normalizedScope) *gorm.DB {
-	return query.Where("tenant_id = ?", scope.tenantID).Where(
+	return query.Where("tenant_id = ?", scope.tenantID).Where("organization_id = ?", scope.organizationID).Where("app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = knowledge_objects.organization_id)").Where(
 		`(sharing_scope = 'global'
 			OR (sharing_scope = 'app' AND app_id IN ?)
-			OR (sharing_scope = 'private' AND owner_id = ? AND app_id IN ?))`,
+			OR (sharing_scope = 'private' AND (owner_id = ? OR ?) AND app_id IN ?))`,
 		scope.readableAppIDs,
 		scope.ownerID,
+		scope.siteAdministrator,
 		scope.readableAppIDs,
 	)
 }
@@ -178,7 +185,7 @@ func readCatalogState(database *gorm.DB, tenantID string) (catalogState, error) 
 	}
 	if err := query.Session(&gorm.Session{}).Select(`
 		tenant.tenant_id AS tenant_id,
-		length(CAST(tenant.tenant_id AS BLOB)) AS tenant_id_bytes,
+		octet_length(tenant.tenant_id) AS tenant_id_bytes,
 		tenant.catalog_revision AS tenant_catalog_revision,
 		head.catalog_revision AS head_catalog_revision,
 		coalesce(length(head.state_token), -1) AS state_token_bytes,
@@ -320,16 +327,13 @@ func readBoundedVisibleKnowledgeObjectCount(database *gorm.DB, scope normalizedS
 
 func baseProjectionQuery(database *gorm.DB) *gorm.DB {
 	return database.Table("knowledge_object_list_projections AS projection").
-		Joins(`CROSS JOIN knowledge_object_list_order_keys AS ordering
-			ON ordering.tenant_id = projection.tenant_id
+		Joins(`JOIN knowledge_object_list_order_keys AS ordering ON ordering.tenant_id = projection.tenant_id
 		   AND ordering.knowledge_object_id = projection.knowledge_object_id
 		   AND ordering.object_version = projection.object_version`).
-		Joins(`CROSS JOIN knowledge_object_list_projection_seals AS seal
-			ON seal.tenant_id = projection.tenant_id
+		Joins(`JOIN knowledge_object_list_projection_seals AS seal ON seal.tenant_id = projection.tenant_id
 		   AND seal.knowledge_object_id = projection.knowledge_object_id
 		   AND seal.object_version = projection.object_version`).
-		Joins(`CROSS JOIN knowledge_objects AS object
-			ON object.tenant_id = projection.tenant_id
+		Joins(`JOIN knowledge_objects AS object ON object.tenant_id = projection.tenant_id
 		   AND object.knowledge_object_id = projection.knowledge_object_id
 		   AND object.current_version = projection.object_version
 		   AND object.app_id = projection.app_id
@@ -338,33 +342,32 @@ func baseProjectionQuery(database *gorm.DB) *gorm.DB {
 		   AND object.name = projection.name
 		   AND object.sharing_scope = projection.sharing_scope
 		   AND object.state = projection.state`).
-		Joins(`CROSS JOIN knowledge_object_versions AS version
-			ON version.tenant_id = object.tenant_id
+		Joins(`JOIN knowledge_object_versions AS version ON version.tenant_id = object.tenant_id
 		   AND version.knowledge_object_id = object.knowledge_object_id
 		   AND version.object_version = object.current_version`).
 		Joins(`LEFT JOIN knowledge_definition_blobs AS blob
 			ON blob.tenant_id = version.tenant_id
 		   AND blob.definition_digest = version.definition_digest`).
 		Select(fmt.Sprintf(`
-			CASE WHEN length(CAST(projection.tenant_id AS BLOB)) BETWEEN 1 AND %[1]d
+			CASE WHEN octet_length(projection.tenant_id) BETWEEN 1 AND %[1]d
 				THEN projection.tenant_id ELSE '' END AS tenant_id,
-			CASE WHEN length(CAST(projection.knowledge_object_id AS BLOB)) BETWEEN 1 AND %[2]d
+			CASE WHEN octet_length(projection.knowledge_object_id) BETWEEN 1 AND %[2]d
 				THEN projection.knowledge_object_id ELSE '' END AS knowledge_object_id,
 			projection.object_version AS object_version,
-			CASE WHEN length(CAST(projection.app_id AS BLOB)) BETWEEN 1 AND %[3]d
+			CASE WHEN octet_length(projection.app_id) BETWEEN 1 AND %[3]d
 				THEN projection.app_id ELSE '' END AS app_id,
-			CASE WHEN length(CAST(projection.owner_id AS BLOB)) BETWEEN 1 AND %[4]d
+			CASE WHEN octet_length(projection.owner_id) BETWEEN 1 AND %[4]d
 				THEN projection.owner_id ELSE '' END AS owner_id,
-			CASE WHEN length(CAST(projection.object_type AS BLOB)) BETWEEN 1 AND %[5]d
+			CASE WHEN octet_length(projection.object_type) BETWEEN 1 AND %[5]d
 				THEN projection.object_type ELSE '' END AS object_type,
-			CASE WHEN length(CAST(projection.name AS BLOB)) BETWEEN 1 AND %[6]d
+			CASE WHEN octet_length(projection.name) BETWEEN 1 AND %[6]d
 				THEN projection.name ELSE '' END AS name,
-			CASE WHEN length(CAST(projection.sharing_scope AS BLOB)) BETWEEN 1 AND %[7]d
+			CASE WHEN octet_length(projection.sharing_scope) BETWEEN 1 AND %[7]d
 				THEN projection.sharing_scope ELSE '' END AS sharing_scope,
-			CASE WHEN length(CAST(projection.state AS BLOB)) BETWEEN 1 AND %[8]d
+			CASE WHEN octet_length(projection.state) BETWEEN 1 AND %[8]d
 				THEN projection.state ELSE '' END AS state,
 			projection.description_present AS description_present,
-			CASE WHEN length(CAST(projection.description AS BLOB)) <= %[9]d
+			CASE WHEN octet_length(projection.description) <= %[9]d
 				THEN projection.description ELSE '' END AS description,
 			projection.index_selector_count AS index_selector_count,
 			projection.host_selector_count AS host_selector_count,
@@ -376,7 +379,7 @@ func baseProjectionQuery(database *gorm.DB) *gorm.DB {
 			seal.projection_bytes AS seal_projection_bytes,
 			seal.canonical_selector_bytes AS seal_canonical_selector_bytes,
 			CASE WHEN length(object.definition_digest) <= %[10]d
-				THEN object.definition_digest ELSE X'' END AS definition_digest,
+				THEN object.definition_digest ELSE decode('', 'hex') END AS definition_digest,
 			object.created_at_unix_micro AS created_at_unix_micro,
 			object.updated_at_unix_micro AS updated_at_unix_micro,
 			object.disabled_at_unix_micro AS disabled_at_unix_micro,
@@ -384,23 +387,23 @@ func baseProjectionQuery(database *gorm.DB) *gorm.DB {
 			object.deleted_at_unix_micro AS deleted_at_unix_micro,
 			CASE
 				WHEN object.quarantine_reason IS NULL THEN NULL
-				WHEN length(CAST(object.quarantine_reason AS BLOB)) <= %[11]d
+				WHEN octet_length(object.quarantine_reason) <= %[11]d
 					THEN object.quarantine_reason
 				ELSE NULL
 			END AS quarantine_reason,
 			coalesce(length(blob.definition_proto), 0) AS definition_bytes,
 			version.dependency_count AS dependency_count,
-			length(CAST(projection.knowledge_object_id AS BLOB)) AS width_knowledge_object_id_bytes,
-			length(CAST(projection.tenant_id AS BLOB)) AS width_tenant_id_bytes,
-			length(CAST(projection.app_id AS BLOB)) AS width_app_id_bytes,
-			length(CAST(projection.owner_id AS BLOB)) AS width_owner_id_bytes,
-			length(CAST(projection.object_type AS BLOB)) AS width_object_type_bytes,
-			length(CAST(projection.name AS BLOB)) AS width_name_bytes,
-			length(CAST(projection.sharing_scope AS BLOB)) AS width_sharing_scope_bytes,
-			length(CAST(projection.state AS BLOB)) AS width_state_bytes,
+			octet_length(projection.knowledge_object_id) AS width_knowledge_object_id_bytes,
+			octet_length(projection.tenant_id) AS width_tenant_id_bytes,
+			octet_length(projection.app_id) AS width_app_id_bytes,
+			octet_length(projection.owner_id) AS width_owner_id_bytes,
+			octet_length(projection.object_type) AS width_object_type_bytes,
+			octet_length(projection.name) AS width_name_bytes,
+			octet_length(projection.sharing_scope) AS width_sharing_scope_bytes,
+			octet_length(projection.state) AS width_state_bytes,
 			coalesce(length(object.definition_digest), 0) AS width_digest_bytes,
-			coalesce(length(CAST(object.quarantine_reason AS BLOB)), 0) AS width_quarantine_reason_bytes,
-			length(CAST(projection.description AS BLOB)) AS width_description_bytes,
+			coalesce(octet_length(object.quarantine_reason), 0) AS width_quarantine_reason_bytes,
+			octet_length(projection.description) AS width_description_bytes,
 			projection.selector_value_bytes AS width_selector_value_bytes,
 			projection.projection_bytes AS width_projection_bytes,
 			seal.projection_bytes AS width_seal_projection_bytes,
@@ -438,8 +441,8 @@ func listFilterPredicate(request normalizedListRequest) (string, []any) {
 	}
 	if request.textFilter != nil {
 		predicates = append(predicates, `(
-			instr(CAST(projection.name AS BLOB), CAST(? AS BLOB)) > 0 OR
-			instr(CAST(projection.description AS BLOB), CAST(? AS BLOB)) > 0
+			strpos(projection.name, ?) > 0 OR
+			strpos(projection.description, ?) > 0
 		)`)
 		arguments = append(arguments, *request.textFilter, *request.textFilter)
 	}
@@ -449,7 +452,7 @@ func listFilterPredicate(request normalizedListRequest) (string, []any) {
 			WHERE selector.tenant_id = projection.tenant_id
 			  AND selector.knowledge_object_id = projection.knowledge_object_id
 			  AND selector.object_version = projection.object_version
-			  AND instr(CAST(selector.value AS BLOB), CAST(? AS BLOB)) > 0
+			  AND strpos(selector.value, ?) > 0
 		)`)
 		arguments = append(arguments, *request.selectorTextFilter)
 	}

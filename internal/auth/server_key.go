@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"gorm.io/gorm"
 )
 
@@ -123,7 +124,7 @@ func registerServerMasterKeyIdentityAt(
 	}
 	detachedFingerprint := append([]byte(nil), fingerprint...)
 
-	tx := orm.Begin()
+	tx := pgmeta.Begin(orm)
 	if tx.Error != nil {
 		return fmt.Errorf("begin server master-key registration: %w", tx.Error)
 	}

@@ -40,6 +40,12 @@ var (
 // Scope is the trusted tenant boundary for every fleet operation.
 type Scope struct {
 	TenantID string
+	// IndexAccess is a canonical JSON array of currently authorized source
+	// indexes. Empty means the trusted internal/site-administrator boundary;
+	// [] explicitly denies all collectors. Every source must be authorized.
+	IndexAccess string
+	// AccessIdentity binds continuations to the user and selected organization.
+	AccessIdentity string
 }
 
 // AdministrativeState is the future administrator-controlled lifecycle state.

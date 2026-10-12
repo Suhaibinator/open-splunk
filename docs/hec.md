@@ -177,9 +177,9 @@ rows are not expired to make capacity.
 ## Atomicity, durability, and retries
 
 The request is normalized, authorized, policy-checked, and quota-checked as a
-unit. One SQLite transaction charges all schedules and stages visibility,
+unit. One PostgreSQL transaction charges all schedules and stages visibility,
 immutable outbox payload, deterministic event IDs, and optional ACK, or it
-creates none. HTTP code 0 means durable SQLite staging, not immediate
+creates none. HTTP code 0 means durable PostgreSQL staging, not immediate
 ClickHouse visibility.
 
 Cancellation or response failure after commit does not undo admission. Reusing
@@ -314,7 +314,7 @@ process health remains `/healthz` and readiness `/readyz`.
 ## Backup and recovery
 
 HEC has no standalone backup. Token profiles, channels, ACK rows, schedules,
-visibility reservations, and outbox live in SQLite; searchable rows live in
+visibility reservations, and outbox live in PostgreSQL; searchable rows live in
 ClickHouse. They are one coordinated recovery unit. The default Compose file
 does not install backup or restore jobs; configure infrastructure-level backups
 for both stores and never restore one side independently.

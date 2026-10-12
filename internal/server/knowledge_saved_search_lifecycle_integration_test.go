@@ -29,7 +29,7 @@ import (
 
 const (
 	knowledgeSavedSearchTenantID = "knowledge-saved-search-tenant"
-	knowledgeSavedSearchOwnerID  = "knowledge-saved-search-owner"
+	knowledgeSavedSearchOwnerID  = "1102"
 	knowledgeSavedSearchAppID    = "app_000000000900000000001Q"
 	knowledgeSavedSearchID       = "saved-knowledge-lifecycle"
 	knowledgeSavedSearchObjectID = "ko_saved_search_lifecycle"
@@ -119,7 +119,7 @@ func (catalog knowledgeSavedSearchAppCatalog) ListActiveApps(
 	tenantID string,
 	maximum uint32,
 ) (AppCatalogResult, error) {
-	result, err := catalog.catalog.ListApps(ctx, control.AppAccessScope{TenantID: tenantID}, control.AppListRequest{
+	result, err := catalog.catalog.ListApps(ctx, control.AppAccessScope{OrganizationID: 1, TenantID: tenantID}, control.AppListRequest{
 		PageSize:     maximum,
 		StateFilters: []control.AppState{control.AppStateActive},
 		SortBy:       control.AppSortByDisplayName,
@@ -143,7 +143,7 @@ func (catalog knowledgeSavedSearchAppCatalog) ListActiveApps(
 func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOriginal(t *testing.T) {
 	ctx := t.Context()
 	anchor := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := openTestControl(t, ctx, filepath.Join(t.TempDir(), "control.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,9 +152,23 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 			t.Errorf("close control database: %v", closeErr)
 		}
 	})
-	if _, err := database.CreateIndex(ctx, control.IndexDefinition{
+	// Direct catalog fixtures still provide explicit index ownership; native
+	// GoCommon membership and foreign keys are tested by identity acceptance.
+	if _, err := database.SQLDB().ExecContext(ctx, `CREATE TABLE os_index_organizations (
+		index_id TEXT PRIMARY KEY REFERENCES indexes(index_id),
+		organization_id BIGINT NOT NULL CHECK (organization_id > 0),
+		revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0)
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	index, err := database.CreateIndex(ctx, control.IndexDefinition{
 		Name: "main", IngestionEnabled: true, SearchEnabled: true,
-	}); err != nil {
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.SQLDB().ExecContext(ctx,
+		"INSERT INTO os_index_organizations(index_id,organization_id) VALUES($1,1)", index.ID); err != nil {
 		t.Fatal(err)
 	}
 	appCatalog, err := control.NewAppCatalog(database, control.AppCatalogOptions{
@@ -167,7 +181,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := appCatalog.CreateApp(ctx, control.AppAccessScope{TenantID: knowledgeSavedSearchTenantID}, control.AppDefinition{
+	if _, err := appCatalog.CreateApp(ctx, control.AppAccessScope{OrganizationID: 1, TenantID: knowledgeSavedSearchTenantID}, control.AppDefinition{
 		Slug: "knowledge-saved-search", DisplayName: "Knowledge Saved Search",
 	}); err != nil {
 		t.Fatal(err)
@@ -197,7 +211,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeScope := knowledgecatalog.WriteScope{
+	writeScope := knowledgecatalog.WriteScope{OrganizationID: 1,
 		TenantID:       knowledgeSavedSearchTenantID,
 		OwnerID:        knowledgeSavedSearchOwnerID,
 		WritableAppIDs: []string{knowledgeSavedSearchAppID},
@@ -236,7 +250,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	}
 	saved, err := savedSearches.Create(
 		ctx,
-		savedobjects.AccessScope{OwnerID: knowledgeSavedSearchOwnerID},
+		savedobjects.AccessScope{OrganizationID: "1", OwnerID: knowledgeSavedSearchOwnerID},
 		savedDefinition,
 	)
 	if err != nil {
@@ -286,7 +300,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	if !manager.KnowledgeAdmissionEnabled() || manager.LookupAdmissionEnabled() {
 		t.Fatal("saved-search lifecycle manager reported incorrect knowledge or lookup capabilities")
 	}
-	principalFactory, err := auth.NewBearerTokenAuthenticator(
+	principalFactory, err := newTestBearerTokenAuthenticator(
 		[]byte("knowledge-saved-search-browser-token"),
 		knowledgeSavedSearchTenantID,
 		knowledgeSavedSearchOwnerID,
@@ -303,16 +317,16 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 		t.Fatal(err)
 	}
 	handler := newTestHandler(t, Config{
-		SearchJobs:           manager,
-		Indexes:              database,
-		SavedSearches:        savedSearches,
-		SearchHistory:        history,
-		AppCatalog:           knowledgeSavedSearchAppCatalog{catalog: appCatalog},
-		BrowserAuthenticator: &knowledgeBoundaryAuthenticator{principal: principal},
-		WebUI:                testUI(),
-		OwnerID:              knowledgeSavedSearchOwnerID,
-		TenantID:             knowledgeSavedSearchTenantID,
-		Now:                  func() time.Time { return anchor },
+		SearchJobs:            manager,
+		Indexes:               database,
+		SavedSearches:         savedSearches,
+		SearchHistory:         history,
+		AppCatalog:            knowledgeSavedSearchAppCatalog{catalog: appCatalog},
+		IdentityAuthenticator: adaptTestBrowserAuthenticator(&knowledgeBoundaryAuthenticator{principal: principal}),
+		WebUI:                 testUI(),
+		OwnerID:               knowledgeSavedSearchOwnerID,
+		TenantID:              knowledgeSavedSearchTenantID,
+		Now:                   func() time.Time { return anchor },
 	})
 
 	savedRunDefinition := proto.Clone(saved.GetDefinition().GetSearch()).(*opensplunk.SearchDefinition)
@@ -358,7 +372,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	if updatedObject.GetKnowledgeObject().GetVersion() != 2 {
 		t.Fatalf("saved-search knowledge v2 = %v", updatedObject.GetKnowledgeObject())
 	}
-	retainedWhileRunning, err := manager.GetForContext(ctx, searchjobs.AccessScope{
+	retainedWhileRunning, err := manager.GetForContext(ctx, searchjobs.AccessScope{OrganizationID: "1",
 		TenantID: knowledgeSavedSearchTenantID, OwnerID: knowledgeSavedSearchOwnerID,
 	}, original.ID)
 	if err != nil {
@@ -378,7 +392,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 		t.Fatal("saved-search rerun retained the stale v1 snapshot digest")
 	}
 	executor.Release()
-	access := searchjobs.AccessScope{
+	access := searchjobs.AccessScope{OrganizationID: "1",
 		TenantID: knowledgeSavedSearchTenantID, OwnerID: knowledgeSavedSearchOwnerID,
 	}
 	original = waitKnowledgeSavedSearchJob(t, manager, access, original.ID)
@@ -541,7 +555,7 @@ func createKnowledgeSavedSearchJob(
 	wantID string,
 ) searchjobs.Job {
 	t.Helper()
-	response := postProto(t, handler, "/api/search/jobs/create", request)
+	response := postProtoHeaders(t, handler, "/api/search/jobs/create", request, map[string]string{"Authorization": "Bearer " + knowledgeBoundaryToken})
 	if response.Code != http.StatusOK {
 		t.Fatalf("create knowledge saved-search job status=%d body=%q", response.Code, response.Body.String())
 	}
@@ -550,7 +564,7 @@ func createKnowledgeSavedSearchJob(
 	if decoded.GetSearchJob().GetSearchJobId() != wantID {
 		t.Fatalf("created knowledge saved-search job ID=%q, want %q", decoded.GetSearchJob().GetSearchJobId(), wantID)
 	}
-	job, err := manager.GetForContext(t.Context(), searchjobs.AccessScope{
+	job, err := manager.GetForContext(t.Context(), searchjobs.AccessScope{OrganizationID: "1",
 		TenantID: knowledgeSavedSearchTenantID, OwnerID: knowledgeSavedSearchOwnerID,
 	}, wantID)
 	if err != nil {
@@ -592,7 +606,7 @@ func waitKnowledgeSavedSearchHistory(
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		entry, err := history.Get(t.Context(), searchhistory.AccessScope{
+		entry, err := history.Get(t.Context(), searchhistory.AccessScope{OrganizationID: "1",
 			TenantID: knowledgeSavedSearchTenantID, OwnerID: knowledgeSavedSearchOwnerID,
 		}, id)
 		if err == nil {

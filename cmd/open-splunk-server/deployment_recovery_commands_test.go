@@ -17,9 +17,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
+
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	clickhouserow "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/buildassets"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/controlbackup"
 	"github.com/Suhaibinator/open-splunk/internal/recoveryset"
@@ -27,6 +31,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/migrations"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 func TestRunDeploymentSubcommandRecognizesDeploymentRecoverySetCommands(t *testing.T) {
@@ -50,9 +56,9 @@ func TestDeploymentRecoverySetFlagParsersRequireCompleteExactInputs(t *testing.T
 
 	root := filepath.Join(string(filepath.Separator), "private", "recovery")
 	backupArguments := []string{
-		"-control-db", filepath.Join(root, "open-splunk.db"),
+		"-postgres-dsn", "postgres://postgres@localhost/source?sslmode=disable",
+		"-minio-endpoint", "localhost:9000", "-minio-access-key", "test-access", "-minio-secret-key", "test-secret", "-minio-bucket", "private-results",
 		"-master-key", filepath.Join(root, "master.key"),
-		"-administrator-token-file", filepath.Join(root, "administrator.token"),
 		"-destination", filepath.Join(root, "set"),
 		"-archive-root", filepath.Join(root, "archives"),
 		"-address", "clickhouse:9440",
@@ -68,9 +74,8 @@ func TestDeploymentRecoverySetFlagParsersRequireCompleteExactInputs(t *testing.T
 		backup.PasswordFile != filepath.Join(root, "backup.password") ||
 		backup.CACertFile != filepath.Join(root, "clickhouse-ca.pem") ||
 		backup.ServerName != "clickhouse" ||
-		backup.DatabasePath != filepath.Join(root, "open-splunk.db") ||
+		backup.PostgresDSN != "postgres://postgres@localhost/source?sslmode=disable" ||
 		backup.MasterKeyPath != filepath.Join(root, "master.key") ||
-		backup.AdministratorTokenPath != filepath.Join(root, "administrator.token") ||
 		backup.Destination != filepath.Join(root, "set") ||
 		backup.ArchiveRoot != filepath.Join(root, "archives") {
 		t.Fatalf("parsed deployment recovery backup options = %#v", backup)
@@ -91,9 +96,9 @@ func TestDeploymentRecoverySetFlagParsersRequireCompleteExactInputs(t *testing.T
 	restoreArguments := []string{
 		"-source", filepath.Join(root, "set"),
 		"-archive-root", filepath.Join(root, "archives"),
-		"-control-db", filepath.Join(root, "restored.db"),
+		"-postgres-dsn", "postgres://postgres@localhost/restore?sslmode=disable",
+		"-minio-endpoint", "localhost:9000", "-minio-access-key", "test-access", "-minio-secret-key", "test-secret", "-minio-bucket", "private-results",
 		"-master-key", filepath.Join(root, "restored.key"),
-		"-administrator-token-file", filepath.Join(root, "restored.token"),
 		"-address", "clickhouse:9440",
 		"-password-file", filepath.Join(root, "restore.password"),
 		"-ca-cert", filepath.Join(root, "clickhouse-ca.pem"),
@@ -109,9 +114,8 @@ func TestDeploymentRecoverySetFlagParsersRequireCompleteExactInputs(t *testing.T
 		restore.ServerName != "clickhouse" ||
 		restore.Source != filepath.Join(root, "set") ||
 		restore.ArchiveRoot != filepath.Join(root, "archives") ||
-		restore.DatabasePath != filepath.Join(root, "restored.db") ||
-		restore.MasterKeyPath != filepath.Join(root, "restored.key") ||
-		restore.AdministratorTokenPath != filepath.Join(root, "restored.token") {
+		restore.PostgresDSN != "postgres://postgres@localhost/restore?sslmode=disable" ||
+		restore.MasterKeyPath != filepath.Join(root, "restored.key") {
 		t.Fatalf("parsed deployment recovery restore options = %#v", restore)
 	}
 
@@ -156,9 +160,9 @@ func TestDeploymentRecoverySetFlagParsersRejectUnsafePathAddressAndTLSInputs(t *
 
 	root := filepath.Join(string(filepath.Separator), "private", "recovery")
 	validBackup := []string{
-		"-control-db", filepath.Join(root, "open-splunk.db"),
+		"-postgres-dsn", "postgres://postgres@localhost/source?sslmode=disable",
+		"-minio-endpoint", "localhost:9000", "-minio-access-key", "test-access", "-minio-secret-key", "test-secret", "-minio-bucket", "private-results",
 		"-master-key", filepath.Join(root, "master.key"),
-		"-administrator-token-file", filepath.Join(root, "administrator.token"),
 		"-destination", filepath.Join(root, "set"),
 		"-archive-root", filepath.Join(root, "archives"),
 		"-address", "clickhouse:9440",
@@ -171,7 +175,7 @@ func TestDeploymentRecoverySetFlagParsersRejectUnsafePathAddressAndTLSInputs(t *
 		flag  string
 		value string
 	}{
-		{name: "relative state", flag: "-control-db", value: "open-splunk.db"},
+		{name: "relative state", flag: "-postgres-dsn", value: "open-splunk.db"},
 		{name: "unclean archive", flag: "-archive-root", value: root + "/x/../archives"},
 		{name: "relative password", flag: "-password-file", value: "backup.password"},
 		{name: "relative CA", flag: "-ca-cert", value: "clickhouse-ca.pem"},
@@ -207,14 +211,14 @@ func TestDeploymentRecoveryBackupLocksBeforeCredentialsStateOrNetwork(t *testing
 	err := runBackupDeploymentRecoverySetWithDependencies(
 		t.Context(),
 		deploymentRecoveryBackupOptions{
-			DatabasePath: "/missing/control.db",
+			PostgresDSN:  "/missing/control.db",
 			PasswordFile: "/missing/backup.password",
 			CACertFile:   "/missing/ca.pem",
 		},
 		testRecoveryReleaseIdentity(),
 		deploymentRecoveryDependencies{
 			migrationFiles: migrations.ClickHouse(),
-			acquireDatabaseLock: func(string) (*serverLock, error) {
+			acquireDatabaseLock: func(context.Context, string) (*control.MaintenanceLease, error) {
 				return nil, wantErr
 			},
 			open: func(*clickhousedriver.Options) (deploymentRecoverySession, error) {
@@ -258,7 +262,7 @@ func TestDeploymentRecoveryRestoreLocksBeforeVerificationCredentialsOrNetwork(t 
 	err := runRestoreDeploymentRecoverySetWithDependencies(
 		t.Context(),
 		deploymentRecoveryRestoreOptions{
-			DatabasePath: "/missing/control.db",
+			PostgresDSN:  "/missing/control.db",
 			Source:       "/missing/recovery-set",
 			ArchiveRoot:  "/missing/archives",
 			PasswordFile: "/missing/restore.password",
@@ -267,7 +271,7 @@ func TestDeploymentRecoveryRestoreLocksBeforeVerificationCredentialsOrNetwork(t 
 		testRecoveryReleaseIdentity(),
 		deploymentRecoveryDependencies{
 			migrationFiles: migrations.ClickHouse(),
-			acquireDatabaseLock: func(string) (*serverLock, error) {
+			acquireDatabaseLock: func(context.Context, string) (*control.MaintenanceLease, error) {
 				return nil, wantErr
 			},
 			verifyRecoverySet: func(
@@ -371,12 +375,12 @@ func TestDeploymentRecoveryBackupUsesExactNativeOperationAndStableSource(t *test
 		fixture.release,
 		deploymentRecoveryDependencies{
 			migrationFiles: migrations.ClickHouse(),
-			acquireDatabaseLock: func(path string) (*serverLock, error) {
+			acquireDatabaseLock: func(ctx context.Context, path string) (*control.MaintenanceLease, error) {
 				order = append(order, "lock")
-				if path != fixture.databasePath {
-					t.Fatalf("lock database path = %q, want %q", path, fixture.databasePath)
+				if path != fixture.postgresDSN {
+					t.Fatalf("lock database path = %q, want %q", path, fixture.postgresDSN)
 				}
-				return &serverLock{}, nil
+				return acquireDeploymentRecoveryTestServerLock(t, ctx, fixture.postgresDSN)
 			},
 			open: func(options *clickhousedriver.Options) (deploymentRecoverySession, error) {
 				order = append(order, "open")
@@ -412,9 +416,8 @@ func TestDeploymentRecoveryBackupUsesExactNativeOperationAndStableSource(t *test
 				options recoveryset.CreateOptions,
 			) (recoveryset.Verification, error) {
 				order = append(order, "create")
-				if options.DatabasePath != fixture.databasePath ||
+				if options.PostgresDSN != fixture.postgresDSN ||
 					options.MasterKeyPath != fixture.masterKeyPath ||
-					options.AdministratorTokenPath != fixture.administratorTokenPath ||
 					options.Destination != fixture.destination ||
 					options.ArchiveRoot != fixture.archiveRoot ||
 					options.Release != fixture.release || options.NativeBackup == nil {
@@ -463,15 +466,16 @@ func TestDeploymentRecoveryBackupUsesExactNativeOperationAndStableSource(t *test
 }
 
 type deploymentRecoveryCommandFixture struct {
-	databasePath           string
-	masterKeyPath          string
-	administratorTokenPath string
-	destination            string
-	archiveRoot            string
-	passwordFile           string
-	caCertFile             string
-	password               string
-	release                controlbackup.ReleaseIdentity
+	postgresDSN       string
+	sourcePostgresDSN string
+	blobs             searchartifacts.BlobStore
+	masterKeyPath     string
+	destination       string
+	archiveRoot       string
+	passwordFile      string
+	caCertFile        string
+	password          string
+	release           controlbackup.ReleaseIdentity
 }
 
 func newDeploymentRecoveryCommandFixture(t *testing.T) deploymentRecoveryCommandFixture {
@@ -483,63 +487,47 @@ func newDeploymentRecoveryCommandFixture(t *testing.T) deploymentRecoveryCommand
 	}
 	const password = "one-shot-recovery-password"
 	return deploymentRecoveryCommandFixture{
-		databasePath:           filepath.Join(root, "control.db"),
-		masterKeyPath:          filepath.Join(root, "master.key"),
-		administratorTokenPath: filepath.Join(root, "administrator.token"),
-		destination:            filepath.Join(root, "deployment-recovery-set"),
-		archiveRoot:            filepath.Join(root, "archives"),
-		passwordFile:           writeClickHouseCredentialFixture(t, password+"\n", 0o600),
-		caCertFile:             identity.CertificateFile,
-		password:               password,
-		release:                testRecoveryReleaseIdentity(),
+		postgresDSN:   pgtest.DSN(t),
+		masterKeyPath: filepath.Join(root, "master.key"),
+		destination:   filepath.Join(root, "deployment-recovery-set"),
+		archiveRoot:   filepath.Join(root, "archives"),
+		passwordFile:  writeClickHouseCredentialFixture(t, password+"\n", 0o600),
+		caCertFile:    identity.CertificateFile,
+		password:      password,
+		release:       testRecoveryReleaseIdentity(),
 	}
 }
 
-func acquireDeploymentRecoveryTestServerLock(
-	t *testing.T,
-	databasePath string,
-) (*serverLock, error) {
+func acquireDeploymentRecoveryTestServerLock(t *testing.T, ctx context.Context, dsn string) (*control.MaintenanceLease, error) {
 	t.Helper()
-	return acquireServerLockAt(
-		databasePath,
-		filepath.Join(t.TempDir(), "host.server.lock"),
-	)
+	return control.AcquireMaintenanceLease(ctx, dsn)
 }
 
-func createDeploymentControlBackupFixture(
-	t *testing.T,
-	fixture *deploymentRecoveryCommandFixture,
-) (controlbackup.Manifest, string) {
+func createDeploymentControlBackupFixture(t *testing.T, fixture *deploymentRecoveryCommandFixture) (controlbackup.Manifest, string) {
 	t.Helper()
 	root := filepath.Dir(fixture.destination)
-	if err := os.Mkdir(fixture.destination, 0o700); err != nil {
+	if err := os.Mkdir(fixture.destination, 0700); err != nil {
 		t.Fatal(err)
 	}
 	sourceDirectory := filepath.Join(root, "source-control")
-	if err := os.Mkdir(sourceDirectory, 0o700); err != nil {
+	if err := os.Mkdir(sourceDirectory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	sourceDatabasePath := filepath.Join(sourceDirectory, "control.db")
-	sourceDatabase, err := control.Open(t.Context(), sourceDatabasePath)
+	fixture.sourcePostgresDSN = pgtest.DSN(t)
+	sourceDatabase, err := control.Open(t.Context(), fixture.sourcePostgresDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = sourceDatabase.Close() })
 	masterKey := bytes.Repeat([]byte{0x4d}, auth.ServerMasterKeyBytes)
 	fingerprint, err := auth.FingerprintServerMasterKey(masterKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := auth.RegisterServerMasterKeyIdentity(
-		t.Context(),
-		sourceDatabase,
-		fingerprint[:],
-	); err != nil {
+	if err := auth.RegisterServerMasterKeyIdentity(t.Context(), sourceDatabase, fingerprint[:]); err != nil {
 		t.Fatal(err)
 	}
-	migrationIdentity, err := sourceDatabase.VerifyCurrentMigrations(
-		t.Context(),
-		migrations.SQLite(),
-	)
+	_, err = sourceDatabase.VerifyCurrentMigrations(t.Context(), migrations.PostgreSQL())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,36 +535,20 @@ func createDeploymentControlBackupFixture(
 		t.Fatal(err)
 	}
 	sourceMasterKeyPath := filepath.Join(sourceDirectory, "master.key")
-	if err := os.WriteFile(sourceMasterKeyPath, masterKey, 0o600); err != nil {
+	if err := os.WriteFile(sourceMasterKeyPath, masterKey, 0600); err != nil {
 		t.Fatal(err)
 	}
-	sourceAdministratorTokenPath := filepath.Join(sourceDirectory, "administrator.token")
-	if err := os.WriteFile(
-		sourceAdministratorTokenPath,
-		bytes.Repeat([]byte{'R'}, auth.MinimumBrowserBearerTokenBytes),
-		0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
-	fixture.release.SQLiteMigrations = controlbackup.MigrationIdentity{
-		SHA256:        hex.EncodeToString(migrationIdentity.SHA256[:]),
-		LatestVersion: migrationIdentity.LatestVersion,
-	}
-	manifest, err := controlbackup.Create(t.Context(), controlbackup.CreateOptions{
-		DatabasePath:           sourceDatabasePath,
-		MasterKeyPath:          sourceMasterKeyPath,
-		AdministratorTokenPath: sourceAdministratorTokenPath,
-		Destination:            filepath.Join(fixture.destination, "control-plane"),
-		Release:                fixture.release,
-	})
+	migrationCorpus, err := buildassets.DigestMigrations(migrations.PostgreSQL(), ".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	contents, err := os.ReadFile(filepath.Join(
-		fixture.destination,
-		"control-plane",
-		"manifest.json",
-	))
+	fixture.release.PostgresMigrations = controlbackup.MigrationIdentity{SHA256: migrationCorpus.SHA256, LatestVersion: migrationCorpus.LatestVersion}
+	manifest, err := controlbackup.Create(t.Context(), controlbackup.CreateOptions{PostgresDSN: fixture.sourcePostgresDSN, MasterKeyPath: sourceMasterKeyPath, Destination: filepath.Join(fixture.destination, "control-plane"), Release: fixture.release, Blobs: fixture.blobs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.postgresDSN = pgtest.EmptyCopy(t, fixture.sourcePostgresDSN)
+	contents, err := os.ReadFile(filepath.Join(fixture.destination, "control-plane", "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,29 +572,29 @@ func bindDeploymentVerificationToControlBackup(
 
 func (fixture deploymentRecoveryCommandFixture) backupOptions() deploymentRecoveryBackupOptions {
 	return deploymentRecoveryBackupOptions{
-		DatabasePath:           fixture.databasePath,
-		MasterKeyPath:          fixture.masterKeyPath,
-		AdministratorTokenPath: fixture.administratorTokenPath,
-		Destination:            fixture.destination,
-		ArchiveRoot:            fixture.archiveRoot,
-		Address:                "clickhouse:9440",
-		PasswordFile:           fixture.passwordFile,
-		CACertFile:             fixture.caCertFile,
-		ServerName:             "clickhouse",
+		PostgresDSN:   fixture.postgresDSN,
+		Blobs:         fixture.blobs,
+		MasterKeyPath: fixture.masterKeyPath,
+		Destination:   fixture.destination,
+		ArchiveRoot:   fixture.archiveRoot,
+		Address:       "clickhouse:9440",
+		PasswordFile:  fixture.passwordFile,
+		CACertFile:    fixture.caCertFile,
+		ServerName:    "clickhouse",
 	}
 }
 
 func (fixture deploymentRecoveryCommandFixture) restoreOptions() deploymentRecoveryRestoreOptions {
 	return deploymentRecoveryRestoreOptions{
-		Source:                 fixture.destination,
-		ArchiveRoot:            fixture.archiveRoot,
-		DatabasePath:           fixture.databasePath,
-		MasterKeyPath:          fixture.masterKeyPath,
-		AdministratorTokenPath: fixture.administratorTokenPath,
-		Address:                "clickhouse:9440",
-		PasswordFile:           fixture.passwordFile,
-		CACertFile:             fixture.caCertFile,
-		ServerName:             "clickhouse",
+		Source:        fixture.destination,
+		ArchiveRoot:   fixture.archiveRoot,
+		PostgresDSN:   fixture.postgresDSN,
+		Blobs:         fixture.blobs,
+		MasterKeyPath: fixture.masterKeyPath,
+		Address:       "clickhouse:9440",
+		PasswordFile:  fixture.passwordFile,
+		CACertFile:    fixture.caCertFile,
+		ServerName:    "clickhouse",
 	}
 }
 
@@ -1136,8 +1108,10 @@ func TestDeploymentRecoveryBackupRejectsNativeStatusAndSourceDrift(t *testing.T)
 				fixture.backupOptions(),
 				fixture.release,
 				deploymentRecoveryDependencies{
-					migrationFiles:           migrations.ClickHouse(),
-					acquireDatabaseLock:      func(string) (*serverLock, error) { return &serverLock{}, nil },
+					migrationFiles: migrations.ClickHouse(),
+					acquireDatabaseLock: func(ctx context.Context, _ string) (*control.MaintenanceLease, error) {
+						return acquireDeploymentRecoveryTestServerLock(t, ctx, fixture.postgresDSN)
+					},
 					open:                     func(*clickhousedriver.Options) (deploymentRecoverySession, error) { return session, nil },
 					validateBackupPrivileges: func(context.Context, server.ClickHousePrivilegeConnection) error { return nil },
 					validateBackupSource: func(context.Context, server.ClickHouseRecoveryValidationConnection, fs.FS) (server.ClickHouseRecoveryDatabaseInspection, error) {
@@ -1235,9 +1209,11 @@ func TestDeploymentRecoveryBackupPreservesPreexistingDifferentArchiveMarker(t *t
 		fixture.backupOptions(),
 		fixture.release,
 		deploymentRecoveryDependencies{
-			migrationFiles:      migrations.ClickHouse(),
-			acquireDatabaseLock: func(string) (*serverLock, error) { return &serverLock{}, nil },
-			open:                func(*clickhousedriver.Options) (deploymentRecoverySession, error) { return session, nil },
+			migrationFiles: migrations.ClickHouse(),
+			acquireDatabaseLock: func(ctx context.Context, _ string) (*control.MaintenanceLease, error) {
+				return acquireDeploymentRecoveryTestServerLock(t, ctx, fixture.postgresDSN)
+			},
+			open: func(*clickhousedriver.Options) (deploymentRecoverySession, error) { return session, nil },
 			validateBackupPrivileges: func(context.Context, server.ClickHousePrivilegeConnection) error {
 				return nil
 			},
@@ -1329,12 +1305,12 @@ func TestDeploymentRecoveryRestoreFreshStateReceiptsCanonicalThenRestoresControl
 		fixture.release,
 		deploymentRecoveryDependencies{
 			migrationFiles: migrations.ClickHouse(),
-			acquireDatabaseLock: func(path string) (*serverLock, error) {
+			acquireDatabaseLock: func(ctx context.Context, path string) (*control.MaintenanceLease, error) {
 				order = append(order, "lock")
-				if path != fixture.databasePath {
-					t.Fatalf("restore lock path = %q, want %q", path, fixture.databasePath)
+				if path != fixture.postgresDSN {
+					t.Fatalf("restore lock path = %q, want %q", path, fixture.postgresDSN)
 				}
-				return acquireDeploymentRecoveryTestServerLock(t, path)
+				return acquireDeploymentRecoveryTestServerLock(t, ctx, path)
 			},
 			verifyRecoverySet: func(_ context.Context, options recoveryset.VerifyOptions) (recoveryset.Verification, error) {
 				order = append(order, "verify")
@@ -1346,11 +1322,11 @@ func TestDeploymentRecoveryRestoreFreshStateReceiptsCanonicalThenRestoresControl
 			},
 			preflightControlPlane: func(_ context.Context, options controlbackup.RestoreOptions) error {
 				order = append(order, "preflight")
-				if options.DatabaseLock == nil ||
-					options.DatabaseLock.Name() != fixture.databasePath+".server.lock" ||
+				if options.Lease == nil ||
+					options.Lease.Validate(fixture.postgresDSN) != nil ||
 					options.ExpectedRecoverySetID != verification.Manifest.RecoverySetID ||
 					options.ExpectedManifestSHA256 != verification.Manifest.ControlPlane.Manifest.SHA256 {
-					t.Fatalf("control-plane preflight lock = %#v", options.DatabaseLock)
+					t.Fatalf("control-plane preflight lock = %#v", options.Lease)
 				}
 				return nil
 			},
@@ -1424,11 +1400,10 @@ func TestDeploymentRecoveryRestoreFreshStateReceiptsCanonicalThenRestoresControl
 			restoreControlPlane: func(_ context.Context, options controlbackup.RestoreOptions) error {
 				order = append(order, "control")
 				if options.Source != filepath.Join(fixture.destination, "control-plane") ||
-					options.DatabasePath != fixture.databasePath ||
-					options.DatabaseLock == nil ||
-					options.DatabaseLock.Name() != fixture.databasePath+".server.lock" ||
+					options.PostgresDSN != fixture.postgresDSN ||
+					options.Lease == nil ||
+					options.Lease.Validate(fixture.postgresDSN) != nil ||
 					options.MasterKeyPath != fixture.masterKeyPath ||
-					options.AdministratorTokenPath != fixture.administratorTokenPath ||
 					options.Release != fixture.release ||
 					options.ExpectedRecoverySetID != verification.Manifest.RecoverySetID ||
 					options.ExpectedManifestSHA256 != verification.Manifest.ControlPlane.Manifest.SHA256 {
@@ -1482,16 +1457,14 @@ func TestDeploymentPostRestoreVerificationRequiresExactManifestAndDigest(t *test
 	}
 }
 
-func TestDeploymentRecoveryRestoreHoldsRealDatabaseLockThroughRealControlRestore(t *testing.T) {
+func TestDeploymentRecoveryRestoreHoldsRealLeaseThroughRealControlRestore(t *testing.T) {
 	fixture := newDeploymentRecoveryCommandFixture(t)
-	root := filepath.Dir(fixture.databasePath)
+	root := filepath.Dir(fixture.destination)
 	restoreDirectory := filepath.Join(root, "restored-control")
 	if err := os.Mkdir(restoreDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	fixture.databasePath = filepath.Join(restoreDirectory, "control.db")
 	fixture.masterKeyPath = filepath.Join(restoreDirectory, "master.key")
-	fixture.administratorTokenPath = filepath.Join(restoreDirectory, "administrator.token")
 	controlManifest, controlManifestSHA256 := createDeploymentControlBackupFixture(t, &fixture)
 
 	verification := bindDeploymentVerificationToControlBackup(
@@ -1501,8 +1474,7 @@ func TestDeploymentRecoveryRestoreHoldsRealDatabaseLockThroughRealControlRestore
 	)
 	inspection := deploymentRestoredInspectionFixture(deploymentRecoveryDatabase)
 	session := &deploymentRecoveryTestSession{}
-	hostLockPath := filepath.Join(root, "deployment-recovery-host.lock")
-	var acquiredLock *serverLock
+	var acquiredLock *control.MaintenanceLease
 	controlRestored := false
 	err := runRestoreDeploymentRecoverySetWithDependencies(
 		t.Context(),
@@ -1510,9 +1482,9 @@ func TestDeploymentRecoveryRestoreHoldsRealDatabaseLockThroughRealControlRestore
 		fixture.release,
 		deploymentRecoveryDependencies{
 			migrationFiles: migrations.ClickHouse(),
-			acquireDatabaseLock: func(path string) (*serverLock, error) {
+			acquireDatabaseLock: func(ctx context.Context, path string) (*control.MaintenanceLease, error) {
 				var lockErr error
-				acquiredLock, lockErr = acquireServerLockAt(path, hostLockPath)
+				acquiredLock, lockErr = acquireDeploymentRecoveryTestServerLock(t, ctx, path)
 				return acquiredLock, lockErr
 			},
 			verifyRecoverySet: func(context.Context, recoveryset.VerifyOptions) (recoveryset.Verification, error) {
@@ -1565,13 +1537,19 @@ func TestDeploymentRecoveryRestoreHoldsRealDatabaseLockThroughRealControlRestore
 				return time.Time{}
 			},
 			restoreControlPlane: func(ctx context.Context, options controlbackup.RestoreOptions) error {
-				if options.DatabaseLock == nil ||
-					options.DatabaseLock.Name() != options.DatabasePath+".server.lock" {
-					t.Fatalf("control restore database lock = %#v", options.DatabaseLock)
+				if options.Lease == nil ||
+					options.Lease.Validate(options.PostgresDSN) != nil {
+					t.Fatalf("control restore database lock = %#v", options.Lease)
 				}
-				if acquiredLock == nil || len(acquiredLock.files) != 2 ||
-					acquiredLock.files[1] != options.DatabaseLock {
+				if acquiredLock == nil || acquiredLock != options.Lease {
 					t.Fatalf("database lock is not held through control restore: %#v", acquiredLock)
+				}
+				contender, err := control.Open(ctx, options.PostgresDSN)
+				if contender != nil {
+					_ = contender.Close()
+				}
+				if !errors.Is(err, control.ErrServerAlreadyRunning) {
+					t.Fatalf("runtime opened while recovery maintenance held: %v", err)
 				}
 				controlRestored = true
 				return controlbackup.Restore(ctx, options)
@@ -1581,22 +1559,23 @@ func TestDeploymentRecoveryRestoreHoldsRealDatabaseLockThroughRealControlRestore
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !controlRestored || acquiredLock == nil || len(acquiredLock.files) != 0 {
+	if !controlRestored || acquiredLock == nil {
 		t.Fatalf("control restore/lock lifecycle = (%t, %#v)", controlRestored, acquiredLock)
 	}
-	lockInfo, err := os.Lstat(fixture.databasePath + ".server.lock")
+	contender, err := control.AcquireMaintenanceLease(t.Context(), fixture.postgresDSN)
 	if err != nil {
+		t.Fatalf("maintenance lease was not released after restore: %v", err)
+	}
+	if err := contender.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if !lockInfo.Mode().IsRegular() || lockInfo.Mode().Perm() != 0o600 || lockInfo.Size() != 0 {
-		t.Fatalf("preserved database lock state = (%v, %#o, %d)", lockInfo.Mode(), lockInfo.Mode().Perm(), lockInfo.Size())
-	}
-	restored, err := control.OpenReadOnly(t.Context(), fixture.databasePath)
+
+	restored, err := control.OpenReadOnly(t.Context(), fixture.postgresDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer restored.Close()
-	if _, err := restored.VerifyCurrentMigrations(t.Context(), migrations.SQLite()); err != nil {
+	if _, err := restored.VerifyCurrentMigrations(t.Context(), migrations.PostgreSQL()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1608,35 +1587,22 @@ func TestDeploymentRecoveryRestorePreflightRejectsUnsafeControlStateBeforeEveryC
 		afterLock func(*testing.T, *deploymentRecoveryCommandFixture)
 	}{
 		{
-			name: "unsafe held lock mode",
+			name: "destination contains an unrelated table",
 			seed: func(t *testing.T, fixture *deploymentRecoveryCommandFixture, _ controlbackup.Manifest) {
-				lockPath := fixture.databasePath + ".server.lock"
-				if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Chmod(lockPath, 0o640); err != nil {
-					t.Fatal(err)
-				}
+				executeDeploymentRecoveryFixtureSQL(t, fixture.postgresDSN, "CREATE TABLE unrelated_destination(value integer)")
 			},
 		},
 		{
-			name: "held lock pathname replacement",
+			name: "destination state changes after maintenance acquisition",
 			afterLock: func(t *testing.T, fixture *deploymentRecoveryCommandFixture) {
-				lockPath := fixture.databasePath + ".server.lock"
-				movedPath := filepath.Join(filepath.Dir(fixture.destination), "moved-deployment-lock")
-				if err := os.Rename(lockPath, movedPath); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
-					t.Fatal(err)
-				}
+				executeDeploymentRecoveryFixtureSQL(t, fixture.postgresDSN, "CREATE TABLE changed_destination(value integer)")
 			},
 		},
 		{
-			name: "unrelated destination entry",
+			name: "preexisting mismatched destination master key",
 			seed: func(t *testing.T, fixture *deploymentRecoveryCommandFixture, _ controlbackup.Manifest) {
 				if err := os.WriteFile(
-					filepath.Join(filepath.Dir(fixture.databasePath), "unrelated"),
+					fixture.masterKeyPath,
 					[]byte("x"),
 					0o600,
 				); err != nil {
@@ -1675,14 +1641,12 @@ func TestDeploymentRecoveryRestorePreflightRejectsUnsafeControlStateBeforeEveryC
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newDeploymentRecoveryCommandFixture(t)
-			root := filepath.Dir(fixture.databasePath)
+			root := filepath.Dir(fixture.destination)
 			restoreDirectory := filepath.Join(root, "restored-control")
 			if err := os.Mkdir(restoreDirectory, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			fixture.databasePath = filepath.Join(restoreDirectory, "control.db")
 			fixture.masterKeyPath = filepath.Join(restoreDirectory, "master.key")
-			fixture.administratorTokenPath = filepath.Join(restoreDirectory, "administrator.token")
 			controlManifest, controlManifestSHA256 := createDeploymentControlBackupFixture(t, &fixture)
 			if test.seed != nil {
 				test.seed(t, &fixture, controlManifest)
@@ -1701,11 +1665,8 @@ func TestDeploymentRecoveryRestorePreflightRejectsUnsafeControlStateBeforeEveryC
 				fixture.release,
 				deploymentRecoveryDependencies{
 					migrationFiles: migrations.ClickHouse(),
-					acquireDatabaseLock: func(path string) (*serverLock, error) {
-						return acquireServerLockAt(
-							path,
-							filepath.Join(root, "adversarial-host.server.lock"),
-						)
+					acquireDatabaseLock: func(ctx context.Context, path string) (*control.MaintenanceLease, error) {
+						return acquireDeploymentRecoveryTestServerLock(t, ctx, path)
 					},
 					verifyRecoverySet: func(context.Context, recoveryset.VerifyOptions) (recoveryset.Verification, error) {
 						if test.afterLock != nil {
@@ -1805,8 +1766,8 @@ func TestDeploymentRecoveryRestoreResumesExactCanonicalReceiptWithMarkerCrashSta
 				fixture.release,
 				deploymentRecoveryDependencies{
 					migrationFiles: migrations.ClickHouse(),
-					acquireDatabaseLock: func(path string) (*serverLock, error) {
-						return acquireDeploymentRecoveryTestServerLock(t, path)
+					acquireDatabaseLock: func(ctx context.Context, path string) (*control.MaintenanceLease, error) {
+						return acquireDeploymentRecoveryTestServerLock(t, ctx, path)
 					},
 					verifyRecoverySet: func(context.Context, recoveryset.VerifyOptions) (recoveryset.Verification, error) {
 						order = append(order, "verify")
@@ -1931,8 +1892,8 @@ func TestDeploymentRecoveryRestoreFailsClosedForPartialOrMismatchedState(t *test
 				fixture.release,
 				deploymentRecoveryDependencies{
 					migrationFiles: migrations.ClickHouse(),
-					acquireDatabaseLock: func(path string) (*serverLock, error) {
-						return acquireDeploymentRecoveryTestServerLock(t, path)
+					acquireDatabaseLock: func(ctx context.Context, path string) (*control.MaintenanceLease, error) {
+						return acquireDeploymentRecoveryTestServerLock(t, ctx, path)
 					},
 					verifyRecoverySet: func(context.Context, recoveryset.VerifyOptions) (recoveryset.Verification, error) {
 						return verification, nil
@@ -2035,8 +1996,8 @@ func TestDeploymentRecoveryRestoreRejectsNativeStatusBeforeReceiptOrControl(t *t
 				t.Context(), fixture.restoreOptions(), fixture.release,
 				deploymentRecoveryDependencies{
 					migrationFiles: migrations.ClickHouse(),
-					acquireDatabaseLock: func(path string) (*serverLock, error) {
-						return acquireDeploymentRecoveryTestServerLock(t, path)
+					acquireDatabaseLock: func(ctx context.Context, path string) (*control.MaintenanceLease, error) {
+						return acquireDeploymentRecoveryTestServerLock(t, ctx, path)
 					},
 					verifyRecoverySet: func(context.Context, recoveryset.VerifyOptions) (recoveryset.Verification, error) {
 						return verification, nil
@@ -2132,7 +2093,7 @@ func deploymentRecoveryVerificationFixture(
 			Scope:                "deployment-recovery-set",
 			ClickHouseIncluded:   true,
 			SourceRevision:       release.SourceRevision,
-			SQLiteMigrations:     release.SQLiteMigrations,
+			PostgresMigrations:   release.PostgresMigrations,
 			ClickHouseMigrations: release.ClickHouseMigrations,
 			ControlPlane: recoveryset.ControlPlaneIdentity{
 				Directory: "control-plane",
@@ -2159,5 +2120,18 @@ func deploymentRecoveryVerificationFixture(
 				BackupOperationUUID:             "55555555-5555-4555-8555-555555555555",
 			},
 		},
+	}
+}
+
+func executeDeploymentRecoveryFixtureSQL(t *testing.T, dsn, statement string) {
+	t.Helper()
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database := stdlib.OpenDB(*cfg)
+	defer database.Close()
+	if _, err := database.ExecContext(t.Context(), statement); err != nil {
+		t.Fatal(err)
 	}
 }

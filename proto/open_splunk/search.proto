@@ -118,6 +118,10 @@ message SearchProgress {
   // progress. It shares SearchJob.state_version's per-job monotonic domain;
   // zero means unavailable from a legacy sender.
   uint64 state_version = 12;
+  uint64 capture_rows = 13;
+  uint64 capture_bytes = 14;
+  bool capture_complete = 15;
+  bool preview_truncated = 16;
 }
 
 enum SearchFailureCode {
@@ -205,4 +209,11 @@ message SearchJob {
   google.protobuf.Duration retention_lifetime = 26;
   google.protobuf.Timestamp last_accessed_at = 27;
   RetainedResultStatus retained_result_status = 28;
+  // Complete immutable captured output exists independently of live preview.
+  bool capture_complete = 29;
+  // Preview is a bounded prefix; this does not imply captured output is lost.
+  bool preview_truncated = 30;
+  optional string organization_id = 31;
+  uint64 capture_rows = 32;
+  uint64 capture_bytes = 33;
 }

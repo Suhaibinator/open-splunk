@@ -56,7 +56,7 @@ func TestRuntimeOptionRegistryIsCompleteAndUnique(t *testing.T) {
 	if err := validateRuntimeOptionRegistry(flags, runtimeOptionBindings); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := len(runtimeOptionBindings), 36; got != want {
+	if got, want := len(runtimeOptionBindings), 46; got != want {
 		t.Fatalf("runtime option binding count = %d, want %d", got, want)
 	}
 
@@ -133,8 +133,8 @@ func TestParseRuntimeOptionsPrecedenceAndTypes(t *testing.T) {
 		}
 		if config.httpAddress != "127.0.0.1:8080" ||
 			config.tenantID != "default" || config.hecEnabled ||
-			config.masterKeyPath != "open-splunk.db.key" ||
-			config.searchArtifactDir != "open-splunk.db.search-artifacts" ||
+			config.masterKeyPath != "data/master.key" ||
+			config.searchArtifactDir != "data/search-cache" ||
 			config.logLevel != "info" || config.logFormat != "json" {
 			t.Fatalf("default runtime configuration = %#v", config)
 		}
@@ -146,7 +146,7 @@ func TestParseRuntimeOptionsPrecedenceAndTypes(t *testing.T) {
 			"OPEN_SPLUNK_SERVER_LOG_FORMAT":                                     "CONSOLE",
 			"OPEN_SPLUNK_SERVER_HTTP_LISTEN_ADDRESS":                            "0.0.0.0:8081",
 			"OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO":                   "true",
-			"OPEN_SPLUNK_SERVER_CONTROL_DATABASE_FILE":                          "/state/control.db",
+			"OPEN_SPLUNK_SERVER_POSTGRES_DSN":                                   "postgres://postgres@localhost/control?sslmode=disable",
 			"OPEN_SPLUNK_SERVER_SEARCH_HISTORY_MAXIMUM_AGE":                     "6h",
 			"OPEN_SPLUNK_SERVER_SEARCH_HISTORY_MAXIMUM_ENTRIES_PER_OWNER":       "37",
 			"OPEN_SPLUNK_SERVER_SEARCH_ATTEMPT_AUDIT_MAXIMUM_RETAINED_ATTEMPTS": "41",
@@ -156,9 +156,9 @@ func TestParseRuntimeOptionsPrecedenceAndTypes(t *testing.T) {
 		}
 		if config.logLevel != "DEBUG" || config.logFormat != "CONSOLE" ||
 			config.httpAddress != "0.0.0.0:8081" || !config.trustForwardedProto ||
-			config.controlDBPath != "/state/control.db" ||
-			config.masterKeyPath != "/state/control.db.key" ||
-			config.searchArtifactDir != "/state/control.db.search-artifacts" ||
+			config.postgresDSN != "postgres://postgres@localhost/control?sslmode=disable" ||
+			config.masterKeyPath != "data/master.key" ||
+			config.searchArtifactDir != "data/search-cache" ||
 			config.searchHistoryMaximumAge != 6*time.Hour ||
 			config.searchHistoryMaximumEntriesPerOwner != 37 ||
 			config.searchAttemptAuditMaximumRetainedAttempts != 41 {
@@ -233,14 +233,14 @@ func TestParseRuntimeOptionsRejectsInvalidLoggingValues(t *testing.T) {
 func TestParseRuntimeOptionsCredentialGroupPrecedence(t *testing.T) {
 	t.Run("environment raw", func(t *testing.T) {
 		config, environment, err := parseRuntimeOptionsForTest(t, nil, map[string]string{
-			"OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN": "environment-secret",
+			"OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD": "environment-secret",
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if config.administratorToken != "environment-secret" ||
-			!environment.removed["OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN"] {
-			t.Fatalf("administrator environment result = (%#v, %#v)", config, environment)
+		if config.clickhousePassword != "environment-secret" ||
+			!environment.removed["OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD"] {
+			t.Fatalf("credential environment result = (%#v, %#v)", config, environment)
 		}
 	})
 
@@ -274,16 +274,16 @@ func TestParseRuntimeOptionsCredentialGroupPrecedence(t *testing.T) {
 
 	t.Run("CLI file overrides both environment forms", func(t *testing.T) {
 		config, environment, err := parseRuntimeOptionsForTest(t, []string{
-			"-administrator-token-file=/cli/admin-token",
+			"-clickhouse-password-file=/cli/admin-token",
 		}, map[string]string{
-			"OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN":      "environment-secret",
-			"OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN_FILE": "/environment/admin-token",
+			"OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD":      "environment-secret",
+			"OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD_FILE": "/environment/admin-token",
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if config.administratorToken != "" || config.administratorTokenFile != "/cli/admin-token" ||
-			!environment.removed["OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN"] {
+		if config.clickhousePassword != "" || config.clickhousePasswordFile != "/cli/admin-token" ||
+			!environment.removed["OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD"] {
 			t.Fatalf("CLI credential-file result = (%#v, %#v)", config, environment)
 		}
 	})
@@ -291,8 +291,8 @@ func TestParseRuntimeOptionsCredentialGroupPrecedence(t *testing.T) {
 	t.Run("CLI raw and file conflict", func(t *testing.T) {
 		const secret = "cli-secret-must-not-leak"
 		_, _, err := parseRuntimeOptionsForTest(t, []string{
-			"-administrator-token=" + secret,
-			"-administrator-token-file=/run/secrets/admin",
+			"-clickhouse-password=" + secret,
+			"-clickhouse-password-file=/run/secrets/admin",
 		}, nil)
 		if err == nil || strings.Contains(err.Error(), secret) {
 			t.Fatalf("CLI credential conflict error = %v", err)
@@ -302,11 +302,11 @@ func TestParseRuntimeOptionsCredentialGroupPrecedence(t *testing.T) {
 	t.Run("secret removed when another environment value is invalid", func(t *testing.T) {
 		const secret = "secret-must-not-leak"
 		_, environment, err := parseRuntimeOptionsForTest(t, nil, map[string]string{
-			"OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN":          secret,
+			"OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD":          secret,
 			"OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO": "invalid",
 		})
 		if err == nil || strings.Contains(err.Error(), secret) ||
-			!environment.removed["OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN"] {
+			!environment.removed["OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD"] {
 			t.Fatalf("invalid environment cleanup = (%v, %#v)", err, environment)
 		}
 	})

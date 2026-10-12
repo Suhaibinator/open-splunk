@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"path/filepath"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	"slices"
 	"strings"
 	"sync"
@@ -37,7 +39,7 @@ var (
 // collapsed helpers onto the saved_search_id tiebreaker for every sort.
 func openTiedStore(t *testing.T) (*Store, []string) {
 	t.Helper()
-	database, err := control.Open(context.Background(), filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := control.Open(context.Background(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("control.Open() error = %v", err)
 	}
@@ -59,7 +61,7 @@ func openTiedStore(t *testing.T) (*Store, []string) {
 	for position, name := range adversarialNames {
 		created, err := store.Create(
 			context.Background(),
-			AccessScope{OwnerID: adversarialOwner},
+			AccessScope{OwnerID: adversarialOwner, OrganizationID: "1"},
 			savedSearchDefinition(name, adversarialApps[position]),
 		)
 		if err != nil {
@@ -74,7 +76,7 @@ func openTiedStore(t *testing.T) (*Store, []string) {
 // fingerprint for the request but whatever key shape the caller chose.
 func adversarialToken(t *testing.T, request ListRequest, cursor listCursor) string {
 	t.Helper()
-	normalized, err := normalizeListRequest(AccessScope{OwnerID: adversarialOwner}, request)
+	normalized, err := normalizeListRequest(AccessScope{OwnerID: adversarialOwner, OrganizationID: "1"}, request)
 	if err != nil {
 		t.Fatalf("normalizeListRequest() error = %v", err)
 	}
@@ -91,13 +93,15 @@ func adversarialToken(t *testing.T, request ListRequest, cursor listCursor) stri
 
 func adversarialList(t *testing.T, store *Store, request ListRequest) (ListResult, error) {
 	t.Helper()
-	return store.List(context.Background(), AccessScope{OwnerID: adversarialOwner}, request)
+	return store.List(context.Background(), AccessScope{OwnerID: adversarialOwner, OrganizationID:
+
+	// TestListRejectsMismatchedCursorKeyShapes replays hash-valid cursors whose key
+	// shape does not match the sort field. The collapsed cursor helper dereferences
+	// IntegerKey unconditionally for time sorts, so a hash-valid integer-less
+	// cursor is the panic hazard.
+	"1"}, request)
 }
 
-// TestListRejectsMismatchedCursorKeyShapes replays hash-valid cursors whose key
-// shape does not match the sort field. The collapsed cursor helper dereferences
-// IntegerKey unconditionally for time sorts, so a hash-valid integer-less
-// cursor is the panic hazard.
 func TestListRejectsMismatchedCursorKeyShapes(t *testing.T) {
 	store, ids := openTiedStore(t)
 	integer := int64(1)
@@ -269,7 +273,7 @@ func TestListConcurrentSortsDoNotShareQueryState(t *testing.T) {
 			for _, direction := range adversarialDirections {
 				group.Go(func() {
 					want := tiedOrder(ids, sortBy, direction)
-					page, err := store.List(context.Background(), AccessScope{OwnerID: adversarialOwner}, ListRequest{
+					page, err := store.List(context.Background(), AccessScope{OwnerID: adversarialOwner, OrganizationID: "1"}, ListRequest{
 						PageSize: uint32(len(ids)), SortBy: sortBy, SortDirection: direction, IncludeTotal: true,
 					})
 					if err != nil {

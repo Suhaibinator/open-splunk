@@ -191,7 +191,7 @@ func (handler *Handler) Shutdown(ctx context.Context) error {
 	if err := handler.lifecycle.wait(ctx); err != nil {
 		// The graceful budget is also the request-admission budget. Cancel
 		// every protected request context before the runtime performs its final
-		// ownership wait; SQLite and ClickHouse boundaries must honor it.
+		// ownership wait; PostgreSQL and ClickHouse boundaries must honor it.
 		handler.lifecycle.cancelActive()
 		return err
 	}

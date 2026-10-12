@@ -8,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
 	"fortio.org/safecast"
 	"github.com/Suhaibinator/open-splunk/internal/alerts"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"github.com/Suhaibinator/open-splunk/internal/scheduler"
 	"github.com/Suhaibinator/open-splunk/internal/searchretention"
 	"github.com/google/uuid"
@@ -21,16 +23,18 @@ import (
 )
 
 type SQLRepositoryOptions struct {
-	Clock       func() time.Time
-	IDGenerator func() (string, error)
-	TenantID    string
+	ResolveSourceScope func(context.Context, alerts.AccessScope) (alerts.AccessScope, error)
+	Clock              func() time.Time
+	IDGenerator        func() (string, error)
+	TenantID           string
 }
 
 type SQLRepository struct {
-	db          *gorm.DB
-	clock       func() time.Time
-	idGenerator func() (string, error)
-	tenantID    string
+	resolveSourceScope func(context.Context, alerts.AccessScope) (alerts.AccessScope, error)
+	db                 *gorm.DB
+	clock              func() time.Time
+	idGenerator        func() (string, error)
+	tenantID           string
 }
 
 var (
@@ -62,6 +66,7 @@ const (
 )
 
 type alertSQLRecord struct {
+	OrganizationID      int64                `gorm:"column:organization_id"`
 	AlertID             string               `gorm:"column:alert_id;primaryKey"`
 	Version             int64                `gorm:"column:version"`
 	TenantID            string               `gorm:"column:tenant_id"`
@@ -132,7 +137,7 @@ func NewSQLRepository(database *control.DB, options SQLRepositoryOptions) (*SQLR
 	if idGenerator == nil {
 		idGenerator = func() (string, error) { return uuid.NewString(), nil }
 	}
-	return &SQLRepository{db: database.GORMDB(), clock: clock, idGenerator: idGenerator, tenantID: options.TenantID}, nil
+	return &SQLRepository{db: database.GORMDB(), resolveSourceScope: options.ResolveSourceScope, clock: clock, idGenerator: idGenerator, tenantID: options.TenantID}, nil
 }
 
 func (repository *SQLRepository) FindCreateReplay(ctx context.Context, ownerID, clientRequestID string, fingerprint [32]byte) (alerts.Alert, bool, error) {
@@ -150,6 +155,12 @@ func (repository *SQLRepository) FindCreateReplay(ctx context.Context, ownerID, 
 }
 
 func (repository *SQLRepository) Create(ctx context.Context, input alerts.CreateRecord) (alerts.CreateResult, error) {
+	var scopeErr error
+	ctx, scopeErr = alerts.WithAccessScope(ctx, alerts.AccessScope{OwnerID: input.OwnerID, OrganizationID: input.OrganizationID})
+	if scopeErr != nil {
+		return alerts.CreateResult{}, scopeErr
+	}
+	organizationID, _ := strconv.ParseInt(input.OrganizationID, 10, 64)
 	if input.State != alerts.AlertDisabled {
 		return alerts.CreateResult{}, fmt.Errorf("%w: new alerts must be disabled", alerts.ErrInvalidArgument)
 	}
@@ -177,7 +188,7 @@ func (repository *SQLRepository) Create(ctx context.Context, input alerts.Create
 		createRequestSHA256 = append([]byte(nil), input.RequestFingerprint[:]...)
 	}
 	record := alertSQLRecord{
-		AlertID: input.ID, Version: 1, TenantID: repository.tenantID, OwnerID: input.OwnerID,
+		AlertID: input.ID, Version: 1, TenantID: repository.tenantID, OwnerID: input.OwnerID, OrganizationID: organizationID,
 		ClientRequestID: clientRequestID, CreateRequestSHA256: createRequestSHA256,
 		AppID: input.Definition.Application, Name: input.Definition.Name, Enabled: 0, Definition: definition,
 		EndpointCiphertext: append([]byte(nil), input.Endpoint.Ciphertext...), EndpointNonce: append([]byte(nil), input.Endpoint.Nonce...),
@@ -187,7 +198,7 @@ func (repository *SQLRepository) Create(ctx context.Context, input alerts.Create
 		CreatedAt: input.CreatedAt.UTC().UnixMicro(), UpdatedAt: input.CreatedAt.UTC().UnixMicro(),
 	}
 	var created alerts.CreateResult
-	err = repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
 		if input.ClientRequestID != "" {
 			replayed, found, replayErr := repository.findCreateReplay(tx, input.OwnerID, input.ClientRequestID, input.RequestFingerprint)
 			if replayErr != nil {
@@ -199,13 +210,19 @@ func (repository *SQLRepository) Create(ctx context.Context, input alerts.Create
 			}
 		}
 		var count int64
-		if err := tx.Model(&alertSQLRecord{}).Where("tenant_id = ? AND owner_id = ?", repository.tenantID, input.OwnerID).Count(&count).Error; err != nil {
+		if err := scopedAlertQuery(tx.Model(&alertSQLRecord{}), "").Where("tenant_id = ? AND TRUE", repository.tenantID).Count(&count).Error; err != nil {
 			return err
 		}
 		if count >= alerts.MaximumAlertsPerOwner {
 			return alerts.ErrCapacity
 		}
+		if err := tx.SavePoint("alert_create_attempt").Error; err != nil {
+			return err
+		}
 		if err := tx.Create(&record).Error; err != nil {
+			if rollbackErr := tx.RollbackTo("alert_create_attempt").Error; rollbackErr != nil {
+				return rollbackErr
+			}
 			if strings.Contains(strings.ToLower(err.Error()), "unique") {
 				if input.ClientRequestID != "" {
 					replayed, found, replayErr := repository.findCreateReplay(tx, input.OwnerID, input.ClientRequestID, input.RequestFingerprint)
@@ -232,12 +249,12 @@ func (repository *SQLRepository) Create(ctx context.Context, input alerts.Create
 	return created, nil
 }
 
-func (repository *SQLRepository) findCreateReplay(tx *gorm.DB, ownerID, clientRequestID string, fingerprint [32]byte) (alerts.Alert, bool, error) {
+func (repository *SQLRepository) findCreateReplay(tx *gorm.DB, _ string, clientRequestID string, fingerprint [32]byte) (alerts.Alert, bool, error) {
 	var record alertSQLRecord
-	err := tx.Where(
-		"tenant_id = ? AND owner_id = ? AND client_request_id = ?",
+	err := scopedAlertQuery(tx, "").Where(
+		"tenant_id = ? AND TRUE AND client_request_id = ?",
 		repository.tenantID,
-		ownerID,
+
 		clientRequestID,
 	).Take(&record).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -256,9 +273,9 @@ func (repository *SQLRepository) findCreateReplay(tx *gorm.DB, ownerID, clientRe
 	return replayed, true, nil
 }
 
-func (repository *SQLRepository) GetSecretBearing(ctx context.Context, ownerID, id string) (alerts.Alert, error) {
+func (repository *SQLRepository) GetSecretBearing(ctx context.Context, _ string, id string) (alerts.Alert, error) {
 	var record alertSQLRecord
-	err := repository.db.WithContext(ctx).Where("tenant_id = ? AND owner_id = ? AND alert_id = ?", repository.tenantID, ownerID, id).Take(&record).Error
+	err := scopedAlertQuery(repository.db.WithContext(ctx), "").Where("tenant_id = ? AND TRUE AND alert_id = ?", repository.tenantID, id).Take(&record).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return alerts.Alert{}, alerts.ErrNotFound
 	}
@@ -268,11 +285,11 @@ func (repository *SQLRepository) GetSecretBearing(ctx context.Context, ownerID, 
 	return alertFromSQL(record)
 }
 
-func (repository *SQLRepository) GetSummary(ctx context.Context, ownerID, id string) (alerts.AlertSummary, error) {
+func (repository *SQLRepository) GetSummary(ctx context.Context, _ string, id string) (alerts.AlertSummary, error) {
 	var record alertSQLRecord
-	err := repository.db.WithContext(ctx).
-		Select("alert_id", "version", "tenant_id", "owner_id", "app_id", "name", "enabled", "definition_proto", "webhook_hostname", "secret_generation", "secret_rotated_at_unix_micro", "next_run_at_unix_micro", "last_outcome", "last_outcome_scheduled_at_unix_micro", "last_evaluated_at_unix_micro", "last_delivered_at_unix_micro", "created_at_unix_micro", "updated_at_unix_micro").
-		Where("tenant_id = ? AND owner_id = ? AND alert_id = ?", repository.tenantID, ownerID, id).Take(&record).Error
+	err := scopedAlertQuery(repository.db.WithContext(ctx).
+		Select("organization_id", "alert_id", "version", "tenant_id", "owner_id", "app_id", "name", "enabled", "definition_proto", "webhook_hostname", "secret_generation", "secret_rotated_at_unix_micro", "next_run_at_unix_micro", "last_outcome", "last_outcome_scheduled_at_unix_micro", "last_evaluated_at_unix_micro", "last_delivered_at_unix_micro", "created_at_unix_micro", "updated_at_unix_micro"), "").
+		Where("tenant_id = ? AND TRUE AND alert_id = ?", repository.tenantID, id).Take(&record).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return alerts.AlertSummary{}, alerts.ErrNotFound
 	}
@@ -286,14 +303,14 @@ func (repository *SQLRepository) GetSummary(ctx context.Context, ownerID, id str
 	return alertSummaryFromSQL(record, definition), nil
 }
 
-func (repository *SQLRepository) List(ctx context.Context, ownerID string, limit int) ([]alerts.AlertSummary, error) {
+func (repository *SQLRepository) List(ctx context.Context, _ string, limit int) ([]alerts.AlertSummary, error) {
 	if limit <= 0 || limit > alerts.MaximumAlertsPerOwner {
 		limit = alerts.MaximumAlertsPerOwner
 	}
 	var records []alertSQLRecord
-	err := repository.db.WithContext(ctx).
-		Select("alert_id", "version", "tenant_id", "owner_id", "app_id", "name", "enabled", "definition_proto", "webhook_hostname", "secret_generation", "secret_rotated_at_unix_micro", "next_run_at_unix_micro", "last_outcome", "last_outcome_scheduled_at_unix_micro", "last_evaluated_at_unix_micro", "last_delivered_at_unix_micro", "created_at_unix_micro", "updated_at_unix_micro").
-		Where("tenant_id = ? AND owner_id = ?", repository.tenantID, ownerID).
+	err := scopedAlertQuery(repository.db.WithContext(ctx).
+		Select("organization_id", "alert_id", "version", "tenant_id", "owner_id", "app_id", "name", "enabled", "definition_proto", "webhook_hostname", "secret_generation", "secret_rotated_at_unix_micro", "next_run_at_unix_micro", "last_outcome", "last_outcome_scheduled_at_unix_micro", "last_evaluated_at_unix_micro", "last_delivered_at_unix_micro", "created_at_unix_micro", "updated_at_unix_micro"), "").
+		Where("tenant_id = ? AND TRUE", repository.tenantID).
 		Order("updated_at_unix_micro DESC, alert_id DESC").Limit(limit).Find(&records).Error
 	if err != nil {
 		return nil, mapSQLError(ctx, "list alerts", err)
@@ -324,9 +341,9 @@ func (repository *SQLRepository) Update(ctx context.Context, input alerts.Update
 		"endpoint_generation": input.EndpointGeneration, "webhook_hostname": input.WebhookHostname, "updated_at_unix_micro": input.UpdatedAt.UTC().UnixMicro(),
 	}
 	var updated alerts.Alert
-	err = repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
 		var current alertSQLRecord
-		if err := tx.Where("tenant_id = ? AND owner_id = ? AND alert_id = ?", repository.tenantID, input.OwnerID, input.ID).Take(&current).Error; err != nil {
+		if err := scopedAlertQuery(tx, "").Where("tenant_id = ? AND TRUE AND alert_id = ?", repository.tenantID, input.ID).Take(&current).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return alerts.ErrNotFound
 			}
@@ -342,8 +359,8 @@ func (repository *SQLRepository) Update(ctx context.Context, input alerts.Update
 			}
 			updates["next_run_at_unix_micro"] = next.UnixMicro()
 		}
-		result := tx.Model(&alertSQLRecord{}).
-			Where("tenant_id = ? AND owner_id = ? AND alert_id = ? AND version = ?", repository.tenantID, input.OwnerID, input.ID, input.ExpectedVersion).
+		result := scopedAlertQuery(tx.Model(&alertSQLRecord{}), "").
+			Where("tenant_id = ? AND TRUE AND alert_id = ? AND version = ?", repository.tenantID, input.ID, input.ExpectedVersion).
 			Updates(updates)
 		if result.Error != nil {
 			if strings.Contains(strings.ToLower(result.Error.Error()), "unique") {
@@ -374,9 +391,9 @@ func (repository *SQLRepository) SetState(ctx context.Context, input alerts.SetS
 		return alerts.Alert{}, fmt.Errorf("%w: expected version exceeds storage bounds", alerts.ErrInvalidArgument)
 	}
 	var updated alerts.Alert
-	err := repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
 		var record alertSQLRecord
-		if err := tx.Where("tenant_id = ? AND owner_id = ? AND alert_id = ?", repository.tenantID, input.OwnerID, input.ID).Take(&record).Error; err != nil {
+		if err := scopedAlertQuery(tx, "").Where("tenant_id = ? AND TRUE AND alert_id = ?", repository.tenantID, input.ID).Take(&record).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return alerts.ErrNotFound
 			}
@@ -424,8 +441,8 @@ func (repository *SQLRepository) SetState(ctx context.Context, input alerts.SetS
 }
 
 func (repository *SQLRepository) RotateSecret(ctx context.Context, input alerts.RotateSecretRecord) (alerts.Alert, error) {
-	result := repository.db.WithContext(ctx).Model(&alertSQLRecord{}).
-		Where("tenant_id = ? AND owner_id = ? AND alert_id = ? AND version = ? AND secret_generation = ?", repository.tenantID, input.OwnerID, input.ID, input.ExpectedVersion, input.ExpectedGeneration).
+	result := scopedAlertQuery(repository.db.WithContext(ctx).Model(&alertSQLRecord{}), "").
+		Where("tenant_id = ? AND TRUE AND alert_id = ? AND version = ? AND secret_generation = ?", repository.tenantID, input.ID, input.ExpectedVersion, input.ExpectedGeneration).
 		Updates(map[string]any{
 			"version": gorm.Expr("version + 1"), "secret_generation": input.SecretGeneration.Generation,
 			"secret_ciphertext": input.SecretGeneration.Encrypted.Ciphertext, "secret_nonce": input.SecretGeneration.Encrypted.Nonce,
@@ -449,9 +466,9 @@ func (repository *SQLRepository) AuthorizeDelivery(ctx context.Context, input al
 		return "", fmt.Errorf("%w: secret generation exceeds storage bounds", alerts.ErrInvalidArgument)
 	}
 	var authorization alerts.DeliveryAuthorization
-	err = repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
 		var record alertSQLRecord
-		if err := tx.Select("secret_generation").Where("tenant_id = ? AND owner_id = ? AND alert_id = ?", repository.tenantID, input.OwnerID, input.AlertID).Take(&record).Error; err != nil {
+		if err := scopedAlertQuery(tx.Select("secret_generation"), "").Where("tenant_id = ? AND TRUE AND alert_id = ?", repository.tenantID, input.AlertID).Take(&record).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return alerts.ErrNotFound
 			}
@@ -499,9 +516,9 @@ func (repository *SQLRepository) DeleteIfIdle(ctx context.Context, input alerts.
 	if conversionErr != nil {
 		return fmt.Errorf("%w: expected version exceeds storage bounds", alerts.ErrInvalidArgument)
 	}
-	err := repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
 		var record alertSQLRecord
-		if err := tx.Select("version").Where("tenant_id = ? AND owner_id = ? AND alert_id = ?", repository.tenantID, input.OwnerID, input.ID).Take(&record).Error; err != nil {
+		if err := scopedAlertQuery(tx.Select("version"), "").Where("tenant_id = ? AND TRUE AND alert_id = ?", repository.tenantID, input.ID).Take(&record).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return alerts.ErrNotFound
 			}
@@ -534,7 +551,7 @@ func (repository *SQLRepository) ClaimDue(ctx context.Context, now time.Time, li
 		limit = alerts.MaximumAlertsPerOwner
 	}
 	claimed := make([]alerts.RunSnapshot, 0, limit)
-	err := repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
 		var records []alertSQLRecord
 		if err := tx.Where("tenant_id = ? AND enabled = 1 AND next_run_at_unix_micro <= ?", repository.tenantID, now.UTC().UnixMicro()).Order("next_run_at_unix_micro, alert_id").Limit(limit).Find(&records).Error; err != nil {
 			return err
@@ -578,7 +595,7 @@ func (repository *SQLRepository) ClaimDue(ctx context.Context, now time.Time, li
 				return errors.New("alerts: generate alert run ID")
 			}
 			snapshot := alerts.RunSnapshot{
-				AlertID: record.AlertID, AlertRunID: runID, AlertVersion: safecast.MustConv[uint64](record.Version), OwnerID: record.OwnerID,
+				AlertID: record.AlertID, AlertRunID: runID, AlertVersion: safecast.MustConv[uint64](record.Version), OwnerID: record.OwnerID, OrganizationID: strconv.FormatInt(record.OrganizationID, 10),
 				TenantID:   record.TenantID,
 				Definition: definition, Endpoint: alerts.EncryptedValue{Nonce: record.EndpointNonce, Ciphertext: record.EndpointCiphertext},
 				EndpointGeneration: safecast.MustConv[uint64](record.EndpointGeneration), SecretGeneration: alerts.SecretGeneration{
@@ -650,9 +667,9 @@ func (repository *SQLRepository) ClaimRunNow(ctx context.Context, ownerID, alert
 	now = now.UTC()
 	var snapshot alerts.RunSnapshot
 	active := false
-	err := repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
 		var record alertSQLRecord
-		if err := tx.Where("tenant_id = ? AND owner_id = ? AND alert_id = ?", repository.tenantID, ownerID, alertID).Take(&record).Error; err != nil {
+		if err := scopedAlertQuery(tx, "").Where("tenant_id = ? AND TRUE AND alert_id = ?", repository.tenantID, alertID).Take(&record).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return alerts.ErrNotFound
 			}
@@ -685,7 +702,7 @@ func (repository *SQLRepository) ClaimRunNow(ctx context.Context, ownerID, alert
 		}
 		snapshot = alerts.RunSnapshot{
 			AlertID: record.AlertID, AlertRunID: runID, AlertVersion: safecast.MustConv[uint64](record.Version),
-			OwnerID: record.OwnerID, TenantID: record.TenantID, Definition: definition,
+			OwnerID: record.OwnerID, OrganizationID: strconv.FormatInt(record.OrganizationID, 10), TenantID: record.TenantID, Definition: definition,
 			Endpoint:           alerts.EncryptedValue{Nonce: append([]byte(nil), record.EndpointNonce...), Ciphertext: append([]byte(nil), record.EndpointCiphertext...)},
 			EndpointGeneration: safecast.MustConv[uint64](record.EndpointGeneration),
 			SecretGeneration: alerts.SecretGeneration{
@@ -742,7 +759,7 @@ func (repository *SQLRepository) RecordOverlap(ctx context.Context, summary aler
 	if summary.AlertID == "" || summary.AlertRunID == "" || summary.ScheduledAt.IsZero() {
 		return fmt.Errorf("%w: overlap run identity and schedule are required", alerts.ErrInvalidArgument)
 	}
-	err := repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
 		var alert alertSQLRecord
 		if err := tx.Where("tenant_id = ? AND alert_id = ?", repository.tenantID, summary.AlertID).Take(&alert).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -752,7 +769,7 @@ func (repository *SQLRepository) RecordOverlap(ctx context.Context, summary aler
 		}
 		snapshot, err := json.Marshal(alerts.RunSnapshot{
 			AlertID: summary.AlertID, AlertRunID: summary.AlertRunID,
-			AlertVersion: safecast.MustConv[uint64](alert.Version), OwnerID: alert.OwnerID,
+			AlertVersion: safecast.MustConv[uint64](alert.Version), OwnerID: alert.OwnerID, OrganizationID: strconv.FormatInt(alert.OrganizationID, 10),
 			ScheduledAt: summary.ScheduledAt, ClaimedAt: summary.StartedAt,
 			MissedOccurrenceCount: summary.MissedOccurrenceCount,
 		})
@@ -806,7 +823,7 @@ func (repository *SQLRepository) AttachSearchJob(ctx context.Context, alertID, r
 		return nil
 	}
 	// A transport or driver can report an ambiguous commit after the update
-	// reached SQLite. Make an exact retry idempotent without allowing a caller
+	// reached PostgreSQL. Make an exact retry idempotent without allowing a caller
 	// to replace the immutable job identity or expiry.
 	var current alertRunSQLRecord
 	if err := repository.db.WithContext(ctx).
@@ -860,7 +877,7 @@ func (repository *SQLRepository) CompleteRun(ctx context.Context, summary alerts
 	} else if summary.Delivery.Category != "" && summary.Delivery.Category != alerts.DeliverySucceeded {
 		updates["failure_category"] = string(summary.Delivery.Category)
 	}
-	err = repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
 		var current alertRunSQLRecord
 		if err := tx.
 			Where("alert_id = ? AND alert_run_id = ?", summary.AlertID, summary.AlertRunID).
@@ -926,7 +943,7 @@ func databaseTimesEqual(actual, expected time.Time) bool {
 
 func (repository *SQLRepository) InterruptUnfinished(ctx context.Context, now time.Time) (int64, error) {
 	var interrupted int64
-	err := repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
 		var activeRuns []alertRunSQLRecord
 		if err := tx.Model(&alertRunSQLRecord{}).
 			Where("outcome = ? AND alert_id IN (SELECT alert_id FROM alerts WHERE tenant_id = ?)", persistedRunOutcomeActive, repository.tenantID).
@@ -959,14 +976,14 @@ func (repository *SQLRepository) InterruptUnfinished(ctx context.Context, now ti
 	return interrupted, nil
 }
 
-func (repository *SQLRepository) ListRuns(ctx context.Context, ownerID, alertID string, limit int) ([]alerts.RunSummary, error) {
+func (repository *SQLRepository) ListRuns(ctx context.Context, _ string, alertID string, limit int) ([]alerts.RunSummary, error) {
 	if limit <= 0 || limit > alerts.MaximumRunHistory {
 		limit = alerts.MaximumRunHistory
 	}
 	var records []alertRunSQLRecord
-	err := repository.db.WithContext(ctx).Table("alert_runs AS runs").
-		Select("runs.*").Joins("JOIN alerts ON alerts.alert_id = runs.alert_id").
-		Where("alerts.tenant_id = ? AND alerts.owner_id = ? AND runs.alert_id = ?", repository.tenantID, ownerID, alertID).
+	err := scopedAlertQuery(repository.db.WithContext(ctx).Table("alert_runs AS runs").
+		Select("runs.*").Joins("JOIN alerts ON alerts.alert_id = runs.alert_id"), "alerts.").
+		Where("alerts.tenant_id = ? AND TRUE AND runs.alert_id = ?", repository.tenantID, alertID).
 		Order("runs.scheduled_at_unix_micro DESC, runs.alert_run_id DESC").Limit(limit).Scan(&records).Error
 	if err != nil {
 		return nil, mapSQLError(ctx, "list alert runs", err)
@@ -978,9 +995,9 @@ func (repository *SQLRepository) ListRuns(ctx context.Context, ownerID, alertID 
 	return result, nil
 }
 
-func (repository *SQLRepository) notFoundOrConflict(tx *gorm.DB, ownerID, id string) error {
+func (repository *SQLRepository) notFoundOrConflict(tx *gorm.DB, _ string, id string) error {
 	var count int64
-	if err := tx.Model(&alertSQLRecord{}).Where("tenant_id = ? AND owner_id = ? AND alert_id = ?", repository.tenantID, ownerID, id).Count(&count).Error; err != nil {
+	if err := scopedAlertQuery(tx.Model(&alertSQLRecord{}), "").Where("tenant_id = ? AND TRUE AND alert_id = ?", repository.tenantID, id).Count(&count).Error; err != nil {
 		return err
 	}
 	if count == 0 {
@@ -990,16 +1007,19 @@ func (repository *SQLRepository) notFoundOrConflict(tx *gorm.DB, ownerID, id str
 }
 
 func (repository *SQLRepository) lookupConflict(ctx context.Context, ownerID, id string) error {
-	return mapSQLError(ctx, "read alert conflict", repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return repository.notFoundOrConflict(tx, ownerID, id) }))
+	return mapSQLError(ctx, "read alert conflict", pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error { return repository.notFoundOrConflict(tx, ownerID, id) }))
 }
 
 func alertFromSQL(record alertSQLRecord) (alerts.Alert, error) {
+	if record.OrganizationID <= 0 {
+		return alerts.Alert{}, errors.New("persisted alert organization is invalid")
+	}
 	definition, err := decodeDefinition(record.Definition)
 	if err != nil {
 		return alerts.Alert{}, err
 	}
 	return alerts.Alert{
-		ID: record.AlertID, OwnerID: record.OwnerID, Version: safecast.MustConv[uint64](record.Version), State: stateFromEnabled(record.Enabled), Definition: definition,
+		ID: record.AlertID, OwnerID: record.OwnerID, OrganizationID: strconv.FormatInt(record.OrganizationID, 10), Version: safecast.MustConv[uint64](record.Version), State: stateFromEnabled(record.Enabled), Definition: definition,
 		Endpoint: alerts.EncryptedValue{Nonce: append([]byte(nil), record.EndpointNonce...), Ciphertext: append([]byte(nil), record.EndpointCiphertext...)}, EndpointGeneration: safecast.MustConv[uint64](record.EndpointGeneration),
 		WebhookHostname:  record.WebhookHostname,
 		SecretGeneration: alerts.SecretGeneration{Generation: safecast.MustConv[uint64](record.SecretGeneration), Encrypted: alerts.EncryptedValue{Nonce: append([]byte(nil), record.SecretNonce...), Ciphertext: append([]byte(nil), record.SecretCiphertext...)}, CreatedAt: databaseTime(record.SecretRotatedAt)},
@@ -1011,7 +1031,7 @@ func alertFromSQL(record alertSQLRecord) (alerts.Alert, error) {
 
 func alertSummaryFromSQL(record alertSQLRecord, definition alerts.Definition) alerts.AlertSummary {
 	return alerts.AlertSummary{
-		ID: record.AlertID, OwnerID: record.OwnerID, Version: safecast.MustConv[uint64](record.Version), State: stateFromEnabled(record.Enabled),
+		ID: record.AlertID, OwnerID: record.OwnerID, OrganizationID: strconv.FormatInt(record.OrganizationID, 10), Version: safecast.MustConv[uint64](record.Version), State: stateFromEnabled(record.Enabled),
 		Definition: definition, WebhookHostname: record.WebhookHostname, SecretGeneration: safecast.MustConv[uint64](record.SecretGeneration),
 		SecretRotatedAt: databaseTime(record.SecretRotatedAt), NextRunAt: optionalDatabaseTime(record.NextRunAt),
 		LastOutcome: optionalOutcomeFromSQL(record.LastOutcome), LastEvaluatedAt: optionalDatabaseTime(record.LastEvaluatedAt),
@@ -1221,7 +1241,7 @@ func summaryOutcomeToSQL(outcome alerts.RunOutcome) (persistedRunOutcome, error)
 }
 
 func pruneRuns(tx *gorm.DB, alertID string) error {
-	return tx.Exec(`DELETE FROM alert_runs WHERE alert_id = ? AND outcome <> ? AND alert_run_id IN (SELECT alert_run_id FROM alert_runs WHERE alert_id = ? AND outcome <> ? ORDER BY scheduled_at_unix_micro DESC, alert_run_id DESC LIMIT -1 OFFSET ?)`, alertID, persistedRunOutcomeActive, alertID, persistedRunOutcomeActive, alerts.MaximumRunHistory).Error
+	return tx.Exec(`DELETE FROM alert_runs WHERE alert_id = ? AND outcome <> ? AND alert_run_id IN (SELECT alert_run_id FROM alert_runs WHERE alert_id = ? AND outcome <> ? ORDER BY scheduled_at_unix_micro DESC, alert_run_id DESC OFFSET ?)`, alertID, persistedRunOutcomeActive, alertID, persistedRunOutcomeActive, alerts.MaximumRunHistory).Error
 }
 
 func stateFromEnabled(value int64) alerts.AlertState {
@@ -1335,4 +1355,39 @@ func mapSQLError(ctx context.Context, operation string, err error) error {
 		return alerts.ErrNotFound
 	}
 	return fmt.Errorf("alerts: %s: %w", operation, err)
+}
+
+// ListRuntimeOwners enumerates enabled alert owners for startup validation,
+// without exposing endpoint or signing-secret material.
+func (repository *SQLRepository) ListRuntimeOwners(ctx context.Context, after string, limit int) ([]string, error) {
+	if ctx == nil || limit < 1 || limit > 256 {
+		return nil, alerts.ErrInvalidArgument
+	}
+	var owners []string
+	err := repository.db.WithContext(ctx).Model(&alertSQLRecord{}).Distinct("owner_id").Where("tenant_id = ? AND enabled = 1 AND owner_id > ?", repository.tenantID, after).Order("owner_id").Limit(limit).Pluck("owner_id", &owners).Error
+	if err != nil {
+		return nil, mapSQLError(ctx, "list runtime alert owners", err)
+	}
+	return owners, nil
+}
+
+func scopedAlertQuery(database *gorm.DB, prefix string) *gorm.DB {
+	scope, ok := alerts.AccessScopeFromContext(database.Statement.Context)
+	if !ok {
+		return database.Where("FALSE")
+	}
+	if scope.OrganizationID != "" {
+		database = database.Where(prefix+"organization_id = ?", scope.OrganizationID)
+	}
+	if !scope.SiteAdministrator {
+		database = database.Where(prefix+"owner_id = ?", scope.OwnerID)
+	}
+	return database
+}
+
+func (repository *SQLRepository) ResolveSourceScope(ctx context.Context, scope alerts.AccessScope) (alerts.AccessScope, error) {
+	if repository.resolveSourceScope != nil {
+		return repository.resolveSourceScope(ctx, scope)
+	}
+	return alerts.NormalizeAccessScope(scope)
 }

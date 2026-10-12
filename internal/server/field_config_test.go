@@ -33,7 +33,7 @@ func TestSearchFieldServiceLimitsAndTypedNilAreValidated(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := NewHandler(Config{
+			_, err := newAuthenticatedTestHandler(Config{
 				SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: &fakeSavedSearches{},
 				SearchFields: &fakeSearchFields{
 					maximumFields: test.maximumFields, maximumPage: test.maximumPage,
@@ -69,7 +69,7 @@ func TestSearchFieldServiceLimitsAndTypedNilAreValidated(t *testing.T) {
 	}
 
 	var typedNil *fakeSearchFields
-	handler, err := NewHandler(Config{
+	handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: &fakeSavedSearches{},
 		SearchFields: typedNil, WebUI: testUI(),
 	})

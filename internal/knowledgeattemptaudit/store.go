@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"fortio.org/safecast"
-	"gorm.io/gorm"
-
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"gorm.io/gorm"
 )
 
 // Appender is the fail-closed dependency intended for future authenticated
@@ -73,7 +73,7 @@ func validateStartupIntegrity(
 	ctx context.Context,
 	database *gorm.DB,
 ) (returnedErr error) {
-	tx := database.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(database.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return mapStoreError(ctx, "begin startup validation", tx.Error)
 	}
@@ -114,7 +114,7 @@ func (store *Store) AppendRejected(
 	if err != nil {
 		return err
 	}
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(store.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return mapStoreError(ctx, "begin rejected-attempt append", tx.Error)
 	}
@@ -353,11 +353,11 @@ func validateTenantAppendBoundary(database *gorm.DB, state tenantStateRecord) er
 	if state.RetainedCount == 0 {
 		var eventExists int64
 		if err := database.Raw(`
-			SELECT EXISTS (
+			SELECT CASE WHEN EXISTS (
 				SELECT 1 FROM knowledge_attempt_audit_events
 				WHERE tenant_id = ? LIMIT 1
 			)
-		`, state.TenantID).Scan(&eventExists).Error; err != nil {
+		 THEN 1 ELSE 0 END`, state.TenantID).Scan(&eventExists).Error; err != nil {
 			return err
 		}
 		if eventExists != 0 {

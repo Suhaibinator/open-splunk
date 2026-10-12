@@ -1,3 +1,4 @@
+import { currentOrganizationId } from "@/lib/api/identity-session";
 import { browserClientRequestId, type BrowserCreateRequestOptions } from "@/lib/api/client-request-id";
 import {
   CsvHeaderMode,
@@ -774,7 +775,6 @@ export async function cancelServerExport(
 }
 
 export interface DownloadedExportArtifact {
-  blob: Blob;
   fileName: string;
   mediaType: string;
   sizeBytes: bigint;
@@ -783,7 +783,7 @@ export interface DownloadedExportArtifact {
 
 export interface DownloadServerExportOptions extends ProtobufRequestOptions {
   apiBaseUrl?: string;
-  fetch?: typeof globalThis.fetch;
+  navigate?: (url: string, fileName: string) => void;
 }
 
 function servingOrigin(apiBaseUrl: string | undefined): URL {
@@ -795,25 +795,25 @@ function servingOrigin(apiBaseUrl: string | undefined): URL {
   return new URL(window.location.origin);
 }
 
-function validatedDownloadUrl(downloadPath: string, apiBaseUrl: string | undefined): string {
+export function nativeExportDownloadUrl(exportJobId: string, apiBaseUrl?: string): string {
   const base = servingOrigin(apiBaseUrl);
-  const url = new URL(downloadPath, base);
-  if (
-    url.origin !== base.origin
-    || url.pathname !== "/api/search/exports/download"
-    || url.search.length > 0
-    || url.hash.length > 0
-    || url.username.length > 0
-    || url.password.length > 0
-  ) {
-    throw new Error("The server returned an invalid export download path.");
-  }
+  const url = new URL("/api/search/exports/download", base);
+  url.searchParams.set("export_job_id", exportJobId);
+  const organizationId = currentOrganizationId();
+  if (organizationId !== null) url.searchParams.set("organization_id", organizationId.toString());
   return url.toString();
 }
 
+function navigateToDownload(url: string, fileName: string): void {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+}
+
 /**
- * Issues and immediately redeems a one-time download grant. The token is kept
- * inside this call and is never returned, persisted, or placed in a URL.
+ * Starts a native cookie-authenticated download. The browser streams the file
+ * to disk; this method never fetches or materializes the artifact body.
  */
 export async function downloadServerExport(
   client: OpenSplunkApiClient,
@@ -830,50 +830,29 @@ export async function downloadServerExport(
   try {
     grantResponse = await client.exports.get({
       exportJobId: id,
-      issueDownloadGrant: true,
+      issueDownloadGrant: false,
     }, options);
   } catch (error) {
     if (isAdvertisedFeatureRouteUnavailable(error)) return optionalRouteUnavailable;
     throw error;
   }
   const job = grantResponse.exportJob;
-  const grant = grantResponse.downloadGrant;
   const artifact = job?.artifact;
   if (
     job === undefined
     || !exportCanDownload(job)
     || artifact === undefined
-    || grant === undefined
-    || grant.expiresAt === undefined
   ) {
     throw new Error("The export artifact is not ready to download.");
   }
-  const url = validatedDownloadUrl(grant.downloadPath, options.apiBaseUrl);
-  const fetchImplementation = options.fetch ?? globalThis.fetch.bind(globalThis);
-  const response = await fetchImplementation(url, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${grant.downloadToken}` },
-    cache: "no-store",
-    credentials: "include",
-    signal: options.signal,
-  });
-  if (!response.ok) {
-    const responseBody = await response.text();
-    throw new HttpError({
-      status: response.status,
-      statusText: response.statusText,
-      message: responseBody || `Export download failed with HTTP ${response.status}.`,
-      url,
-      responseBody: responseBody || undefined,
-    });
-  }
-  const blob = await response.blob();
+  if (options.signal?.aborted) throw options.signal.reason ?? new DOMException("Download was canceled.", "AbortError");
+  const url = nativeExportDownloadUrl(id, options.apiBaseUrl);
+  (options.navigate ?? navigateToDownload)(url, artifact.fileName);
   return {
     status: "available",
     value: {
-      blob,
       fileName: artifact.fileName,
-      mediaType: artifact.mediaType || response.headers.get("Content-Type") || "application/octet-stream",
+      mediaType: artifact.mediaType || "application/octet-stream",
       sizeBytes: artifact.sizeBytes,
       rowCount: artifact.rowCount,
     },

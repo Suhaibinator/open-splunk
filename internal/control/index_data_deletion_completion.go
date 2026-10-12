@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"fortio.org/safecast"
-	"gorm.io/gorm"
-
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
+	"gorm.io/gorm"
 )
 
 // IndexDataDeletionCompletion is the immutable terminal audit for one
@@ -63,7 +63,7 @@ func (db *DB) CompleteIndexDataDeletion(
 		)
 	}
 
-	tx := database.Begin()
+	tx := pgmeta.Begin(database)
 	if tx.Error != nil {
 		return IndexDataDeletionCompletion{}, fmt.Errorf(
 			"begin index data deletion completion: %w",

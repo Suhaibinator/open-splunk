@@ -1,3 +1,4 @@
+import { publishIdentity } from "@/lib/api/identity-session";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -8,9 +9,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { AppState } from "@/gen/ts/open_splunk/app";
 import { GetSystemBootstrapResponse } from "@/gen/ts/open_splunk/system_api";
 import {
-  clearAdministratorBearerToken,
+  clearIdentitySession,
   invalidateAppCatalog,
-  setAdministratorBearerToken,
   type OpenSplunkApiClient,
 } from "@/lib/api";
 import * as clientModule from "@/lib/api/open-splunk-client";
@@ -148,7 +148,7 @@ test("a cross-tab catalog invalidation refreshes an already mounted product shel
   }
 });
 
-test("an administrator session change hides the prior catalog and rejects its late refresh", async () => {
+test("an authenticated viewer change hides the prior catalog and rejects its late refresh", async () => {
   const realFactory = clientModule.createOpenSplunkApiClient;
   const staleRefresh = deferred<GetSystemBootstrapResponse>();
   const nextSession = deferred<GetSystemBootstrapResponse>();
@@ -180,7 +180,7 @@ test("an administrator session change hides the prior catalog and rejects its la
 
     await act(async () => invalidateAppCatalog("https://session-catalog.test/"));
     assert.equal(bootstrapCalls, 2);
-    await act(async () => setAdministratorBearerToken("a".repeat(32)));
+    await act(async () => publishIdentity({ status: "authenticated", user: { id: 2n, email: "b@example.com", name: "B", userType: 1 }, organizations: [], organizationId: null, error: null }, true));
     assert.equal(bootstrapCalls, 3);
     assert.doesNotMatch(container.textContent ?? "", /Tenant A/u);
 
@@ -194,7 +194,7 @@ test("an administrator session change hides the prior catalog and rejects its la
   } finally {
     await act(async () => root.unmount());
     container.parentNode?.removeChild(container);
-    clearAdministratorBearerToken();
+    clearIdentitySession();
     (clientModule as unknown as { createOpenSplunkApiClient: typeof realFactory }).createOpenSplunkApiClient = realFactory;
   }
 });

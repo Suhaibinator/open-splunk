@@ -7,6 +7,7 @@ import (
 	"math"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,7 +23,6 @@ import (
 const (
 	maximumExportDownloadDuration = 30 * time.Minute
 	exportDownloadBufferBytes     = 32 << 10
-	exportDownloadRealm           = `Bearer realm="open-splunk-export"`
 )
 
 var exportDownloadBuffers = sync.Pool{New: func() any {
@@ -30,18 +30,34 @@ var exportDownloadBuffers = sync.Pool{New: func() any {
 	return &buffer
 }}
 
-// downloadExport redeems a one-time capability and streams its pinned
+// downloadExport authorizes the current user, creates an internal one-time
+// capability and streams its pinned
 // artifact. The route deliberately bypasses protobuf decoding and the short
 // synchronous API timeout, but remains behind browser-origin validation, a
 // dedicated download admission bound, and an explicit transport deadline.
 func (handler *apiHandler) downloadExport(response http.ResponseWriter, request *http.Request) {
-	if !validExportDownloadShape(request) {
+	if !validAuthenticatedExportDownloadShape(request) {
 		writeAPIError(response, http.StatusBadRequest, "download request is invalid")
 		return
 	}
-	token, ok := strictBearerToken(request.Header.Values("Authorization"))
-	if !ok {
-		writeInvalidDownloadGrant(response)
+	grant, grantErr := handler.exports.CreateDownloadGrant(request.Context(), handler.accessScope(request.Context()), request.URL.Query().Get("export_job_id"))
+	if grantErr != nil {
+		switch {
+		case errors.Is(grantErr, exportjobs.ErrDownloadGrantCapacity):
+			response.Header().Set("Retry-After", "1")
+			writeAPIError(response, http.StatusTooManyRequests, "download capacity is exhausted")
+		case errors.Is(grantErr, exportjobs.ErrSourceNotReady), errors.Is(grantErr, exportjobs.ErrSourceUnavailable):
+			writeAPIError(response, http.StatusConflict, "export artifact is unavailable")
+		case errors.Is(grantErr, exportjobs.ErrSourceExpired):
+			writeAPIError(response, http.StatusGone, "export artifact expired")
+		default:
+			writeAPIError(response, http.StatusForbidden, "export download access is denied")
+		}
+		return
+	}
+	token := grant.Token
+	if token == "" {
+		writeAPIError(response, http.StatusServiceUnavailable, "download is unavailable")
 		return
 	}
 	if err := request.Context().Err(); err != nil {
@@ -140,29 +156,20 @@ func (handler *apiHandler) downloadExport(response http.ResponseWriter, request 
 	}
 }
 
-func validExportDownloadShape(request *http.Request) bool {
-	if request == nil || request.Method != http.MethodGet || request.URL == nil ||
-		request.URL.RawQuery != "" || request.URL.ForceQuery || request.URL.Opaque != "" || request.URL.User != nil ||
-		len(request.Header.Values("Range")) != 0 || len(request.TransferEncoding) != 0 || request.ContentLength != 0 {
+func validAuthenticatedExportDownloadShape(request *http.Request) bool {
+	if request == nil || request.Method != http.MethodGet || request.URL == nil || request.URL.Opaque != "" || request.URL.User != nil || request.URL.ForceQuery || len(request.Header.Values("Range")) != 0 || len(request.TransferEncoding) != 0 || request.ContentLength != 0 {
 		return false
 	}
-	return true
-}
-
-func strictBearerToken(values []string) (string, bool) {
-	if len(values) != 1 {
-		return "", false
+	values, err := url.ParseQuery(request.URL.RawQuery)
+	if err != nil {
+		return false
 	}
-	value := values[0]
-	if strings.Count(value, " ") != 1 || strings.Contains(value, ",") {
-		return "", false
+	for key, entries := range values {
+		if key != "export_job_id" && key != "organization_id" || len(entries) != 1 {
+			return false
+		}
 	}
-	scheme, token, found := strings.Cut(value, " ")
-	if !found || !strings.EqualFold(scheme, "Bearer") || token == "" ||
-		strings.IndexFunc(token, unicode.IsSpace) >= 0 {
-		return "", false
-	}
-	return token, true
+	return validateBoundedIdentifier(values.Get("export_job_id"), maximumAdminObjectIDBytes, false) == nil
 }
 
 func validDownloadArtifact(artifact exportjobs.Artifact) (string, bool) {
@@ -199,6 +206,5 @@ func writeDownloadBytes(ctx context.Context, response http.ResponseWriter, paylo
 }
 
 func writeInvalidDownloadGrant(response http.ResponseWriter) {
-	response.Header().Set("WWW-Authenticate", exportDownloadRealm)
 	writeAPIError(response, http.StatusUnauthorized, "download grant is invalid")
 }

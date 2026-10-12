@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestRevalidateCollectorInTransactionDoesNotRecordTokenUse(t *testing.T) {
@@ -33,14 +35,14 @@ func TestRevalidateCollectorInTransactionDoesNotRecordTokenUse(t *testing.T) {
 		CreateCollectorTokenRequest{
 			Name:              "collector",
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		},
 	)
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
 	}
 
-	tx := database.GORMDB().WithContext(ctx).Begin(
+	tx := pgmeta.Begin(database.GORMDB().WithContext(ctx),
 		&sql.TxOptions{ReadOnly: true},
 	)
 	if tx.Error != nil {
@@ -142,8 +144,8 @@ func TestLeaseRevalidationReturnsIdentityWithDeferredIndexAuthorityOnly(t *testi
 			mutate: func(t *testing.T, ctx context.Context, database *control.DB, index control.Index) {
 				if _, err := database.SQLDB().ExecContext(ctx, `
 					UPDATE indexes
-					SET retention_nanoseconds = ?
-					WHERE index_id = ?`, int64(8_000_000_000*time.Second), index.ID); err != nil {
+					SET retention_nanoseconds = $1
+					WHERE index_id = $2`, int64(8_000_000_000*time.Second), index.ID); err != nil {
 					t.Fatalf("corrupt retention: %v", err)
 				}
 			},
@@ -157,16 +159,16 @@ func TestLeaseRevalidationReturnsIdentityWithDeferredIndexAuthorityOnly(t *testi
 					t.Fatalf("acquire corruption connection: %v", err)
 				}
 				defer connection.Close()
-				if _, err := connection.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+				if _, err := pgtest.DropForeignKeys(ctx, connection); err != nil {
 					t.Fatalf("disable test-only foreign keys: %v", err)
 				}
-				if _, err := connection.ExecContext(ctx, `DROP TRIGGER index_catalog_index_delete_is_forbidden`); err != nil {
+				if _, err := connection.ExecContext(ctx, `DROP TRIGGER index_catalog_index_delete_is_forbidden ON indexes`); err != nil {
 					t.Fatalf("disable test-only deletion guard: %v", err)
 				}
-				if _, err := connection.ExecContext(ctx, `DELETE FROM indexes WHERE index_id = ?`, index.ID); err != nil {
+				if _, err := connection.ExecContext(ctx, `DELETE FROM indexes WHERE index_id = $1`, index.ID); err != nil {
 					t.Fatalf("orphan token scope: %v", err)
 				}
-				if _, err := connection.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
+				if _, err := pgtest.RestoreForeignKeys(ctx, connection); err != nil {
 					t.Fatalf("restore foreign keys: %v", err)
 				}
 			},
@@ -204,14 +206,14 @@ func TestLeaseRevalidationReturnsIdentityWithDeferredIndexAuthorityOnly(t *testi
 			store.now = func() time.Time { return createdAt }
 			issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 				Name: "collector", AllowedIndexNames: []string{"main"}, BoundCollectorID: testCollectorID,
-				AllowedHostRegexes: []string{"^valid$"},
+				AllowedHostRegexes: []string{"^valid$"}, OrganizationID: 1, IssuerUserID: 42,
 			})
 			if err != nil {
 				t.Fatalf("CreateCollectorToken(): %v", err)
 			}
 			test.mutate(t, ctx, database, index)
 
-			tx := database.GORMDB().WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+			tx := pgmeta.Begin(database.GORMDB().WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 			if tx.Error != nil {
 				t.Fatalf("begin read transaction: %v", tx.Error)
 			}
@@ -232,7 +234,7 @@ func TestLeaseRevalidationReturnsIdentityWithDeferredIndexAuthorityOnly(t *testi
 				t.Fatalf("strict Authenticate = (%#v, %v), want zero authentication failure", strict, err)
 			}
 
-			write := database.GORMDB().WithContext(ctx).Begin()
+			write := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 			if write.Error != nil {
 				t.Fatalf("begin write transaction: %v", write.Error)
 			}

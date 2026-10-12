@@ -26,7 +26,7 @@ func TestInteractiveCreateUsesSharedTrustedAdmission(t *testing.T) {
 	admission := &recordingTrustedSearchAdmission{job: job}
 	handler := &apiHandler{
 		trustedSearchAdmission: admission,
-		ownerID:                "owner-1",
+		ownerID:                "1009",
 		tenantID:               "tenant-1",
 		now:                    func() time.Time { return testNow },
 	}
@@ -40,7 +40,7 @@ func TestInteractiveCreateUsesSharedTrustedAdmission(t *testing.T) {
 		t.Fatalf("created job = %q, want %q", response.GetSearchJob().GetSearchJobId(), job.ID)
 	}
 	got := admission.request
-	if got.OwnerID != "owner-1" || got.TenantID != "tenant-1" || got.AppID != "search" ||
+	if got.OwnerID != "1009" || got.TenantID != "tenant-1" || got.AppID != "search" ||
 		len(got.IndexScope) != 1 || got.IndexScope[0] != "main" || got.Source.Origin != searchjobs.JobOriginAdHoc ||
 		got.TimeRange.Earliest() != testNow.Add(-time.Hour) || got.TimeRange.Latest() != testNow {
 		t.Fatalf("trusted admission request = %+v", got)

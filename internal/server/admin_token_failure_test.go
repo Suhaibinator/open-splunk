@@ -23,7 +23,7 @@ type failingStateTokenAdministration struct {
 }
 
 func (administration *failingStateTokenAdministration) SetCollectorTokenEnabled(context.Context, string, uint64, bool) (auth.CollectorToken, error) {
-	return auth.CollectorToken{}, administration.err
+	return auth.CollectorToken{OrganizationID: 1, IssuerUserID: 1}, administration.err
 }
 
 type privateDatabaseError struct{}

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
@@ -173,7 +174,11 @@ func (service *Service) Preview(
 	if err != nil {
 		return SealedResponse{}, err
 	}
-	if access.TenantID == "" || access.OwnerID == "" ||
+	organizationID, organizationErr := strconv.ParseInt(access.OrganizationID, 10, 64)
+	if organizationErr != nil || organizationID <= 0 || strconv.FormatInt(organizationID, 10) != access.OrganizationID ||
+		validationScope.Read.OrganizationID != organizationID || validationScope.Write.OrganizationID != organizationID ||
+		validationScope.Read.SiteAdministrator != access.SiteAdministrator || validationScope.Write.SiteAdministrator != access.SiteAdministrator ||
+		access.TenantID == "" || access.OwnerID == "" ||
 		validationScope.Read.TenantID != access.TenantID ||
 		validationScope.Read.OwnerID != access.OwnerID ||
 		validationScope.Write.TenantID != access.TenantID ||
@@ -184,8 +189,10 @@ func (service *Service) Preview(
 	lease, execution, err := service.searches.AcquireExecutionFor(
 		ctx,
 		searchjobs.AccessScope{
-			TenantID: strings.Clone(access.TenantID),
-			OwnerID:  strings.Clone(access.OwnerID),
+			TenantID:          strings.Clone(access.TenantID),
+			OwnerID:           strings.Clone(access.OwnerID),
+			OrganizationID:    strings.Clone(access.OrganizationID),
+			SiteAdministrator: access.SiteAdministrator,
 		},
 		request.GetRetainedSearchJobId(),
 	)
@@ -197,7 +204,7 @@ func (service *Service) Preview(
 	}
 	defer lease.Close()
 	if execution.ID != request.GetRetainedSearchJobId() ||
-		execution.TenantID != access.TenantID || execution.OwnerID != access.OwnerID {
+		execution.TenantID != access.TenantID || execution.OrganizationID != access.OrganizationID || (!access.SiteAdministrator && execution.OwnerID != access.OwnerID) {
 		return SealedResponse{}, ErrNotFoundOrForbidden
 	}
 	if _, valid := execution.ValidatedResultLease(lease); !valid {
@@ -303,14 +310,18 @@ func activeValidationView(
 func cloneValidationScope(scope knowledgecatalog.ValidationScope) knowledgecatalog.ValidationScope {
 	return knowledgecatalog.ValidationScope{
 		Read: knowledgecatalog.ReadScope{
-			TenantID:       strings.Clone(scope.Read.TenantID),
-			OwnerID:        strings.Clone(scope.Read.OwnerID),
-			ReadableAppIDs: slices.Clone(scope.Read.ReadableAppIDs),
+			OrganizationID:    scope.Read.OrganizationID,
+			SiteAdministrator: scope.Read.SiteAdministrator,
+			TenantID:          strings.Clone(scope.Read.TenantID),
+			OwnerID:           strings.Clone(scope.Read.OwnerID),
+			ReadableAppIDs:    slices.Clone(scope.Read.ReadableAppIDs),
 		},
 		Write: knowledgecatalog.WriteScope{
-			TenantID:       strings.Clone(scope.Write.TenantID),
-			OwnerID:        strings.Clone(scope.Write.OwnerID),
-			WritableAppIDs: slices.Clone(scope.Write.WritableAppIDs),
+			OrganizationID:    scope.Write.OrganizationID,
+			SiteAdministrator: scope.Write.SiteAdministrator,
+			TenantID:          strings.Clone(scope.Write.TenantID),
+			OwnerID:           strings.Clone(scope.Write.OwnerID),
+			WritableAppIDs:    slices.Clone(scope.Write.WritableAppIDs),
 		},
 	}
 }

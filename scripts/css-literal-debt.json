@@ -151,10 +151,6 @@
       "border-radius": [
         "50%"
       ],
-      "box-shadow": [
-        "1px",
-        "color-mix(in srgb, var(--status-error) 24%, transparent)"
-      ],
       "z-index": [
         "2"
       ]

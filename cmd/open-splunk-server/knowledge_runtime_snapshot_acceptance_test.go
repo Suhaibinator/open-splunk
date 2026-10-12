@@ -448,7 +448,7 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeScope := knowledgecatalog.WriteScope{
+	writeScope := knowledgecatalog.WriteScope{OrganizationID: 1,
 		TenantID:       runtimeKnowledgeTestTenant,
 		OwnerID:        runtimeKnowledgeTestOwner,
 		WritableAppIDs: []string{runtimeKnowledgeTestApp},
@@ -471,7 +471,7 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 		t.Fatalf("published ACTIVE v1 = %v", objectV1)
 	}
 
-	resolutionScope := knowledgecatalog.ResolutionScope{
+	resolutionScope := knowledgecatalog.ResolutionScope{OrganizationID: 1,
 		TenantID:                   runtimeKnowledgeTestTenant,
 		PrincipalID:                runtimeKnowledgeTestOwner,
 		AppID:                      runtimeKnowledgeTestApp,
@@ -584,7 +584,7 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 	}
 	executionV1, err := manager.CompletedExecutionSnapshotFor(
 		t.Context(),
-		searchjobs.AccessScope{TenantID: request.TenantID, OwnerID: request.OwnerID},
+		searchjobs.AccessScope{OrganizationID: "1", TenantID: request.TenantID, OwnerID: request.OwnerID},
 		jobV1.ID,
 	)
 	if err != nil {
@@ -603,8 +603,8 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 		wantV1SummaryDigest,
 	)
 
-	access := searchjobs.AccessScope{TenantID: request.TenantID, OwnerID: request.OwnerID}
-	wrongAccess := searchjobs.AccessScope{TenantID: request.TenantID, OwnerID: "other-owner"}
+	access := searchjobs.AccessScope{OrganizationID: "1", TenantID: request.TenantID, OwnerID: request.OwnerID}
+	wrongAccess := searchjobs.AccessScope{OrganizationID: "1", TenantID: request.TenantID, OwnerID: "other-owner"}
 	if wrong, wrongErr := manager.CompletedExecutionSnapshotFor(
 		t.Context(), wrongAccess, jobV1.ID,
 	); !errors.Is(wrongErr, searchjobs.ErrNotFound) || wrong.ID != "" ||

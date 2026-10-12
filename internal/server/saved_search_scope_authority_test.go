@@ -31,12 +31,12 @@ func TestSavedSearchSharingScopeDoesNotChangeCurrentRunAuthority(t *testing.T) {
 			} {
 				t.Run(test.name, func(t *testing.T) {
 					t.Parallel()
-					record := savedSearchRecord("scope-saved", 4, "owner-1", "app-main", "Scope authority")
+					record := savedSearchRecord("scope-saved", 4, "1009", "app-main", "Scope authority")
 					record.Definition.SharingScope = sharing
 					record.Definition.Search.Spl = "index=main"
 					record.Definition.Search.IndexScope = []string{"main"}
 					store := &fakeSavedSearches{getFn: func(_ context.Context, scope savedobjects.AccessScope, id string) (*opensplunk.SavedSearch, error) {
-						if scope.OwnerID != "owner-1" || id != record.SavedSearchId {
+						if scope.OwnerID != "1009" || id != record.SavedSearchId {
 							t.Fatalf("scope %v altered object authority: %+v %q", sharing, scope, id)
 						}
 						return record, nil
@@ -46,7 +46,7 @@ func TestSavedSearchSharingScopeDoesNotChangeCurrentRunAuthority(t *testing.T) {
 					jobs := &knowledgeAdmissionSearchJobs{fakeSearchJobs: &fakeSearchJobs{createJob: job}, enabled: true}
 					handler := newTestHandler(t, Config{
 						SearchJobs: jobs, SavedSearches: store, AppCatalog: test.apps,
-						Indexes: test.indexes, OwnerID: "owner-1", TenantID: "tenant-1", WebUI: testUI(),
+						Indexes: test.indexes, OwnerID: "1009", TenantID: "tenant-1", WebUI: testUI(),
 						Now: func() time.Time { return testNow },
 					})
 					request := createRequest("-1h", "now", "main")
@@ -62,7 +62,7 @@ func TestSavedSearchSharingScopeDoesNotChangeCurrentRunAuthority(t *testing.T) {
 					calls, admitted := jobs.createCalls, jobs.createRequest
 					jobs.mu.Unlock()
 					if test.status == http.StatusOK {
-						if calls != 1 || admitted.OwnerID != "owner-1" || admitted.TenantID != "tenant-1" || admitted.SPL != "index=main" {
+						if calls != 1 || admitted.OwnerID != "1009" || admitted.TenantID != "tenant-1" || admitted.SPL != "index=main" {
 							t.Fatalf("scope %v changed accepted run authority/definition: %+v", sharing, admitted)
 						}
 					} else if calls != 0 {

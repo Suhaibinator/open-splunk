@@ -46,15 +46,6 @@ var deploymentCommands = []deploymentCommand{
 		run: deploymentCommandRunner(runDeploymentHealthcheckSubcommand),
 	},
 	{
-		name:        "provision-administrator-token",
-		summary:     "Publish a generated administrator token into private runtime state.",
-		usageSuffix: "[options]",
-		group:       deploymentCommandGroupRuntime,
-		options: `  -source <path>       read-only generated administrator-token source
-  -destination <path>  private runtime administrator-token destination`,
-		run: deploymentCommandRunner(runProvisionAdministratorTokenSubcommand),
-	},
-	{
 		name:        "migrate-clickhouse",
 		summary:     "Apply and verify ClickHouse migrations with the migration principal.",
 		usageSuffix: "[options]",
@@ -126,7 +117,7 @@ var deploymentCommands = []deploymentCommand{
 	},
 	{
 		name:        "backup-control-plane",
-		summary:     "Back up only SQLite and local control-plane artifacts.",
+		summary:     "Back up only PostgreSQL and private result objects.",
 		usageSuffix: "[options]",
 		group:       deploymentCommandGroupControlPlaneRecovery,
 		options:     controlPlaneRecoveryOptions("backup"),
@@ -142,7 +133,7 @@ var deploymentCommands = []deploymentCommand{
 	},
 	{
 		name:        "restore-control-plane",
-		summary:     "Restore only SQLite and local control-plane artifacts.",
+		summary:     "Restore only PostgreSQL and private result objects.",
 		usageSuffix: "[options]",
 		group:       deploymentCommandGroupControlPlaneRecovery,
 		options:     controlPlaneRecoveryOptions("restore"),
@@ -153,10 +144,13 @@ var deploymentCommands = []deploymentCommand{
 func coordinatedRecoverySetOptions(operation string) string {
 	if operation == "backup" {
 		return `  -destination <path>                absolute new recovery-set directory
-  -control-db <path>                 absolute stopped-server SQLite database path
+  -postgres-dsn <dsn>                PostgreSQL control schema; server must be stopped
   -master-key <path>                 absolute matching server master-key path
-  -administrator-token-file <path>   absolute matching administrator-token path
-  -search-artifact-directory <path>  optional absolute retained-search directory
+  -minio-endpoint <host:port>         private object-storage endpoint
+  -minio-access-key <key>            object-storage access identity
+  -minio-secret-key <secret>         object-storage secret (prefer environment)
+  -minio-bucket <name>               private versioned result bucket
+  -minio-use-tls                     use TLS for object storage
   -archive-root <path>               absolute ClickHouse recovery archive root
   -address <host:port>               ClickHouse native TLS address
   -password-file <path>              read-only backup-principal password file
@@ -164,10 +158,13 @@ func coordinatedRecoverySetOptions(operation string) string {
   -server-name <name>                explicit ClickHouse TLS certificate name`
 	}
 	return `  -source <path>                     absolute verified recovery-set directory
-  -control-db <path>                 absolute absent or exactly resumed SQLite database path
+  -postgres-dsn <dsn>                empty PostgreSQL control schema
   -master-key <path>                 absolute absent or exactly resumed server master-key path
-  -administrator-token-file <path>   absolute absent or exactly resumed administrator-token path
-  -search-artifact-directory <path>  optional absolute absent or exactly resumed retained-search directory
+  -minio-endpoint <host:port>         private object-storage endpoint
+  -minio-access-key <key>            object-storage access identity
+  -minio-secret-key <secret>         object-storage secret (prefer environment)
+  -minio-bucket <name>               private versioned result bucket
+  -minio-use-tls                     use TLS for object storage
   -archive-root <path>               absolute ClickHouse recovery archive root
   -address <host:port>               ClickHouse native TLS address
   -password-file <path>              read-only restore-principal password file
@@ -176,26 +173,18 @@ func coordinatedRecoverySetOptions(operation string) string {
 }
 
 func controlPlaneRecoveryOptions(operation string) string {
-	pathRole := "matching"
 	bundleFlag := "-destination"
-	bundleRole := "new"
 	if operation == "restore" {
-		pathRole = "absent"
 		bundleFlag = "-source"
-		bundleRole = "verified"
 	}
-	return fmt.Sprintf(`  %s <path>                 absolute %s private bundle directory
-  -control-db <path>                 absolute %s SQLite database path
-  -master-key <path>                 absolute %s server master-key path
-  -administrator-token-file <path>   absolute %s administrator-token path
-  -search-artifact-directory <path>  optional absolute %s retained-search directory`,
-		bundleFlag,
-		bundleRole,
-		pathRole,
-		pathRole,
-		pathRole,
-		pathRole,
-	)
+	return fmt.Sprintf(`  %s <path>                 absolute private bundle directory
+  -postgres-dsn <dsn>                native PostgreSQL control schema
+  -master-key <path>                 absolute server master-key path
+  -minio-endpoint <host:port>         private object-storage endpoint
+  -minio-access-key <key>            object-storage access identity
+  -minio-secret-key <secret>         object-storage secret
+  -minio-bucket <name>               private, versioned result bucket
+  -minio-use-tls                     use TLS for object storage`, bundleFlag)
 }
 
 func deploymentCommandRunner(run func([]string) error) func([]string, io.Writer) error {
@@ -322,9 +311,9 @@ func deploymentCommandGroupHeading(group deploymentCommandGroup) string {
 	case deploymentCommandGroupRuntime:
 		return "Deployment commands:"
 	case deploymentCommandGroupCoordinatedRecovery:
-		return "Coordinated deployment recovery (control plane and ClickHouse; stopped server only):"
+		return "Coordinated deployment recovery (PostgreSQL, MinIO and ClickHouse; stopped server only):"
 	case deploymentCommandGroupControlPlaneRecovery:
-		return "Control-plane-only recovery (SQLite and local artifacts; stopped server only):"
+		return "Control-plane-only recovery (PostgreSQL and private result objects; stopped server only):"
 	default:
 		return "Unknown commands:"
 	}
@@ -335,9 +324,9 @@ func deploymentCommandGroupScope(group deploymentCommandGroup) string {
 	case deploymentCommandGroupRuntime:
 		return "isolated deployment operation"
 	case deploymentCommandGroupCoordinatedRecovery:
-		return "coordinated deployment recovery: control plane and ClickHouse; server must be stopped"
+		return "coordinated deployment recovery: PostgreSQL, MinIO and ClickHouse; server must be stopped"
 	case deploymentCommandGroupControlPlaneRecovery:
-		return "control-plane-only recovery: SQLite and local artifacts; server must be stopped"
+		return "control-plane-only recovery: PostgreSQL and private result objects; server must be stopped"
 	default:
 		return "unknown"
 	}

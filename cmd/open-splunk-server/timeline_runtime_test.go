@@ -26,6 +26,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchsuggestions"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"github.com/Suhaibinator/open-splunk/internal/server"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -304,6 +305,18 @@ func (searches *runtimeSuggestionSearches) createCallCount() int {
 
 type runtimeSuggestionIndexes struct{ runtimeIndexCatalog }
 
+func (catalog runtimeSuggestionIndexes) GetIndexesByNames(ctx context.Context, names []string) ([]control.Index, error) {
+	result := make([]control.Index, 0, len(names))
+	for _, name := range names {
+		index, err := catalog.GetIndexByName(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, index)
+	}
+	return result, nil
+}
+
 func (runtimeSuggestionIndexes) GetIndexByName(
 	_ context.Context,
 	name string,
@@ -312,6 +325,7 @@ func (runtimeSuggestionIndexes) GetIndexByName(
 		return control.Index{}, control.ErrNotFound
 	}
 	return control.Index{
+		ID: "runtime-main", Version: 1,
 		Definition: control.IndexDefinition{
 			Name:          name,
 			SearchEnabled: true,
@@ -359,6 +373,7 @@ func TestRuntimeHTTPHandlerAdvertisesEnforcedTimelineService(t *testing.T) {
 	}
 	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1/api/system/bootstrap", bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/x-protobuf")
+	request.Header.Set("Authorization", "Bearer "+runtimeAdministratorToken)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -443,6 +458,7 @@ func TestRuntimeHTTPHandlerServesComposedSearchSuggestionsWithoutCreatingJob(t *
 		bytes.NewReader(payload),
 	)
 	request.Header.Set("Content-Type", "application/x-protobuf")
+	request.Header.Set("Authorization", "Bearer "+runtimeAdministratorToken)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -498,6 +514,7 @@ func TestRuntimeHTTPHandlerServesConfiguredFieldCatalog(t *testing.T) {
 	}
 	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1/api/search/jobs/fields/list", bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/x-protobuf")
+	request.Header.Set("Authorization", "Bearer "+runtimeAdministratorToken)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -560,6 +577,7 @@ func TestRuntimeHTTPHandlerServesConfiguredIndexFieldCatalog(t *testing.T) {
 		bytes.NewReader(payload),
 	)
 	request.Header.Set("Content-Type", "application/x-protobuf")
+	request.Header.Set("Authorization", "Bearer "+runtimeAdministratorToken)
 	request.Header.Set(
 		"Authorization",
 		"Bearer "+runtimeAdministratorToken,
@@ -620,6 +638,7 @@ func TestRuntimeHTTPHandlerServesConfiguredFieldSummary(t *testing.T) {
 	}
 	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1/api/search/jobs/field-summary", bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/x-protobuf")
+	request.Header.Set("Authorization", "Bearer "+runtimeAdministratorToken)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -801,7 +820,7 @@ func TestRuntimeFieldAnalysisAdmitsTwoCatalogsAndRejectsThirdWithoutWaiting(t *t
 		}
 	})
 
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: "1", TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	results := make(chan error, runtimeFieldAnalysisMaxConcurrent)
 	for index := range runtimeFieldAnalysisMaxConcurrent {
 		jobID := jobIDs[index]
@@ -862,8 +881,8 @@ func TestRuntimeSearchAnalysisCloseIsIdempotent(t *testing.T) {
 	if err := (*runtimeSearchAnalysis)(nil).Close(); err != nil {
 		t.Fatalf("nil Close: %v", err)
 	}
-	_, err := analysis.fields.ListFields(context.Background(), searchjobs.AccessScope{
-		TenantID: "tenant", OwnerID: "owner",
+	_, err := analysis.fields.ListFields(context.Background(), searchjobs.AccessScope{OrganizationID: "1",
+		TenantID: "tenant", OwnerID: "1",
 	}, searchanalysis.ListFieldsRequest{SearchJobID: "job"})
 	if !errors.Is(err, searchjobs.ErrClosed) {
 		t.Fatalf("ListFields after Close error = %v, want ErrClosed", err)
@@ -892,7 +911,7 @@ func TestRuntimeSearchAnalysisCloseWaitsForBlockedFieldWorker(t *testing.T) {
 
 	listResult := make(chan error, 1)
 	go func() {
-		_, err := analysis.fields.ListFields(context.Background(), searchjobs.AccessScope{
+		_, err := analysis.fields.ListFields(context.Background(), searchjobs.AccessScope{OrganizationID: "1",
 			TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID,
 		}, searchanalysis.ListFieldsRequest{SearchJobID: snapshot.ID})
 		listResult <- err
@@ -1023,7 +1042,7 @@ func TestRuntimeSearchAnalysisCloseWaitsForBlockedFieldSummaryWorker(t *testing.
 
 	summaryResult := make(chan error, 1)
 	go func() {
-		_, err := analysis.fields.GetFieldSummary(context.Background(), searchjobs.AccessScope{
+		_, err := analysis.fields.GetFieldSummary(context.Background(), searchjobs.AccessScope{OrganizationID: "1",
 			TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID,
 		}, searchanalysis.GetFieldSummaryRequest{SearchJobID: snapshot.ID, FieldName: "level"})
 		summaryResult <- err
@@ -1117,7 +1136,7 @@ func runtimeFieldExecutionSnapshotWithID(
 
 	const (
 		tenantID = "tenant"
-		ownerID  = "owner"
+		ownerID  = "1"
 		source   = "index=main level=error"
 	)
 	searchStart := time.Date(2026, 7, 22, 2, 2, 0, 0, time.UTC)
@@ -1147,7 +1166,7 @@ func runtimeFieldExecutionSnapshotWithID(
 			t.Errorf("close field execution manager: %v", err)
 		}
 	})
-	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{
+	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{OrganizationID: "1",
 		SPL:               source,
 		OwnerID:           ownerID,
 		TenantID:          tenantID,
@@ -1162,7 +1181,7 @@ func runtimeFieldExecutionSnapshotWithID(
 	waitForRuntimeKnowledgeJobState(t, manager, created.ID)
 	snapshot, err := manager.CompletedExecutionSnapshotFor(
 		context.Background(),
-		searchjobs.AccessScope{TenantID: tenantID, OwnerID: ownerID},
+		searchjobs.AccessScope{OrganizationID: "1", TenantID: tenantID, OwnerID: ownerID},
 		created.ID,
 	)
 	if err != nil {
@@ -1384,23 +1403,24 @@ func newRuntimeSearchAnalysisForTest(t *testing.T) *runtimeSearchAnalysis {
 }
 
 func runtimeServerConfig() server.Config {
-	authenticator, err := auth.NewBearerTokenAuthenticator(
+	authenticator, err := newRuntimeSessionAuthenticator(
 		[]byte(runtimeAdministratorToken),
 		"tenant",
-		"owner",
+		"1",
 		auth.BrowserRoleAdministrator,
 	)
 	if err != nil {
 		panic("construct runtime test browser authenticator: " + err.Error())
 	}
 	return server.Config{
-		SearchJobs:           runtimeSearchJobs{},
-		Indexes:              runtimeIndexCatalog{},
-		IndexAdmin:           runtimeIndexAdministration{},
-		SavedSearches:        runtimeSavedSearches{},
-		BrowserAuthenticator: authenticator,
-		TenantID:             "tenant",
-		OwnerID:              "owner",
+		SearchJobs:            runtimeSearchJobs{},
+		Indexes:               runtimeIndexCatalog{},
+		IndexAdmin:            runtimeIndexAdministration{},
+		SavedSearches:         runtimeSavedSearches{},
+		IdentityAuthenticator: authenticator,
+		Authorization:         testsupport.AuthorizationFixture("tenant"),
+		TenantID:              "tenant",
+		OwnerID:               "1",
 		WebUI: fstest.MapFS{
 			"index.html": &fstest.MapFile{Data: []byte("<html>runtime</html>")},
 		},

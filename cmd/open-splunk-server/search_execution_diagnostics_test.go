@@ -93,7 +93,7 @@ func TestSearchFailureLogIncludesOperationalFieldsAndOmitsPrivateDetails(t *test
 	logSearchFailure(logger, searchjobs.FailureNotification{Report: searchjobs.FailureReport{
 		JobID:        "job\nidentifier",
 		TenantID:     "tenant-a",
-		OwnerID:      "owner-a",
+		OwnerID:      "1",
 		AppID:        "search",
 		Source:       searchjobs.JobSource{Origin: searchjobs.JobOriginSavedSearch, ObjectID: "saved-1"},
 		Phase:        searchjobs.StateRunning,
@@ -128,7 +128,7 @@ func TestSearchFailureLogIncludesOperationalFieldsAndOmitsPrivateDetails(t *test
 		`"msg":"search failed"`,
 		`"job_id":"job\nidentifier"`,
 		`"tenant_id":"tenant-a"`,
-		`"owner_id":"owner-a"`,
+		`"owner_id":"1"`,
 		`"app_id":"search"`,
 		`"search_origin":"saved_search"`,
 		`"source_object_id":"saved-1"`,
@@ -206,7 +206,7 @@ func TestCoalescedSearchFailuresAreExplicitErrors(t *testing.T) {
 	))
 	logSearchFailure(logger, searchjobs.FailureNotification{
 		Report: searchjobs.FailureReport{
-			JobID: "latest", TenantID: "tenant-a", OwnerID: "owner-a",
+			JobID: "latest", TenantID: "tenant-a", OwnerID: "1",
 			Source: searchjobs.JobSource{Origin: searchjobs.JobOriginAPI},
 			Phase:  searchjobs.StateRunning, Code: searchjobs.FailureInvalidSPL,
 			Message: "search SPL is invalid",

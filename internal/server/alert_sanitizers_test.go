@@ -259,7 +259,7 @@ func TestSanitizeAlertDefinitionLeavesAnAcceptedDefinitionUnchanged(t *testing.T
 		t.Fatalf("sanitizer rewrote an accepted definition: %+v", definition)
 	}
 	converted, webhookURL := alertDefinitionFromProto(definition)
-	if webhookURL != "https://hooks.example.com/alerts" || converted.Application != "search" ||
+	if webhookURL != "https://hooks.example.com/alerts" || converted.Application != knowledgeHTTPAppID ||
 		len(converted.IndexScope) != 1 || converted.IndexScope[0] != "main" {
 		t.Fatalf("converted definition = %+v, %q", converted, webhookURL)
 	}

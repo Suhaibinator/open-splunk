@@ -322,7 +322,7 @@ func TestSanitizeListSearchAttemptAuditEventsRequestProjectsFilters(t *testing.T
 	t.Parallel()
 
 	actor := "actor"
-	owner := "owner"
+	owner := "1008"
 	request := &opensplunk.ListSearchAttemptAuditEventsRequest{
 		ActorIdFilter: &actor,
 		OwnerIdFilter: &owner,

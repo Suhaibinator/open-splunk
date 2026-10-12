@@ -1,5 +1,5 @@
 // Package indexpolicy owns the dependency-neutral ingestion policy shared by
-// the SQLite control plane, authorization snapshots, native ingestion, and
+// the PostgreSQL control plane, authorization snapshots, native ingestion, and
 // ClickHouse retention metadata.
 package indexpolicy
 

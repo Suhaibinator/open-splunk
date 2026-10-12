@@ -10,6 +10,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
@@ -105,7 +106,7 @@ func testPublicationReview(t *testing.T, beforeFinalize bool, outcome string) {
 	t.Helper()
 	ctx := t.Context()
 	directory := t.TempDir()
-	database, err := control.Open(ctx, filepath.Join(directory, "control.sqlite"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,8 +128,8 @@ func testPublicationReview(t *testing.T, beforeFinalize bool, outcome string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	access := searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"}
-	job, err := manager.Create(ctx, searchjobs.CreateRequest{SPL: "index=main | table _raw", TenantID: access.TenantID, OwnerID: access.OwnerID, AuthorizedIndexes: []string{"main"}, RequestedIndexes: []string{"main"}, TimeRange: timeRange})
+	access := searchjobs.AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
+	job, err := manager.Create(ctx, searchjobs.CreateRequest{OrganizationID: "1", SPL: "index=main | table _raw", TenantID: access.TenantID, OwnerID: access.OwnerID, AuthorizedIndexes: []string{"main"}, RequestedIndexes: []string{"main"}, TimeRange: timeRange})
 	if err != nil {
 		t.Fatal(err)
 	}

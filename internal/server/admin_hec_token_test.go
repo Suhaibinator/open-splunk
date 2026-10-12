@@ -339,7 +339,7 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 func TestApplyHECTokenUpdateFencesImmutablePurposeAndAcknowledgment(t *testing.T) {
 	t.Parallel()
 
-	current := auth.CollectorToken{
+	current := auth.CollectorToken{OrganizationID: 1, IssuerUserID: 1,
 		Name:              "HEC producer",
 		Purpose:           auth.IngestionTokenPurposeHEC,
 		AllowedIndexNames: []string{"main"},
@@ -375,7 +375,7 @@ func TestApplyHECTokenUpdateFencesImmutablePurposeAndAcknowledgment(t *testing.T
 func TestApplyHECTokenUpdateMovesDefaultWithScopeRegardlessOfMaskOrder(t *testing.T) {
 	t.Parallel()
 
-	current := auth.CollectorToken{
+	current := auth.CollectorToken{OrganizationID: 1, IssuerUserID: 1,
 		Name:              "HEC producer",
 		Purpose:           auth.IngestionTokenPurposeHEC,
 		AllowedIndexNames: []string{"main"},

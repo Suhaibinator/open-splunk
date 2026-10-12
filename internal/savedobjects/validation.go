@@ -10,6 +10,7 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/protostrict"
+	"github.com/Suhaibinator/open-splunk/internal/resourcepolicy"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -25,10 +26,11 @@ const (
 )
 
 type indexedDefinition struct {
-	name         string
-	appID        string
-	ownerID      string
-	sharingScope opensplunk.SharingScope
+	sourceIndexNames []byte
+	name             string
+	appID            string
+	ownerID          string
+	sharingScope     opensplunk.SharingScope
 }
 
 func normalizeAndEncodeDefinition(input *opensplunk.SavedSearchDefinition, ownerID string) (*opensplunk.SavedSearchDefinition, indexedDefinition, []byte, error) {
@@ -92,8 +94,13 @@ func normalizeAndEncodeDefinition(input *opensplunk.SavedSearchDefinition, owner
 	if len(encoded) == 0 || len(encoded) > maximumDefinitionBytes {
 		return nil, indexedDefinition{}, nil, fmt.Errorf("%w: saved-search definition exceeds %d bytes", control.ErrInvalidArgument, maximumDefinitionBytes)
 	}
+	sourceIndexNames, sourceErr := resourcepolicy.SourceNames(definition.GetSearch())
+	if sourceErr != nil {
+		return nil, indexedDefinition{}, nil, sourceErr
+	}
 	return definition, indexedDefinition{
-		name: name, appID: appID, ownerID: ownerID, sharingScope: definition.SharingScope,
+		sourceIndexNames: sourceIndexNames,
+		name:             name, appID: appID, ownerID: ownerID, sharingScope: definition.SharingScope,
 	}, encoded, nil
 }
 

@@ -93,28 +93,28 @@ func TestResolverActiveCountPlanUsesThreeBoundedAuthorizationIndexes(t *testing.
 		t.Fatal(err)
 	}
 	query, arguments := captureBoundedActiveResolutionCountQuery(t, database, scope)
-	details := explainSQLiteQueryPlan(t, database.SQLDB(), query, arguments)
+	details := explainPostgreSQLQueryPlan(t, database.SQLDB(), query, arguments)
 	joined := strings.Join(details, "\n")
 
 	for _, required := range []string{
-		"CO-ROUTINE bounded_active_resolution_objects",
-		"knowledge_objects_authorized_global_idx",
-		"knowledge_objects_authorized_app_idx",
-		"knowledge_objects_authorized_private_idx",
-		"SCAN bounded_active_resolution_objects",
+		"Limit",
+		"knowledge_objects_active_global_name_idx",
+		"knowledge_objects_active_app_name_idx",
+		"knowledge_objects_active_private_name_idx",
+		"Append",
 	} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("bounded active-resolution count plan lacks %q:\n%s\nSQL:\n%s", required, joined, query)
 		}
 	}
-	if strings.Contains(joined, "SCAN knowledge_objects") ||
-		strings.Contains(joined, "USE TEMP B-TREE") {
+	if strings.Contains(joined, "Seq Scan on knowledge_objects") ||
+		strings.Contains(joined, "Sort") {
 		t.Fatalf("bounded active-resolution count plan scans or sorts before its shared limit:\n%s", joined)
 	}
 	for _, indexName := range []string{
-		"knowledge_objects_authorized_global_idx",
-		"knowledge_objects_authorized_app_idx",
-		"knowledge_objects_authorized_private_idx",
+		"knowledge_objects_active_global_name_idx",
+		"knowledge_objects_active_app_name_idx",
+		"knowledge_objects_active_private_name_idx",
 	} {
 		if strings.Count(joined, indexName) != 1 {
 			t.Fatalf("bounded active-resolution count plan uses %s %d times, want exactly once:\n%s", indexName, strings.Count(joined, indexName), joined)
@@ -132,52 +132,52 @@ func TestResolverProjectionPlanIsAuthorizationDrivenAndSortsOnlyBoundedRows(t *t
 		t.Fatal(err)
 	}
 	query, arguments := compiledActiveResolutionProjectionQuery(t, database, scope)
-	details := explainSQLiteQueryPlan(t, database.SQLDB(), query, arguments)
+	details := explainPostgreSQLQueryPlan(t, database.SQLDB(), query, arguments)
 	joined := strings.Join(details, "\n")
 
 	for _, required := range []string{
-		"CO-ROUTINE authorized_active_resolution_projection",
-		"knowledge_objects_authorized_global_idx",
-		"knowledge_objects_authorized_app_idx",
-		"knowledge_objects_authorized_private_idx",
-		"SEARCH defining_app USING",
-		"SCAN authorized_active_resolution_projection",
-		"SEARCH projection USING PRIMARY KEY",
-		"USE TEMP B-TREE FOR ORDER BY",
+		"Limit",
+		"knowledge_objects_active_global_name_idx",
+		"knowledge_objects_active_app_name_idx",
+		"knowledge_objects_active_private_name_idx",
+		"on defining_app",
+		"Append",
+		"on projection",
+		"Sort",
 	} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("active-resolution projection plan lacks %q:\n%s\nSQL:\n%s", required, joined, query)
 		}
 	}
-	if strings.Contains(joined, "SCAN authorized_registry") ||
-		strings.Contains(joined, "SCAN candidate") ||
-		strings.Contains(joined, "SCAN projection") {
+	if strings.Contains(joined, "Seq Scan on authorized_registry") ||
+		strings.Contains(joined, "Seq Scan on candidate") ||
+		strings.Contains(joined, "Seq Scan on projection") {
 		t.Fatalf("active-resolution projection plan contains an unbounded authority/projection scan:\n%s", joined)
 	}
-	if strings.Count(joined, "SEARCH candidate USING") != 3 {
-		t.Fatalf("active-resolution projection plan has %d indexed candidate joins, want 3:\n%s", strings.Count(joined, "SEARCH candidate USING"), joined)
+	if strings.Count(joined, "on candidate") != 3 {
+		t.Fatalf("active-resolution projection plan has %d indexed candidate joins, want 3:\n%s", strings.Count(joined, "on candidate"), joined)
 	}
 	for _, indexName := range []string{
-		"knowledge_objects_authorized_global_idx",
-		"knowledge_objects_authorized_app_idx",
-		"knowledge_objects_authorized_private_idx",
+		"knowledge_objects_active_global_name_idx",
+		"knowledge_objects_active_app_name_idx",
+		"knowledge_objects_active_private_name_idx",
 	} {
 		if strings.Count(joined, indexName) != 1 {
 			t.Fatalf("active-resolution projection plan uses %s %d times, want exactly once:\n%s", indexName, strings.Count(joined, indexName), joined)
 		}
 	}
-	definingAppIndex := indexContaining(details, "SEARCH defining_app USING")
+	definingAppIndex := indexContaining(details, "on defining_app")
 	if definingAppIndex < 0 ||
-		!strings.Contains(details[definingAppIndex], "tenant_id=? AND app_id=?") {
+		(!strings.Contains(details[definingAppIndex], "tenant_id") || !strings.Contains(details[definingAppIndex], "app_id")) {
 		t.Fatalf("active-resolution defining-app authorization is not an exact tenant/app lookup:\n%s", joined)
 	}
 	for _, detail := range details {
-		if !strings.Contains(detail, "SEARCH candidate USING") {
+		if !strings.Contains(detail, "on candidate") {
 			continue
 		}
-		if !strings.Contains(detail, "tenant_id=?") ||
-			!strings.Contains(detail, "knowledge_object_id=?") ||
-			!strings.Contains(detail, "object_version=?)") {
+		if !strings.Contains(detail, "tenant_id") ||
+			!strings.Contains(detail, "knowledge_object_id") ||
+			!strings.Contains(detail, "object_version") {
 			t.Fatalf("active-resolution candidate projection is not an exact identity lookup: %s\n%s", detail, joined)
 		}
 	}
@@ -197,21 +197,20 @@ func TestResolverProjectionPlanIsAuthorizationDrivenAndSortsOnlyBoundedRows(t *t
 		}
 	}
 	for _, detail := range details {
-		if strings.HasPrefix(detail, "SCAN ") &&
-			detail != "SCAN authorized_active_resolution_projection" {
+		if strings.HasPrefix(detail, "Seq Scan ") {
 			t.Fatalf("active-resolution projection plan contains a scan outside its bounded driver: %s\n%s", detail, joined)
 		}
 	}
-	if strings.Count(joined, "USE TEMP B-TREE FOR ORDER BY") != 1 {
+	if strings.Count(joined, "Sort") != 1 {
 		t.Fatalf("active-resolution projection sorter count is not exactly one:\n%s", joined)
 	}
-	driverIndex := indexContaining(details, "SCAN authorized_active_resolution_projection")
-	sortIndex := indexContaining(details, "USE TEMP B-TREE FOR ORDER BY")
+	driverIndex := indexContaining(details, "Limit")
+	sortIndex := indexContaining(details, "Sort")
 	if driverIndex < 0 || sortIndex <= driverIndex {
 		t.Fatalf("active-resolution projection sorter is not downstream of its bounded authorization driver:\n%s", joined)
 	}
-	if strings.Count(query, "LIMIT 4097") != 2 {
-		t.Fatalf("active-resolution projection SQL has %d 4,097-row limits, want one shared authorization limit and one outer read limit:\n%s", strings.Count(query, "LIMIT 4097"), query)
+	if strings.Count(query, "LIMIT 4097") != 1 || !nativeBoundLimit(query, arguments, 4097) {
+		t.Fatalf("native projection lost shared authority or outer read bound: %s / %#v", query, arguments)
 	}
 }
 

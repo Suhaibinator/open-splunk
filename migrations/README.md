@@ -1,158 +1,92 @@
 # Database schema mechanics
 
-Open Splunk embeds an ordered migration history for each database. Every
-history starts with exactly one complete `0001_baseline.sql`; later schema
-changes are appended as contiguous, immutable versioned scripts. A fresh
-database applies the baseline and every forward migration, while a database
-whose verified ledger is an exact prefix applies only the pending suffix.
+OpenSplunk stores runtime control state and GoCommon identity state in one
+PostgreSQL database and schema. ClickHouse continues to store event data.
+MinIO stores immutable retained search snapshots and exports; PostgreSQL owns
+their metadata, authorization, quotas, publication and retention state.
 
-Forward upgrades from a shipped migration prefix are supported. Downgrades,
-gapped or rewritten histories, unledgered schema adoption, and migration from
-an unrelated source history are not.
+## Migration ownership
 
-Migration sequence numbers, ledger digests, entity/catalog revisions, and
-private row-format counters are implementation mechanics. They detect drift,
-stale writes, and unrecognized local state; they are not product versions or
-public compatibility levels.
+`postgres/` contains OpenSplunk's native, contiguous versioned migration
+history, beginning with `0001_baseline.sql`. The baseline creates the final
+control schema, including explicit foreign keys, checked scalar bounds,
+immutable-row/state-transition guards and accounting triggers. Follow-up SQL
+files add schema; the server never imports or interprets SQLite files.
+`0008_export_source_identity.sql` pins each export to its source job. Reaping
+may remove expired source objects while preserving the source authorization
+metadata until dependent exports and object cleanup reservations are gone.
 
-## Ledger contract
+The PostgreSQL runner verifies each existing ledger row's name, version and
+SHA-256 against the embedded file before applying a pending suffix. It rejects
+modified, missing, gapped, future and ledgerless control schemas. Migration DDL
+and ledger rows commit together under a schema-scoped advisory transaction
+lock. The ledger is `open_splunk_schema_migrations`.
 
-Migration files are embedded into the server. Filenames carry contiguous
-four-digit versions, beginning with `0001_baseline.sql`. Before applying a
-pending script, the runner validates every existing ledger row's version,
-name, and SHA-256 digest against the corresponding embedded file. Missing,
-renamed, modified, duplicated, gapped, or unexpected rows fail as drift.
-Successful scripts are recorded once, so reopening and retrying the current
-history is safe. Tests pin every shipped migration's SHA-256 digest: an applied
-script is never edited or replaced; a schema change requires a newly appended
-migration.
+GoCommon independently owns its `gocommon_*` tables and
+`gocommon_schema_migrations`. Startup borrows the application's PostgreSQL
+pool for GoCommon initialization. Immutable named application migrations run
+through `DB.ApplyAdditionalMigration` after GoCommon's schema is ready; their
+separate ledger adds resource-organization foreign keys without mixing the
+two schema owners' histories. OpenSplunk never calls AutoMigrate on its own
+control models.
 
-One released SQLite baseline folded the ingest write-group schema into version
-`0001` after the original baseline had shipped. The runner narrowly recognizes
-that exact alternate checksum, adopts the corresponding accounting migration,
-and then rejoins the canonical history. No other alternate checksum or
-rewritten migration is accepted. Pre-accounting pending reservations retain
-their original outbox and are replayed individually before new write groups are
-formed.
+A pinned PostgreSQL session advisory lease admits one production server per
+database/schema. Maintenance commands use the same lease across the entire
+recovery generation. Losing that connection requires the process to stop
+serving. SQL and GORM domain repositories share one application-owned pool;
+the lease uses a dedicated connection so it cannot exhaust a small data pool.
 
-The principal-backlog migration preserves every accepted reservation and adds
-an immutable server-derived source identity for new admission. Older rows keep
-an empty identity; their pending rows and bytes count conservatively against
-every principal until replay makes them terminal. Token retirement never
-deletes backlog accounting, and recovery does not reassign accepted work.
+## Transaction contracts
 
-An unrecognized ledger or unledgered legacy schema is not silently adopted,
-rewritten, or deleted. Provision a fresh database or volume and retain old state
-separately if forensic access is required.
+Metadata writes acquire a schema-scoped advisory transaction lock before
+reading authority or capacity. Statement triggers acquire the same lock for
+direct SQL writes. Mutations, audit events, idempotency receipts, catalog
+revisions and quota/visibility accounting remain one transaction. Read-only
+multi-query snapshots use repeatable read. Retried transactions start fresh;
+a PostgreSQL error never retries a statement inside an aborted transaction.
 
-SQLite validates and applies all pending migrations transactionally under one
-startup writer lock. ClickHouse DDL is not transactional, so each ClickHouse
-migration must use retry-safe DDL and write its ledger row last. GORM never
-runs `AutoMigrate`.
+Each index has one owning organization. Canonical app, saved search,
+dashboard, knowledge and lookup authorities carry organization IDs. Global
+sharing remains inside that organization. Organization membership precedes
+ordinary users' index grants, while site administrators retain their universal
+authority. Referential guards prevent deletion of organizations with dependent
+resources.
 
-## SQLite control plane
+An immutable MinIO object is published in PostgreSQL only after its upload
+succeeds. Object storage and SQL cannot share a transaction, so incomplete
+publication and deletion use durable reconciliation. Presigned capabilities
+are issued only after authorization; source-index permissions are checked
+again for retained results, downloads and long-lived consumers.
 
-SQLite is the authority for catalogs, optimistic-concurrency revisions,
-authentication/token metadata, collectors, jobs/history/export,
-saved searches, dashboards, knowledge/lookups, visibility, quota schedules,
-ingestion request/outbox state, audit journals (including the identity-free
-feature-operation journal), cursors, and recovery metadata.
+## Event visibility and recovery
 
-Audited business mutations and their audit/receipt/catalog changes share one
-caller-owned transaction. The schema uses explicit foreign keys, uniqueness,
-bounds, state transitions, and immutable-row triggers so malformed state fails
-at the storage boundary and again during hydration.
+PostgreSQL reserves stable visibility sequences, index times, retention
+snapshots and immutable ingestion outboxes before ClickHouse insertion.
+Successful insert records commit authority; ambiguous outcomes retain the
+gap and exact outbox bytes until reconciliation. ClickHouse queries retain
+all existing tenant/index/time/visibility predicates and deduplication rules.
 
-SQLite and the server master-key/administrator-token files are one control-
-plane recovery unit. Do not copy a live database independently of the
-coordinated recovery procedure in [`deploy/README.md`](../deploy/README.md).
-
-## ClickHouse event store
-
-One `open_splunk.events` table stores all logical indexes. Tenant and index lead
-the sort/primary key, followed by bounded time and stable identity components.
-Monthly event-time partitions keep cardinality bounded. `event_time` preserves
-nanoseconds, `index_time` records server admission, and `expires_at` stores the
-index retention decision at admission. TTL removes expired rows in background
-without relying on whole-part deletion across mixed index policies.
-
-Promoted columns represent canonical event metadata. Optional promoted Strings
-remain nullable so missing and empty differ. Dynamic `fields` uses the native
-ClickHouse JSON type with bounded dedicated paths/types; aligned `field_names`
-and `field_types` preserve canonical dotted paths and stable logical value
-types, including null and extended bytes/time/duration/decimal values. The
-writer derives metadata and its private format discriminator from the original
-typed protobuf value rather than inferring it later from physical JSON.
-
-Canonical SPL aliases hide physical names: `index` maps to `index_name`,
-`_time` to `event_time`, `_indextime` to `index_time`, `_raw` to `raw`, and
-`message` to `body`. Raw bytes use the native byte-safe insertion path; they
-must not be UTF-8-repaired or base64-replaced.
-
-Case-insensitive exact searches on `event_id`, `trace_id`, and `span_id` use
-normalized bloom indexes that match the compiler's search expressions. The
-forward migration adds index metadata without rewriting existing event parts
-or changing their results. New parts build the indexes automatically. To
-accelerate older parts immediately, a ClickHouse administrator can schedule
-the following maintenance separately from server startup:
-
-```sql
-ALTER TABLE open_splunk.events MATERIALIZE INDEX idx_event_id_ci;
-ALTER TABLE open_splunk.events MATERIALIZE INDEX idx_trace_id_ci;
-ALTER TABLE open_splunk.events MATERIALIZE INDEX idx_span_id_ci;
-```
-
-Materialization reads existing parts and runs asynchronously; its cost depends
-on retained data volume. The application does not require materialization
-privileges, and searches remain correct before it finishes.
-
-## Visibility, retries, and recovery
-
-SQLite reserves a stable positive visibility sequence, index time, and
-per-index retention snapshot before ClickHouse insertion. Successful insert
-marks the reservation committed; a known pre-send failure may be skipped; an
-ambiguous send retains the gap and identical outbox payload until
-reconciliation proves its result.
-
-Search captures the highest contiguous committed sequence and one immutable
-index-time cutoff. Every event scan applies tenant/index/time authority plus
-`index_time <= cutoff`, `expires_at > cutoff`, and
-`visibility_seq <= committed_cutoff`. TTL expiry therefore cannot make the
-logical visibility high-water move backward.
-
-Native collector and HEC retries reuse deterministic event identities, row
-order, settings, and source-revision-specific deduplication domains.
-ClickHouse's MergeTree deduplication is a bounded recent-block window, not
-global exactly-once delivery. An acknowledgment is issued only after commit
-authority; ambiguous outcomes keep durable work pending.
-
-SQLite and ClickHouse form one coordinated recovery generation. A recovery
-set binds their exact private schema/migration counters and digests. Restore
-never mixes a control plane from one generation with ClickHouse from another.
-Unknown state fails closed; recovery does not discard it as success.
-
-The SQLite half of that generation contains both logical ingestion
-reservations and immutable write-group membership. A snapshot must therefore
-never retain an ambiguous group without every referenced reservation outbox.
-Online backup, index deletion, and other physical maintenance use the shared
-write freeze and drain proof before copying or mutating either store. Terminal
-group membership is pruned before referenced logical identity rows in the same
-bounded maintenance transaction.
+Native PostgreSQL `pg_dump`/`pg_restore`, MinIO object references, the master
+key and ClickHouse's existing archive form one coordinated recovery
+generation. Restore requires an empty target and never silently overwrites
+existing state. The former SQLite preservation utility is a separate,
+disposable deliverable sourced from the previous release; production does
+not contain a SQLite driver, migration history or fallback.
 
 ## Verification
 
-Fast schema, final-shape, ordered-history, upgrade-preservation, ledger,
-digest, drift, and retry tests run in the default suite. ClickHouse smoke tests
-reapply the current history, verify typed JSON/metadata and retry
-deduplication, and use the repository-pinned image:
+Embedded migration tests pin exact file digests. Control, identity,
+authorization and repository tests use isolated PostgreSQL schemas and fail
+when `OPEN_SPLUNK_TEST_POSTGRES_DSN` is unavailable; they never silently skip.
+Native backup tests additionally require matching `pg_dump` and `pg_restore`
+clients on PATH. Database tests validate fresh initialization, restart,
+concurrent startup, drift, constraint/state forgery, rollback, quota races,
+lease fencing and recovery preservation.
+
+ClickHouse migration files and their physical event contracts are unchanged.
+Its integration gate remains:
 
 ```sh
-go test ./migrations/...
-
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
 go test ./migrations/clickhouse -run AgainstClickHouse -count=1 -v
 ```
-
-Set `OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` only for an intentional pinned-image
-comparison. A schema smoke pass does not replace ingestion, query, recovery,
-load, or soak gates.

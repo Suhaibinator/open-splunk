@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
@@ -23,7 +26,7 @@ func TestBodyDerivedFiltersCannotHideSameByteProjectionCorruption(t *testing.T) 
 				dropTrigger(t, database, "knowledge_list_projection_update_is_forbidden")
 				mustExec(t, database, `UPDATE knowledge_object_list_projections
 					SET description = 'xxxxxx'
-					WHERE tenant_id = ? AND knowledge_object_id = 'ko-filter-corrupt'`, testTenant)
+					WHERE tenant_id = $1 AND knowledge_object_id = 'ko-filter-corrupt'`, testTenant)
 			},
 			request: func() ListRequest {
 				value := "needle"
@@ -36,7 +39,7 @@ func TestBodyDerivedFiltersCannotHideSameByteProjectionCorruption(t *testing.T) 
 				dropTrigger(t, database, "knowledge_list_selector_update_is_forbidden")
 				mustExec(t, database, `UPDATE knowledge_object_list_selector_patterns
 					SET value = 'xxxxxx'
-					WHERE tenant_id = ? AND knowledge_object_id = 'ko-filter-corrupt'`, testTenant)
+					WHERE tenant_id = $1 AND knowledge_object_id = 'ko-filter-corrupt'`, testTenant)
 			},
 			request: func() ListRequest {
 				value := "prod-"
@@ -78,7 +81,7 @@ func TestBodyFilterValidatesFalseInclusionBeyondReturnedPage(t *testing.T) {
 	dropTrigger(t, database, "knowledge_list_projection_update_is_forbidden")
 	mustExec(t, database, `UPDATE knowledge_object_list_projections
 		SET description = 'needle'
-		WHERE tenant_id = ? AND knowledge_object_id = 'ko-filter-zulu'`, testTenant)
+		WHERE tenant_id = $1 AND knowledge_object_id = 'ko-filter-zulu'`, testTenant)
 	filter := "needle"
 	if _, err := store.List(context.Background(), testReadScope(), ListRequest{
 		PageSize: 1, IncludeTotal: true, TextFilter: &filter,
@@ -140,7 +143,7 @@ func TestDependencyIntegrityForCurrentAndHistoricalVersions(t *testing.T) {
 		database, store := seed(t, 1)
 		dropTrigger(t, database, "knowledge_dependency_update_is_forbidden")
 		mustExec(t, database, `UPDATE knowledge_object_dependencies SET ordinal = 1
-			WHERE tenant_id = ? AND source_object_id = 'ko-source' AND source_object_version = 1`, testTenant)
+			WHERE tenant_id = $1 AND source_object_id = 'ko-source' AND source_object_version = 1`, testTenant)
 		assertGetAndListCorrupt(t, store, "ko-source")
 	})
 
@@ -159,7 +162,7 @@ func TestDependencyIntegrityForCurrentAndHistoricalVersions(t *testing.T) {
 		dropTrigger(t, database, "knowledge_dependency_update_is_forbidden")
 		mustExec(t, database, `UPDATE knowledge_object_dependencies
 			SET target_object_version = 2
-			WHERE tenant_id = ? AND source_object_id = 'ko-source' AND source_object_version = 1`, testTenant)
+			WHERE tenant_id = $1 AND source_object_id = 'ko-source' AND source_object_version = 1`, testTenant)
 		assertGetAndListCorrupt(t, store, "ko-source")
 	})
 
@@ -167,7 +170,7 @@ func TestDependencyIntegrityForCurrentAndHistoricalVersions(t *testing.T) {
 		database, store := seed(t, 2)
 		dropTrigger(t, database, "knowledge_dependency_update_is_forbidden")
 		mustExec(t, database, `UPDATE knowledge_object_dependencies SET ordinal = 1
-			WHERE tenant_id = ? AND source_object_id = 'ko-source' AND source_object_version = 1`, testTenant)
+			WHERE tenant_id = $1 AND source_object_id = 'ko-source' AND source_object_version = 1`, testTenant)
 		version := uint64(1)
 		if _, err := store.Get(context.Background(), testReadScope(), "ko-source", &version); !errors.Is(err, ErrCorrupt) {
 			t.Fatalf("Get(corrupt historical dependencies) error = %v, want ErrCorrupt", err)
@@ -184,7 +187,7 @@ func TestCurrentTimestampLifecycleAndRevisionIntegrity(t *testing.T) {
 		}})
 		dropTrigger(t, database, "knowledge_object_version_update_is_forbidden")
 		mustExec(t, database, `UPDATE knowledge_object_versions SET created_at_unix_micro = 19
-			WHERE tenant_id = ? AND knowledge_object_id = 'ko-time' AND object_version = 2`, testTenant)
+			WHERE tenant_id = $1 AND knowledge_object_id = 'ko-time' AND object_version = 2`, testTenant)
 		assertGetAndListCorrupt(t, store, "ko-time")
 	})
 
@@ -196,7 +199,7 @@ func TestCurrentTimestampLifecycleAndRevisionIntegrity(t *testing.T) {
 		}})
 		dropTrigger(t, database, "knowledge_object_registry_transition_is_valid")
 		mustExec(t, database, `UPDATE knowledge_objects SET disabled_at_unix_micro = 10
-			WHERE tenant_id = ? AND knowledge_object_id = 'ko-disabled'`, testTenant)
+			WHERE tenant_id = $1 AND knowledge_object_id = 'ko-disabled'`, testTenant)
 		assertGetAndListCorrupt(t, store, "ko-disabled")
 	})
 
@@ -249,10 +252,10 @@ func TestListBudgetExactSliceAndUnhydratedSentinel(t *testing.T) {
 			}}})
 		}
 		dropTrigger(t, database, "knowledge_definition_blob_update_is_forbidden")
-		mustExec(t, database, `UPDATE knowledge_definition_blobs SET definition_proto = X'00', definition_bytes = 1
-			WHERE tenant_id = ? AND definition_digest = (
+		mustExec(t, database, `UPDATE knowledge_definition_blobs SET definition_proto = decode('00','hex'), definition_bytes = 1
+			WHERE tenant_id = $1 AND definition_digest = (
 				SELECT definition_digest FROM knowledge_objects
-				WHERE tenant_id = ? AND knowledge_object_id = 'ko-bravo'
+				WHERE tenant_id = $2 AND knowledge_object_id = 'ko-bravo'
 			)`, testTenant, testTenant)
 		page, err := store.List(context.Background(), testReadScope(), ListRequest{PageSize: 1})
 		if err != nil {
@@ -342,15 +345,15 @@ func execWithForeignKeysDisabled(t *testing.T, database *control.DB, query strin
 		t.Fatalf("acquire corruption connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(context.Background(), connection); err != nil {
 		t.Fatalf("disable fixture foreign keys: %v", err)
 	}
 	defer func() {
-		if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`); err != nil {
+		if _, err := pgtest.RestoreForeignKeys(context.Background(), connection); err != nil {
 			t.Errorf("restore fixture foreign keys: %v", err)
 		}
 	}()
-	if _, err := connection.ExecContext(context.Background(), query, args...); err != nil {
+	if _, err := connection.ExecContext(context.Background(), pgtest.Parameters(query), args...); err != nil {
 		t.Fatalf("execute foreign-key corruption: %v", err)
 	}
 }
@@ -361,7 +364,7 @@ func insertOrphanVersion(t *testing.T, database *control.DB, objectID string, ve
 	var appID, ownerID, objectType, name, sharingScope string
 	if err := database.SQLDB().QueryRowContext(context.Background(), `SELECT
 		app_id, owner_id, object_type, name, sharing_scope
-		FROM knowledge_objects WHERE tenant_id = ? AND knowledge_object_id = ?`,
+		FROM knowledge_objects WHERE tenant_id = $1 AND knowledge_object_id = $2`,
 		testTenant, objectID,
 	).Scan(&appID, &ownerID, &objectType, &name, &sharingScope); err != nil {
 		t.Fatalf("read orphan predecessor identity: %v", err)
@@ -381,26 +384,26 @@ func insertOrphanVersion(t *testing.T, database *control.DB, objectID string, ve
 	if err != nil {
 		t.Fatalf("normalize orphan version: %v", err)
 	}
-	tx, err := database.SQLDB().BeginTx(context.Background(), nil)
+	tx, err := pgmeta.BeginSQL(context.Background(), database.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin orphan version: %v", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_definition_blobs (
 		tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro
-	) VALUES (?, ?, ?, ?, ?)`, testTenant, normalized.Digest[:], normalized.Bytes, len(normalized.Bytes), timestamp); err != nil {
+	) VALUES ($1, $2, $3, $4, $5)`, testTenant, normalized.Digest[:], normalized.Bytes, len(normalized.Bytes), timestamp); err != nil {
 		t.Fatalf("insert orphan body: %v", err)
 	}
 	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_versions (
 		tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, definition_digest, dependency_count, mutation_kind, created_at_unix_micro
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 0, 'update', ?)`,
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, 0, 'update', $10)`,
 		testTenant, objectID, version, appID, ownerID, objectType, name, sharingScope, normalized.Digest[:], timestamp); err != nil {
 		t.Fatalf("insert orphan version: %v", err)
 	}
 	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_dependency_seals (
 		tenant_id, knowledge_object_id, object_version, dependency_count
-	) VALUES (?, ?, ?, 0)`, testTenant, objectID, version); err != nil {
+	) VALUES ($1, $2, $3, 0)`, testTenant, objectID, version); err != nil {
 		t.Fatalf("seal orphan version: %v", err)
 	}
 	if err := tx.Commit(); err != nil {

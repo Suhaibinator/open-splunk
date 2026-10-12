@@ -31,14 +31,16 @@ type HECIndexAuthoritySnapshot struct {
 // staging. Indexes contains only indexes selected by at least one admitted
 // event, not every index authorized for the token.
 type HECAdmissionAuthority struct {
-	TokenID               string
-	TokenVersion          uint64
-	IndexerAcknowledgment bool
-	Indexes               []HECIndexAuthoritySnapshot
+	OrganizationID               int64
+	RequireOrganizationOwnership bool
+	TokenID                      string
+	TokenVersion                 uint64
+	IndexerAcknowledgment        bool
+	Indexes                      []HECIndexAuthoritySnapshot
 }
 
 // RevalidateHECAdmissionInTransaction proves that authority remains exact in
-// a caller-owned SQLite transaction. It performs bounded, count-only reads and
+// a caller-owned PostgreSQL transaction. It performs bounded, count-only reads and
 // neither commits nor rolls back tx. Callers must execute quota, outbox, and
 // acknowledgment writes in this same transaction after it succeeds.
 func RevalidateHECAdmissionInTransaction(
@@ -105,24 +107,37 @@ func RevalidateHECAdmissionInTransaction(
 		seen[index.Name] = struct{}{}
 	}
 
-	acknowledgmentMode := 0
-	if authority.IndexerAcknowledgment {
-		acknowledgmentMode = 1
+	if authority.RequireOrganizationOwnership {
+		if authority.OrganizationID <= 0 {
+			return ErrStaleHECAdmission
+		}
+		var invalid int64
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM ingestion_tokens AS token
+			JOIN ingestion_token_indexes AS scope ON scope.ingestion_token_id = token.ingestion_token_id
+			LEFT JOIN os_index_organizations AS owned ON owned.index_id = scope.index_id
+			WHERE token.ingestion_token_id = $1 AND (token.organization_id <> $2 OR owned.organization_id IS NULL OR owned.organization_id <> token.organization_id)`, authority.TokenID, authority.OrganizationID).Scan(&invalid); err != nil {
+			return fmt.Errorf("revalidate HEC organization ownership: %w", err)
+		}
+		if invalid != 0 {
+			return ErrStaleHECAdmission
+		}
 	}
+
+	acknowledgmentMode := authority.IndexerAcknowledgment
 	var matchingToken int64
 	if err := tx.QueryRowContext(ctx, `
 		SELECT count(*)
 		FROM ingestion_tokens AS token
 		JOIN ingestion_token_hec_profiles AS profile
 		  ON profile.ingestion_token_id = token.ingestion_token_id
-		WHERE token.ingestion_token_id = ?
-		  AND token.version = ?
+		WHERE token.ingestion_token_id = $1
+		  AND token.version = $2
 		  AND token.purpose = 'hec'
 		  AND token.bound_collector_id IS NULL
 		  AND token.state = 'active'
 		  AND (token.expires_at_unix_micro IS NULL
-		       OR token.expires_at_unix_micro > ?)
-		  AND profile.indexer_acknowledgment = ?`,
+		       OR token.expires_at_unix_micro > $3)
+		  AND profile.indexer_acknowledgment = $4`,
 		authority.TokenID,
 		authority.TokenVersion,
 		checkedAt.UnixMicro(),
@@ -143,7 +158,7 @@ func RevalidateHECAdmissionInTransaction(
 		if position > 0 {
 			statement.WriteByte(',')
 		}
-		statement.WriteString("(?, ?)")
+		fmt.Fprintf(&statement, "($%d::text, $%d::bigint)", position*2+1, position*2+2)
 		arguments = append(arguments, index.Name, index.Version)
 	}
 	statement.WriteString(`)
@@ -156,7 +171,8 @@ func RevalidateHECAdmissionInTransaction(
 		 AND target.ingestion_enabled = 1
 		JOIN ingestion_token_indexes AS scope
 		  ON scope.index_id = target.index_id
-		 AND scope.ingestion_token_id = ?`)
+		 AND scope.ingestion_token_id = `)
+	fmt.Fprintf(&statement, "$%d", len(arguments)+1)
 	arguments = append(arguments, authority.TokenID)
 
 	var matchingIndexes int64

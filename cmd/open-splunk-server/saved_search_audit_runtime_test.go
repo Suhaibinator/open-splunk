@@ -23,8 +23,8 @@ import (
 
 const (
 	runtimeSavedSearchAuditTenantID = "tenant-saved-search-audit"
-	runtimeSavedSearchAuditOwnerID  = "single-user"
-	runtimeSavedSearchSystemActorID = "open-splunk-server"
+	runtimeSavedSearchAuditOwnerID  = "1"
+	runtimeSavedSearchSystemActorID = "1"
 )
 
 func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
@@ -44,14 +44,14 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 	masterKeyPath := filepath.Join(directory, "server.key")
 	bearerToken := bytes.Repeat(
 		[]byte("s"),
-		auth.MinimumBrowserBearerTokenBytes,
+		runtimeSessionCredentialBytes,
 	)
 	authenticator := newRuntimeSavedSearchAuditAuthenticator(
 		t,
 		bearerToken,
 	)
 
-	firstDatabase, err := control.Open(ctx, databasePath)
+	firstDatabase, err := openTestControl(t, ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 	}
 	firstDatabaseClosed = true
 
-	secondDatabase, err := control.Open(ctx, databasePath)
+	secondDatabase, err := openTestControl(t, ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 func TestRuntimeSavedSearchMutationFailsClosedWithoutAuditJournal(t *testing.T) {
 	ctx := context.Background()
 	directory := t.TempDir()
-	database, err := control.Open(
+	database, err := openTestControl(t,
 		ctx,
 		filepath.Join(directory, "control.db"),
 	)
@@ -413,7 +413,7 @@ func TestRuntimeSavedSearchMutationFailsClosedWithoutAuditJournal(t *testing.T) 
 	}
 	bearerToken := bytes.Repeat(
 		[]byte("f"),
-		auth.MinimumBrowserBearerTokenBytes,
+		runtimeSessionCredentialBytes,
 	)
 	handler := newRuntimeSavedSearchAuditHandlerForTest(
 		t,
@@ -424,7 +424,7 @@ func TestRuntimeSavedSearchMutationFailsClosedWithoutAuditJournal(t *testing.T) 
 	)
 	if _, err := database.SQLDB().ExecContext(
 		ctx,
-		"DROP TABLE audit_events",
+		"DROP TABLE audit_events CASCADE",
 	); err != nil {
 		t.Fatalf("make test audit journal unavailable: %v", err)
 	}
@@ -496,9 +496,9 @@ func assertRuntimeSavedSearchAuditEvents(
 		event := response.GetAuditEvents()[index]
 		wantSequence := uint64(len(expectations) - index)
 		if event.GetSequence() != wantSequence ||
-			event.GetActorKind() != opensplunk.AuditActorKind_AUDIT_ACTOR_KIND_SYSTEM ||
+			event.GetActorKind() != opensplunk.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER ||
 			event.GetActorId() != runtimeSavedSearchSystemActorID ||
-			event.GetActorRole() != opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_SYSTEM ||
+			event.GetActorRole() != opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR ||
 			event.GetAction() != expectation.action ||
 			event.GetTargetKind() != opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH ||
 			event.GetTargetId() != expectation.targetID ||
@@ -518,9 +518,9 @@ func assertRuntimeSavedSearchAuditEvents(
 func newRuntimeSavedSearchAuditAuthenticator(
 	t *testing.T,
 	bearerToken []byte,
-) auth.BrowserAuthenticator {
+) server.IdentityAuthenticator {
 	t.Helper()
-	authenticator, err := auth.NewBearerTokenAuthenticator(
+	authenticator, err := newRuntimeSessionAuthenticator(
 		bearerToken,
 		runtimeSavedSearchAuditTenantID,
 		runtimeSavedSearchAuditOwnerID,
@@ -536,21 +536,21 @@ func newRuntimeSavedSearchAuditHandlerForTest(
 	t *testing.T,
 	savedSearches server.SavedSearches,
 	auditEvents server.AuditEvents,
-	authenticator auth.BrowserAuthenticator,
+	authenticator server.IdentityAuthenticator,
 	configure func(*server.Config),
 ) *server.Handler {
 	t.Helper()
 	config := runtimeServerConfig()
 	config.SavedSearches = savedSearches
 	config.AuditEvents = auditEvents
-	config.BrowserAuthenticator = authenticator
+	config.IdentityAuthenticator = authenticator
 	config.TenantID = runtimeSavedSearchAuditTenantID
 	config.OwnerID = runtimeSavedSearchAuditOwnerID
 	config.AdministrativeAllowedHosts = []string{"127.0.0.1"}
 	if configure != nil {
 		configure(&config)
 	}
-	handler, err := server.NewHandler(config)
+	handler, err := newRuntimeTestHandler(config)
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
@@ -605,7 +605,7 @@ func waitForRuntimeSavedSearchRerunHistory(
 	t.Helper()
 	ctx := context.Background()
 	deadline := time.Now().Add(2 * time.Second)
-	scope := searchhistory.AccessScope{
+	scope := searchhistory.AccessScope{OrganizationID: "1",
 		TenantID: runtimeSavedSearchAuditTenantID,
 		OwnerID:  runtimeSavedSearchAuditOwnerID,
 	}

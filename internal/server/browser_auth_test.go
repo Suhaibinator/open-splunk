@@ -17,12 +17,13 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"google.golang.org/protobuf/proto"
 )
 
 const (
 	browserGateTenantID = "tenant-exact"
-	browserGateOwnerID  = "owner-exact"
+	browserGateOwnerID  = "1106"
 )
 
 var browserGateAdministratorPaths = []string{
@@ -294,7 +295,7 @@ func (administration *browserGateTokenAdministration) GetCollectorToken(
 	string,
 ) (auth.CollectorToken, error) {
 	administration.record()
-	return auth.CollectorToken{}, control.ErrNotFound
+	return auth.CollectorToken{OrganizationID: 1, IssuerUserID: 1}, control.ErrNotFound
 }
 
 func (administration *browserGateTokenAdministration) ListCollectorTokens(
@@ -311,7 +312,7 @@ func (administration *browserGateTokenAdministration) UpdateCollectorToken(
 	auth.UpdateCollectorTokenRequest,
 ) (auth.CollectorToken, error) {
 	administration.record()
-	return auth.CollectorToken{}, errors.New("unexpected token update")
+	return auth.CollectorToken{OrganizationID: 1, IssuerUserID: 1}, errors.New("unexpected token update")
 }
 
 func (administration *browserGateTokenAdministration) SetCollectorTokenEnabled(
@@ -321,7 +322,7 @@ func (administration *browserGateTokenAdministration) SetCollectorTokenEnabled(
 	bool,
 ) (auth.CollectorToken, error) {
 	administration.record()
-	return auth.CollectorToken{}, errors.New("unexpected token state update")
+	return auth.CollectorToken{OrganizationID: 1, IssuerUserID: 1}, errors.New("unexpected token state update")
 }
 
 func (administration *browserGateTokenAdministration) RevokeCollectorToken(
@@ -330,7 +331,7 @@ func (administration *browserGateTokenAdministration) RevokeCollectorToken(
 	uint64,
 ) (auth.CollectorToken, error) {
 	administration.record()
-	return auth.CollectorToken{}, errors.New("unexpected token revocation")
+	return auth.CollectorToken{OrganizationID: 1, IssuerUserID: 1}, errors.New("unexpected token revocation")
 }
 
 type observedRequestBody struct {
@@ -360,17 +361,17 @@ func TestHandlerRequiresBrowserAuthenticationForAdministrativeServices(t *testin
 
 	for _, test := range []struct {
 		name          string
-		authenticator auth.BrowserAuthenticator
+		authenticator fixtureBrowserAuthenticator
 	}{
 		{name: "missing"},
 		{name: "typed nil", authenticator: (*recordingBrowserAuthenticator)(nil)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			config := base
-			config.BrowserAuthenticator = test.authenticator
+			config.IdentityAuthenticator = adaptTestBrowserAuthenticator(test.authenticator)
 			_, err := NewHandler(config)
 			if err == nil ||
-				!strings.Contains(err.Error(), "administrative services require browser authentication") {
+				!strings.Contains(err.Error(), "user identity and resource authorization are required") {
 				t.Fatalf("NewHandler error = %v", err)
 			}
 		})
@@ -381,8 +382,8 @@ func TestHandlerRequiresBrowserAuthenticationForAdministrativeServices(t *testin
 		Indexes:       fakeIndexCatalog{},
 		SavedSearches: &fakeSavedSearches{},
 		WebUI:         testUI(),
-	}); err != nil {
-		t.Fatalf("NewHandler without administrative services: %v", err)
+	}); err == nil {
+		t.Fatal("ordinary routes accepted a missing user identity")
 	}
 }
 
@@ -429,7 +430,7 @@ func TestEveryAdministratorRouteRequiresBrowserAuthenticationBeforeAdmission(t *
 				)
 			}
 			if response.Header().Get("WWW-Authenticate") !=
-				administratorAuthenticationRealm {
+				"" {
 				t.Fatalf(
 					"WWW-Authenticate = %q",
 					response.Header().Get("WWW-Authenticate"),
@@ -472,7 +473,7 @@ func TestBrowserAuthenticationIsScopedAndOrderedAfterExactRouteAndOriginChecks(t
 		"/api/system/bootstrap",
 		&opensplunk.GetSystemBootstrapRequest{},
 	)
-	if ordinary.Code != http.StatusOK {
+	if ordinary.Code != http.StatusUnauthorized {
 		t.Fatalf(
 			"ordinary route status = %d, body = %s",
 			ordinary.Code,
@@ -606,7 +607,7 @@ func TestAdministratorAuthorizationHeaderParsingFailsClosedBeforeWork(t *testing
 		{name: "DEL token character", values: []string{"Bearer " + strings.Repeat("a", 31) + "\x7f"}},
 		{name: "non-ASCII token character", values: []string{"Bearer " + strings.Repeat("a", 31) + "é"}},
 		{name: "interior padding", values: []string{"Bearer " + strings.Repeat("a", 31) + "=a"}},
-		{name: "oversized", values: []string{"Bearer " + strings.Repeat("a", auth.MaximumBrowserBearerTokenBytes+1)}},
+		{name: "oversized", values: []string{"Bearer " + strings.Repeat("a", maximumFixtureBearerTokenBytes+1)}},
 		{name: "duplicate values", values: []string{validHeader, validHeader}},
 		{
 			name: "case variant duplicate",
@@ -653,7 +654,7 @@ func TestAdministratorAuthorizationHeaderParsingFailsClosedBeforeWork(t *testing
 				)
 			}
 			if response.Header().Get("WWW-Authenticate") !=
-				administratorAuthenticationRealm {
+				"" {
 				t.Fatalf(
 					"WWW-Authenticate = %q",
 					response.Header().Get("WWW-Authenticate"),
@@ -693,7 +694,7 @@ func TestAdministratorAuthenticationAndAuthorizationOutcomesAreSafe(t *testing.T
 	}{
 		{
 			name: "invalid credential", err: auth.ErrBrowserUnauthorized,
-			status: http.StatusUnauthorized, wantChallenge: true,
+			status: http.StatusUnauthorized, wantChallenge: false,
 		},
 		{
 			name: "ordinary user",
@@ -716,14 +717,14 @@ func TestAdministratorAuthenticationAndAuthorizationOutcomesAreSafe(t *testing.T
 			status: http.StatusForbidden,
 		},
 		{
-			name: "owner mismatch",
+			name: "different authenticated owner",
 			principal: browserGatePrincipal(
 				t,
 				browserGateTenantID,
-				"other-owner",
+				"1007",
 				auth.BrowserRoleAdministrator,
 			),
-			status: http.StatusForbidden,
+			status: http.StatusUnsupportedMediaType,
 		},
 		{
 			name:   "corrupt principal",
@@ -759,7 +760,7 @@ func TestAdministratorAuthenticationAndAuthorizationOutcomesAreSafe(t *testing.T
 			request := httptest.NewRequestWithContext(
 				context.Background(),
 				http.MethodPost,
-				"/api/indexes/list",
+				"/api/apps/list",
 				nil,
 			)
 			request.Body = body
@@ -776,7 +777,12 @@ func TestAdministratorAuthenticationAndAuthorizationOutcomesAreSafe(t *testing.T
 				)
 			}
 			if test.status == http.StatusForbidden {
-				wantBody := "{\"error\":{\"message\":\"administrator access is required\"}}\n"
+				var wantBody string
+				if test.name == "tenant mismatch" {
+					wantBody = "{\"error\":{\"message\":\"resource access is denied\"}}\n"
+				} else {
+					wantBody = "{\"error\":{\"message\":\"organization administrator access is required\"}}\n"
+				}
 				if response.Body.String() != wantBody {
 					t.Fatalf("body = %q, want %q", response.Body.String(), wantBody)
 				}
@@ -970,7 +976,7 @@ func TestAuthenticateBrowserAcceptsUserAndDetachesSecurityContext(t *testing.T) 
 	principal := browserGatePrincipal(
 		t,
 		"user-tenant",
-		"ordinary-user",
+		"1140",
 		auth.BrowserRoleUser,
 	)
 	authenticator := &recordingBrowserAuthenticator{
@@ -984,7 +990,7 @@ func TestAuthenticateBrowserAcceptsUserAndDetachesSecurityContext(t *testing.T) 
 			return principal, nil
 		},
 	}
-	handler := &apiHandler{browserAuthenticator: authenticator}
+	handler := &apiHandler{tenantID: "user-tenant", identityAuthenticator: adaptTestBrowserAuthenticator(authenticator)}
 	upstreamActor := audit.Actor{
 		Kind: audit.ActorKindBrowser,
 		ID:   "untrusted-upstream-actor",
@@ -1023,7 +1029,7 @@ func TestAuthenticateBrowserAcceptsUserAndDetachesSecurityContext(t *testing.T) 
 	}
 	if !authenticatedPrincipal.Valid() ||
 		authenticatedPrincipal.TenantID() != "user-tenant" ||
-		authenticatedPrincipal.OwnerID() != "ordinary-user" ||
+		authenticatedPrincipal.OwnerID() != "1140" ||
 		authenticatedPrincipal.Role() != auth.BrowserRoleUser {
 		t.Fatalf(
 			"authenticated principal = tenant %q owner %q role %v valid %t",
@@ -1036,7 +1042,7 @@ func TestAuthenticateBrowserAcceptsUserAndDetachesSecurityContext(t *testing.T) 
 	capturedPrincipal, present := browserPrincipalFromRequest(authenticatedRequest)
 	if !present ||
 		capturedPrincipal.TenantID() != "user-tenant" ||
-		capturedPrincipal.OwnerID() != "ordinary-user" ||
+		capturedPrincipal.OwnerID() != "1140" ||
 		capturedPrincipal.Role() != auth.BrowserRoleUser {
 		t.Fatalf(
 			"context principal = tenant %q owner %q role %v present %t",
@@ -1049,7 +1055,7 @@ func TestAuthenticateBrowserAcceptsUserAndDetachesSecurityContext(t *testing.T) 
 	capturedActor, present := audit.ActorFromContext(authenticatedRequest.Context())
 	wantActor := audit.Actor{
 		Kind: audit.ActorKindBrowser,
-		ID:   "ordinary-user",
+		ID:   "1140",
 		Role: audit.ActorRoleUser,
 	}
 	if !present || capturedActor != wantActor {
@@ -1103,53 +1109,53 @@ func TestAuthenticateBrowserFailureMappingsAreStable(t *testing.T) {
 			name:       "nil handler",
 			nilHandler: true,
 			status:     http.StatusServiceUnavailable,
-			message:    "administrator authentication is unavailable",
+			message:    "user authentication is unavailable",
 		},
 		{
 			name:       "missing authenticator",
 			nilHandler: false,
 			status:     http.StatusServiceUnavailable,
-			message:    "administrator authentication is unavailable",
+			message:    "user authentication is unavailable",
 		},
 		{
 			name:     "typed nil authenticator",
 			typedNil: true,
 			status:   http.StatusServiceUnavailable,
-			message:  "administrator authentication is unavailable",
+			message:  "user authentication is unavailable",
 		},
 		{
 			name:          "invalid credential",
 			err:           auth.ErrBrowserUnauthorized,
 			status:        http.StatusUnauthorized,
-			message:       "administrator authentication is required",
-			wantChallenge: true,
+			message:       "sign in is required",
+			wantChallenge: false,
 			wantCalls:     1,
 		},
 		{
 			name:      "invalid principal",
 			status:    http.StatusServiceUnavailable,
-			message:   "administrator authentication is unavailable",
+			message:   "user authentication is unavailable",
 			wantCalls: 1,
 		},
 		{
 			name:      "request canceled",
 			err:       context.Canceled,
 			status:    http.StatusRequestTimeout,
-			message:   "administrator authentication timed out",
+			message:   "authentication timed out",
 			wantCalls: 1,
 		},
 		{
 			name:      "request deadline exceeded",
 			err:       context.DeadlineExceeded,
 			status:    http.StatusRequestTimeout,
-			message:   "administrator authentication timed out",
+			message:   "authentication timed out",
 			wantCalls: 1,
 		},
 		{
 			name:      "backend failure",
 			err:       errors.New("secret backend detail"),
 			status:    http.StatusServiceUnavailable,
-			message:   "administrator authentication is unavailable",
+			message:   "user authentication is unavailable",
 			wantCalls: 1,
 		},
 	}
@@ -1161,14 +1167,14 @@ func TestAuthenticateBrowserFailureMappingsAreStable(t *testing.T) {
 			if !test.nilHandler {
 				handler = &apiHandler{}
 				if test.typedNil {
-					handler.browserAuthenticator = (*recordingBrowserAuthenticator)(nil)
+					handler.identityAuthenticator = adaptTestBrowserAuthenticator((*recordingBrowserAuthenticator)(nil))
 				} else if test.wantCalls > 0 {
 					authenticator = &recordingBrowserAuthenticator{
 						fn: func(context.Context, []byte) (auth.BrowserPrincipal, error) {
 							return test.principal, test.err
 						},
 					}
-					handler.browserAuthenticator = authenticator
+					handler.identityAuthenticator = adaptTestBrowserAuthenticator(authenticator)
 				}
 			}
 			request := httptest.NewRequestWithContext(
@@ -1359,7 +1365,8 @@ func TestAuthorizedDownstreamRequestStripsEveryAuthorizationKeyVariant(t *testin
 				},
 			}
 			api := &apiHandler{
-				browserAuthenticator: authenticator,
+				authorization:         testsupport.AuthorizationFixture(browserGateTenantID),
+				identityAuthenticator: adaptTestBrowserAuthenticator(authenticator),
 				administratorRoutes: map[string]struct{}{
 					"/api/indexes/list": {},
 				},
@@ -1434,7 +1441,7 @@ func TestAuthorizedDownstreamRequestStripsEveryAuthorizationKeyVariant(t *testin
 
 func newBrowserGateHandler(
 	t *testing.T,
-	authenticator auth.BrowserAuthenticator,
+	authenticator fixtureBrowserAuthenticator,
 	routeTimeout time.Duration,
 ) (*Handler, *browserGateIndexAdministration, *browserGateTokenAdministration) {
 	return newBrowserGateHandlerWithForwardedProto(
@@ -1447,14 +1454,14 @@ func newBrowserGateHandler(
 
 func newBrowserGateHandlerWithForwardedProto(
 	t *testing.T,
-	authenticator auth.BrowserAuthenticator,
+	authenticator fixtureBrowserAuthenticator,
 	routeTimeout time.Duration,
 	trustForwardedProto bool,
 ) (*Handler, *browserGateIndexAdministration, *browserGateTokenAdministration) {
 	t.Helper()
 	indexes := &browserGateIndexAdministration{}
 	tokens := &browserGateTokenAdministration{}
-	handler, err := NewHandler(Config{
+	handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:                 &fakeSearchJobs{},
 		Indexes:                    indexes,
 		IndexAdmin:                 indexes,
@@ -1466,7 +1473,7 @@ func newBrowserGateHandlerWithForwardedProto(
 		SearchInspections:          &fakeSearchInspections{},
 		ServerSettings:             newFakeServerSettings(),
 		SavedSearches:              &fakeSavedSearches{},
-		BrowserAuthenticator:       authenticator,
+		IdentityAuthenticator:      adaptTestBrowserAuthenticator(authenticator),
 		WebUI:                      testUI(),
 		TenantID:                   browserGateTenantID,
 		OwnerID:                    browserGateOwnerID,
@@ -1487,7 +1494,7 @@ func browserGatePrincipal(
 	role auth.BrowserRole,
 ) auth.BrowserPrincipal {
 	t.Helper()
-	authenticator, err := auth.NewBearerTokenAuthenticator(
+	authenticator, err := newTestBearerTokenAuthenticator(
 		[]byte(adminIntegrationBearerToken),
 		tenantID,
 		ownerID,

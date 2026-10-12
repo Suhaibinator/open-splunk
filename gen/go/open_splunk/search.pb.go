@@ -729,9 +729,13 @@ type SearchProgress struct {
 	// Version of the authoritative SearchJob snapshot used to project this
 	// progress. It shares SearchJob.state_version's per-job monotonic domain;
 	// zero means unavailable from a legacy sender.
-	StateVersion  uint64 `protobuf:"varint,12,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	StateVersion     uint64 `protobuf:"varint,12,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
+	CaptureRows      uint64 `protobuf:"varint,13,opt,name=capture_rows,json=captureRows,proto3" json:"capture_rows,omitempty"`
+	CaptureBytes     uint64 `protobuf:"varint,14,opt,name=capture_bytes,json=captureBytes,proto3" json:"capture_bytes,omitempty"`
+	CaptureComplete  bool   `protobuf:"varint,15,opt,name=capture_complete,json=captureComplete,proto3" json:"capture_complete,omitempty"`
+	PreviewTruncated bool   `protobuf:"varint,16,opt,name=preview_truncated,json=previewTruncated,proto3" json:"preview_truncated,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *SearchProgress) Reset() {
@@ -846,6 +850,34 @@ func (x *SearchProgress) GetStateVersion() uint64 {
 		return x.StateVersion
 	}
 	return 0
+}
+
+func (x *SearchProgress) GetCaptureRows() uint64 {
+	if x != nil {
+		return x.CaptureRows
+	}
+	return 0
+}
+
+func (x *SearchProgress) GetCaptureBytes() uint64 {
+	if x != nil {
+		return x.CaptureBytes
+	}
+	return 0
+}
+
+func (x *SearchProgress) GetCaptureComplete() bool {
+	if x != nil {
+		return x.CaptureComplete
+	}
+	return false
+}
+
+func (x *SearchProgress) GetPreviewTruncated() bool {
+	if x != nil {
+		return x.PreviewTruncated
+	}
+	return false
 }
 
 type SearchFailure struct {
@@ -1152,8 +1184,15 @@ type SearchJob struct {
 	RetentionLifetime    *durationpb.Duration      `protobuf:"bytes,26,opt,name=retention_lifetime,json=retentionLifetime,proto3" json:"retention_lifetime,omitempty"`
 	LastAccessedAt       *timestamppb.Timestamp    `protobuf:"bytes,27,opt,name=last_accessed_at,json=lastAccessedAt,proto3" json:"last_accessed_at,omitempty"`
 	RetainedResultStatus RetainedResultStatus      `protobuf:"varint,28,opt,name=retained_result_status,json=retainedResultStatus,proto3,enum=open_splunk.RetainedResultStatus" json:"retained_result_status,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Complete immutable captured output exists independently of live preview.
+	CaptureComplete bool `protobuf:"varint,29,opt,name=capture_complete,json=captureComplete,proto3" json:"capture_complete,omitempty"`
+	// Preview is a bounded prefix; this does not imply captured output is lost.
+	PreviewTruncated bool    `protobuf:"varint,30,opt,name=preview_truncated,json=previewTruncated,proto3" json:"preview_truncated,omitempty"`
+	OrganizationId   *string `protobuf:"bytes,31,opt,name=organization_id,json=organizationId,proto3,oneof" json:"organization_id,omitempty"`
+	CaptureRows      uint64  `protobuf:"varint,32,opt,name=capture_rows,json=captureRows,proto3" json:"capture_rows,omitempty"`
+	CaptureBytes     uint64  `protobuf:"varint,33,opt,name=capture_bytes,json=captureBytes,proto3" json:"capture_bytes,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *SearchJob) Reset() {
@@ -1375,6 +1414,41 @@ func (x *SearchJob) GetRetainedResultStatus() RetainedResultStatus {
 	return RetainedResultStatus_RETAINED_RESULT_STATUS_UNSPECIFIED
 }
 
+func (x *SearchJob) GetCaptureComplete() bool {
+	if x != nil {
+		return x.CaptureComplete
+	}
+	return false
+}
+
+func (x *SearchJob) GetPreviewTruncated() bool {
+	if x != nil {
+		return x.PreviewTruncated
+	}
+	return false
+}
+
+func (x *SearchJob) GetOrganizationId() string {
+	if x != nil && x.OrganizationId != nil {
+		return *x.OrganizationId
+	}
+	return ""
+}
+
+func (x *SearchJob) GetCaptureRows() uint64 {
+	if x != nil {
+		return x.CaptureRows
+	}
+	return 0
+}
+
+func (x *SearchJob) GetCaptureBytes() uint64 {
+	if x != nil {
+		return x.CaptureBytes
+	}
+	return 0
+}
+
 var File_open_splunk_search_proto protoreflect.FileDescriptor
 
 const file_open_splunk_search_proto_rawDesc = "" +
@@ -1408,7 +1482,7 @@ const file_open_splunk_search_proto_rawDesc = "" +
 	"\x18_scheduled_report_run_idB\v\n" +
 	"\t_alert_idB\x0f\n" +
 	"\r_alert_run_idB\x0f\n" +
-	"\r_scheduled_at\"\xca\x04\n" +
+	"\r_scheduled_at\"\xea\x05\n" +
 	"\x0eSearchProgress\x127\n" +
 	"\x05phase\x18\x01 \x01(\x0e2!.open_splunk.SearchExecutionPhaseR\x05phase\x12!\n" +
 	"\fscanned_rows\x18\x02 \x01(\x04R\vscannedRows\x12#\n" +
@@ -1424,7 +1498,11 @@ const file_open_splunk_search_proto_rawDesc = "" +
 	"updated_at\x18\n" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x124\n" +
 	"\x16counters_are_estimates\x18\v \x01(\bR\x14countersAreEstimates\x12#\n" +
-	"\rstate_version\x18\f \x01(\x04R\fstateVersionB\x13\n" +
+	"\rstate_version\x18\f \x01(\x04R\fstateVersion\x12!\n" +
+	"\fcapture_rows\x18\r \x01(\x04R\vcaptureRows\x12#\n" +
+	"\rcapture_bytes\x18\x0e \x01(\x04R\fcaptureBytes\x12)\n" +
+	"\x10capture_complete\x18\x0f \x01(\bR\x0fcaptureComplete\x12+\n" +
+	"\x11preview_truncated\x18\x10 \x01(\bR\x10previewTruncatedB\x13\n" +
 	"\x11_percent_complete\"\xb6\x01\n" +
 	"\rSearchFailure\x122\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x1e.open_splunk.SearchFailureCodeR\x04code\x12\x18\n" +
@@ -1448,7 +1526,7 @@ const file_open_splunk_search_proto_rawDesc = "" +
 	"\x14_clickhouse_query_id\"\xa0\x01\n" +
 	"\x10SearchJobOptions\x124\n" +
 	"\x16enable_field_discovery\x18\x02 \x01(\bR\x14enableFieldDiscovery\x12'\n" +
-	"\x0fenable_timeline\x18\x03 \x01(\bR\x0eenableTimelineJ\x04\b\x01\x10\x02J\x04\b\x04\x10\x05R\x0eenable_previewR\x11preview_row_limit\"\x89\x0e\n" +
+	"\x0fenable_timeline\x18\x03 \x01(\bR\x0eenableTimelineJ\x04\b\x01\x10\x02J\x04\b\x04\x10\x05R\x0eenable_previewR\x11preview_row_limit\"\xeb\x0f\n" +
 	"\tSearchJob\x12\"\n" +
 	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\x12#\n" +
 	"\rstate_version\x18\x02 \x01(\x04R\fstateVersion\x12=\n" +
@@ -1486,14 +1564,20 @@ const file_open_splunk_search_proto_rawDesc = "" +
 	"\x0fretention_class\x18\x19 \x01(\x0e2$.open_splunk.SearchJobRetentionClassR\x0eretentionClass\x12H\n" +
 	"\x12retention_lifetime\x18\x1a \x01(\v2\x19.google.protobuf.DurationR\x11retentionLifetime\x12D\n" +
 	"\x10last_accessed_at\x18\x1b \x01(\v2\x1a.google.protobuf.TimestampR\x0elastAccessedAt\x12W\n" +
-	"\x16retained_result_status\x18\x1c \x01(\x0e2!.open_splunk.RetainedResultStatusR\x14retainedResultStatusB\x11\n" +
+	"\x16retained_result_status\x18\x1c \x01(\x0e2!.open_splunk.RetainedResultStatusR\x14retainedResultStatus\x12)\n" +
+	"\x10capture_complete\x18\x1d \x01(\bR\x0fcaptureComplete\x12+\n" +
+	"\x11preview_truncated\x18\x1e \x01(\bR\x10previewTruncated\x12,\n" +
+	"\x0forganization_id\x18\x1f \x01(\tH\x06R\x0eorganizationId\x88\x01\x01\x12!\n" +
+	"\fcapture_rows\x18  \x01(\x04R\vcaptureRows\x12#\n" +
+	"\rcapture_bytes\x18! \x01(\x04R\fcaptureBytesB\x11\n" +
 	"\x0f_normalized_splB\x16\n" +
 	"\x14_resolved_time_rangeB\x10\n" +
 	"\x0e_result_schemaB\n" +
 	"\n" +
 	"\b_failureB\a\n" +
 	"\x05_planB\x15\n" +
-	"\x13_knowledge_snapshotJ\x04\b\x06\x10\aR\x10compiler_version*\x99\x01\n" +
+	"\x13_knowledge_snapshotB\x12\n" +
+	"\x10_organization_idJ\x04\b\x06\x10\aR\x10compiler_version*\x99\x01\n" +
 	"\x0fSearchResultTab\x12!\n" +
 	"\x1dSEARCH_RESULT_TAB_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18SEARCH_RESULT_TAB_EVENTS\x10\x01\x12 \n" +

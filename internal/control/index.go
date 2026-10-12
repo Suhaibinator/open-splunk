@@ -14,11 +14,11 @@ import (
 	"unicode/utf8"
 
 	"fortio.org/safecast"
-	"gorm.io/gorm"
-
 	"github.com/Suhaibinator/open-splunk/internal/indexname"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"gorm.io/gorm"
 )
 
 const (
@@ -80,7 +80,7 @@ type IndexNameAdmissionRequest struct {
 
 // IndexNameAdmissionValidator proves that adding one immutable index name
 // preserves higher-level selector semantics. Implementations run inside the
-// caller-owned SQLite transaction, must treat tx as read-only, and must not
+// caller-owned PostgreSQL transaction, must treat tx as read-only, and must not
 // commit or roll it back.
 type IndexNameAdmissionValidator interface {
 	ValidateIndexNameAdmissionInTransaction(
@@ -159,7 +159,7 @@ func (db *DB) createIndexOnce(
 	auditPublisher indexMutationAuditPublisher,
 	admissionValidator IndexNameAdmissionValidator,
 ) (result Index, returnedErr error) {
-	tx := db.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(db.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return Index{}, fmt.Errorf("begin index creation: %w", tx.Error)
 	}
@@ -288,23 +288,35 @@ func validateIndexNameAdmission(
 		return nil
 	}
 
+	// Bounded fallback probes depend on the published partial-index drivers.
+	// PostgreSQL may choose its own execution plan, but a damaged schema must
+	// not silently remove the bounded authority contract.
+	for _, driver := range []string{"knowledge_catalog_tenants_nonempty_active_idx", "knowledge_objects_active_tenant_idx"} {
+		var ready bool
+		if err := tx.Raw("SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relname=? AND i.indisvalid AND i.indisready)", driver).Scan(&ready).Error; err != nil {
+			return err
+		}
+		if !ready {
+			return fmt.Errorf("index-name admission driver %s is missing or invalid", driver)
+		}
+	}
 	var evidence struct {
-		ActiveTenantLedger int64 `gorm:"column:active_tenant_ledger"`
-		ActiveRegistry     int64 `gorm:"column:active_registry"`
+		ActiveTenantLedger bool `gorm:"column:active_tenant_ledger"`
+		ActiveRegistry     bool `gorm:"column:active_registry"`
 	}
 	err := tx.Raw(`
 		SELECT
 			EXISTS (
 				SELECT 1
 				FROM knowledge_catalog_tenants
-				     INDEXED BY knowledge_catalog_tenants_nonempty_active_idx
+
 				WHERE active_object_count > 0
 				LIMIT 1
 			) AS active_tenant_ledger,
 			EXISTS (
 				SELECT 1
 				FROM knowledge_objects
-				     INDEXED BY knowledge_objects_active_tenant_idx
+
 				WHERE state = 'active'
 				LIMIT 1
 			) AS active_registry`).Scan(&evidence).Error
@@ -314,7 +326,7 @@ func validateIndexNameAdmission(
 			err,
 		)
 	}
-	if evidence.ActiveTenantLedger != 0 || evidence.ActiveRegistry != 0 {
+	if evidence.ActiveTenantLedger || evidence.ActiveRegistry {
 		return fmt.Errorf(
 			"%w: active knowledge objects require index-name validation",
 			ErrDependencyConflict,
@@ -450,7 +462,7 @@ func (db *DB) ListIndexes(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	tx := db.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(db.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return nil, fmt.Errorf("begin index list: %w", tx.Error)
 	}
@@ -505,7 +517,7 @@ func (db *DB) updateIndex(
 	if err != nil {
 		return Index{}, err
 	}
-	tx := db.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(db.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return Index{}, fmt.Errorf("begin index update: %w", tx.Error)
 	}
@@ -599,7 +611,7 @@ func (db *DB) setIndexState(
 	if state == IndexStateDeleting {
 		return Index{}, fmt.Errorf("%w: deleting is reserved for the physical deletion coordinator", ErrInvalidArgument)
 	}
-	tx := db.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(db.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return Index{}, fmt.Errorf("begin index state update: %w", tx.Error)
 	}
@@ -719,7 +731,7 @@ func (db *DB) deleteIndex(
 	if err != nil || canonicalConfirmation != confirmationName {
 		return "", fmt.Errorf("%w: index deletion confirmation is invalid", ErrInvalidArgument)
 	}
-	tx := db.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(db.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return "", fmt.Errorf("begin index deletion: %w", tx.Error)
 	}

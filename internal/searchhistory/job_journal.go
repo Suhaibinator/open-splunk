@@ -173,7 +173,7 @@ func (journal *JobJournal) entry(job searchjobs.Job, terminal bool) (*opensplunk
 }
 
 func jobScope(job searchjobs.Job) AccessScope {
-	return AccessScope{TenantID: job.TenantID, OwnerID: job.OwnerID}
+	return AccessScope{TenantID: job.TenantID, OwnerID: job.OwnerID, OrganizationID: job.OrganizationID}
 }
 
 func historyState(state searchjobs.State) (opensplunk.SearchJobState, error) {

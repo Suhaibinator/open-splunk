@@ -218,27 +218,27 @@ func readPublicationTransitionCurrentTargetVersions(
 				AND current.name = version.name
 				AND current.sharing_scope = version.sharing_scope
 				AND current.state = version.state
-				AND current.definition_digest IS version.definition_digest
+				AND current.definition_digest IS NOT DISTINCT FROM version.definition_digest
 				AND current.updated_at_unix_micro = version.created_at_unix_micro
 				AND current.created_at_unix_micro BETWEEN 1 AND current.updated_at_unix_micro
 				AND current.disabled_at_unix_micro IS NULL
 				AND current.quarantined_at_unix_micro IS NULL
 				AND current.deleted_at_unix_micro IS NULL
-				AND current.quarantine_reason IS version.quarantine_reason
+				AND current.quarantine_reason IS NOT DISTINCT FROM version.quarantine_reason
 				THEN 1 ELSE 0 END AS current_exact,
-			coalesce(length(CAST(version.knowledge_object_id AS BLOB)), 0)
+			coalesce(octet_length(version.knowledge_object_id), 0)
 				AS knowledge_object_id_bytes,
-			coalesce(length(CAST(version.tenant_id AS BLOB)), 0) AS tenant_id_bytes,
-			coalesce(length(CAST(version.app_id AS BLOB)), 0) AS app_id_bytes,
-			coalesce(length(CAST(version.owner_id AS BLOB)), 0) AS owner_id_bytes,
-			coalesce(length(CAST(version.object_type AS BLOB)), 0) AS object_type_bytes,
-			coalesce(length(CAST(version.name AS BLOB)), 0) AS name_bytes,
-			coalesce(length(CAST(version.sharing_scope AS BLOB)), 0) AS sharing_scope_bytes,
-			coalesce(length(CAST(version.state AS BLOB)), 0) AS state_bytes,
+			coalesce(octet_length(version.tenant_id), 0) AS tenant_id_bytes,
+			coalesce(octet_length(version.app_id), 0) AS app_id_bytes,
+			coalesce(octet_length(version.owner_id), 0) AS owner_id_bytes,
+			coalesce(octet_length(version.object_type), 0) AS object_type_bytes,
+			coalesce(octet_length(version.name), 0) AS name_bytes,
+			coalesce(octet_length(version.sharing_scope), 0) AS sharing_scope_bytes,
+			coalesce(octet_length(version.state), 0) AS state_bytes,
 			coalesce(length(version.definition_digest), 0) AS digest_bytes,
-			coalesce(length(CAST(version.quarantine_reason AS BLOB)), 0)
+			coalesce(octet_length(version.quarantine_reason), 0)
 				AS quarantine_reason_bytes,
-			coalesce(length(CAST(version.mutation_kind AS BLOB)), 0) AS mutation_kind_bytes
+			coalesce(octet_length(version.mutation_kind), 0) AS mutation_kind_bytes
 		`).Limit(len(chunk) + 1).Find(&widths).Error; err != nil {
 			return err
 		}

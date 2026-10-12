@@ -2,10 +2,10 @@ package collectorfleet
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -13,13 +13,14 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func openTestStore(t *testing.T) (*control.DB, *Store) {
 	t.Helper()
 	database, err := control.Open(
-		context.Background(),
-		filepath.Join(t.TempDir(), "control.sqlite"),
+		context.Background(), pgtest.DSN(t),
 	)
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
@@ -218,7 +219,7 @@ func TestPreparedClaimIsDetachedAndReusableWithFreshAuthorization(t *testing.T) 
 
 	claimPrepared := func() (Collector, Lease) {
 		t.Helper()
-		tx := database.GORMDB().WithContext(ctx).Begin()
+		tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 		if tx.Error != nil {
 			t.Fatalf("begin prepared claim transaction: %v", tx.Error)
 		}
@@ -553,7 +554,7 @@ func TestUpdateDisplayNameDoesNotTouchDisabledRuntime(t *testing.T) {
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_fleet
 		SET administrative_state = 'disabled'
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	); err != nil {
@@ -577,7 +578,7 @@ func TestUpdateDisplayNameDoesNotTouchDisabledRuntime(t *testing.T) {
 			       active_instance_id,
 			       last_seen_at_unix_micro
 			FROM collector_runtime
-			WHERE tenant_id = ? AND collector_id = ?`,
+			WHERE tenant_id = $1 AND collector_id = $2`,
 			lease.TenantID,
 			lease.CollectorID,
 		).Scan(
@@ -656,8 +657,8 @@ func TestAdministrativeDisableWinsAtTelemetryRevisionCapacity(t *testing.T) {
 	preservedDisplayName := "preserved at capacity"
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_fleet
-		SET admin_version = ?, display_name = ?
-		WHERE tenant_id = ? AND collector_id = ?`,
+		SET admin_version = $1, display_name = $2
+		WHERE tenant_id = $3 AND collector_id = $4`,
 		int64(math.MaxInt64),
 		preservedDisplayName,
 		lease.TenantID,
@@ -667,8 +668,8 @@ func TestAdministrativeDisableWinsAtTelemetryRevisionCapacity(t *testing.T) {
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_runtime
-		SET telemetry_revision = ?
-		WHERE tenant_id = ? AND collector_id = ?`,
+		SET telemetry_revision = $1
+		WHERE tenant_id = $2 AND collector_id = $3`,
 		int64(math.MaxInt64),
 		lease.TenantID,
 		lease.CollectorID,
@@ -738,8 +739,8 @@ func TestTelemetryRevisionReservesTerminalDisconnect(t *testing.T) {
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_runtime
-		SET telemetry_revision = ?
-		WHERE tenant_id = ? AND collector_id = ?`,
+		SET telemetry_revision = $1
+		WHERE tenant_id = $2 AND collector_id = $3`,
 		int64(math.MaxInt64-1),
 		lease.TenantID,
 		lease.CollectorID,
@@ -1012,7 +1013,7 @@ func TestFleetStateSurvivesDatabaseReopen(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "control.sqlite")
+	path := pgtest.DSN(t)
 	database, err := control.Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
@@ -1144,8 +1145,8 @@ func TestPriorBootInvalidationIsGlobalIdempotentAndPreservesCurrentBoot(t *testi
 
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_runtime
-		SET telemetry_revision = ?
-		WHERE tenant_id = ? AND collector_id = ?`,
+		SET telemetry_revision = $1
+		WHERE tenant_id = $2 AND collector_id = $3`,
 		int64(math.MaxInt64),
 		oldBLease.TenantID,
 		oldBLease.CollectorID,
@@ -1254,7 +1255,7 @@ func TestPriorBootInvalidationLinearizesWithCurrentBootClaim(t *testing.T) {
 	}
 }
 
-func TestGetUsesWALReadTransactionAlongsideWriter(t *testing.T) {
+func TestGetUsesSnapshotReadTransactionAlongsideWriter(t *testing.T) {
 	t.Parallel()
 
 	database, store := openTestStore(t)
@@ -1264,13 +1265,13 @@ func TestGetUsesWALReadTransactionAlongsideWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer := database.GORMDB().WithContext(ctx).Begin()
+	writer := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 	if writer.Error != nil {
 		t.Fatalf("begin writer: %v", writer.Error)
 	}
 	defer writer.Rollback()
 
-	// Keep the liveness guard above SQLite's five-second busy timeout so a
+	// Bound the read so a
 	// heavily loaded race runner cannot turn scheduler delay into a false lock
 	// failure. A real read/write lock regression still returns before this
 	// deadline and fails the assertion below.
@@ -1281,7 +1282,7 @@ func TestGetUsesWALReadTransactionAlongsideWriter(t *testing.T) {
 		t.Fatalf("Get() alongside reserved writer: %v", err)
 	}
 	if got.ActiveLease == nil || got.ActiveLease.StreamID != lease.StreamID {
-		t.Fatalf("concurrent WAL read = %#v", got)
+		t.Fatalf("concurrent snapshot read = %#v", got)
 	}
 }
 
@@ -1390,4 +1391,12 @@ func withLeaseStream(lease Lease, stream string) Lease {
 func withLeaseTenant(lease Lease, tenant string) Lease {
 	lease.TenantID = tenant
 	return lease
+}
+
+// Corruption fixtures suspend only this package's exact native constraints.
+// Unrelated identity, quota, and audit tables keep their normal write guards.
+func collectorTestChecks(ctx context.Context, executor pgtest.SQLExecutor, enabled bool) (sql.Result, error) {
+	return pgtest.CheckTables(ctx, executor, enabled,
+		"collector_fleet", "collector_runtime", "collector_catalog_revisions",
+		"collector_capabilities", "collector_authorized_indexes", "collector_inputs", "collector_input_health")
 }

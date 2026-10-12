@@ -31,12 +31,14 @@ type exportListCursor struct {
 }
 
 type exportListFilterFingerprint struct {
-	Version     int     `json:"v"`
-	TenantID    string  `json:"t"`
-	OwnerID     string  `json:"o"`
-	States      []State `json:"s"`
-	SearchJobID *string `json:"j"`
-	Sort        string  `json:"k"`
+	Version           int     `json:"v"`
+	TenantID          string  `json:"t"`
+	OwnerID           string  `json:"o"`
+	OrganizationID    string  `json:"g"`
+	SiteAdministrator bool    `json:"z"`
+	States            []State `json:"s"`
+	SearchJobID       *string `json:"j"`
+	Sort              string  `json:"k"`
 }
 
 func exportListFilterHash(
@@ -44,9 +46,10 @@ func exportListFilterHash(
 	request normalizedExportListRequest,
 ) (string, error) {
 	payload, err := json.Marshal(exportListFilterFingerprint{
-		Version:     exportListCursorVersion,
-		TenantID:    access.TenantID,
-		OwnerID:     access.OwnerID,
+		Version:        exportListCursorVersion,
+		TenantID:       access.TenantID,
+		OwnerID:        access.OwnerID,
+		OrganizationID: access.OrganizationID, SiteAdministrator: access.SiteAdministrator,
 		States:      request.states,
 		SearchJobID: request.searchJobID,
 		Sort:        exportListFixedSort,

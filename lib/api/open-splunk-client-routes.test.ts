@@ -3,7 +3,6 @@ import test from "node:test";
 
 import { GetSystemBootstrapResponse } from "@/gen/ts/open_splunk/system_api";
 
-import { isAdministratorRoutePath } from "./administrator-session";
 import { createOpenSplunkApiClient, OpenSplunkApiClient } from "./open-splunk-client";
 import {
   PROTOBUF_CONTENT_TYPE,
@@ -20,6 +19,7 @@ import {
   hecOperationsRoutes,
   historyRoutes,
   indexRoutes,
+  indexPermissionRoutes,
   ingestionTokenRoutes,
   savedSearchRoutes,
   scheduleRoutes,
@@ -29,7 +29,7 @@ import {
   systemRoutes,
 } from "./routes";
 
-const EXPECTED_METHOD_COUNT = 83;
+const EXPECTED_METHOD_COUNT = 87;
 
 /**
  * The binder's failure mode is a transposition — a method wired to a sibling
@@ -44,6 +44,7 @@ const expectedRoutes: Readonly<Record<string, Readonly<Record<string, object>>>>
   auditEvents: auditEventRoutes,
   searchAttemptAudit: searchAttemptAuditRoutes,
   indexes: indexRoutes,
+  indexPermissions: indexPermissionRoutes,
   ingestionTokens: ingestionTokenRoutes,
   hec: { getOperationalSnapshot: hecOperationsRoutes.get },
   search: searchRoutes,
@@ -56,7 +57,7 @@ const expectedRoutes: Readonly<Record<string, Readonly<Record<string, object>>>>
 };
 
 interface RecordedCall {
-  route: { path: string; authorization: string };
+  route: { path: string };
   request: unknown;
   options: ProtobufRequestOptions | undefined;
 }
@@ -124,18 +125,13 @@ test("every bound method forwards its own route object, request, and options", a
   );
 });
 
-test("every bound route carries the authorization its registered path implies", () => {
+test("every bound route uses a root-absolute protobuf API path", () => {
   const { calls, client } = recordingClient();
   for (const [, methods] of namespaceEntries(client)) {
     for (const invoke of Object.values(methods)) void invoke({});
   }
   assert.equal(calls.length, EXPECTED_METHOD_COUNT);
   for (const { route } of calls) {
-    assert.equal(
-      route.authorization,
-      isAdministratorRoutePath(route.path) ? "administrator" : "none",
-      route.path,
-    );
     assert.match(route.path, /^\/api\//);
     assert.doesNotMatch(route.path, /^\/api\/v\d/u);
   }

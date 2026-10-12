@@ -37,6 +37,7 @@ func collectorCatalogFilteredQuery(
 			request.tenantID,
 		)
 
+	query = restrictCollectorIndexes(query, "fleet", request.indexAccess)
 	if request.indexNameFilter != nil {
 		query = query.Where(`
 			EXISTS (
@@ -51,9 +52,9 @@ func collectorCatalogFilteredQuery(
 	if request.textFilter != nil {
 		query = query.Where(`
 			(
-				instr(lower(fleet.collector_id), lower(?)) > 0
-				OR instr(lower(fleet.display_name), lower(?)) > 0
-				OR instr(lower(runtime.hostname), lower(?)) > 0
+				strpos(lower(fleet.collector_id), lower(?)) > 0
+				OR strpos(lower(fleet.display_name), lower(?)) > 0
+				OR strpos(lower(runtime.hostname), lower(?)) > 0
 			)
 		`,
 			*request.textFilter,
@@ -152,7 +153,7 @@ func collectorCatalogLiveStateBranch(
 	entries []CollectorLiveness,
 ) (string, []any) {
 	if len(entries) == 0 {
-		return "0", nil
+		return "FALSE", nil
 	}
 	tuples, arguments := collectorCatalogLeaseTuples(entries)
 	return "(fleet.administrative_state = ? AND (" + tuples + "))",

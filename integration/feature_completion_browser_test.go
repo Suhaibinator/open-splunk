@@ -19,7 +19,7 @@ func assertBrowserFeatureCompletion(
 	ctx context.Context,
 	repository, baseURL string,
 	fixtureStart, bulkStart time.Time,
-	savedSearchID, appID, administratorToken string,
+	savedSearchID, appID, googleSession string,
 	serverProcess *managedProcess,
 ) {
 	t.Helper()
@@ -46,24 +46,24 @@ func assertBrowserFeatureCompletion(
 		environment = environmentWithValue(environment, flag, "0")
 	}
 	for name, value := range map[string]string{
-		"OPEN_SPLUNK_FEATURE_COMPLETION_ADMINISTRATOR_TOKEN": administratorToken,
-		"OPEN_SPLUNK_FEATURE_COMPLETION_APP_ID":              appID,
-		"OPEN_SPLUNK_FEATURE_COMPLETION_BASE_URL":            baseURL,
-		"OPEN_SPLUNK_FEATURE_COMPLETION_BULK_START":          bulkStart.Format(time.RFC3339Nano),
-		"OPEN_SPLUNK_FEATURE_COMPLETION_FIXTURE_START":       fixtureStart.Format(time.RFC3339Nano),
-		"OPEN_SPLUNK_FEATURE_COMPLETION_SAVED_SEARCH_ID":     savedSearchID,
-		"OPEN_SPLUNK_FEATURE_COMPLETION_EXPECTED_BULK_ROWS":  strconv.FormatUint(bulkEventCount-1, 10),
+		"OPEN_SPLUNK_BROWSER_SESSION_COOKIE":                googleSession,
+		"OPEN_SPLUNK_FEATURE_COMPLETION_APP_ID":             appID,
+		"OPEN_SPLUNK_FEATURE_COMPLETION_BASE_URL":           baseURL,
+		"OPEN_SPLUNK_FEATURE_COMPLETION_BULK_START":         bulkStart.Format(time.RFC3339Nano),
+		"OPEN_SPLUNK_FEATURE_COMPLETION_FIXTURE_START":      fixtureStart.Format(time.RFC3339Nano),
+		"OPEN_SPLUNK_FEATURE_COMPLETION_SAVED_SEARCH_ID":    savedSearchID,
+		"OPEN_SPLUNK_FEATURE_COMPLETION_EXPECTED_BULK_ROWS": strconv.FormatUint(bulkEventCount, 10),
 	} {
 		environment = environmentWithValue(environment, name, value)
 	}
-	command.Env = environment
+	command.Env = nativeBrowserEnvironment(environment, baseURL)
 	logs, truncated, runErr := runCommandWithBoundedOutput(command, maximumHarnessOutputBytes)
-	redactedLogs := redactForFailure(logs, administratorToken)
+	redactedLogs := redactForFailure(logs, googleSession)
 	if runErr != nil {
 		diagnostics := managedProcessSearchFailureDiagnostics(serverProcess)
 		if diagnostics != "" {
 			diagnostics = "\nbackend diagnostics:\n" + formatBoundedCommandOutput(
-				redactForFailure(diagnostics, administratorToken),
+				redactForFailure(diagnostics, googleSession),
 				len(diagnostics) > maximumHarnessOutputBytes,
 				maximumHarnessOutputBytes,
 			)

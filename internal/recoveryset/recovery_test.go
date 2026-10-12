@@ -16,8 +16,10 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/buildassets"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/controlbackup"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 	"github.com/Suhaibinator/open-splunk/migrations"
 )
@@ -659,21 +661,20 @@ func validNativeBackupIdentity() NativeBackupIdentity {
 }
 
 type recoverySetFixture struct {
-	databasePath      string
-	masterKeyPath     string
-	administratorPath string
-	destination       string
-	archiveRoot       string
-	release           controlbackup.ReleaseIdentity
-	archivePolicy     ArchiveOwnershipPolicy
+	postgresDSN   string
+	masterKeyPath string
+	destination   string
+	archiveRoot   string
+	release       controlbackup.ReleaseIdentity
+	archivePolicy ArchiveOwnershipPolicy
 }
 
 func newRecoverySetFixture(t *testing.T) *recoverySetFixture {
 	t.Helper()
 	ctx := t.Context()
 	sourceDirectory := privateTestDirectory(t)
-	databasePath := filepath.Join(sourceDirectory, "open-splunk.db")
-	database, err := control.Open(ctx, databasePath)
+	postgresDSN := pgtest.DSN(t)
+	database, err := control.Open(ctx, postgresDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -702,30 +703,31 @@ func newRecoverySetFixture(t *testing.T) *recoverySetFixture {
 	if err := os.WriteFile(masterKeyPath, masterKey, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	administratorPath := filepath.Join(sourceDirectory, "administrator.token")
-	if err := os.WriteFile(
-		administratorPath,
-		bytes.Repeat([]byte{'A'}, auth.MinimumBrowserBearerTokenBytes),
-		0o600,
-	); err != nil {
+	migrationIdentity, err := database.VerifyCurrentMigrations(ctx, migrations.PostgreSQL())
+	if err != nil {
 		t.Fatal(err)
 	}
-	migrationIdentity, err := database.VerifyCurrentMigrations(ctx, migrations.SQLite())
+	if _, err := database.SQLDB().ExecContext(ctx, "UPDATE ingest_visibility_state SET last_assigned=42,committed_through=42 WHERE singleton=1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	corpus, err := buildassets.DigestMigrations(migrations.PostgreSQL(), ".")
 	if err != nil {
 		t.Fatal(err)
 	}
 	destinationParent := privateTestDirectory(t)
 	archiveRoot := privateTestDirectory(t)
 	return &recoverySetFixture{
-		databasePath:      databasePath,
-		masterKeyPath:     masterKeyPath,
-		administratorPath: administratorPath,
-		destination:       filepath.Join(destinationParent, "deployment-recovery-set"),
-		archiveRoot:       archiveRoot,
+		postgresDSN:   postgresDSN,
+		masterKeyPath: masterKeyPath,
+		destination:   filepath.Join(destinationParent, "deployment-recovery-set"),
+		archiveRoot:   archiveRoot,
 		release: controlbackup.ReleaseIdentity{
 			SourceRevision: "development",
-			SQLiteMigrations: controlbackup.MigrationIdentity{
-				SHA256: strings.Repeat("1", sha256.Size*2), LatestVersion: migrationIdentity.LatestVersion,
+			PostgresMigrations: controlbackup.MigrationIdentity{
+				SHA256: corpus.SHA256, LatestVersion: migrationIdentity.LatestVersion,
 			},
 			ClickHouseMigrations: controlbackup.MigrationIdentity{
 				SHA256: strings.Repeat("2", sha256.Size*2), LatestVersion: 1,
@@ -748,14 +750,13 @@ func newRecoverySetFixture(t *testing.T) *recoverySetFixture {
 
 func (fixture *recoverySetFixture) createOptions(backup NativeBackup) CreateOptions {
 	return CreateOptions{
-		DatabasePath:           fixture.databasePath,
-		MasterKeyPath:          fixture.masterKeyPath,
-		AdministratorTokenPath: fixture.administratorPath,
-		Destination:            fixture.destination,
-		ArchiveRoot:            fixture.archiveRoot,
-		ArchiveOwnership:       fixture.archivePolicy,
-		Release:                fixture.release,
-		NativeBackup:           backup,
+		PostgresDSN:      fixture.postgresDSN,
+		MasterKeyPath:    fixture.masterKeyPath,
+		Destination:      fixture.destination,
+		ArchiveRoot:      fixture.archiveRoot,
+		ArchiveOwnership: fixture.archivePolicy,
+		Release:          fixture.release,
+		NativeBackup:     backup,
 	}
 }
 

@@ -2,59 +2,23 @@ package knowledgecatalog
 
 import (
 	"context"
-	"database/sql/driver"
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
-	moderncsqlite "modernc.org/sqlite"
 )
 
 const activeDependentVisitFunction = "ko_test_active_dependent_visit_v1"
 
-var (
-	activeDependentVisitRegisterOnce sync.Once
-	activeDependentVisitRegisterErr  error
-	activeDependentVisitProbes       sync.Map
-)
-
-func registerActiveDependentVisitFunction(t *testing.T) {
-	t.Helper()
-	activeDependentVisitRegisterOnce.Do(func() {
-		activeDependentVisitRegisterErr = moderncsqlite.RegisterScalarFunction(
-			activeDependentVisitFunction,
-			2,
-			func(_ *moderncsqlite.FunctionContext, arguments []driver.Value) (driver.Value, error) {
-				if len(arguments) != 2 {
-					return nil, fmt.Errorf("active-dependent visit arguments = %d", len(arguments))
-				}
-				token, ok := arguments[0].(string)
-				if !ok || token == "" {
-					return nil, fmt.Errorf("active-dependent visit token has type %T", arguments[0])
-				}
-				value, found := activeDependentVisitProbes.Load(token)
-				if !found {
-					return nil, fmt.Errorf("active-dependent visit token is unknown")
-				}
-				counter, ok := value.(*atomic.Int64)
-				if !ok || counter == nil {
-					return nil, fmt.Errorf("active-dependent visit counter is invalid")
-				}
-				counter.Add(1)
-				return int64(1), nil
-			},
-		)
-	})
-	if activeDependentVisitRegisterErr != nil {
-		t.Fatalf("register active-dependent visit function: %v", activeDependentVisitRegisterErr)
-	}
-}
+var activeDependentVisitProbes sync.Map
 
 func TestActiveDependentLookupPlanIsBoundedCurrentFirst(t *testing.T) {
 	database, _ := newCatalogTestStore(t)
@@ -63,39 +27,51 @@ func TestActiveDependentLookupPlanIsBoundedCurrentFirst(t *testing.T) {
 
 func assertActiveDependentLookupPlan(t *testing.T, database *control.DB) {
 	t.Helper()
-	details := explainSQLiteQueryPlan(
+	details := explainPostgreSQLQueryPlan(
 		t,
 		database.SQLDB(),
 		activeDependentLookupSQL,
-		[]any{testTenant, "ko-plan-target"},
+		[]any{"ko-plan-target", testTenant},
 	)
 	joined := strings.Join(details, "\n")
 	for _, required := range []string{
-		"dependent USING INDEX knowledge_objects_resolution_idx",
-		"dependency USING COVERING INDEX knowledge_object_dependencies_source_target_idx",
-		"tenant_id=? AND source_object_id=? AND source_object_version=?",
+		"on dependent table knowledge_objects using knowledge_objects_active_tenant_idx",
+		"source_object_version = dependent.current_version",
 	} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("active-dependent plan lacks %q:\n%s", required, joined)
 		}
 	}
-	if dependentIndex, dependencyIndex := indexContaining(details, "dependent USING"), indexContaining(details, "dependency USING"); dependentIndex < 0 || dependencyIndex <= dependentIndex {
+	if dependentIndex, dependencyIndex := indexContaining(details, "on dependent table"), indexContaining(details, "on dependency table"); dependentIndex < 0 || dependencyIndex <= dependentIndex {
 		t.Fatalf("active-dependent plan is not current-registry first:\n%s", joined)
 	}
-	for _, forbidden := range []string{
-		"knowledge_object_dependencies_target_idx",
-		"sqlite_autoindex_knowledge_object_dependencies",
-		"SCAN dependency",
-		"USE TEMP B-TREE",
-	} {
+	exactDependencyProbe := false
+	for _, detail := range details {
+		if !strings.Contains(detail, "on dependency table knowledge_object_dependencies using ") {
+			continue
+		}
+		if !strings.HasPrefix(detail, "Index Scan") && !strings.HasPrefix(detail, "Index Only Scan") {
+			t.Fatalf("dependency probe is not indexed:\n%s", joined)
+		}
+		for _, key := range []string{"tenant_id = dependent.tenant_id", "source_object_id = dependent.knowledge_object_id", "source_object_version = dependent.current_version", "target_kind =", "target_object_id ="} {
+			if !strings.Contains(detail, key) {
+				t.Fatalf("current dependency point probe lacks exact key %s:\n%s", key, joined)
+			}
+		}
+		exactDependencyProbe = true
+	}
+	if !exactDependencyProbe || strings.Count(joined, "Limit") != 2 {
+		t.Fatalf("current registry/dependency plan lacks two bounded drivers:\n%s", joined)
+	}
+	for _, forbidden := range []string{"Seq Scan on dependency", "Sort"} {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("active-dependent plan contains forbidden %q:\n%s", forbidden, joined)
 		}
 	}
+
 }
 
 func TestActiveDependentLookupIgnoresLargeValidHistoricalEdgeSet(t *testing.T) {
-	registerActiveDependentVisitFunction(t)
 	database, store := newCatalogTestStore(t)
 	const (
 		targetID    = "ko-bounded-dependent-history-target"
@@ -109,7 +85,7 @@ func TestActiveDependentLookupIgnoresLargeValidHistoricalEdgeSet(t *testing.T) {
 	var retainedEdges int64
 	if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT count(*)
 		FROM knowledge_object_dependencies
-		WHERE tenant_id = ? AND target_kind = 'object' AND target_object_id = ?`,
+		WHERE tenant_id = $1 AND target_kind = 'object' AND target_object_id = $2`,
 		testTenant, targetID,
 	).Scan(&retainedEdges); err != nil {
 		t.Fatalf("count retained historical edges: %v", err)
@@ -132,13 +108,14 @@ func TestActiveDependentLookupIgnoresLargeValidHistoricalEdgeSet(t *testing.T) {
 	}
 
 	const token = "active-dependent-history-probe"
-	counter := &atomic.Int64{}
+	counter := &pgVisitCounter{}
 	activeDependentVisitProbes.Store(token, counter)
+	preparePostgresVisit(t, database, activeDependentVisitFunction, token, counter, false)
 	t.Cleanup(func() { activeDependentVisitProbes.Delete(token) })
 	instrumented := strings.Replace(
 		activeDependentLookupSQL,
-		"\t  AND dependency.target_kind = 'object'",
-		"\t  AND "+activeDependentVisitFunction+"(?, dependency.source_object_version) = 1\n\t  AND dependency.target_kind = 'object'",
+		"AND dependency.target_kind = 'object'",
+		"AND "+activeDependentVisitFunction+"(?, dependency.source_object_version) = 1\n\t  AND dependency.target_kind = 'object'",
 		1,
 	)
 	if instrumented == activeDependentLookupSQL {
@@ -147,7 +124,7 @@ func TestActiveDependentLookupIgnoresLargeValidHistoricalEdgeSet(t *testing.T) {
 	var records []struct {
 		Found int64 `gorm:"column:found"`
 	}
-	if err := database.GORMDB().Raw(instrumented, testTenant, token, targetID).Scan(&records).Error; err != nil {
+	if err := database.GORMDB().Raw(instrumented, token, targetID, testTenant).Scan(&records).Error; err != nil {
 		t.Fatalf("execute instrumented active-dependent lookup: %v", err)
 	}
 	if len(records) != 0 {
@@ -197,18 +174,17 @@ func TestActiveDependentLookupAndTriggerBlockExactCurrentActiveEdge(t *testing.T
 	assertDirectActiveTargetTransitionBlocked(t, database, targetID)
 
 	var triggerSQL string
-	if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT sql FROM sqlite_schema
-		WHERE type = 'trigger' AND name = 'knowledge_active_dependency_target_transition_is_blocked'`).Scan(&triggerSQL); err != nil {
+	if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT pg_get_triggerdef(t.oid)||';'||pg_get_functiondef(t.tgfoid) FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND NOT t.tgisinternal AND t.tgname='knowledge_active_dependency_target_transition_is_blocked'`).Scan(&triggerSQL); err != nil {
 		t.Fatalf("read active-dependent trigger SQL: %v", err)
 	}
 	for _, required := range []string{
-		"INDEXED BY knowledge_objects_resolution_idx",
-		"CROSS JOIN knowledge_object_dependencies",
-		"INDEXED BY knowledge_object_dependencies_source_target_idx",
+		"knowledge_objects",
+		"knowledge_object_dependencies",
+		"LATERAL",
 		"dependency.source_object_version = dependent.current_version",
 		"dependency.target_kind = 'object'",
 	} {
-		if !strings.Contains(triggerSQL, required) {
+		if !pgtest.ContainsCheck(triggerSQL, required) {
 			t.Fatalf("active-dependent trigger lacks %q:\n%s", required, triggerSQL)
 		}
 	}
@@ -219,22 +195,16 @@ func poisonActiveDependentPlannerStatistics(t *testing.T, database *control.DB) 
 	if _, err := database.SQLDB().ExecContext(t.Context(), `ANALYZE`); err != nil {
 		t.Fatalf("analyze active-dependent fixtures: %v", err)
 	}
-	// Lie that the forced source index is maximally unselective and the inverse
-	// target index is maximally selective. INDEXED BY must keep both the writer
-	// and trigger access path bounded even if persisted statistics are hostile.
-	if _, err := database.SQLDB().ExecContext(t.Context(), `UPDATE sqlite_stat1
-		SET stat = '1000000000 1000000000 1000000000 1000000000 1000000000 1000000000'
-		WHERE idx = 'knowledge_object_dependencies_source_target_idx'`); err != nil {
+	// Poison the actual PostgreSQL index cardinalities inside this isolated
+	// schema. The current-registry driver must remain bounded despite hostile
+	// inverse-target estimates; no process-global planner settings are changed.
+	if _, err := database.SQLDB().ExecContext(t.Context(), `UPDATE pg_class r SET reltuples=1000000000 WHERE r.relnamespace=current_schema()::regnamespace AND r.relname='knowledge_object_dependencies_source_target_idx'`); err != nil {
 		t.Fatalf("poison source-index statistics: %v", err)
 	}
-	if _, err := database.SQLDB().ExecContext(t.Context(), `UPDATE sqlite_stat1
-		SET stat = '1 1 1 1 1 1 1'
-		WHERE idx = 'knowledge_object_dependencies_target_idx'`); err != nil {
+	if _, err := database.SQLDB().ExecContext(t.Context(), `UPDATE pg_class r SET reltuples=1 WHERE r.relnamespace=current_schema()::regnamespace AND r.relname='knowledge_object_dependencies_target_idx'`); err != nil {
 		t.Fatalf("poison inverse-index statistics: %v", err)
 	}
-	if _, err := database.SQLDB().ExecContext(t.Context(), `ANALYZE sqlite_schema`); err != nil {
-		t.Fatalf("reload hostile active-dependent statistics: %v", err)
-	}
+
 }
 
 func insertActiveDependentHistoryFixtures(
@@ -319,7 +289,7 @@ func disableHistoricalOnlyActiveTarget(
 		t.Fatalf("audit.WithActor(historical active-dependent fixture): %v", err)
 	}
 	response, err := writer.SetState(ctx, WriteScope{
-		TenantID: testTenant, OwnerID: testOwner, WritableAppIDs: []string{testApp},
+		TenantID: testTenant, OwnerID: testOwner, WritableAppIDs: []string{testApp}, OrganizationID: 1,
 	}, &opensplunk.SetKnowledgeObjectStateRequest{
 		KnowledgeObjectId: targetID,
 		ExpectedVersion:   expectedVersion,
@@ -341,7 +311,7 @@ func assertDirectActiveTargetTransitionBlocked(
 	targetID string,
 ) {
 	t.Helper()
-	tx, err := database.SQLDB().BeginTx(t.Context(), nil)
+	tx, err := pgmeta.BeginSQL(t.Context(), database.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin direct active-target transition: %v", err)
 	}
@@ -351,7 +321,7 @@ func assertDirectActiveTargetTransitionBlocked(
 		    state = 'disabled',
 		    updated_at_unix_micro = updated_at_unix_micro + 1,
 		    disabled_at_unix_micro = updated_at_unix_micro + 1
-		WHERE tenant_id = ? AND knowledge_object_id = ?`, testTenant, targetID)
+		WHERE tenant_id = $1 AND knowledge_object_id = $2`, testTenant, targetID)
 	if err == nil || !strings.Contains(err.Error(), "active dependents") {
 		t.Fatalf("direct active-target transition error = %v, want active dependents", err)
 	}

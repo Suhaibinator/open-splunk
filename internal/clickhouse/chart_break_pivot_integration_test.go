@@ -379,12 +379,12 @@ func TestChartPivotHostileDataAgainstClickHouse(t *testing.T) {
 		for _, row := range got {
 			order = append(order, row.row)
 		}
-		// Numeric-aware ascending order over the lexical scalar text: finite
-		// numbers first, then remaining scalars in UTF-8 order. The tagged
-		// envelopes contribute their decoded lexical value, not their map.
+		// Automatic ascending order over the published scalar text includes
+		// numeric prefixes, as sort 0 +probe does. Tagged envelopes contribute
+		// their decoded lexical value rather than their map.
 		want := []string{
 			"-5", "2.5", "7", "12.5",
-			"2026-07-21T03:00:00Z", "90:0", "AQI", "s", "true",
+			"90:0", "2026-07-21T03:00:00Z", "AQI", "s", "true",
 		}
 		if !reflect.DeepEqual(order, want) {
 			t.Fatalf("dynamic row values = %v, want %v", order, want)
@@ -555,8 +555,8 @@ func TestChartPivotHostileDataAgainstClickHouse(t *testing.T) {
 		if !reflect.DeepEqual(order, statsOrder) {
 			t.Fatalf("chart _raw order = %#v, stats count BY _raw | sort 0 +_raw = %#v", order, statsOrder)
 		}
-		if len(order) != 5 {
-			t.Fatalf("_raw rows = %#v, want the five distinct raw payloads", order)
+		if !reflect.DeepEqual(order, []string{"9", "10", "abc", "é", "😀"}) {
+			t.Fatalf("_raw rows = %#v, want exact automatic numeric/Unicode order", order)
 		}
 		for index, row := range got {
 			if total := chartBreakSum(t, row.counts); total != statsRows[index][1] {

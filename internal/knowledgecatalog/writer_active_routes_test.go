@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -91,7 +93,7 @@ func newWriterActiveRouteEmptyHarness(t *testing.T) writerActiveRouteHarness {
 		scope: WriteScope{
 			TenantID:       testTenant,
 			OwnerID:        testOwner,
-			WritableAppIDs: []string{testApp},
+			WritableAppIDs: []string{testApp}, OrganizationID: 1,
 		},
 	}
 }
@@ -438,7 +440,7 @@ func TestWriterActiveUpdateDependentPrecedesMalformedInventory(t *testing.T) {
 		}},
 	})
 	dropTrigger(t, harness.database, "app_catalog_revision_delete_is_forbidden")
-	mustExec(t, harness.database, "DELETE FROM app_catalog_revisions WHERE tenant_id = ?", testTenant)
+	mustExec(t, harness.database, "DELETE FROM app_catalog_revisions WHERE tenant_id = $1", testTenant)
 	before, err := readCatalogState(harness.database.GORMDB(), testTenant)
 	if err != nil {
 		t.Fatalf("read catalog before dependent precedence: %v", err)
@@ -803,7 +805,7 @@ func TestMintRecognizedPublicationTransitionRejectsMalformedEndpointsBeforeInven
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			tx := harness.database.GORMDB().Begin()
+			tx := pgmeta.Begin(harness.database.GORMDB())
 			if tx.Error != nil {
 				t.Fatalf("begin transition validation transaction: %v", tx.Error)
 			}
@@ -1238,22 +1240,22 @@ func insertWriterActiveRouteCounters(
 	if appCount > 0 {
 		mustExec(t, database, `INSERT INTO knowledge_app_active_counters (
 			tenant_id, app_id, active_object_count
-		) VALUES (?, ?, ?)`, testTenant, authority.appID, appCount)
+		) VALUES ($1, $2, $3)`, testTenant, authority.appID, appCount)
 	}
 	if typeCount > 0 {
 		mustExec(t, database, `INSERT INTO knowledge_type_active_counters (
 			tenant_id, object_type, active_object_count
-		) VALUES (?, ?, ?)`, testTenant, authority.objectType, typeCount)
+		) VALUES ($1, $2, $3)`, testTenant, authority.objectType, typeCount)
 	}
 	if appTypeCount > 0 {
 		mustExec(t, database, `INSERT INTO knowledge_app_type_active_counters (
 			tenant_id, app_id, object_type, active_object_count
-		) VALUES (?, ?, ?, ?)`, testTenant, authority.appID, authority.objectType, appTypeCount)
+		) VALUES ($1, $2, $3, $4)`, testTenant, authority.appID, authority.objectType, appTypeCount)
 	}
 	if ownerCount > 0 {
 		mustExec(t, database, `INSERT INTO knowledge_owner_active_counters (
 			tenant_id, owner_id, active_private_object_count
-		) VALUES (?, ?, ?)`, testTenant, testOwner, ownerCount)
+		) VALUES ($1, $2, $3)`, testTenant, testOwner, ownerCount)
 	}
 }
 
@@ -1275,7 +1277,7 @@ func archiveWriterActiveRouteApp(
 	}
 	workspace, err := catalog.GetApp(
 		t.Context(),
-		control.AppAccessScope{TenantID: testTenant},
+		control.AppAccessScope{TenantID: testTenant, OrganizationID: 1},
 		control.AppSelector{AppID: testApp},
 	)
 	if err != nil {
@@ -1283,7 +1285,7 @@ func archiveWriterActiveRouteApp(
 	}
 	if _, err := catalog.SetAppState(
 		t.Context(),
-		control.AppAccessScope{TenantID: testTenant},
+		control.AppAccessScope{TenantID: testTenant, OrganizationID: 1},
 		control.AppSelector{AppID: testApp},
 		workspace.Version,
 		control.AppStateArchived,

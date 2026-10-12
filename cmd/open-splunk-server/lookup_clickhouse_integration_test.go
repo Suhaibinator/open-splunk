@@ -53,7 +53,7 @@ func TestLookupRuntimeManagerAgainstClickHouse(t *testing.T) {
 					EventField:  "service_key",
 				}},
 				OutputMappings: []*opensplunk.LookupFieldMapping{{
-					LookupField: "owner",
+					LookupField: "1",
 					EventField:  "service_owner",
 				}},
 				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
@@ -190,7 +190,7 @@ func TestLookupRuntimeManagerAgainstClickHouse(t *testing.T) {
 					EventField:  "service_key",
 				}},
 				OutputMappings: []*opensplunk.LookupFieldMapping{{
-					LookupField: "owner",
+					LookupField: "1",
 					EventField:  "automatic_owner",
 				}},
 				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,

@@ -30,7 +30,8 @@ mkdir -p "$output_directory"
 chmod 0700 "$output_directory"
 
 clickhouse_password=$(openssl rand -hex 32)
-administrator_token=$(openssl rand -base64 48 | tr -d '\n')
+postgres_password=$(openssl rand -hex 32)
+minio_password=$(openssl rand -hex 32)
 temporary_file="$output_file.tmp.$$"
 trap 'rm -f -- "$temporary_file"' EXIT HUP INT TERM
 
@@ -41,7 +42,23 @@ umask 077
     echo "OPEN_SPLUNK_DEPLOY_CLICKHOUSE_NATIVE_PORT=${OPEN_SPLUNK_DEPLOY_CLICKHOUSE_NATIVE_PORT:-9000}"
     echo "OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME=clickhouse"
     echo "OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD=$clickhouse_password"
-    echo "OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN=$administrator_token"
+    echo "OPEN_SPLUNK_POSTGRES_PASSWORD=$postgres_password"
+    echo "OPEN_SPLUNK_SERVER_POSTGRES_DSN=postgres://open_splunk:$postgres_password@127.0.0.1:${OPEN_SPLUNK_DEPLOY_POSTGRES_PORT:-5432}/open_splunk?sslmode=disable"
+    echo "OPEN_SPLUNK_DEPLOY_POSTGRES_PORT=${OPEN_SPLUNK_DEPLOY_POSTGRES_PORT:-5432}"
+    echo "OPEN_SPLUNK_DEPLOY_MINIO_PORT=${OPEN_SPLUNK_DEPLOY_MINIO_PORT:-9001}"
+    echo "OPEN_SPLUNK_SERVER_MINIO_ENDPOINT=127.0.0.1:${OPEN_SPLUNK_DEPLOY_MINIO_PORT:-9001}"
+    echo "OPEN_SPLUNK_SERVER_MINIO_ACCESS_KEY=open-splunk"
+    echo "OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY=$minio_password"
+    echo "OPEN_SPLUNK_SERVER_MINIO_BUCKET=open-splunk-artifacts"
+    echo "OPEN_SPLUNK_SERVER_MINIO_USE_TLS=false
+OPEN_SPLUNK_SERVER_SEARCH_CAPTURE_MAXIMUM_ROWS=100000
+OPEN_SPLUNK_SERVER_SEARCH_CAPTURE_MAXIMUM_BYTES=268435456
+OPEN_SPLUNK_SERVER_SEARCH_RETENTION_ORGANIZATION_BYTES=4294967296
+OPEN_SPLUNK_SERVER_SEARCH_RETENTION_GLOBAL_BYTES=17179869184"
+    echo "OPEN_SPLUNK_SERVER_PUBLIC_BASE_URL=http://localhost:${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}"
+    echo "OPEN_SPLUNK_DEPLOY_MINIO_IMAGE="
+    echo "OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_ID="
+    echo "OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_SECRET="
     echo "OPEN_SPLUNK_DEPLOY_HTTP_PORT=${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}"
 } >"$temporary_file"
 chmod 0600 "$temporary_file"

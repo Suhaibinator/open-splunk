@@ -136,16 +136,16 @@ func FuzzPrepareCreateMutationCanonicalDigest(f *testing.F) {
 		ClientRequestId: "writer-fuzz-valid-request-0001",
 	}
 	validScope := normalizedWriteScope{
-		tenantID: testTenant, ownerID: testOwner, writableAppIDs: []string{testApp},
+		tenantID: testTenant, ownerID: testOwner, writableAppIDs: []string{testApp}, organizationID: 1,
 	}
 	validActor := audit.Actor{
 		Kind: audit.ActorKindBrowser, ID: testOwner, Role: audit.ActorRoleAdministrator,
 	}
 	validPrepared, err := prepareCreateMutation(validScope, validActor, validRequest)
 	if err != nil || len(validPrepared.requestBytes) == 0 ||
-		validPrepared.requestDigest != digestMutationRequest(
+		validPrepared.requestDigest != digestScopedMutationRequest(
 			mutationRouteCreate,
-			testOwner,
+			validScope,
 			validPrepared.requestBytes,
 		) {
 		f.Fatalf("known-valid Create preparation = (%v, %v)", validPrepared, err)
@@ -164,7 +164,7 @@ func FuzzPrepareCreateMutationCanonicalDigest(f *testing.F) {
 			ClientRequestId: requestID,
 		}
 		before := proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest)
-		scope := normalizedWriteScope{tenantID: testTenant, ownerID: testOwner, writableAppIDs: []string{testApp}}
+		scope := normalizedWriteScope{tenantID: testTenant, ownerID: testOwner, writableAppIDs: []string{testApp}, organizationID: 1}
 		actor := audit.Actor{Kind: audit.ActorKindBrowser, ID: testOwner, Role: audit.ActorRoleAdministrator}
 		first, firstErr := prepareCreateMutation(scope, actor, request)
 		second, secondErr := prepareCreateMutation(scope, actor, request)
@@ -179,7 +179,7 @@ func FuzzPrepareCreateMutationCanonicalDigest(f *testing.F) {
 		}
 		if first.clientRequestID != requestID || first.requestDigest != second.requestDigest ||
 			!bytes.Equal(first.requestBytes, second.requestBytes) ||
-			first.requestDigest != digestMutationRequest(mutationRouteCreate, testOwner, first.requestBytes) {
+			first.requestDigest != digestScopedMutationRequest(mutationRouteCreate, scope, first.requestBytes) {
 			t.Fatal("successful request preparation is not canonical")
 		}
 		decoded := &opensplunk.CreateKnowledgeObjectRequest{}

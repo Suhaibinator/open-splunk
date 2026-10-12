@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
@@ -38,19 +40,20 @@ func TestWriterHiddenCorruptRegistryIsIndistinguishableFromAbsence(t *testing.T)
 		t.Fatalf("open corruption connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(t.Context(), `
-		DROP TRIGGER knowledge_object_registry_transition_is_valid;
-		DROP TRIGGER knowledge_object_update_requires_sealed_list_projection;
-		PRAGMA foreign_keys = OFF;
-		PRAGMA ignore_check_constraints = ON;
-		UPDATE knowledge_objects
-		SET name = ?
-		WHERE tenant_id = ? AND knowledge_object_id = ?;
-		PRAGMA ignore_check_constraints = OFF;
-		PRAGMA foreign_keys = ON`,
-		strings.Repeat("x", 1<<20), writerTestTenant, hiddenID,
-	); err != nil {
+	if _, err := connection.ExecContext(t.Context(), `DROP TRIGGER knowledge_object_registry_transition_is_valid ON knowledge_objects; DROP TRIGGER knowledge_object_update_requires_sealed_list_projection ON knowledge_objects`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pgtest.CheckTables(t.Context(), connection, false, "knowledge_objects"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pgtest.AllowOversizedIndexedValue(t.Context(), connection, "knowledge_objects", "name"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.ExecContext(t.Context(), `UPDATE knowledge_objects SET name=$1 WHERE tenant_id=$2 AND knowledge_object_id=$3`, strings.Repeat("x", 1<<20), writerTestTenant, hiddenID); err != nil {
 		t.Fatalf("inject hidden registry corruption: %v", err)
+	}
+	if _, err := pgtest.CheckTables(t.Context(), connection, true, "knowledge_objects"); err != nil {
+		t.Fatal(err)
 	}
 
 	restrictedScope := harness.writeScope

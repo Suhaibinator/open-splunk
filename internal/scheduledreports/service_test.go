@@ -9,8 +9,10 @@ import (
 	"time"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+	"github.com/Suhaibinator/open-splunk/internal/resourcepolicy"
 	"google.golang.org/protobuf/proto"
-	"gorm.io/driver/sqlite"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -79,7 +81,7 @@ func TestServiceSkipsOlderMissedPeriodsAndSnapshotsDefinition(t *testing.T) {
 	admitter := new(recordingAdmitter)
 	service := newTestService(t, repository, admitter, configuredAt)
 
-	created, err := service.Configure(context.Background(), "owner-1", "tenant-1", "saved-1", 0, Configuration{
+	created, err := service.Configure(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-1", 0, Configuration{
 		Cron: "*/5 * * * *", Timezone: "UTC", DispatchTTL: "", Enabled: true,
 	})
 	if err != nil {
@@ -107,14 +109,14 @@ func TestServiceSkipsOlderMissedPeriodsAndSnapshotsDefinition(t *testing.T) {
 	if request.SchedulePeriod != 5*time.Minute || request.RetentionLifetime != 10*time.Minute {
 		t.Fatalf("period/retention = %v/%v, want 5m/10m", request.SchedulePeriod, request.RetentionLifetime)
 	}
-	runs, err := service.ListRuns(context.Background(), "owner-1", "saved-1", 0)
+	runs, err := service.ListRuns(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-1", 0)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
 	if len(runs) != 1 || runs[0].SkippedOccurrenceCount != 2 || runs[0].Outcome != RunOutcomeSubmitted || runs[0].SearchJobID == "" {
 		t.Fatalf("runs = %#v", runs)
 	}
-	updated, err := repository.Get(context.Background(), "owner-1", "saved-1")
+	updated, err := repository.Get(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -130,7 +132,7 @@ func TestServiceRecordsOverlapWithoutSecondAdmission(t *testing.T) {
 	seedSavedSearch(t, database, "saved-overlap", "owner-1", 1, "search index=main")
 	admitter := new(recordingAdmitter)
 	service := newTestService(t, repository, admitter, now)
-	if _, err := service.Configure(context.Background(), "owner-1", "tenant-1", "saved-overlap", 0, Configuration{
+	if _, err := service.Configure(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-overlap", 0, Configuration{
 		Cron: "*/5 * * * *", Timezone: "UTC", DispatchTTL: "2p", Enabled: true,
 	}); err != nil {
 		t.Fatalf("Configure: %v", err)
@@ -144,7 +146,7 @@ func TestServiceRecordsOverlapWithoutSecondAdmission(t *testing.T) {
 	if got := len(admitter.snapshot()); got != 1 {
 		t.Fatalf("admissions = %d, want 1", got)
 	}
-	runs, err := service.ListRuns(context.Background(), "owner-1", "saved-overlap", 0)
+	runs, err := service.ListRuns(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-overlap", 0)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
@@ -160,7 +162,7 @@ func TestServiceAdmissionFailureIsTerminalAndDoesNotBlockNextRun(t *testing.T) {
 	seedSavedSearch(t, database, "saved-failure", "owner-1", 1, "search index=main")
 	admitter := &recordingAdmitter{err: errors.New("test admission failure")}
 	service := newTestService(t, repository, admitter, now)
-	if _, err := service.Configure(context.Background(), "owner-1", "tenant-1", "saved-failure", 0, Configuration{
+	if _, err := service.Configure(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-failure", 0, Configuration{
 		Cron: "*/5 * * * *", Timezone: "UTC", Enabled: true,
 	}); err != nil {
 		t.Fatalf("Configure: %v", err)
@@ -168,7 +170,7 @@ func TestServiceAdmissionFailureIsTerminalAndDoesNotBlockNextRun(t *testing.T) {
 	if err := service.Step(context.Background(), time.Date(2026, time.August, 29, 12, 5, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("Step should record an expected admission failure without stopping the scheduler: %v", err)
 	}
-	runs, err := service.ListRuns(context.Background(), "owner-1", "saved-failure", 0)
+	runs, err := service.ListRuns(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-failure", 0)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
@@ -192,7 +194,7 @@ func TestServiceAcceptsManagerCompensationAfterJournalAttachment(t *testing.T) {
 	seedSavedSearch(t, database, "saved-compensated", "owner-1", 1, "search index=main")
 	service := newTestService(t, repository, new(recordingAdmitter), now)
 	service.admitter = compensatedFailureAdmitter{service: service}
-	if _, err := service.Configure(context.Background(), "owner-1", "tenant-1", "saved-compensated", 0, Configuration{
+	if _, err := service.Configure(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-compensated", 0, Configuration{
 		Cron: "*/5 * * * *", Timezone: "UTC", Enabled: true,
 	}); err != nil {
 		t.Fatalf("Configure() error = %v", err)
@@ -200,7 +202,7 @@ func TestServiceAcceptsManagerCompensationAfterJournalAttachment(t *testing.T) {
 	if err := service.Step(context.Background(), time.Date(2026, time.August, 29, 12, 5, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("Step() propagated compensated admission failure: %v", err)
 	}
-	runs, err := service.ListRuns(context.Background(), "owner-1", "saved-compensated", 1)
+	runs, err := service.ListRuns(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-compensated", 1)
 	if err != nil || len(runs) != 1 || runs[0].Outcome != RunOutcomeCanceled || runs[0].SearchJobID != "job-compensated" {
 		t.Fatalf("compensated history = %#v, %v", runs, err)
 	}
@@ -212,12 +214,12 @@ func TestRunNowReturnsAdmittedSearchJobID(t *testing.T) {
 	repository, database := newTestRepository(t, now)
 	seedSavedSearch(t, database, "saved-run-now", "owner-1", 1, "search index=main")
 	service := newTestService(t, repository, new(recordingAdmitter), now)
-	if _, err := service.Configure(context.Background(), "owner-1", "tenant-1", "saved-run-now", 0, Configuration{
+	if _, err := service.Configure(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-run-now", 0, Configuration{
 		Cron: "*/5 * * * *", Timezone: "UTC", Enabled: false,
 	}); err != nil {
 		t.Fatalf("Configure: %v", err)
 	}
-	run, err := service.RunNow(context.Background(), "owner-1", "saved-run-now")
+	run, err := service.RunNow(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-run-now")
 	if err != nil {
 		t.Fatalf("RunNow: %v", err)
 	}
@@ -232,18 +234,18 @@ func TestRunNowRecordsOverlapAndReturnsConflictWithoutEmptyJobContract(t *testin
 	repository, database := newTestRepository(t, now)
 	seedSavedSearch(t, database, "saved-run-overlap", "owner-1", 1, "search index=main")
 	service := newTestService(t, repository, new(recordingAdmitter), now)
-	if _, err := service.Configure(context.Background(), "owner-1", "tenant-1", "saved-run-overlap", 0, Configuration{
+	if _, err := service.Configure(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-run-overlap", 0, Configuration{
 		Cron: "*/5 * * * *", Timezone: "UTC", Enabled: false,
 	}); err != nil {
 		t.Fatalf("Configure() error = %v", err)
 	}
-	if _, err := service.RunNow(context.Background(), "owner-1", "saved-run-overlap"); err != nil {
+	if _, err := service.RunNow(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-run-overlap"); err != nil {
 		t.Fatalf("first RunNow() error = %v", err)
 	}
-	if run, err := service.RunNow(context.Background(), "owner-1", "saved-run-overlap"); !errors.Is(err, ErrConflict) || run.RunID != "" {
+	if run, err := service.RunNow(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-run-overlap"); !errors.Is(err, ErrConflict) || run.RunID != "" {
 		t.Fatalf("overlapping RunNow() = %#v, %v; want empty result and ErrConflict", run, err)
 	}
-	runs, err := service.ListRuns(context.Background(), "owner-1", "saved-run-overlap", 2)
+	runs, err := service.ListRuns(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-run-overlap", 2)
 	if err != nil || len(runs) != 2 || runs[0].Outcome != RunOutcomeSkippedOverlap || runs[1].Outcome != RunOutcomeSubmitted {
 		t.Fatalf("overlap history = %#v, %v", runs, err)
 	}
@@ -256,19 +258,19 @@ func TestInstantSearchCompletionBeforeAdmissionReturnIsIdempotent(t *testing.T) 
 	seedSavedSearch(t, database, "saved-instant", "owner-1", 1, "search index=main")
 	service := newTestService(t, repository, new(recordingAdmitter), now)
 	service.admitter = instantCompletionAdmitter{service: service, jobID: "job-instant"}
-	if _, err := service.Configure(context.Background(), "owner-1", "tenant-1", "saved-instant", 0, Configuration{
+	if _, err := service.Configure(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-instant", 0, Configuration{
 		Cron: "*/5 * * * *", Timezone: "UTC", Enabled: false,
 	}); err != nil {
 		t.Fatalf("Configure() error = %v", err)
 	}
-	run, err := service.RunNow(context.Background(), "owner-1", "saved-instant")
+	run, err := service.RunNow(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-instant")
 	if err != nil {
 		t.Fatalf("RunNow() error = %v", err)
 	}
 	if run.SearchJobID != "job-instant" {
 		t.Fatalf("RunNow() job ID = %q", run.SearchJobID)
 	}
-	runs, err := service.ListRuns(context.Background(), "owner-1", "saved-instant", 1)
+	runs, err := service.ListRuns(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-instant", 1)
 	if err != nil || len(runs) != 1 || runs[0].Outcome != RunOutcomeSucceeded || runs[0].SearchJobID != "job-instant" {
 		t.Fatalf("instant completion history = %#v, %v", runs, err)
 	}
@@ -284,7 +286,7 @@ func TestScheduledOccurrenceCanFollowRunNowAtSameTimestamp(t *testing.T) {
 	seedSavedSearch(t, database, "saved-exact-time", "owner-1", 1, "search index=main")
 	admitter := new(recordingAdmitter)
 	service := newTestService(t, repository, admitter, now)
-	schedule, err := service.Configure(context.Background(), "owner-1", "tenant-1", "saved-exact-time", 0, Configuration{
+	schedule, err := service.Configure(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-exact-time", 0, Configuration{
 		Cron: "*/5 * * * *", Timezone: "UTC", Enabled: true,
 	})
 	if err != nil || schedule.NextRunAt == nil {
@@ -301,11 +303,11 @@ func TestScheduledOccurrenceCanFollowRunNowAtSameTimestamp(t *testing.T) {
 	if err := service.Step(context.Background(), *schedule.NextRunAt); err != nil {
 		t.Fatalf("Step(exact timestamp) error = %v", err)
 	}
-	runs, err := service.ListRuns(context.Background(), "owner-1", schedule.SavedSearchID, 0)
+	runs, err := service.ListRuns(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, schedule.SavedSearchID, 0)
 	if err != nil || len(runs) != 2 || runs[0].Outcome != RunOutcomeSubmitted {
 		t.Fatalf("runs after exact-time claims = %#v, %v", runs, err)
 	}
-	updated, err := repository.Get(context.Background(), "owner-1", schedule.SavedSearchID)
+	updated, err := repository.Get(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, schedule.SavedSearchID)
 	if err != nil || updated.NextRunAt == nil || !updated.NextRunAt.After(*schedule.NextRunAt) {
 		t.Fatalf("advanced schedule = %+v, %v", updated, err)
 	}
@@ -320,7 +322,7 @@ func TestRunNowOrOneOffSupportsUnscheduledSavedSearch(t *testing.T) {
 	service := newTestService(t, repository, admitter, now)
 
 	run, err := service.RunNowOrOneOff(
-		context.Background(), "owner-1", "tenant-1", "saved-one-off", DefaultOneOffSchedulePeriod,
+		context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-one-off", DefaultOneOffSchedulePeriod,
 	)
 	if err != nil {
 		t.Fatalf("RunNowOrOneOff: %v", err)
@@ -338,7 +340,7 @@ func TestRunNowOrOneOffSupportsUnscheduledSavedSearch(t *testing.T) {
 	if len(requests) != 1 || requests[0].SchedulePeriod != DefaultOneOffSchedulePeriod || requests[0].RetentionLifetime != 2*DefaultOneOffSchedulePeriod {
 		t.Fatalf("one-off admission = %#v", requests)
 	}
-	if _, err := repository.Get(context.Background(), "owner-1", "saved-one-off"); !errors.Is(err, ErrNotFound) {
+	if _, err := repository.Get(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-one-off"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("one-off unexpectedly created a persisted schedule: %v", err)
 	}
 }
@@ -349,13 +351,13 @@ func TestRunHistoryPaginationUsesOwnerScopedKeysetCursor(t *testing.T) {
 	repository, database := newTestRepository(t, now)
 	seedSavedSearch(t, database, "saved-pages", "owner-1", 1, "search index=main")
 	service := newTestService(t, repository, new(recordingAdmitter), now)
-	if _, err := service.Configure(context.Background(), "owner-1", "tenant-1", "saved-pages", 0, Configuration{
+	if _, err := service.Configure(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-pages", 0, Configuration{
 		Cron: "*/5 * * * *", Timezone: "UTC", Enabled: false,
 	}); err != nil {
 		t.Fatalf("Configure: %v", err)
 	}
 	for range 5 {
-		run, err := service.RunNow(context.Background(), "owner-1", "saved-pages")
+		run, err := service.RunNow(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-pages")
 		if err != nil {
 			t.Fatalf("RunNow: %v", err)
 		}
@@ -363,35 +365,35 @@ func TestRunHistoryPaginationUsesOwnerScopedKeysetCursor(t *testing.T) {
 			t.Fatalf("Finish: %v", err)
 		}
 	}
-	first, err := service.ListRunPage(context.Background(), "owner-1", "saved-pages", RunPageRequest{Limit: 2, IncludeTotal: true})
+	first, err := service.ListRunPage(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-pages", RunPageRequest{Limit: 2, IncludeTotal: true})
 	if err != nil {
 		t.Fatalf("ListRunPage first: %v", err)
 	}
 	if len(first.Runs) != 2 || first.Runs[0].RunID != "run-0005" || first.Runs[1].RunID != "run-0004" || first.NextPageToken == "" || first.TotalSize == nil || *first.TotalSize != 5 {
 		t.Fatalf("first page = %#v", first)
 	}
-	inserted, err := service.RunNow(context.Background(), "owner-1", "saved-pages")
+	inserted, err := service.RunNow(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-pages")
 	if err != nil {
 		t.Fatalf("RunNow inserted: %v", err)
 	}
 	if err := service.Finish(context.Background(), inserted.RunID, RunOutcomeSucceeded, ""); err != nil {
 		t.Fatalf("Finish inserted: %v", err)
 	}
-	second, err := service.ListRunPage(context.Background(), "owner-1", "saved-pages", RunPageRequest{Limit: 2, PageToken: first.NextPageToken})
+	second, err := service.ListRunPage(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-pages", RunPageRequest{Limit: 2, PageToken: first.NextPageToken})
 	if err != nil {
 		t.Fatalf("ListRunPage second: %v", err)
 	}
 	if len(second.Runs) != 2 || second.Runs[0].RunID != "run-0003" || second.Runs[1].RunID != "run-0002" || second.NextPageToken == "" {
 		t.Fatalf("second page = %#v", second)
 	}
-	third, err := service.ListRunPage(context.Background(), "owner-1", "saved-pages", RunPageRequest{Limit: 2, PageToken: second.NextPageToken})
+	third, err := service.ListRunPage(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-pages", RunPageRequest{Limit: 2, PageToken: second.NextPageToken})
 	if err != nil {
 		t.Fatalf("ListRunPage third: %v", err)
 	}
 	if len(third.Runs) != 1 || third.Runs[0].RunID != "run-0001" || third.NextPageToken != "" {
 		t.Fatalf("third page = %#v", third)
 	}
-	if _, err := service.ListRunPage(context.Background(), "another-owner", "saved-pages", RunPageRequest{Limit: 2, PageToken: first.NextPageToken}); !errors.Is(err, ErrInvalidArgument) {
+	if _, err := service.ListRunPage(context.Background(), AccessScope{OwnerID: "another-owner", OrganizationID: "1"}, "saved-pages", RunPageRequest{Limit: 2, PageToken: first.NextPageToken}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("cross-owner cursor error = %v, want ErrInvalidArgument", err)
 	}
 }
@@ -402,12 +404,12 @@ func TestFinishIsIdempotentForIdenticalTerminalOutcome(t *testing.T) {
 	repository, database := newTestRepository(t, now)
 	seedSavedSearch(t, database, "saved-finish-retry", "owner-1", 1, "search index=main")
 	service := newTestService(t, repository, new(recordingAdmitter), now)
-	if _, err := service.Configure(context.Background(), "owner-1", "tenant-1", "saved-finish-retry", 0, Configuration{
+	if _, err := service.Configure(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-finish-retry", 0, Configuration{
 		Cron: "*/5 * * * *", Timezone: "UTC", Enabled: false,
 	}); err != nil {
 		t.Fatalf("Configure: %v", err)
 	}
-	run, err := service.RunNow(context.Background(), "owner-1", "saved-finish-retry")
+	run, err := service.RunNow(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-finish-retry")
 	if err != nil {
 		t.Fatalf("RunNow: %v", err)
 	}
@@ -432,35 +434,35 @@ func TestCurrentProjectionsBatchSchedulesLatestRunsAndRetainedResults(t *testing
 	seedSavedSearch(t, database, "saved-unscheduled", "owner-1", 1, "search index=main")
 	service := newTestService(t, repository, new(recordingAdmitter), now)
 	for _, id := range []string{"saved-a", "saved-b", "saved-c"} {
-		if _, err := service.Configure(context.Background(), "owner-1", "tenant-1", id, 0, Configuration{
+		if _, err := service.Configure(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", id, 0, Configuration{
 			Cron: "*/5 * * * *", Timezone: "UTC", Enabled: false,
 		}); err != nil {
 			t.Fatalf("Configure(%s): %v", id, err)
 		}
 	}
-	first, err := service.RunNow(context.Background(), "owner-1", "saved-a")
+	first, err := service.RunNow(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-a")
 	if err != nil {
 		t.Fatalf("RunNow first: %v", err)
 	}
 	if err := service.Finish(context.Background(), first.RunID, RunOutcomeSucceeded, ""); err != nil {
 		t.Fatalf("Finish first: %v", err)
 	}
-	latest, err := service.RunNow(context.Background(), "owner-1", "saved-a")
+	latest, err := service.RunNow(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-a")
 	if err != nil {
 		t.Fatalf("RunNow latest: %v", err)
 	}
 	if err := service.Finish(context.Background(), latest.RunID, RunOutcomeFailed, "execution_failed"); err != nil {
 		t.Fatalf("Finish latest: %v", err)
 	}
-	active, err := service.RunNow(context.Background(), "owner-1", "saved-c")
+	active, err := service.RunNow(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-c")
 	if err != nil {
 		t.Fatalf("RunNow active: %v", err)
 	}
-	if _, err := service.RunNow(context.Background(), "owner-1", "saved-c"); !errors.Is(err, ErrConflict) {
+	if _, err := service.RunNow(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-c"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("RunNow overlapping error = %v, want ErrConflict", err)
 	}
 
-	projections, err := service.CurrentProjections(context.Background(), "owner-1", []string{
+	projections, err := service.CurrentProjections(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, []string{
 		"saved-a", "saved-b", "saved-c", "saved-unscheduled", "saved-a",
 	})
 	if err != nil {
@@ -477,7 +479,7 @@ func TestCurrentProjectionsBatchSchedulesLatestRunsAndRetainedResults(t *testing
 		projections["saved-c"].LatestResultRun.RunID != active.RunID {
 		t.Fatalf("current projections = %#v", projections)
 	}
-	foreign, err := service.CurrentProjections(context.Background(), "owner-2", []string{"saved-a"})
+	foreign, err := service.CurrentProjections(context.Background(), AccessScope{OwnerID: "owner-2", OrganizationID: "1"}, []string{"saved-a"})
 	if err != nil || len(foreign) != 0 {
 		t.Fatalf("foreign projections = %#v, %v", foreign, err)
 	}
@@ -489,7 +491,7 @@ func TestConfigureUsesSeparateOperatorAndRuntimeVersions(t *testing.T) {
 	repository, database := newTestRepository(t, now)
 	seedSavedSearch(t, database, "saved-version", "owner-1", 1, "search index=main")
 	service := newTestService(t, repository, new(recordingAdmitter), now)
-	created, err := service.Configure(context.Background(), "owner-1", "tenant-1", "saved-version", 0, Configuration{
+	created, err := service.Configure(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-version", 0, Configuration{
 		Cron: "0 * * * *", Timezone: "UTC", Enabled: true,
 	})
 	if err != nil {
@@ -498,24 +500,24 @@ func TestConfigureUsesSeparateOperatorAndRuntimeVersions(t *testing.T) {
 	if err := service.Step(context.Background(), time.Date(2026, time.August, 29, 13, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("Step: %v", err)
 	}
-	afterRun, err := repository.Get(context.Background(), "owner-1", "saved-version")
+	afterRun, err := repository.Get(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-version")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if afterRun.ConfigVersion != created.ConfigVersion || afterRun.RuntimeVersion == created.RuntimeVersion {
 		t.Fatalf("versions after run = config %d runtime %d; created = %d/%d", afterRun.ConfigVersion, afterRun.RuntimeVersion, created.ConfigVersion, created.RuntimeVersion)
 	}
-	disabled, err := service.SetEnabled(context.Background(), "owner-1", "tenant-1", "saved-version", created.ConfigVersion, false)
+	disabled, err := service.SetEnabled(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-version", created.ConfigVersion, false)
 	if err != nil {
 		t.Fatalf("SetEnabled: %v", err)
 	}
 	if disabled.Enabled || disabled.NextRunAt != nil || disabled.ConfigVersion != created.ConfigVersion+1 {
 		t.Fatalf("disabled schedule = %#v", disabled)
 	}
-	if _, err := service.SetEnabled(context.Background(), "owner-1", "tenant-1", "saved-version", created.ConfigVersion, true); !errors.Is(err, ErrConflict) {
+	if _, err := service.SetEnabled(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-version", created.ConfigVersion, true); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale SetEnabled error = %v, want ErrConflict", err)
 	}
-	if _, err := service.Configure(context.Background(), "owner-1", "tenant-1", "saved-version", created.ConfigVersion, Configuration{
+	if _, err := service.Configure(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-version", created.ConfigVersion, Configuration{
 		Cron: "30 * * * *", Timezone: "UTC", Enabled: true,
 	}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale Configure error = %v, want ErrConflict", err)
@@ -528,7 +530,7 @@ func TestRecoverInterruptsSubmittedRuns(t *testing.T) {
 	repository, database := newTestRepository(t, now)
 	seedSavedSearch(t, database, "saved-restart", "owner-1", 1, "search index=main")
 	service := newTestService(t, repository, new(recordingAdmitter), now)
-	if _, err := service.Configure(context.Background(), "owner-1", "tenant-1", "saved-restart", 0, Configuration{
+	if _, err := service.Configure(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "tenant-1", "saved-restart", 0, Configuration{
 		Cron: "*/5 * * * *", Timezone: "UTC", Enabled: true,
 	}); err != nil {
 		t.Fatalf("Configure: %v", err)
@@ -540,7 +542,7 @@ func TestRecoverInterruptsSubmittedRuns(t *testing.T) {
 	if err != nil || count != 1 {
 		t.Fatalf("Recover = %d, %v; want 1", count, err)
 	}
-	runs, err := service.ListRuns(context.Background(), "owner-1", "saved-restart", 0)
+	runs, err := service.ListRuns(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, "saved-restart", 0)
 	if err != nil || len(runs) != 1 || runs[0].Outcome != RunOutcomeInterrupted {
 		t.Fatalf("runs after recovery = %#v, %v", runs, err)
 	}
@@ -557,8 +559,7 @@ func newTestService(t *testing.T, repository *Repository, admitter SearchAdmitte
 
 func newTestRepository(t *testing.T, now time.Time) (*Repository, *gorm.DB) {
 	t.Helper()
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
-	database, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{SkipDefaultTransaction: true})
+	database, err := gorm.Open(postgres.New(postgres.Config{Conn: pgtest.Open(t)}), &gorm.Config{SkipDefaultTransaction: true})
 	if err != nil {
 		t.Fatalf("open test database: %v", err)
 	}
@@ -602,51 +603,64 @@ func seedSavedSearch(t *testing.T, database *gorm.DB, id, owner string, version 
 	if err != nil {
 		t.Fatalf("marshal saved search: %v", err)
 	}
-	if err := database.Exec(`INSERT INTO saved_searches (saved_search_id, version, owner_id, definition_proto) VALUES (?, ?, ?, ?)`, id, version, owner, encoded).Error; err != nil {
+	sources, err := resourcepolicy.SourceNames(definition.Search)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Exec(`INSERT INTO saved_searches (organization_id,saved_search_id, version, owner_id, definition_proto,source_index_names) VALUES (1,?, ?, ?, ?,?::jsonb)`, id, version, owner, encoded, string(sources)).Error; err != nil {
 		t.Fatalf("seed saved search: %v", err)
 	}
 }
 
 var scheduledReportTestSchema = []string{
 	`CREATE TABLE saved_searches (
+ organization_id BIGINT NOT NULL,
+ source_index_names JSONB NOT NULL,
+ name TEXT NOT NULL DEFAULT 'test report',
+ app_id TEXT NOT NULL DEFAULT '',
+ sharing_scope BIGINT NOT NULL DEFAULT 1,
+ created_at_unix_micro BIGINT NOT NULL DEFAULT 1,
+ updated_at_unix_micro BIGINT NOT NULL DEFAULT 1,
 		saved_search_id TEXT PRIMARY KEY NOT NULL,
-		version INTEGER NOT NULL,
+		version BIGINT NOT NULL,
 		owner_id TEXT NOT NULL,
-		definition_proto BLOB NOT NULL
+		definition_proto BYTEA NOT NULL
 	)`,
 	`CREATE TABLE saved_search_schedules (
+ organization_id BIGINT NOT NULL,
 		saved_search_id TEXT PRIMARY KEY NOT NULL,
 		owner_id TEXT NOT NULL,
 		tenant_id TEXT NOT NULL,
-		config_version INTEGER NOT NULL,
-		runtime_version INTEGER NOT NULL,
+		config_version BIGINT NOT NULL,
+		runtime_version BIGINT NOT NULL,
 		cron_expression TEXT NOT NULL,
 		timezone TEXT NOT NULL,
 		dispatch_ttl TEXT NOT NULL,
-		enabled INTEGER NOT NULL,
-		next_run_at_unix_micro INTEGER,
-		created_at_unix_micro INTEGER NOT NULL,
-		updated_at_unix_micro INTEGER NOT NULL
+		enabled BOOLEAN NOT NULL,
+		next_run_at_unix_micro BIGINT,
+		created_at_unix_micro BIGINT NOT NULL,
+		updated_at_unix_micro BIGINT NOT NULL
 	)`,
 	`CREATE TABLE saved_search_schedule_runs (
+ organization_id BIGINT NOT NULL,
 		run_id TEXT PRIMARY KEY NOT NULL,
 		saved_search_id TEXT NOT NULL,
 		owner_id TEXT NOT NULL,
 		tenant_id TEXT NOT NULL,
-		definition_version INTEGER NOT NULL,
-		definition_proto BLOB NOT NULL,
+		definition_version BIGINT NOT NULL,
+		definition_proto BYTEA NOT NULL,
 		cron_expression TEXT NOT NULL,
 		timezone TEXT NOT NULL,
 		dispatch_ttl TEXT NOT NULL,
-		schedule_period_microseconds INTEGER NOT NULL,
-		retention_lifetime_microseconds INTEGER NOT NULL,
-		scheduled_at_unix_micro INTEGER NOT NULL,
-		claimed_at_unix_micro INTEGER NOT NULL,
-		skipped_occurrence_count INTEGER NOT NULL,
+		schedule_period_microseconds BIGINT NOT NULL,
+		retention_lifetime_microseconds BIGINT NOT NULL,
+		scheduled_at_unix_micro BIGINT NOT NULL,
+		claimed_at_unix_micro BIGINT NOT NULL,
+		skipped_occurrence_count BIGINT NOT NULL,
 		outcome TEXT NOT NULL,
 		search_job_id TEXT,
 		failure_category TEXT,
-		finished_at_unix_micro INTEGER
+		finished_at_unix_micro BIGINT
 	)`,
 	`CREATE UNIQUE INDEX saved_search_schedule_runs_active_idx
 		ON saved_search_schedule_runs(saved_search_id)

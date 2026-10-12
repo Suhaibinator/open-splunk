@@ -69,7 +69,7 @@ func (handler *apiHandler) prepareNearbyContext(
 	if handler.searchArtifacts != nil {
 		record, artifactErr := handler.searchArtifacts.Get(
 			ctx,
-			handler.accessScope(),
+			handler.accessScope(request.Context()),
 			input.GetSearchJobId(),
 			searchartifacts.AccessRefresh,
 		)
@@ -87,7 +87,7 @@ func (handler *apiHandler) prepareNearbyContext(
 	if live, ok := handler.jobs.(nearbyContextSearchJobs); ok {
 		nearby, err = live.NearbyContextFor(
 			ctx,
-			handler.accessScope(),
+			handler.accessScope(request.Context()),
 			input.GetSearchJobId(),
 			generation,
 			ordinal,
@@ -153,7 +153,7 @@ func (handler *apiHandler) durableNearbyContext(
 	generation uint64,
 	ordinal uint64,
 ) (searchjobs.NearbyContext, error) {
-	lease, err := handler.searchArtifacts.Acquire(ctx, handler.accessScope(), jobID)
+	lease, err := handler.searchArtifacts.Acquire(ctx, handler.accessScope(ctx), jobID)
 	if err != nil {
 		return searchjobs.NearbyContext{}, mapSearchArtifactError(err)
 	}
@@ -183,7 +183,7 @@ func (handler *apiHandler) durableNearbyContext(
 	}
 	record, err := handler.searchArtifacts.Get(
 		ctx,
-		handler.accessScope(),
+		handler.accessScope(ctx),
 		jobID,
 		searchartifacts.AccessInspect,
 	)

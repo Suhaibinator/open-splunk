@@ -13,6 +13,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+
 	"fortio.org/safecast"
 	"gorm.io/gorm"
 
@@ -82,11 +84,12 @@ const listAppIdentitiesSQL = `
 SELECT
 	substr(app_id, 1, ?) AS app_id,
 	substr(state, 1, ?) AS state
-FROM app_workspaces INDEXED BY app_workspaces_tenant_display_id_idx
-WHERE tenant_id = ?
+FROM app_workspaces
+WHERE tenant_id = ? AND organization_id = ?
 LIMIT ?`
 
 type normalizedAppListRequest struct {
+	organizationID          int64
 	tenantID                string
 	pageSize                uint32
 	pageToken               string
@@ -108,14 +111,15 @@ type appListCursor struct {
 }
 
 type appListFingerprint struct {
-	Version   int      `json:"v"`
-	TenantID  string   `json:"t"`
-	PageSize  uint32   `json:"p"`
-	Total     bool     `json:"z"`
-	States    []string `json:"s"`
-	Text      *string  `json:"x"`
-	SortBy    string   `json:"b"`
-	Direction string   `json:"d"`
+	OrganizationID int64    `json:"org"`
+	Version        int      `json:"v"`
+	TenantID       string   `json:"t"`
+	PageSize       uint32   `json:"p"`
+	Total          bool     `json:"z"`
+	States         []string `json:"s"`
+	Text           *string  `json:"x"`
+	SortBy         string   `json:"b"`
+	Direction      string   `json:"d"`
 }
 
 // ListAppIdentities reads only stable app identity and lifecycle authority.
@@ -147,6 +151,7 @@ func (catalog *AppCatalog) ListAppIdentities(
 		canonicalAppIDBytes+1,
 		len(AppStateArchived)+1,
 		tenantID,
+		scope.OrganizationID,
 		int64(maximum)+1,
 	).Scan(&records)
 	if query.Error != nil {
@@ -215,7 +220,7 @@ func (catalog *AppCatalog) ListApps(
 		}
 	}
 
-	tx := catalog.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(catalog.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return AppListResult{}, appContextError(ctx, "begin app list", tx.Error)
 	}
@@ -421,6 +426,7 @@ func normalizeAppListRequest(
 	}
 	return normalizedAppListRequest{
 		tenantID:                tenantID,
+		organizationID:          scope.OrganizationID,
 		pageSize:                pageSize,
 		pageToken:               request.PageToken,
 		requiredCatalogRevision: requiredRevision,
@@ -436,16 +442,16 @@ func applyAppListFilters(
 	query *gorm.DB,
 	request normalizedAppListRequest,
 ) *gorm.DB {
-	query = query.Where("tenant_id = ?", request.tenantID)
+	query = query.Where("tenant_id = ? AND organization_id = ?", request.tenantID, request.organizationID)
 	if len(request.stateFilters) != 0 {
 		query = query.Where("state IN ?", request.stateFilters)
 	}
 	if request.textFilter != nil {
 		query = query.Where(
 			`(
-				instr(lower(slug), lower(?)) > 0
-				OR instr(lower(display_name), lower(?)) > 0
-				OR instr(lower(description), lower(?)) > 0
+				strpos(lower(slug), lower(?)) > 0
+				OR strpos(lower(display_name), lower(?)) > 0
+				OR strpos(lower(description), lower(?)) > 0
 			)`,
 			*request.textFilter,
 			*request.textFilter,
@@ -538,14 +544,15 @@ func appListFilterHash(request normalizedAppListRequest) (string, error) {
 		states[index] = string(state)
 	}
 	payload, err := json.Marshal(appListFingerprint{
-		Version:   appListCursorVersion,
-		TenantID:  request.tenantID,
-		PageSize:  request.pageSize,
-		Total:     request.includeTotal,
-		States:    states,
-		Text:      request.textFilter,
-		SortBy:    string(request.sortBy),
-		Direction: string(request.direction),
+		Version:        appListCursorVersion,
+		TenantID:       request.tenantID,
+		OrganizationID: request.organizationID,
+		PageSize:       request.pageSize,
+		Total:          request.includeTotal,
+		States:         states,
+		Text:           request.textFilter,
+		SortBy:         string(request.sortBy),
+		Direction:      string(request.direction),
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode app list filter: %w", err)

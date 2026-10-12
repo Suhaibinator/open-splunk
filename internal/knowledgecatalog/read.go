@@ -1,6 +1,7 @@
 package knowledgecatalog
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -26,16 +27,16 @@ func readRegistryRecord(query *gorm.DB) (registryRecord, bool, error) {
 	}
 	var sizes []registrySizeRecord
 	if err := query.Session(&gorm.Session{}).Select(`
-		length(CAST(knowledge_object_id AS BLOB)) AS knowledge_object_id_bytes,
-		length(CAST(tenant_id AS BLOB)) AS tenant_id_bytes,
-		length(CAST(app_id AS BLOB)) AS app_id_bytes,
-		length(CAST(owner_id AS BLOB)) AS owner_id_bytes,
-		length(CAST(object_type AS BLOB)) AS object_type_bytes,
-		length(CAST(name AS BLOB)) AS name_bytes,
-		length(CAST(sharing_scope AS BLOB)) AS sharing_scope_bytes,
-		length(CAST(state AS BLOB)) AS state_bytes,
+		octet_length(knowledge_object_id) AS knowledge_object_id_bytes,
+		octet_length(tenant_id) AS tenant_id_bytes,
+		octet_length(app_id) AS app_id_bytes,
+		octet_length(owner_id) AS owner_id_bytes,
+		octet_length(object_type) AS object_type_bytes,
+		octet_length(name) AS name_bytes,
+		octet_length(sharing_scope) AS sharing_scope_bytes,
+		octet_length(state) AS state_bytes,
 		coalesce(length(definition_digest), 0) AS digest_bytes,
-		coalesce(length(CAST(quarantine_reason AS BLOB)), 0) AS quarantine_reason_bytes
+		coalesce(octet_length(quarantine_reason), 0) AS quarantine_reason_bytes
 	`).Limit(2).Find(&sizes).Error; err != nil {
 		return registryRecord{}, false, err
 	}
@@ -86,17 +87,17 @@ func readVersionRecord(database *gorm.DB, tenantID, objectID string, version int
 	)
 	var sizes []versionSizeRecord
 	if err := query.Session(&gorm.Session{}).Select(`
-		length(CAST(knowledge_object_id AS BLOB)) AS knowledge_object_id_bytes,
-		length(CAST(tenant_id AS BLOB)) AS tenant_id_bytes,
-		length(CAST(app_id AS BLOB)) AS app_id_bytes,
-		length(CAST(owner_id AS BLOB)) AS owner_id_bytes,
-		length(CAST(object_type AS BLOB)) AS object_type_bytes,
-		length(CAST(name AS BLOB)) AS name_bytes,
-		length(CAST(sharing_scope AS BLOB)) AS sharing_scope_bytes,
-		length(CAST(state AS BLOB)) AS state_bytes,
+		octet_length(knowledge_object_id) AS knowledge_object_id_bytes,
+		octet_length(tenant_id) AS tenant_id_bytes,
+		octet_length(app_id) AS app_id_bytes,
+		octet_length(owner_id) AS owner_id_bytes,
+		octet_length(object_type) AS object_type_bytes,
+		octet_length(name) AS name_bytes,
+		octet_length(sharing_scope) AS sharing_scope_bytes,
+		octet_length(state) AS state_bytes,
 		coalesce(length(definition_digest), 0) AS digest_bytes,
-		coalesce(length(CAST(quarantine_reason AS BLOB)), 0) AS quarantine_reason_bytes,
-		length(CAST(mutation_kind AS BLOB)) AS mutation_kind_bytes
+		coalesce(octet_length(quarantine_reason), 0) AS quarantine_reason_bytes,
+		octet_length(mutation_kind) AS mutation_kind_bytes
 	`).Limit(2).Find(&sizes).Error; err != nil {
 		return versionRecord{}, false, err
 	}
@@ -126,7 +127,7 @@ func readDefinitionBlob(database *gorm.DB, tenantID string, digest []byte) (defi
 		ProtoBytes    int64 `gorm:"column:proto_bytes"`
 	}
 	if err := query.Session(&gorm.Session{}).Select(`
-		length(CAST(tenant_id AS BLOB)) AS tenant_id_bytes,
+		octet_length(tenant_id) AS tenant_id_bytes,
 		length(definition_digest) AS digest_bytes,
 		length(definition_proto) AS proto_bytes
 	`).Limit(2).Find(&sizes).Error; err != nil {
@@ -167,7 +168,7 @@ type projectionSizeRecord struct {
 }
 
 // projectionReadRecord keeps the detached projection and its defensive width
-// aliases in one SQLite result row.  The ordered authorized query can require
+// aliases in one PostgreSQL result row.  The ordered authorized query can require
 // a bounded sorter, so executing a separate width preflight would duplicate
 // that work and reopen a same-transaction consistency seam for no benefit.
 type projectionReadRecord struct {
@@ -233,37 +234,59 @@ func readProjectionRecordsBounded(
 	if maximumAggregateProjectionBytes < maximumProjectionBytes {
 		return nil, fmt.Errorf("%w: invalid aggregate projection read bound", ErrCorrupt)
 	}
-	readQuery := query.Session(&gorm.Session{}).Limit(limit)
-	rows, err := readQuery.Rows()
+	portal, err := newProjectionPortal(query, limit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer portal.Close()
 	records := make([]projectionRecord, 0, min(limit, MaximumPageSize+1))
 	var aggregateProjectionBytes int64
-	for rows.Next() {
-		var scannedRecord projectionReadRecord
-		if err := readQuery.ScanRows(rows, &scannedRecord); err != nil {
+	for len(records) < limit {
+		// A whole batch of valid records must fit the remaining byte budget.
+		// FETCH one when the remaining budget cannot hold the maximum row; that
+		// row either fits or is the single physical row proving exhaustion.
+		fetchSize := min(limit-len(records), MaximumPageSize+1, max(1, int((maximumAggregateProjectionBytes-aggregateProjectionBytes)/maximumProjectionBytes)))
+		rows, err := portal.Fetch(fetchSize)
+		if err != nil {
 			return nil, err
 		}
-		size := scannedRecord.sizeRecord()
-		if !validRegistrySize(size.RegistrySizeRecord) || size.DescriptionBytes < 0 ||
-			size.DescriptionBytes > maximumDescriptionBytes || size.SelectorValueBytes < 0 ||
-			size.SelectorValueBytes > maximumSelectorAggregateValueBytes ||
-			size.ProjectionBytes != size.DescriptionBytes+size.SelectorValueBytes ||
-			size.SealProjectionBytes != size.ProjectionBytes ||
-			size.CanonicalSelectorBytes < 0 || size.CanonicalSelectorBytes > maximumCanonicalSelectorBytes ||
-			size.SealCanonicalSelectorBytes != size.CanonicalSelectorBytes {
-			return nil, fmt.Errorf("%w: list projection width is invalid", ErrCorrupt)
+		readCount := 0
+		for rows.Next() {
+			var scannedRecord projectionReadRecord
+			if err := portal.query.ScanRows(rows, &scannedRecord); err != nil {
+				portal.cancel()
+				_ = rows.Close()
+				return nil, err
+			}
+			size := scannedRecord.sizeRecord()
+			if !validRegistrySize(size.RegistrySizeRecord) || size.DescriptionBytes < 0 ||
+				size.DescriptionBytes > maximumDescriptionBytes || size.SelectorValueBytes < 0 ||
+				size.SelectorValueBytes > maximumSelectorAggregateValueBytes ||
+				size.ProjectionBytes != size.DescriptionBytes+size.SelectorValueBytes ||
+				size.SealProjectionBytes != size.ProjectionBytes ||
+				size.CanonicalSelectorBytes < 0 || size.CanonicalSelectorBytes > maximumCanonicalSelectorBytes ||
+				size.SealCanonicalSelectorBytes != size.CanonicalSelectorBytes {
+				portal.cancel()
+				_ = rows.Close()
+				return nil, fmt.Errorf("%w: list projection width is invalid", ErrCorrupt)
+			}
+			if aggregateProjectionBytes > maximumAggregateProjectionBytes-size.ProjectionBytes {
+				portal.cancel()
+				_ = rows.Close()
+				return nil, fmt.Errorf("%w: aggregate list projection byte bound exceeded", control.ErrCapacityExceeded)
+			}
+			aggregateProjectionBytes += size.ProjectionBytes
+			records = append(records, scannedRecord.Record)
+			readCount++
 		}
-		if aggregateProjectionBytes > maximumAggregateProjectionBytes-size.ProjectionBytes {
-			return nil, fmt.Errorf("%w: aggregate list projection byte bound exceeded", control.ErrCapacityExceeded)
+		rowErr := rows.Err()
+		closeErr := rows.Close()
+		if err := errors.Join(rowErr, closeErr); err != nil {
+			return nil, err
 		}
-		aggregateProjectionBytes += size.ProjectionBytes
-		records = append(records, scannedRecord.Record)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		if readCount < fetchSize {
+			break
+		}
 	}
 	return records, nil
 }
@@ -322,11 +345,11 @@ func readDependencyRecords(
 		DependencyRoleBytes int64 `gorm:"column:dependency_role_bytes"`
 	}
 	if err := query.Session(&gorm.Session{}).Select(`
-		length(CAST(dependency.tenant_id AS BLOB)) AS tenant_id_bytes,
-		length(CAST(dependency.source_object_id AS BLOB)) AS source_id_bytes,
-		length(CAST(dependency.target_kind AS BLOB)) AS target_kind_bytes,
-		length(CAST(dependency.target_object_id AS BLOB)) AS target_id_bytes,
-		length(CAST(dependency.dependency_role AS BLOB)) AS dependency_role_bytes
+		octet_length(dependency.tenant_id) AS tenant_id_bytes,
+		octet_length(dependency.source_object_id) AS source_id_bytes,
+		octet_length(dependency.target_kind) AS target_kind_bytes,
+		octet_length(dependency.target_object_id) AS target_id_bytes,
+		octet_length(dependency.dependency_role) AS dependency_role_bytes
 	`).Limit(maximumDependenciesPerVersion + 1).Find(&sizes).Error; err != nil {
 		return nil, err
 	}
@@ -380,7 +403,7 @@ const invalidCurrentActiveDependencySQL = `(source_registry.state = 'active'
 
 func readSelectorRecords(database *gorm.DB, tenantID, objectID string, version int64) ([]selectorRecord, error) {
 	// Cardinality and width are corruption boundaries, so prove them with a
-	// primary-key-compatible walk before asking SQLite to perform the canonical
+	// primary-key-compatible walk before asking PostgreSQL to perform the canonical
 	// dimension ordering.  In particular, a check-bypassed oversized selector
 	// set must hit LIMIT without first filling a temporary CASE-order sorter.
 	preflightQuery := selectorRecordPreflightQuery(database, tenantID, objectID, version)
@@ -390,9 +413,9 @@ func readSelectorRecords(database *gorm.DB, tenantID, objectID string, version i
 		ValueBytes     int64 `gorm:"column:value_bytes"`
 	}
 	if err := preflightQuery.Session(&gorm.Session{}).Select(`
-		length(CAST(dimension AS BLOB)) AS dimension_bytes,
-		length(CAST(match_kind AS BLOB)) AS match_kind_bytes,
-		length(CAST(value AS BLOB)) AS value_bytes
+		octet_length(dimension) AS dimension_bytes,
+		octet_length(match_kind) AS match_kind_bytes,
+		octet_length(value) AS value_bytes
 	`).Limit(maximumSelectorPatterns + 1).Find(&sizes).Error; err != nil {
 		return nil, err
 	}

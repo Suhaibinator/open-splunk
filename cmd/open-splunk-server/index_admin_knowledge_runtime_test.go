@@ -173,13 +173,14 @@ func TestRuntimeIndexAdministrationRejectsConflictInAnyKnowledgeTenantAtomically
 
 func newRuntimeIndexAdmissionDatabase(t *testing.T) *control.DB {
 	t.Helper()
-	database, err := control.Open(
+	database, err := openTestControl(t,
 		t.Context(),
 		filepath.Join(t.TempDir(), "control.db"),
 	)
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
 	}
+	initializeRuntimeIndexOwnershipFixture(t, database)
 	t.Cleanup(func() {
 		if err := database.Close(); err != nil {
 			t.Errorf("close control database: %v", err)
@@ -222,12 +223,14 @@ func createRuntimeIndexAdmissionPhysicalIndex(
 	name string,
 ) {
 	t.Helper()
-	if _, err := database.CreateIndex(
+	created, err := database.CreateIndex(
 		t.Context(),
 		runtimeIndexAdmissionControlDefinition(name),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("create existing physical index %q: %v", name, err)
 	}
+	assignRuntimeIndexOwnershipFixture(t, database, created.ID)
 }
 
 func runtimeIndexAdmissionControlDefinition(name string) control.IndexDefinition {
@@ -259,7 +262,7 @@ func createRuntimeIndexAdmissionApp(
 	}
 	if _, err := catalog.CreateApp(
 		t.Context(),
-		control.AppAccessScope{TenantID: tenantID},
+		control.AppAccessScope{TenantID: tenantID, OrganizationID: 1},
 		control.AppDefinition{
 			Slug:        slug,
 			DisplayName: slug,
@@ -318,7 +321,7 @@ func insertRuntimeIndexAdmissionACTIVEObject(
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_definition_blobs (
 		tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro
-	) VALUES (?, ?, ?, ?, ?)`,
+	) VALUES ($1, $2, $3, $4, $5)`,
 		tenantID, normalized.Digest[:], normalized.Bytes, len(normalized.Bytes), timestamp,
 	); err != nil {
 		t.Fatalf("insert %s/%s definition: %v", tenantID, objectID, err)
@@ -327,7 +330,7 @@ func insertRuntimeIndexAdmissionACTIVEObject(
 		tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, definition_digest, dependency_count, mutation_kind,
 		quarantine_reason, created_at_unix_micro
-	) VALUES (?, ?, 1, ?, ?, ?, ?, ?, 'active', ?, 0, 'create', NULL, ?)`,
+	) VALUES ($1, $2, 1, $3, $4, $5, $6, $7, 'active', $8, 0, 'create', NULL, $9)`,
 		tenantID,
 		objectID,
 		appID,
@@ -342,7 +345,7 @@ func insertRuntimeIndexAdmissionACTIVEObject(
 	}
 	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_dependency_seals (
 		tenant_id, knowledge_object_id, object_version, dependency_count
-	) VALUES (?, ?, 1, 0)`, tenantID, objectID); err != nil {
+	) VALUES ($1, $2, 1, 0)`, tenantID, objectID); err != nil {
 		t.Fatalf("seal %s/%s dependencies: %v", tenantID, objectID, err)
 	}
 
@@ -367,7 +370,7 @@ func insertRuntimeIndexAdmissionACTIVEObject(
 		sharing_scope, state, description_present, description, index_selector_count,
 		host_selector_count, source_selector_count, sourcetype_selector_count,
 		selector_value_bytes, canonical_selector_bytes
-	) VALUES (?, ?, 1, ?, ?, ?, ?, ?, 'active', 0, '', ?, ?, ?, ?, ?, ?)`,
+	) VALUES ($1, $2, 1, $3, $4, $5, $6, $7, 'active', 0, '', $8, $9, $10, $11, $12, $13)`,
 		tenantID,
 		objectID,
 		appID,
@@ -387,7 +390,7 @@ func insertRuntimeIndexAdmissionACTIVEObject(
 	insertRuntimeIndexAdmissionSelectorRows(t, tx, tenantID, objectID, normalized)
 	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_list_projection_seals (
 		tenant_id, knowledge_object_id, object_version, projection_bytes, canonical_selector_bytes
-	) VALUES (?, ?, 1, ?, ?)`,
+	) VALUES ($1, $2, 1, $3, $4)`,
 		tenantID,
 		objectID,
 		selectorValueBytes,
@@ -396,10 +399,10 @@ func insertRuntimeIndexAdmissionACTIVEObject(
 		t.Fatalf("seal %s/%s projection: %v", tenantID, objectID, err)
 	}
 	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (
-		tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name,
+		organization_id, tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro,
 		disabled_at_unix_micro, quarantined_at_unix_micro, deleted_at_unix_micro, quarantine_reason
-	) VALUES (?, ?, 1, ?, ?, ?, ?, ?, 'active', ?, ?, ?, NULL, NULL, NULL, NULL)`,
+	) VALUES (1, $1, $2, 1, $3, $4, $5, $6, $7, 'active', $8, $9, $10, NULL, NULL, NULL, NULL)`,
 		tenantID,
 		objectID,
 		appID,
@@ -414,7 +417,7 @@ func insertRuntimeIndexAdmissionACTIVEObject(
 		t.Fatalf("insert %s/%s registry: %v", tenantID, objectID, err)
 	}
 	if _, err := tx.ExecContext(t.Context(), `UPDATE knowledge_catalog_tenants
-		SET catalog_revision = catalog_revision + 1 WHERE tenant_id = ?`, tenantID); err != nil {
+		SET catalog_revision = catalog_revision + 1 WHERE tenant_id = $1`, tenantID); err != nil {
 		t.Fatalf("advance %s catalog revision: %v", tenantID, err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -451,7 +454,7 @@ func insertRuntimeIndexAdmissionSelectorRows(
 			}
 			if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_list_selector_patterns (
 				tenant_id, knowledge_object_id, object_version, dimension, ordinal, match_kind, value
-			) VALUES (?, ?, 1, ?, ?, ?, ?)`,
+			) VALUES ($1, $2, 1, $3, $4, $5, $6)`,
 				tenantID,
 				objectID,
 				dimension.name,

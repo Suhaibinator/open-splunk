@@ -1,0 +1,141 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+import "google/protobuf/timestamp.proto";
+import "chat.proto";
+import "inference_api.proto";
+
+// ChatWebSocketEvent is chat's realtime payload message: it is serialized into
+// RealtimeEvent.payload (see realtime_ws.proto) and delivered to participant user
+// topics and authorized open-channel realtime subscriptions.
+//
+// Notes:
+// - This is a payload, not a transport envelope. Topic, event type and timestamp
+//   routing metadata live on the surrounding RealtimeEvent.
+// - Payload messages are re-used from chat.proto (Channel/Message/Reaction/etc).
+// - The payload may be partial depending on the event type (e.g. delete events may
+//   omit the full entity and only provide ids).
+message ChatWebSocketEvent {
+  // High-level event type (created/updated/deleted, reaction added/removed, etc.)
+  ChatEventType type = 1;
+
+  // When the event occurred (server time).
+  google.protobuf.Timestamp occurred_at = 2;
+
+  // Actor user ID; 0 when the producer has no user actor.
+  uint64 actor_user_id = 3;
+
+  // Created indicates whether the underlying object was newly created as part of a get-or-create flow.
+  bool created = 4;
+
+  // Member tuple for events where the exact participants are relevant (e.g. unique channel creation).
+  repeated uint64 member_user_ids = 5;
+
+  // Optional convenience fields for id-only payloads or routing.
+  uint64 channel_id = 6;
+  uint64 message_id = 7;
+
+  reserved 17;
+  reserved "message_inference_summary";
+
+  // Event payload. Only one is set.
+  oneof payload {
+    Channel channel = 10;
+    Message message = 11;
+    MessageReaction reaction = 12;
+    ChannelParticipant participant = 13;
+    TypingEvent typing = 14;
+    MessageStreamEvent message_stream = 15;
+    ToolCallResolutionEvent tool_call_resolution = 16;
+    ContextCompactionEvent context_compaction = 18;
+    AgentRunStateEvent agent_run_state = 19;
+    AgentSessionInteractionEvent agent_session_interaction = 20;
+    ChatInferenceUsageUpdate inference_usage = 21;
+  }
+}
+
+// AgentSessionInteractionEvent says an agent session's interaction state changed
+// (CHAT_EVENT_TYPE_AGENT_SESSION_INTERACTION), published after commit. It carries only the
+// session's identity and location: the interaction depends on the viewer, so a client re-reads it.
+message AgentSessionInteractionEvent {
+  uint64 channel_id = 1;
+  uint64 parent_message_id = 2; // 0 for the channel's main transcript
+  uint64 agent_session_id = 3;
+}
+
+// AgentRunStateEvent reports one agent run's lifecycle status and observable activity
+// (CHAT_EVENT_TYPE_AGENT_RUN_STATE). Status transitions are published after commit; activity
+// changes are ephemeral and re-published on the run's drive heartbeat. Consumers must scope it
+// by (channel_id, parent_message_id, agent_run_id): activity in one thread says nothing about
+// another.
+message AgentRunStateEvent {
+  uint64 channel_id = 1;
+  uint64 parent_message_id = 2; // 0 for the channel's main transcript
+  uint64 agent_run_id = 3;
+  ChatAgentRunStatus status = 4;
+  ChatAgentRunStatusReason status_reason = 5;
+  string status_reason_code = 6;
+  AgentRunActivity activity = 7;
+  google.protobuf.Timestamp activity_started_at = 8;
+  // TOOL_CALL message behind the activity; omitted when that row is hidden from users.
+  optional uint64 activity_message_id = 9;
+}
+
+// ContextCompactionEvent is the ephemeral "summarizing context" indicator for one agent run
+// (CHAT_EVENT_TYPE_CONTEXT_COMPACTION). active=true when the summary call starts, false when it
+// ends for any reason.
+message ContextCompactionEvent {
+  uint64 channel_id = 1;
+  uint64 parent_message_id = 2; // 0 for the channel's main transcript
+  uint64 agent_run_id = 3;
+  bool active = 4;
+}
+
+// ToolCallResolutionEvent is fanned out (server -> client) when a TOOL_CALL's
+// approval state transitions, so every session can patch the cached TOOL_CALL
+// message in place without a refetch (CHAT_EVENT_TYPE_TOOL_CALL_RESOLUTION).
+message ToolCallResolutionEvent {
+  uint64 message_id = 1;
+  uint64 channel_id = 2;
+  ToolCallApprovalStatus approval_status = 3;
+  // execution_state lets clients patch the approval/execution card from the
+  // event without a refetch (Decision 6 / Known Proto Drift).
+  ToolCallExecutionState execution_state = 7;
+  uint64 resolved_by_user_id = 4;
+  google.protobuf.Timestamp resolved_at = 5;
+  string resolution_reason = 6;
+}
+
+message MessageStreamEvent {
+  uint64 message_id = 1;
+  uint64 channel_id = 2;
+  string stream_id = 3;
+  uint64 sequence = 4;
+  string text_delta = 5;
+  string accumulated_text = 6;
+  InferenceUsage final_usage = 7;
+  // Present on every stream event: zero identifies the channel root; a positive ID
+  // identifies the thread. Absence means placement is unknown (older producers).
+  optional uint64 parent_message_id = 8;
+}
+
+// TypingCommand indicates the user is typing in a channel. It is chat's payload for
+// the "chat.typing" RealtimeCommand (see realtime_ws.proto).
+message TypingCommand {
+  // Channel where the user is typing.
+  uint64 channel_id = 1;
+  // Whether the user started (true) or stopped (false) typing.
+  bool is_typing = 2;
+}
+
+// TypingEvent indicates a user is typing in a channel.
+// The typing user's ID is carried in ChatWebSocketEvent.actor_user_id.
+message TypingEvent {
+  // Channel where the user is typing.
+  uint64 channel_id = 1;
+  // Whether the user started (true) or stopped (false) typing.
+  bool is_typing = 2;
+}

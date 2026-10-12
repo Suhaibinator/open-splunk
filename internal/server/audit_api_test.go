@@ -375,7 +375,7 @@ func TestSavedSearchAuditProtoTaxonomyRoundTrips(t *testing.T) {
 				OccurredAt: time.Date(2026, time.August, 3, 20, 21, 22, 123456000, time.UTC),
 				Actor: audit.Actor{
 					Kind: audit.ActorKindBrowser,
-					ID:   "single-user",
+					ID:   "1030",
 					Role: audit.ActorRoleUser,
 				},
 				Action:        testCase.action,
@@ -511,7 +511,7 @@ func TestAuditEventHTTPVerticalCapturesAuthenticatedTokenCreationWithoutSecrets(
 	t.Parallel()
 
 	ctx := context.Background()
-	database, err := control.Open(ctx, t.TempDir()+"/control.sqlite")
+	database, err := openTestControl(t, ctx, t.TempDir()+"/control.sqlite")
 	if err != nil {
 		t.Fatalf("control.Open: %v", err)
 	}
@@ -542,7 +542,7 @@ func TestAuditEventHTTPVerticalCapturesAuthenticatedTokenCreationWithoutSecrets(
 	if err != nil {
 		t.Fatalf("auth.NewStoreWithOptions: %v", err)
 	}
-	browserAuthenticator, err := auth.NewBearerTokenAuthenticator(
+	browserAuthenticator, err := newTestBearerTokenAuthenticator(
 		[]byte(adminIntegrationBearerToken),
 		browserGateTenantID,
 		browserGateOwnerID,
@@ -556,7 +556,7 @@ func TestAuditEventHTTPVerticalCapturesAuthenticatedTokenCreationWithoutSecrets(
 		Indexes:                    database,
 		IngestionTokens:            tokenStore,
 		AuditEvents:                auditStore,
-		BrowserAuthenticator:       browserAuthenticator,
+		IdentityAuthenticator:      adaptTestBrowserAuthenticator(browserAuthenticator),
 		WebUI:                      testUI(),
 		TenantID:                   browserGateTenantID,
 		OwnerID:                    browserGateOwnerID,
@@ -691,7 +691,7 @@ func TestAuditEventHTTPVerticalCapturesAuthenticatedTokenCreationWithoutSecrets(
 
 	rows, err := database.SQLDB().QueryContext(
 		ctx,
-		`SELECT name FROM pragma_table_info('audit_events') ORDER BY cid`,
+		`SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='audit_events' ORDER BY ordinal_position`,
 	)
 	if err != nil {
 		t.Fatalf("inspect audit event columns: %v", err)
@@ -830,7 +830,7 @@ func TestAuditEventListClampsDefaultPageSizeToServerMaximum(t *testing.T) {
 		SearchJobs:                 &fakeSearchJobs{},
 		Indexes:                    fakeIndexCatalog{},
 		AuditEvents:                service,
-		BrowserAuthenticator:       testSearchInspectionAuthenticator(t),
+		IdentityAuthenticator:      adaptTestBrowserAuthenticator(testSearchInspectionAuthenticator(t)),
 		WebUI:                      testUI(),
 		TenantID:                   browserGateTenantID,
 		OwnerID:                    browserGateOwnerID,
@@ -862,12 +862,7 @@ func TestAuditEventListMapsStorageFailureAndAdvertisesManagedFeature(t *testing.
 		t.Fatalf("corrupt storage status = %d, body = %s", response.Code, response.Body.String())
 	}
 
-	bootstrap := postProto(
-		t,
-		handler,
-		"/api/system/bootstrap",
-		&opensplunk.GetSystemBootstrapRequest{},
-	)
+	bootstrap := postProtoHeaders(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 	if bootstrap.Code != http.StatusOK {
 		t.Fatalf("bootstrap status = %d, body = %s", bootstrap.Code, bootstrap.Body.String())
 	}
@@ -878,17 +873,17 @@ func TestAuditEventListMapsStorageFailureAndAdvertisesManagedFeature(t *testing.
 	}
 
 	disabled := newTestHandler(t, Config{
-		SearchJobs:           &fakeSearchJobs{},
-		Indexes:              fakeIndexCatalog{},
-		BrowserAuthenticator: testSearchInspectionAuthenticator(t),
-		WebUI:                testUI(),
-		TenantID:             browserGateTenantID,
-		OwnerID:              browserGateOwnerID,
+		SearchJobs:            &fakeSearchJobs{},
+		Indexes:               fakeIndexCatalog{},
+		IdentityAuthenticator: adaptTestBrowserAuthenticator(testSearchInspectionAuthenticator(t)),
+		WebUI:                 testUI(),
+		TenantID:              browserGateTenantID,
+		OwnerID:               browserGateOwnerID,
 		Bootstrap: BootstrapConfig{Features: []opensplunk.ServerFeature{
 			opensplunk.ServerFeature_SERVER_FEATURE_AUDIT_SEARCH,
 		}},
 	})
-	disabledBootstrap := postProto(t, disabled, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
+	disabledBootstrap := postProtoHeaders(t, disabled, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 	unmarshalResponse(t, disabledBootstrap, &decoded)
 	if slices.Contains(decoded.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_AUDIT_SEARCH) {
 		t.Fatalf("unconfigured handler advertised audit search: %v", decoded.GetFeatures())
@@ -940,7 +935,7 @@ func newAuditTestHandler(t *testing.T, service AuditEvents) *Handler {
 		SearchJobs:                 &fakeSearchJobs{},
 		Indexes:                    fakeIndexCatalog{},
 		AuditEvents:                service,
-		BrowserAuthenticator:       testSearchInspectionAuthenticator(t),
+		IdentityAuthenticator:      adaptTestBrowserAuthenticator(testSearchInspectionAuthenticator(t)),
 		WebUI:                      testUI(),
 		TenantID:                   browserGateTenantID,
 		OwnerID:                    browserGateOwnerID,

@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
@@ -18,6 +19,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport/knowledgecompat"
 )
 
 type statsWildcardTestExecutor struct {
@@ -352,11 +354,7 @@ func TestStatsWildcardExpansionPrivateAuthorityParticipatesInMetadataCapacity(t 
 }
 
 func TestKnowledgeAdmissionDiscoversGeneratedStatsWildcardField(t *testing.T) {
-	resolver, appID := newCalculatedFieldKnowledgeResolver(
-		t,
-		"tenant",
-		"knowledge_latency",
-	)
+	resolver, appID := newCalculatedFieldKnowledgeResolver(t)
 	executor := &statsWildcardTestExecutor{inventoryFields: []string{"knowledge_latency"}}
 	manager := newTestManager(t, Config{
 		Executor:          executor,
@@ -402,12 +400,11 @@ func TestKnowledgeAdmissionDiscoversGeneratedStatsWildcardField(t *testing.T) {
 
 func newCalculatedFieldKnowledgeResolver(
 	t *testing.T,
-	tenantID string,
-	destination string,
 ) (KnowledgeResolver, string) {
+	const tenantID, destination = "tenant", "knowledge_latency"
 	t.Helper()
 	ctx := context.Background()
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.db"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
 	}
@@ -424,6 +421,7 @@ func newCalculatedFieldKnowledgeResolver(
 	}); err != nil {
 		t.Fatalf("CreateIndex(main): %v", err)
 	}
+	knowledgecompat.BindIndexes(t, database.GORMDB(), 1, "main")
 	appID := "app_aaaaaaaaaaaaaaaaaaaaaA"
 	appCatalog, err := control.NewAppCatalog(database, control.AppCatalogOptions{
 		CursorKey: testCursorKey,
@@ -434,7 +432,7 @@ func newCalculatedFieldKnowledgeResolver(
 	if err != nil {
 		t.Fatalf("NewAppCatalog(): %v", err)
 	}
-	if _, err := appCatalog.CreateApp(ctx, control.AppAccessScope{TenantID: tenantID}, control.AppDefinition{
+	if _, err := appCatalog.CreateApp(ctx, control.AppAccessScope{OrganizationID: 1, TenantID: tenantID}, control.AppDefinition{
 		Slug: "search-app", DisplayName: "Search App",
 	}); err != nil {
 		t.Fatalf("CreateApp(): %v", err)
@@ -474,7 +472,7 @@ func newCalculatedFieldKnowledgeResolver(
 			},
 		},
 	}
-	if _, err := writer.Create(actorContext, knowledgecatalog.WriteScope{
+	if _, err := writer.Create(actorContext, knowledgecatalog.WriteScope{OrganizationID: 1,
 		TenantID: tenantID, OwnerID: "owner", WritableAppIDs: []string{appID},
 	}, &opensplunk.CreateKnowledgeObjectRequest{
 		Definition:      definition,
@@ -491,7 +489,18 @@ func newCalculatedFieldKnowledgeResolver(
 	if err != nil {
 		t.Fatalf("knowledgecatalog.NewResolver(): %v", err)
 	}
-	return resolver, appID
+	// Freeze the valid catalog authority outside the runtime-budget assertions.
+	// Those tests measure inventory+execution, not PostgreSQL fixture scheduling.
+	frozen, err := resolver.Resolve(ctx, knowledgecatalog.ResolutionScope{OrganizationID: 1, TenantID: tenantID, PrincipalID: "owner", AppID: appID, EffectiveAuthorizedIndexes: []string{"main"}})
+	if err != nil {
+		t.Fatalf("resolve calculated fixture: %v", err)
+	}
+	return knowledgeResolverFunc(func(_ context.Context, scope knowledgecatalog.ResolutionScope) (knowledgecatalog.Resolution, error) {
+		if scope.OrganizationID != 1 || scope.TenantID != tenantID || scope.PrincipalID != "owner" || scope.AppID != appID {
+			return knowledgecatalog.Resolution{}, ErrKnowledgeUnavailable
+		}
+		return frozen, nil
+	}), appID
 }
 
 func TestStatsWildcardInventoryAndSearchShareOneRuntimeBudget(t *testing.T) {
@@ -524,11 +533,7 @@ func TestStatsWildcardInventoryAndSearchShareOneRuntimeBudget(t *testing.T) {
 	})
 
 	t.Run("knowledge", func(t *testing.T) {
-		resolver, appID := newCalculatedFieldKnowledgeResolver(
-			t,
-			"tenant",
-			"knowledge_latency",
-		)
+		resolver, appID := newCalculatedFieldKnowledgeResolver(t)
 		executor := &statsWildcardTestExecutor{
 			inventoryDelay:  inventoryDelay,
 			inventoryFields: []string{"knowledge_latency"},
@@ -609,11 +614,7 @@ func TestExhaustedStatsWildcardRuntimeBudgetPreventsFinalExecutionAndAdmission(t
 	})
 
 	t.Run("knowledge pre-journal", func(t *testing.T) {
-		resolver, appID := newCalculatedFieldKnowledgeResolver(
-			t,
-			"tenant",
-			"knowledge_latency",
-		)
+		resolver, appID := newCalculatedFieldKnowledgeResolver(t)
 		executor := &statsWildcardTestExecutor{
 			inventoryDelay:  inventoryDelay,
 			inventoryFields: []string{"knowledge_latency"},

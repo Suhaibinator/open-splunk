@@ -174,7 +174,7 @@ unsynchronized wall clocks.
 
 Exact durable batch lookup precedes mutable policy and quota. Terminal results
 replay exactly; pending ClickHouse work resumes; a fresh batch charges in the
-same serializable SQLite transaction that establishes batch identity,
+same serializable PostgreSQL transaction that establishes batch identity,
 visibility, and outbox work. Concurrent duplicates, ambiguous inserts,
 restart, and stream takeover therefore cannot double-charge inside the retained
 replay horizon.
@@ -379,8 +379,8 @@ after restart.
 
 Server shutdown separately stops new admission, force-seals accepted
 ungrouped batches, and drains write groups within its bounded shutdown context
-before closing SQLite or ClickHouse. Any work that does not finish remains in
-SQLite with its sealed membership and outbox, so restart resumes ambiguous
+before closing PostgreSQL or ClickHouse. Any work that does not finish remains in
+PostgreSQL with its sealed membership and outbox, so restart resumes ambiguous
 groups first, then ready groups, then ungrouped batches. An expired sparse
 linger deadline is durable and fires immediately after restart rather than
 starting a new delay.

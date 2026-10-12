@@ -243,7 +243,7 @@ func TestHECOperationalServiceRequiresBrowserAuthentication(t *testing.T) {
 		SavedSearches: &fakeSavedSearches{},
 		WebUI:         testUI(),
 	})
-	if err == nil || !strings.Contains(err.Error(), "administrative services require browser authentication") {
+	if err == nil || !strings.Contains(err.Error(), "user identity and resource authorization are required") {
 		t.Fatalf("NewHandler HEC operations error = %v", err)
 	}
 }
@@ -253,10 +253,10 @@ func newHECOperationsHTTPHandler(
 	service HECOperationalSnapshotter,
 ) *Handler {
 	t.Helper()
-	authenticator, err := auth.NewBearerTokenAuthenticator(
+	authenticator, err := newTestBearerTokenAuthenticator(
 		[]byte(hecOperationsAdministratorToken),
 		"hec-tenant",
-		"hec-owner",
+		"1004",
 		auth.BrowserRoleAdministrator,
 	)
 	if err != nil {
@@ -266,10 +266,10 @@ func newHECOperationsHTTPHandler(
 		SearchJobs:                 &fakeSearchJobs{},
 		Indexes:                    fakeIndexCatalog{},
 		HECOperations:              service,
-		BrowserAuthenticator:       authenticator,
+		IdentityAuthenticator:      adaptTestBrowserAuthenticator(authenticator),
 		WebUI:                      testUI(),
 		TenantID:                   "hec-tenant",
-		OwnerID:                    "hec-owner",
+		OwnerID:                    "1004",
 		AdministrativeAllowedHosts: []string{"example.com"},
 	})
 }

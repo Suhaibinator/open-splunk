@@ -35,9 +35,9 @@ func TestRuntimeIngestionTokenLastUseSurvivesHTTPGRPCReopen(t *testing.T) {
 	keyPath := filepath.Join(directory, "server.key")
 	administratorToken := bytes.Repeat(
 		[]byte("a"),
-		auth.MinimumBrowserBearerTokenBytes,
+		runtimeSessionCredentialBytes,
 	)
-	authenticator, err := auth.NewBearerTokenAuthenticator(
+	authenticator, err := newRuntimeSessionAuthenticator(
 		administratorToken,
 		"tenant-a",
 		"administrator",
@@ -47,7 +47,7 @@ func TestRuntimeIngestionTokenLastUseSurvivesHTTPGRPCReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	firstDB, err := control.Open(ctx, dbPath)
+	firstDB, err := openTestControl(t, ctx, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestRuntimeIngestionTokenLastUseSurvivesHTTPGRPCReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	secondDB, err := control.Open(ctx, dbPath)
+	secondDB, err := openTestControl(t, ctx, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,17 +250,17 @@ func newRuntimeTokenHTTPHandlerForTest(
 	t *testing.T,
 	db *control.DB,
 	tokens *auth.Store,
-	authenticator auth.BrowserAuthenticator,
+	authenticator server.IdentityAuthenticator,
 ) *server.Handler {
 	t.Helper()
 	config := runtimeServerConfig()
 	config.Indexes = db
 	config.IngestionTokens = tokens
-	config.BrowserAuthenticator = authenticator
+	config.IdentityAuthenticator = authenticator
 	config.AdministrativeAllowedHosts = []string{"127.0.0.1"}
 	config.TenantID = "tenant-a"
 	config.OwnerID = "administrator"
-	handler, err := server.NewHandler(config)
+	handler, err := newRuntimeTestHandler(config)
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}

@@ -1,9 +1,9 @@
 import type { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 
 import {
-  getAdministratorBearerToken,
-  isAdministratorRoutePath,
-} from "./administrator-session";
+  currentOrganizationId,
+  reportSessionUnauthorized,
+} from "./identity-session";
 
 export const PROTOBUF_CONTENT_TYPE = "application/x-protobuf";
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -19,8 +19,6 @@ export interface ProtobufRoute<TRequest, TResponse> {
   readonly path: `/${string}`;
   readonly request: ProtobufCodec<TRequest>;
   readonly response: ProtobufCodec<TResponse>;
-  /** Administrator routes receive the current in-memory bearer credential. */
-  readonly authorization: "none" | "administrator";
   /** Optional wire-size ceiling enforced before this route's decoder runs. */
   readonly maximumResponseBytes?: number;
 }
@@ -138,7 +136,6 @@ export function defineProtobufRoute<TRequest, TResponse>(
     path,
     request,
     response,
-    authorization: isAdministratorRoutePath(path) ? "administrator" : "none",
     ...(options.maximumResponseBytes === undefined
       ? {}
       : { maximumResponseBytes: options.maximumResponseBytes }),
@@ -149,11 +146,11 @@ function trimTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
-function withoutAuthorization(
+function sessionHeaders(
   headers: Readonly<Record<string, string>>,
 ): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(headers).filter(([name]) => name.toLowerCase() !== "authorization"),
+    Object.entries(headers).filter(([name]) => !["authorization", "x-opensplunk-organization-id"].includes(name.toLowerCase())),
   );
 }
 
@@ -305,11 +302,6 @@ export class ProtobufTransport {
     request: TRequest,
     options: ProtobufRequestOptions = {},
   ): Promise<TResponse> {
-    const administratorRoute = isAdministratorRoutePath(route.path);
-    const expectedAuthorization = administratorRoute ? "administrator" : "none";
-    if (route.authorization !== expectedAuthorization) {
-      throw new TypeError("Protobuf route authorization disagrees with its registered path");
-    }
     const timeoutMs = options.timeoutMs ?? this.timeoutMs;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       throw new RangeError("Request timeout must be a positive number of milliseconds");
@@ -331,23 +323,15 @@ export class ProtobufTransport {
       }
 
       const requestBytes = route.request.encode(request).finish();
-      const administratorToken = administratorRoute
-        ? getAdministratorBearerToken()
-        : null;
-      const defaultHeaders = administratorRoute
-        ? withoutAuthorization(this.defaultHeaders)
-        : this.defaultHeaders;
-      const requestHeaders = administratorRoute
-        ? withoutAuthorization(options.headers ?? {})
-        : (options.headers ?? {});
+      const organizationId = currentOrganizationId();
+      const defaultHeaders = sessionHeaders(this.defaultHeaders);
+      const requestHeaders = sessionHeaders(options.headers ?? {});
       const response = await this.fetchImplementation(url, {
         method: "POST",
         headers: {
           ...defaultHeaders,
           ...requestHeaders,
-          ...(administratorToken === null
-            ? {}
-            : { Authorization: `Bearer ${administratorToken}` }),
+          ...(organizationId === null ? {} : { "X-OpenSplunk-Organization-ID": organizationId.toString() }),
           Accept: PROTOBUF_CONTENT_TYPE,
           "Content-Type": PROTOBUF_CONTENT_TYPE,
         },
@@ -358,6 +342,7 @@ export class ProtobufTransport {
       });
 
       if (!response.ok) {
+        if (response.status === 401) reportSessionUnauthorized();
         let responseBody = "";
         try {
           const responseBytes = await readBoundedResponseBytes(

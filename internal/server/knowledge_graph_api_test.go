@@ -35,7 +35,7 @@ func knowledgeGraphHTTPAuthority(
 func knowledgeGraphHTTPScopes() knowledgeScopes {
 	apps := []string{knowledgeHTTPAppID}
 	return knowledgeScopes{
-		read: knowledgecatalog.ReadScope{
+		read: knowledgecatalog.ReadScope{OrganizationID: 1,
 			TenantID:       knowledgeBoundaryTenantID,
 			OwnerID:        knowledgeBoundaryOwnerID,
 			ReadableAppIDs: append([]string(nil), apps...),
@@ -248,7 +248,7 @@ func TestKnowledgeGraphConverterRejectsUntrustedPageAuthorityAndShape(
 			page.Edges[0].Source = page.ResolvedObject
 		}},
 		{name: "hidden target", mutate: func(page *knowledgecatalog.DependencyPage) {
-			page.Edges[0].TargetCurrent.OwnerID = "owner-other"
+			page.Edges[0].TargetCurrent.OwnerID = "1110"
 		}},
 		{name: "unsupported role", mutate: func(page *knowledgecatalog.DependencyPage) {
 			page.Edges[0].Role = opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_UNSPECIFIED

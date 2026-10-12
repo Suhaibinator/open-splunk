@@ -14,12 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/server"
+	"google.golang.org/protobuf/proto"
 )
 
 type stubControlAppCatalog struct {
@@ -200,7 +199,7 @@ func TestRuntimeAppCatalogConvertsPresenceAndDetachesValues(t *testing.T) {
 			scope control.AppAccessScope,
 			definition control.AppDefinition,
 		) (control.AppWorkspace, error) {
-			if scope != (control.AppAccessScope{TenantID: "tenant-a"}) {
+			if scope != (control.AppAccessScope{OrganizationID: 1, TenantID: "tenant-a"}) {
 				t.Fatalf("scope = %#v", scope)
 			}
 			captured = definition
@@ -210,9 +209,9 @@ func TestRuntimeAppCatalogConvertsPresenceAndDetachesValues(t *testing.T) {
 	adapter := &runtimeAppCatalog{catalog: backend}
 	got, err := adapter.CreateApp(
 		context.Background(),
-		server.AppAdministrationScope{
+		server.AppAdministrationScope{OrganizationID: 1,
 			TenantID: "tenant-a",
-			ActorID:  "administrator",
+			ActorID:  "1",
 		},
 		input,
 	)
@@ -341,7 +340,7 @@ func TestRuntimeAppCatalogListMapsCursorRevisionFiltersAndResult(t *testing.T) {
 	adapter := &runtimeAppCatalog{catalog: backend}
 	got, err := adapter.ListApps(
 		context.Background(),
-		server.AppAdministrationScope{TenantID: "tenant-a"},
+		server.AppAdministrationScope{OrganizationID: 1, TenantID: "tenant-a"},
 		request,
 	)
 	if err != nil {
@@ -670,7 +669,7 @@ func TestRuntimeAppCatalogMapsSortStateAndDeleteArguments(t *testing.T) {
 	adapter := &runtimeAppCatalog{catalog: backend}
 	if _, err := adapter.SetAppState(
 		context.Background(),
-		server.AppAdministrationScope{TenantID: "tenant-a"},
+		server.AppAdministrationScope{OrganizationID: 1, TenantID: "tenant-a"},
 		server.AppAdministrationSelector{Slug: "alpha"},
 		7,
 		server.AppAdministrationStateArchived,
@@ -683,9 +682,9 @@ func TestRuntimeAppCatalogMapsSortStateAndDeleteArguments(t *testing.T) {
 	const confirmation = " Alpha \n"
 	deleted, err := adapter.DeleteApp(
 		context.Background(),
-		server.AppAdministrationScope{
+		server.AppAdministrationScope{OrganizationID: 1,
 			TenantID: "tenant-a",
-			ActorID:  "administrator",
+			ActorID:  "1",
 		},
 		server.AppAdministrationSelector{
 			AppID: "app_000000000000000000000A",
@@ -813,7 +812,7 @@ func TestRuntimeAppCatalogPersistsAcrossReopenAndBorrowsControlDB(t *testing.T) 
 	dbPath := filepath.Join(directory, "control.db")
 	keyPath := filepath.Join(directory, "server.key")
 
-	firstDB, err := control.Open(ctx, dbPath)
+	firstDB, err := openTestControl(t, ctx, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -824,9 +823,9 @@ func TestRuntimeAppCatalogPersistsAcrossReopenAndBorrowsControlDB(t *testing.T) 
 	}
 	firstCreated, err := first.CreateApp(
 		ctx,
-		server.AppAdministrationScope{
+		server.AppAdministrationScope{OrganizationID: 1,
 			TenantID: "tenant-a",
-			ActorID:  "administrator",
+			ActorID:  "1",
 		},
 		server.AppAdministrationDefinition{
 			Slug:        "alpha",
@@ -839,7 +838,7 @@ func TestRuntimeAppCatalogPersistsAcrossReopenAndBorrowsControlDB(t *testing.T) 
 	}
 	if _, err := first.CreateApp(
 		ctx,
-		server.AppAdministrationScope{TenantID: "tenant-a"},
+		server.AppAdministrationScope{OrganizationID: 1, TenantID: "tenant-a"},
 		server.AppAdministrationDefinition{
 			Slug:        "beta",
 			DisplayName: "Beta",
@@ -850,7 +849,7 @@ func TestRuntimeAppCatalogPersistsAcrossReopenAndBorrowsControlDB(t *testing.T) 
 	}
 	if _, err := first.GetApp(
 		ctx,
-		server.AppAdministrationScope{TenantID: "tenant-b"},
+		server.AppAdministrationScope{OrganizationID: 1, TenantID: "tenant-b"},
 		server.AppAdministrationSelector{AppID: firstCreated.AppID},
 	); !errors.Is(err, server.ErrAppAdministrationNotFound) {
 		_ = firstDB.Close()
@@ -858,7 +857,7 @@ func TestRuntimeAppCatalogPersistsAcrossReopenAndBorrowsControlDB(t *testing.T) 
 	}
 	firstPage, err := first.ListApps(
 		ctx,
-		server.AppAdministrationScope{TenantID: "tenant-a"},
+		server.AppAdministrationScope{OrganizationID: 1, TenantID: "tenant-a"},
 		server.AppAdministrationListRequest{
 			PageSize: 1,
 			SortBy:   server.AppAdministrationSortDisplayName,
@@ -884,7 +883,7 @@ func TestRuntimeAppCatalogPersistsAcrossReopenAndBorrowsControlDB(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	secondDB, err := control.Open(ctx, dbPath)
+	secondDB, err := openTestControl(t, ctx, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -904,7 +903,7 @@ func TestRuntimeAppCatalogPersistsAcrossReopenAndBorrowsControlDB(t *testing.T) 
 	revision := firstPage.CatalogRevision
 	secondPage, err := second.ListApps(
 		ctx,
-		server.AppAdministrationScope{TenantID: "tenant-a"},
+		server.AppAdministrationScope{OrganizationID: 1, TenantID: "tenant-a"},
 		server.AppAdministrationListRequest{
 			PageSize:                1,
 			PageCursor:              firstPage.NextPageCursor,
@@ -923,7 +922,7 @@ func TestRuntimeAppCatalogPersistsAcrossReopenAndBorrowsControlDB(t *testing.T) 
 	}
 	reopened, err := second.GetApp(
 		ctx,
-		server.AppAdministrationScope{TenantID: "tenant-a"},
+		server.AppAdministrationScope{OrganizationID: 1, TenantID: "tenant-a"},
 		server.AppAdministrationSelector{AppID: firstCreated.AppID},
 	)
 	if err != nil {
@@ -934,7 +933,7 @@ func TestRuntimeAppCatalogPersistsAcrossReopenAndBorrowsControlDB(t *testing.T) 
 	}
 	archived, err := second.SetAppState(
 		ctx,
-		server.AppAdministrationScope{TenantID: "tenant-a"},
+		server.AppAdministrationScope{OrganizationID: 1, TenantID: "tenant-a"},
 		server.AppAdministrationSelector{AppID: firstCreated.AppID},
 		reopened.Version,
 		server.AppAdministrationStateArchived,
@@ -944,7 +943,7 @@ func TestRuntimeAppCatalogPersistsAcrossReopenAndBorrowsControlDB(t *testing.T) 
 	}
 	if _, err := second.DeleteApp(
 		ctx,
-		server.AppAdministrationScope{TenantID: "tenant-a"},
+		server.AppAdministrationScope{OrganizationID: 1, TenantID: "tenant-a"},
 		server.AppAdministrationSelector{AppID: firstCreated.AppID},
 		archived.Version,
 		" alpha ",
@@ -953,7 +952,7 @@ func TestRuntimeAppCatalogPersistsAcrossReopenAndBorrowsControlDB(t *testing.T) 
 	}
 	deleted, err := second.DeleteApp(
 		ctx,
-		server.AppAdministrationScope{TenantID: "tenant-a"},
+		server.AppAdministrationScope{OrganizationID: 1, TenantID: "tenant-a"},
 		server.AppAdministrationSelector{AppID: firstCreated.AppID},
 		archived.Version,
 		"alpha",
@@ -973,8 +972,8 @@ func TestRuntimeAppCatalogEndToEndHTTPAndCursorReopen(t *testing.T) {
 	directory := t.TempDir()
 	dbPath := filepath.Join(directory, "control.db")
 	keyPath := filepath.Join(directory, "server.key")
-	bearerToken := bytes.Repeat([]byte("a"), auth.MinimumBrowserBearerTokenBytes)
-	authenticator, err := auth.NewBearerTokenAuthenticator(
+	bearerToken := bytes.Repeat([]byte("a"), runtimeSessionCredentialBytes)
+	authenticator, err := newRuntimeSessionAuthenticator(
 		bearerToken,
 		"tenant-a",
 		"administrator",
@@ -984,7 +983,7 @@ func TestRuntimeAppCatalogEndToEndHTTPAndCursorReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	firstDB, err := control.Open(ctx, dbPath)
+	firstDB, err := openTestControl(t, ctx, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1126,7 +1125,7 @@ func TestRuntimeAppCatalogEndToEndHTTPAndCursorReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	secondDB, err := control.Open(ctx, dbPath)
+	secondDB, err := openTestControl(t, ctx, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1207,7 +1206,7 @@ func newRuntimeAppHTTPHandlerForTest(
 	t *testing.T,
 	catalog *runtimeAppCatalog,
 	cursorKey []byte,
-	authenticator auth.BrowserAuthenticator,
+	authenticator server.IdentityAuthenticator,
 	auditEvents server.AuditEvents,
 ) *server.Handler {
 	t.Helper()
@@ -1215,12 +1214,12 @@ func newRuntimeAppHTTPHandlerForTest(
 	config.AppAdmin = catalog
 	config.AppCatalog = catalog
 	config.AppCursorKey = cursorKey
-	config.BrowserAuthenticator = authenticator
+	config.IdentityAuthenticator = authenticator
 	config.TenantID = "tenant-a"
 	config.OwnerID = "administrator"
 	config.AdministrativeAllowedHosts = []string{"127.0.0.1"}
 	config.AuditEvents = auditEvents
-	handler, err := server.NewHandler(config)
+	handler, err := newRuntimeTestHandler(config)
 	clear(cursorKey)
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
@@ -1248,10 +1247,7 @@ func postRuntimeAppProto(
 	)
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	if len(bearerToken) != 0 {
-		request.Header.Set(
-			"Authorization",
-			"Bearer "+string(bearerToken),
-		)
+		request.AddCookie(&http.Cookie{Name: "session_token", Value: string(bearerToken), Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -1291,7 +1287,7 @@ func getRuntimeAppBootstrap(
 		handler,
 		"/api/system/bootstrap",
 		&opensplunk.GetSystemBootstrapRequest{},
-		nil,
+		bytes.Repeat([]byte("a"), runtimeSessionCredentialBytes),
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf(

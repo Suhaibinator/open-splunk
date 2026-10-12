@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { installBrowserSession, requireBrowserSessionRequest } from "./browser-session";
 
 import {
   expect,
@@ -206,6 +207,10 @@ test.use({
   ignoreHTTPSErrors,
   screenshot: "only-on-failure",
   trace: "retain-on-failure",
+});
+
+test.beforeEach(async ({ context }) => {
+  await installBrowserSession(context, origin);
 });
 
 test("real backend zero-result search renders the empty state", async ({ page }) => {
@@ -1204,8 +1209,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   const stateRequests: SetKnowledgeObjectStateRequest[] = [];
   const deleteRequests: DeleteKnowledgeObjectRequest[] = [];
   const previewRequests: PreviewKnowledgeObjectRequest[] = [];
-  const mutationAuthorizations: string[] = [];
-  const administratorToken = "K".repeat(32);
+  const mutationSessions: boolean[] = [];
   const catalogStateToken = new Uint8Array(32).fill(0x35);
   let malformedValidationResponses = 1;
   let holdNextValidation = true;
@@ -1351,12 +1355,9 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
     },
   );
 
-  function mutationAuthorization(route: Route): void {
-    const authorization = route.request().headers()["authorization"] ?? "";
-    mutationAuthorizations.push(authorization);
-    if (authorization !== `Bearer ${administratorToken}`) {
-      throw new Error(`knowledge mutation omitted its administrator bearer: ${authorization}`);
-    }
+  async function mutationAuthorization(route: Route): Promise<void> {
+    requireBrowserSessionRequest(await route.request().allHeaders());
+    mutationSessions.push(true);
   }
 
   function nextMutationDate(): Date {
@@ -1367,7 +1368,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   await page.route(
     (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/validate",
     async (route) => {
-      mutationAuthorization(route);
+      await mutationAuthorization(route);
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("knowledge Validate request omitted its protobuf body");
       const request = ValidateKnowledgeObjectRequest.decode(wire);
@@ -1434,7 +1435,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   await page.route(
     (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/create",
     async (route) => {
-      mutationAuthorization(route);
+      await mutationAuthorization(route);
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("knowledge Create request omitted its protobuf body");
       const request = CreateKnowledgeObjectRequest.decode(wire);
@@ -1472,7 +1473,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   await page.route(
     (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/update",
     async (route) => {
-      mutationAuthorization(route);
+      await mutationAuthorization(route);
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("knowledge Update request omitted its protobuf body");
       const request = UpdateKnowledgeObjectRequest.decode(wire);
@@ -1505,7 +1506,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   await page.route(
     (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/set-state",
     async (route) => {
-      mutationAuthorization(route);
+      await mutationAuthorization(route);
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("knowledge SetState request omitted its protobuf body");
       const request = SetKnowledgeObjectStateRequest.decode(wire);
@@ -1536,7 +1537,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   await page.route(
     (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/delete",
     async (route) => {
-      mutationAuthorization(route);
+      await mutationAuthorization(route);
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("knowledge Delete request omitted its protobuf body");
       const request = DeleteKnowledgeObjectRequest.decode(wire);
@@ -1559,7 +1560,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   await page.route(
     (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/preview",
     async (route) => {
-      mutationAuthorization(route);
+      await mutationAuthorization(route);
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("knowledge Preview request omitted its protobuf body");
       const request = PreviewKnowledgeObjectRequest.decode(wire);
@@ -1789,12 +1790,10 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   expect(requestedURLs.filter((value) => value.includes("/api/knowledge/"))).toEqual([]);
 
   knowledgeAdvertised = true;
-  await page.goto(new URL("/signin/", origin).href, {
+  await page.goto(adminURL, {
     waitUntil: "domcontentloaded",
     timeout,
   });
-  await page.getByLabel("Administrator bearer token").fill(administratorToken);
-  await page.getByRole("button", { name: "Open administrator session" }).click();
   await expect(page.getByRole("heading", { name: "Administration" })).toBeVisible({ timeout });
   const knowledgeNavigation = page.locator(".admin-sidebar button").filter({
     hasText: "Knowledge Manager",
@@ -2465,9 +2464,9 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
     expectedVersion: 6n,
   });
   expect(deleteRequests[0]?.clientRequestId).toMatch(/^browser-[0-9a-f]{32}$/);
-  expect(mutationAuthorizations).toEqual(Array.from(
+  expect(mutationSessions).toEqual(Array.from(
     { length: 11 },
-    () => `Bearer ${administratorToken}`,
+    () => true,
   ));
   await expect(manager.getByRole("button", { name: /Preview/i })).toHaveCount(0);
   expect(new URL(page.url()).search).toBe("");

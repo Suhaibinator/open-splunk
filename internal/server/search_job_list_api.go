@@ -112,7 +112,7 @@ func (handler *apiHandler) listSearchJobs(
 		}, nil
 	}
 
-	page, operationErr := handler.jobs.ListPageFor(request.Context(), handler.accessScope(), searchjobs.JobListRequest{
+	page, operationErr := handler.jobs.ListPageFor(request.Context(), handler.accessScope(request.Context()), searchjobs.JobListRequest{
 		PageSize:     pageSize,
 		PageToken:    pageToken,
 		IncludeTotal: includeTotal,
@@ -137,7 +137,7 @@ func (handler *apiHandler) listSearchJobs(
 		}
 		retainedByJobID, operationErr = inspector.InspectMany(
 			request.Context(),
-			handler.accessScope(),
+			handler.accessScope(request.Context()),
 			jobIDs,
 		)
 		if contextErr := requestContextFailure(request.Context(), operationErr); contextErr != nil {
@@ -158,8 +158,11 @@ func (handler *apiHandler) listSearchJobs(
 		}
 		job := searchJobListItemAsJob(item)
 		if !handler.validKnowledgeSearchJobProjection(job) ||
-			!validSearchJobListItem(job, handler.accessScope(), managerStates, appID, textMatcher) {
+			!validSearchJobListItem(job, handler.accessScope(request.Context()), managerStates, appID, textMatcher) {
 			return nil, internalError()
+		}
+		if err := handler.authorizeJobSources(request.Context(), job); err != nil {
+			return nil, err
 		}
 		if _, exists := seenIDs[job.ID]; exists {
 			return nil, internalError()
@@ -303,7 +306,7 @@ func (handler *apiHandler) scanDurableSearchJobs(
 ) (string, error) {
 	firstPageToken := ""
 	for {
-		page, err := lister.ListPage(ctx, handler.accessScope(), request)
+		page, err := lister.ListPage(ctx, handler.accessScope(ctx), request)
 		if contextErr := requestContextFailure(ctx, err); contextErr != nil {
 			return "", router.NewHTTPError(http.StatusRequestTimeout, "search job list request was canceled")
 		}
@@ -341,7 +344,7 @@ func (handler *apiHandler) durableSearchJobListItem(
 		return searchartifacts.Record{}, false, err
 	}
 	if !handler.validKnowledgeSearchJobProjection(record.Job) ||
-		!validDurableSearchJobListInvariant(record, handler.accessScope()) {
+		!validDurableSearchJobListInvariant(record, handler.accessScope(ctx)) {
 		return searchartifacts.Record{}, false, internalError()
 	}
 	if len(states) != 0 && !slices.Contains(states, durableSearchJobListState(record)) {
@@ -365,12 +368,12 @@ func (handler *apiHandler) overlayLiveSearchJob(
 		err error
 	)
 	if getter, ok := handler.jobs.(contextualSearchJobGetter); ok {
-		job, err = getter.GetForContext(ctx, handler.accessScope(), record.Job.ID)
+		job, err = getter.GetForContext(ctx, handler.accessScope(ctx), record.Job.ID)
 	} else {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return searchartifacts.Record{}, contextErr
 		}
-		job, err = handler.jobs.GetFor(handler.accessScope(), record.Job.ID)
+		job, err = handler.jobs.GetFor(handler.accessScope(ctx), record.Job.ID)
 	}
 	if errors.Is(err, searchjobs.ErrNotFound) {
 		return record, nil
@@ -381,7 +384,7 @@ func (handler *apiHandler) overlayLiveSearchJob(
 	if contextErr := ctx.Err(); contextErr != nil {
 		return searchartifacts.Record{}, contextErr
 	}
-	if job.ID != record.Job.ID || job.TenantID != record.Job.TenantID || job.OwnerID != record.Job.OwnerID {
+	if job.ID != record.Job.ID || job.TenantID != record.Job.TenantID || job.OwnerID != record.Job.OwnerID || job.OrganizationID != record.Job.OrganizationID {
 		return searchartifacts.Record{}, internalError()
 	}
 	state := durableSearchJobState(job.State)
@@ -401,11 +404,12 @@ func validDurableSearchJobListInvariant(
 	scope searchjobs.AccessScope,
 ) bool {
 	if record.Job.TenantID != scope.TenantID ||
-		(record.Job.OwnerID != scope.OwnerID && record.Visibility != searchartifacts.VisibilityEveryone) ||
+		(!scope.SiteAdministrator && record.Job.OrganizationID != scope.OrganizationID) ||
+		(!scope.SiteAdministrator && record.Job.OwnerID != scope.OwnerID && record.Visibility != searchartifacts.VisibilityEveryone) ||
 		(record.Visibility != searchartifacts.VisibilityPrivate && record.Visibility != searchartifacts.VisibilityEveryone) {
 		return false
 	}
-	validationScope := searchjobs.AccessScope{TenantID: record.Job.TenantID, OwnerID: record.Job.OwnerID}
+	validationScope := searchjobs.AccessScope{TenantID: record.Job.TenantID, OwnerID: record.Job.OwnerID, OrganizationID: record.Job.OrganizationID, SiteAdministrator: scope.SiteAdministrator}
 	return validSearchJobListItem(record.Job, validationScope, nil, nil, nil)
 }
 
@@ -421,6 +425,7 @@ func durableSearchJobListState(record searchartifacts.Record) opensplunk.SearchJ
 
 func durableSearchJobListStates(states []opensplunk.SearchJobState) []searchartifacts.State {
 	result := make([]searchartifacts.State, 0, len(states))
+	hasLiveState := false
 	for _, state := range states {
 		if state == opensplunk.SearchJobState_SEARCH_JOB_STATE_INTERRUPTED {
 			result = append(result, searchartifacts.StateInterrupted)
@@ -428,6 +433,16 @@ func durableSearchJobListStates(states []opensplunk.SearchJobState) []searcharti
 		}
 		if managerState, ok := searchJobListManagerState(state); ok {
 			result = append(result, durableSearchJobState(managerState))
+			hasLiveState = hasLiveState || !managerState.Terminal()
+		}
+	}
+	if hasLiveState {
+		// A durable row can lag the live manager. Scan the bounded nonterminal
+		// partition, then apply the exact state after overlay before counting.
+		for _, state := range []searchartifacts.State{searchartifacts.StateQueued, searchartifacts.StateParsing, searchartifacts.StatePlanning, searchartifacts.StateRunning} {
+			if !slices.Contains(result, state) {
+				result = append(result, state)
+			}
 		}
 	}
 	return result
@@ -458,26 +473,28 @@ func durableSearchJobState(state searchjobs.State) searchartifacts.State {
 
 func searchJobListItemAsJob(item searchjobs.JobListItem) searchjobs.Job {
 	result := searchjobs.Job{
-		ID:                item.ID,
-		Version:           item.Version,
-		OwnerID:           item.OwnerID,
-		TenantID:          item.TenantID,
-		SPL:               item.SPL,
-		NormalizedSPL:     item.NormalizedSPL,
-		RequestedIndexes:  slices.Clone(item.RequestedIndexes),
-		EffectiveIndexes:  slices.Clone(item.EffectiveIndexes),
-		TimeRange:         item.TimeRange,
-		AppID:             item.AppID,
-		Source:            item.Source,
-		Earliest:          item.Earliest,
-		Latest:            item.Latest,
-		IndexTimeCutoff:   item.IndexTimeCutoff,
-		State:             item.State,
-		ScannedRows:       item.ScannedRows,
-		ScannedBytes:      item.ScannedBytes,
-		RowCount:          item.RowCount,
-		ResultBytes:       item.ResultBytes,
-		ResultsTruncated:  item.ResultsTruncated,
+		ID:               item.ID,
+		Version:          item.Version,
+		OwnerID:          item.OwnerID,
+		TenantID:         item.TenantID,
+		OrganizationID:   item.OrganizationID,
+		SPL:              item.SPL,
+		NormalizedSPL:    item.NormalizedSPL,
+		RequestedIndexes: slices.Clone(item.RequestedIndexes),
+		EffectiveIndexes: slices.Clone(item.EffectiveIndexes),
+		TimeRange:        item.TimeRange,
+		AppID:            item.AppID,
+		Source:           item.Source,
+		Earliest:         item.Earliest,
+		Latest:           item.Latest,
+		IndexTimeCutoff:  item.IndexTimeCutoff,
+		State:            item.State,
+		ScannedRows:      item.ScannedRows,
+		ScannedBytes:     item.ScannedBytes,
+		RowCount:         item.RowCount,
+		ResultBytes:      item.ResultBytes,
+		ResultsTruncated: item.ResultsTruncated,
+		CaptureComplete:  item.CaptureComplete, PreviewTruncated: item.PreviewTruncated, CaptureRows: item.CaptureRows, CaptureBytes: item.CaptureBytes,
 		KnowledgeSnapshot: item.KnowledgeSnapshot,
 		CreatedAt:         item.CreatedAt,
 		StartedAt:         item.StartedAt,
@@ -547,7 +564,7 @@ func validSearchJobListItem(
 	appID *string,
 	text *asciifold.Matcher,
 ) bool {
-	if job.OwnerID != scope.OwnerID || job.TenantID != scope.TenantID ||
+	if (!scope.SiteAdministrator && job.OwnerID != scope.OwnerID) || job.TenantID != scope.TenantID ||
 		job.Schema != nil || job.CreatedAt.IsZero() ||
 		strings.TrimSpace(job.ID) != job.ID ||
 		validateBoundedIdentifier(job.ID, maximumSearchJobListJobIDBytes, false) != nil {

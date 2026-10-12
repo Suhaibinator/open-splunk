@@ -60,7 +60,7 @@ func TestSearchTimelineRoundTripScopeAndClippedBuckets(t *testing.T) {
 		if ctx == nil || ctx.Err() != nil {
 			t.Fatalf("timeline context = %v", ctx)
 		}
-		if scope != (searchjobs.AccessScope{TenantID: "tenant-timeline", OwnerID: "owner-timeline"}) {
+		if scope != (searchjobs.AccessScope{OrganizationID: "1", TenantID: "tenant-timeline", OwnerID: "1028", SiteAdministrator: true}) {
 			t.Fatalf("timeline scope = %+v", scope)
 		}
 		if request.SearchJobID != "job-1" || request.MaxBuckets == nil || *request.MaxBuckets != 2 ||
@@ -78,7 +78,7 @@ func TestSearchTimelineRoundTripScopeAndClippedBuckets(t *testing.T) {
 	}
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SearchTimelines: service,
-		WebUI: testUI(), TenantID: "tenant-timeline", OwnerID: "owner-timeline",
+		WebUI: testUI(), TenantID: "tenant-timeline", OwnerID: "1028",
 	})
 	maximum := uint32(2)
 	response := postProto(t, handler, searchTimelinePath, &opensplunk.GetSearchTimelineRequest{
@@ -465,7 +465,7 @@ func TestSearchTimelineAcquiresSerializationAfterAnalysisAndRetainsPermitUntilEn
 	}}
 	handler := &apiHandler{
 		searchTimelines: service, maximumTimelineBuckets: 10,
-		ownerID: "owner", tenantID: "tenant", serializationGate: make(chan struct{}, 1),
+		ownerID: "1008", tenantID: "tenant", serializationGate: make(chan struct{}, 1),
 	}
 	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchTimelinePath, nil)
 	first, err := handler.getSearchTimeline(request, &opensplunk.GetSearchTimelineRequest{SearchJobId: "job"})
@@ -508,7 +508,7 @@ func TestSearchTimelineAnalysisDoesNotBlockSearchResultResponses(t *testing.T) {
 			Rows:   []searchjobs.ResultRow{{Values: []searchjobs.Value{searchjobs.StringValue("hello")}}},
 		}},
 		searchTimelines: service, maximumTimelineBuckets: 10,
-		ownerID: "owner", tenantID: "tenant", serializationGate: make(chan struct{}, 1),
+		ownerID: "1008", tenantID: "tenant", serializationGate: make(chan struct{}, 1),
 	}
 	request := httptest.NewRequestWithContext(ctx, http.MethodPost, searchTimelinePath, nil)
 	type timelineResponse struct {
@@ -576,7 +576,7 @@ func TestSearchTimelineAnalysisErrorsPrecedeSerializationCapacity(t *testing.T) 
 			}}
 			handler := &apiHandler{
 				searchTimelines: service, maximumTimelineBuckets: 10,
-				ownerID: "owner", tenantID: "tenant", serializationGate: make(chan struct{}, 1),
+				ownerID: "1008", tenantID: "tenant", serializationGate: make(chan struct{}, 1),
 			}
 			release, acquired := handler.acquireSerialization()
 			if !acquired {
@@ -600,7 +600,7 @@ func TestSearchTimelineInvalidResultReleasesSerializationPermit(t *testing.T) {
 	}}
 	handler := &apiHandler{
 		searchTimelines: service, maximumTimelineBuckets: 10,
-		ownerID: "owner", tenantID: "tenant", serializationGate: make(chan struct{}, 1),
+		ownerID: "1008", tenantID: "tenant", serializationGate: make(chan struct{}, 1),
 	}
 	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchTimelinePath, nil)
 	response, err := handler.getSearchTimeline(request, &opensplunk.GetSearchTimelineRequest{SearchJobId: "job"})
@@ -613,7 +613,7 @@ func TestSearchTimelineInvalidResultReleasesSerializationPermit(t *testing.T) {
 
 func TestSearchTimelineServiceMaximumAndTypedNilAreValidated(t *testing.T) {
 	for _, maximum := range []uint32{0, maximumSearchTimelineBuckets + 1} {
-		_, err := NewHandler(Config{
+		_, err := newAuthenticatedTestHandler(Config{
 			SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: &fakeSavedSearches{},
 			SearchTimelines: &fakeSearchTimelines{maximum: maximum}, WebUI: testUI(),
 		})
@@ -623,7 +623,7 @@ func TestSearchTimelineServiceMaximumAndTypedNilAreValidated(t *testing.T) {
 	}
 
 	var typedNil *fakeSearchTimelines
-	handler, err := NewHandler(Config{
+	handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: &fakeSavedSearches{},
 		SearchTimelines: typedNil, WebUI: testUI(),
 	})

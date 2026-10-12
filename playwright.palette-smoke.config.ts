@@ -2,7 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 // The instance-palette smoke is driven by `integration/palette_smoke_test.go`,
 // which starts the real browser API handler and static export on a random
-// loopback port and hands the origin and the administrator bearer over the
+// loopback port and hands the origin and the native session cookie over the
 // environment. There is no web server here to start: the Go test owns it.
 const baseURL = process.env.OPEN_SPLUNK_PALETTE_SMOKE_BASE_URL?.trim();
 if (!baseURL) {

@@ -3,8 +3,6 @@ package clickhouse
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +24,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
@@ -64,29 +63,22 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	)
 	defer setupCancel()
 
-	container := "open-splunk-store-" + integrationRandomHex(t, 6)
-	password := integrationRandomHex(t, 24)
-	image, err := testsupport.ResolvePinnedClickHouseImage(
-		os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"),
-	)
+	image, err := testsupport.ResolvePinnedClickHouseImage(os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"))
 	if err != nil {
-		t.Fatalf("resolve pinned ClickHouse integration image: %v", err)
+		t.Fatal(err)
 	}
-	integrationDocker(t, ctx, nil,
-		"run", "--detach", "--rm", "--name", container,
-		"--publish", "127.0.0.1::9000",
-		"--env", "CLICKHOUSE_DB=open_splunk",
-		"--env", "CLICKHOUSE_USER=open_splunk",
-		"--env", "CLICKHOUSE_PASSWORD="+password,
-		"--env", "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
-		image,
-	)
+	fixture, err := testsupport.StartClickHouse(ctx, image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	container, password := fixture.Name, fixture.Password
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cleanupCancel()
-		_ = exec.CommandContext(cleanupCtx, "docker", "rm", "--force", "--volumes", container).Run()
+		if err := fixture.Close(cleanupCtx); err != nil {
+			t.Error(err)
+		}
 	})
-	integrationWaitForClickHouse(t, ctx, container, password)
 
 	migrationPaths, err := filepath.Glob(filepath.Join("..", "..", "migrations", "clickhouse", "[0-9][0-9][0-9][0-9]_*.sql"))
 	if err != nil || len(migrationPaths) == 0 {
@@ -110,12 +102,12 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	config.Addresses = []string{address}
 	config.Username = "open_splunk"
 	config.Password = password
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("open visibility control database: %v", err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatalf("create visibility sequencer: %v", err)
 	}
@@ -498,12 +490,12 @@ func testQuotaDenialAgainstClickHouse(
 	receivedAt time.Time,
 ) {
 	t.Helper()
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "quota.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,11 +514,11 @@ func testQuotaDenialAgainstClickHouse(
 	)
 	if _, err := controlDB.SQLDB().ExecContext(ctx, `
 		INSERT INTO ingestion_tokens (
-			ingestion_token_id, version, name, token_prefix, token_digest,
+			ingestion_token_id, organization_id, issuer_user_id, version, name, token_prefix, token_digest,
 			state, created_at_unix_micro, updated_at_unix_micro,
 			bound_collector_id
-		) VALUES (?, 1, 'quota integration token', 'quota123', zeroblob(32),
-			'active', 1, 1, ?)`, tokenID, collectorID,
+		) VALUES ($1, 1, 42, 1, 'quota integration token', 'quota123', decode(repeat('00',32),'hex'),
+			'active', 1, 1, $2)`, tokenID, collectorID,
 	); err != nil {
 		t.Fatalf("seed quota integration token: %v", err)
 	}
@@ -630,12 +622,12 @@ func testTerminalRejectionAgainstClickHouse(
 	receivedAt time.Time,
 ) {
 	t.Helper()
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "terminal-rejection.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -802,7 +794,7 @@ func testIndexDataDeletionMutationAgainstClickHouse(
 		)
 	}
 
-	controlPath := filepath.Join(t.TempDir(), "physical-deletion-control.sqlite")
+	controlPath := pgtest.DSN(t)
 	controlDB, err := control.Open(ctx, controlPath)
 	if err != nil {
 		t.Fatalf("open physical-deletion control database: %v", err)
@@ -1014,12 +1006,12 @@ func testWriteFreezeDrainsAmbiguousInsert(
 ) {
 	t.Helper()
 
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "freeze-control.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer controlDB.Close()
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1118,7 +1110,7 @@ func testAmbiguousCommittedInsertRecovery(
 ) {
 	t.Helper()
 
-	controlPath := filepath.Join(t.TempDir(), "restart-control.sqlite")
+	controlPath := pgtest.DSN(t)
 	firstControl, err := control.Open(ctx, controlPath)
 	if err != nil {
 		t.Fatalf("open first visibility control database: %v", err)
@@ -1129,7 +1121,7 @@ func testAmbiguousCommittedInsertRecovery(
 			_ = firstControl.Close()
 		}
 	}()
-	firstSequencer, err := visibility.NewSQLite(ctx, firstControl)
+	firstSequencer, err := visibility.NewPostgreSQL(ctx, firstControl)
 	if err != nil {
 		t.Fatalf("create first visibility sequencer: %v", err)
 	}
@@ -1206,7 +1198,7 @@ func testAmbiguousCommittedInsertRecovery(
 	if err := firstControl.SQLDB().QueryRowContext(ctx, `
 		SELECT phase, length(outbox)
 		FROM ingest_visibility_reservations
-		WHERE sequence = ?`, pending.Sequence).Scan(&pendingPhase, &pendingOutboxBytes); err != nil {
+		WHERE sequence = $1`, pending.Sequence).Scan(&pendingPhase, &pendingOutboxBytes); err != nil {
 		t.Fatal(err)
 	}
 	if pendingPhase != "ambiguous" || pendingOutboxBytes == 0 {
@@ -1245,7 +1237,7 @@ func testAmbiguousCommittedInsertRecovery(
 		t.Fatalf("reopen visibility control database: %v", err)
 	}
 	defer func() { _ = secondControl.Close() }()
-	secondSequencer, err := visibility.NewSQLite(ctx, secondControl)
+	secondSequencer, err := visibility.NewPostgreSQL(ctx, secondControl)
 	if err != nil {
 		t.Fatalf("create restarted visibility sequencer: %v", err)
 	}
@@ -4940,15 +4932,6 @@ func buildIntegrationPlanForIndex(
 	return logical
 }
 
-func integrationRandomHex(t *testing.T, size int) string {
-	t.Helper()
-	value := make([]byte, size)
-	if _, err := rand.Read(value); err != nil {
-		t.Fatal(err)
-	}
-	return hex.EncodeToString(value)
-}
-
 func integrationDocker(t *testing.T, ctx context.Context, stdin *bytes.Reader, args ...string) {
 	t.Helper()
 	command := exec.CommandContext(ctx, "docker", args...)
@@ -4959,33 +4942,6 @@ func integrationDocker(t *testing.T, ctx context.Context, stdin *bytes.Reader, a
 	if err != nil {
 		t.Fatalf("docker %s: %v\n%s", strings.Join(args, " "), err, output)
 	}
-}
-
-func integrationWaitForClickHouse(t *testing.T, ctx context.Context, container, password string) {
-	t.Helper()
-	deadline := time.Now().Add(90 * time.Second)
-	stable := 0
-	var last string
-	for time.Now().Before(deadline) {
-		command := exec.CommandContext(ctx, "docker", "exec", container, "clickhouse-client",
-			"--user", "open_splunk", "--password", password, "--query", "SELECT 1")
-		output, err := command.CombinedOutput()
-		last = fmt.Sprintf("%v: %s", err, output)
-		if err == nil && strings.TrimSpace(string(output)) == "1" {
-			stable++
-			if stable == 4 {
-				return
-			}
-		} else {
-			stable = 0
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("wait for ClickHouse: %v", ctx.Err())
-		case <-time.After(500 * time.Millisecond):
-		}
-	}
-	t.Fatalf("ClickHouse did not become ready: %s", last)
 }
 
 func integrationNativeAddress(t *testing.T, ctx context.Context, container string) string {

@@ -13,6 +13,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/featureops"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 )
 
 var requiredTriggers = [...]string{
@@ -129,7 +130,7 @@ func (store *Store) Append(ctx context.Context, event featureops.Event) (Record,
 	}
 	defer func() { store.appendPermit <- struct{}{} }()
 
-	tx, err := store.database.BeginTx(ctx, nil)
+	tx, err := pgmeta.BeginSQL(ctx, store.database, nil)
 	if err != nil {
 		return Record{}, fmt.Errorf("begin feature audit append: %w", err)
 	}
@@ -144,7 +145,7 @@ func (store *Store) Append(ctx context.Context, event featureops.Event) (Record,
 			INSERT INTO feature_operation_audit_tenant_state (
 				tenant_id, first_sequence, next_sequence, retained_count,
 				last_occurred_at_unix_micro
-			) VALUES (?, 1, 1, 0, NULL)
+			) VALUES ($1, 1, 1, 0, NULL)
 			ON CONFLICT (tenant_id) DO NOTHING
 		`, store.tenantID); err != nil {
 			return Record{}, fmt.Errorf("prepare feature audit tenant state: %w", err)
@@ -158,7 +159,7 @@ func (store *Store) Append(ctx context.Context, event featureops.Event) (Record,
 		SELECT first_sequence, next_sequence, retained_count,
 			last_occurred_at_unix_micro
 		FROM feature_operation_audit_tenant_state
-		WHERE tenant_id = ?
+		WHERE tenant_id = $1
 	`, store.tenantID).Scan(&first, &sequence, &count, &last); err != nil {
 		return Record{}, fmt.Errorf("read feature audit tenant state: %w", err)
 	}
@@ -195,7 +196,7 @@ func (store *Store) Append(ctx context.Context, event featureops.Event) (Record,
 		INSERT INTO feature_operation_audit_events (
 			tenant_id, sequence, occurred_at_unix_micro,
 			feature, operation, outcome, items, bytes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`,
 		store.tenantID,
 		sequence,
@@ -216,7 +217,7 @@ func (store *Store) Append(ctx context.Context, event featureops.Event) (Record,
 		SELECT first_sequence, next_sequence, retained_count,
 			last_occurred_at_unix_micro
 		FROM feature_operation_audit_tenant_state
-		WHERE tenant_id = ?
+		WHERE tenant_id = $1
 	`, store.tenantID).Scan(
 		&advancedFirst, &advancedSequence, &advancedCount, &advancedTime,
 	); err != nil {
@@ -260,9 +261,9 @@ func (store *Store) List(ctx context.Context, afterSequence uint64, limit int) (
 	rows, err := store.database.QueryContext(ctx, `
 		SELECT sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes
 		FROM feature_operation_audit_events
-		WHERE tenant_id = ? AND sequence > ?
+		WHERE tenant_id = $1 AND sequence > $2
 		ORDER BY sequence ASC
-		LIMIT ?
+		LIMIT $3
 	`, store.tenantID, int64(afterSequence), limit)
 	if err != nil {
 		return nil, fmt.Errorf("list feature audit events: %w", err)

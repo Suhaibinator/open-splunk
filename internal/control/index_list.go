@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"fortio.org/safecast"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"gorm.io/gorm"
 )
 
@@ -56,13 +57,14 @@ type IndexListCursor struct {
 
 // IndexListRequest defines one bounded, revision-stable metadata page.
 type IndexListRequest struct {
-	PageSize     uint32
-	IncludeTotal bool
-	StateFilters []IndexState
-	TextFilter   *string
-	SortBy       IndexSortBy
-	Direction    IndexSortDirection
-	Cursor       *IndexListCursor
+	AuthorizedIndexIDs []string
+	PageSize           uint32
+	IncludeTotal       bool
+	StateFilters       []IndexState
+	TextFilter         *string
+	SortBy             IndexSortBy
+	Direction          IndexSortDirection
+	Cursor             *IndexListCursor
 }
 
 // IndexListResult contains detached rows and the next trusted keyset
@@ -76,13 +78,14 @@ type IndexListResult struct {
 }
 
 type normalizedIndexListRequest struct {
-	pageSize     uint32
-	includeTotal bool
-	stateFilters []IndexState
-	textFilter   *string
-	sortBy       IndexSortBy
-	direction    IndexSortDirection
-	cursor       *IndexListCursor
+	authorizedIndexIDs []string
+	pageSize           uint32
+	includeTotal       bool
+	stateFilters       []IndexState
+	textFilter         *string
+	sortBy             IndexSortBy
+	direction          IndexSortDirection
+	cursor             *IndexListCursor
 }
 
 type indexCatalogIntegrity struct {
@@ -93,7 +96,7 @@ type indexCatalogIntegrity struct {
 }
 
 // ListIndexPage returns at most one metadata page. The revision, rows, and
-// optional exact total are read in the same SQLite transaction. Any catalog
+// optional exact total are read in the same PostgreSQL transaction. Any catalog
 // mutation before a continuation invalidates it rather than risking
 // duplicates or omissions from mutable sort keys and tombstone visibility.
 func (db *DB) ListIndexPage(
@@ -111,7 +114,7 @@ func (db *DB) ListIndexPage(
 		return IndexListResult{}, err
 	}
 
-	tx := db.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(db.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return IndexListResult{}, fmt.Errorf("begin index list: %w", tx.Error)
 	}
@@ -290,14 +293,24 @@ func normalizeIndexListRequest(
 	if err := ValidateIndexListCursor(cursor, sortBy); err != nil {
 		return normalizedIndexListRequest{}, err
 	}
+	if len(request.AuthorizedIndexIDs) > MaximumPhysicalIndexRecords {
+		return normalizedIndexListRequest{}, ErrInvalidArgument
+	}
+	authorizedIDs := slices.Clone(request.AuthorizedIndexIDs)
+	for _, id := range authorizedIDs {
+		if !validIndexIdentifier(id) {
+			return normalizedIndexListRequest{}, ErrInvalidArgument
+		}
+	}
 	return normalizedIndexListRequest{
-		pageSize:     pageSize,
-		includeTotal: request.IncludeTotal,
-		stateFilters: states,
-		textFilter:   text,
-		sortBy:       sortBy,
-		direction:    direction,
-		cursor:       cursor,
+		authorizedIndexIDs: authorizedIDs,
+		pageSize:           pageSize,
+		includeTotal:       request.IncludeTotal,
+		stateFilters:       states,
+		textFilter:         text,
+		sortBy:             sortBy,
+		direction:          direction,
+		cursor:             cursor,
 	}, nil
 }
 
@@ -341,15 +354,18 @@ func applyIndexListFilters(
 	query *gorm.DB,
 	request normalizedIndexListRequest,
 ) *gorm.DB {
+	if request.authorizedIndexIDs != nil {
+		query = query.Where("index_id IN ?", request.authorizedIndexIDs)
+	}
 	if len(request.stateFilters) != 0 {
 		query = query.Where("state IN ?", request.stateFilters)
 	}
 	if request.textFilter != nil {
 		query = query.Where(
 			`(
-				instr(lower(name), lower(?)) > 0
-				OR instr(lower(display_name), lower(?)) > 0
-				OR instr(lower(description), lower(?)) > 0
+				strpos(lower(name), lower(?)) > 0
+				OR strpos(lower(display_name), lower(?)) > 0
+				OR strpos(lower(description), lower(?)) > 0
 			)`,
 			*request.textFilter,
 			*request.textFilter,

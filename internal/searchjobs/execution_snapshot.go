@@ -19,6 +19,8 @@ import (
 // successfully completed search. It is detached from Manager storage and does
 // not pin the job's retained result rows or schema.
 type ExecutionSnapshot struct {
+	OrganizationID   string
+	CaptureComplete  bool
 	ID               string
 	OwnerID          string
 	TenantID         string
@@ -260,7 +262,7 @@ func (snapshot ExecutionSnapshot) Equal(other ExecutionSnapshot) bool {
 	if !snapshot.ValidKnowledgeAuthority() || !other.ValidKnowledgeAuthority() {
 		return false
 	}
-	equal := snapshot.ID == other.ID &&
+	equal := snapshot.CaptureComplete == other.CaptureComplete && snapshot.ID == other.ID &&
 		snapshot.OwnerID == other.OwnerID &&
 		snapshot.TenantID == other.TenantID &&
 		snapshot.AppID == other.AppID &&
@@ -304,7 +306,7 @@ func (manager *Manager) CompletedExecutionSnapshotFor(ctx context.Context, acces
 		return ExecutionSnapshot{}, ErrNotFound
 	}
 
-	entry, err := manager.lockEntryForAccess(access, id, true, func() error { return ctx.Err() })
+	entry, err := manager.lockEntryForAccess(access, id, true, func() error { return ctx.Err() }, ctx)
 	if err != nil {
 		return ExecutionSnapshot{}, err
 	}
@@ -342,6 +344,8 @@ func (manager *Manager) executionSnapshotLocked(
 		return ExecutionSnapshot{}, executionResultAuthority{}, ErrResultsUnavailable
 	}
 	snapshot := ExecutionSnapshot{
+		CaptureComplete:        entry.job.CaptureComplete,
+		OrganizationID:         strings.Clone(entry.job.OrganizationID),
 		ID:                     strings.Clone(entry.job.ID),
 		OwnerID:                strings.Clone(entry.job.OwnerID),
 		TenantID:               strings.Clone(entry.job.TenantID),
@@ -364,7 +368,7 @@ func (manager *Manager) executionSnapshotLocked(
 		return ExecutionSnapshot{}, executionResultAuthority{}, ErrResultsUnavailable
 	}
 	if entry.resultSchema == nil || entry.resultGeneration == 0 ||
-		uint64(len(entry.rows)) != entry.job.RowCount {
+		(!entry.job.CaptureComplete && uint64(len(entry.rows)) != entry.job.RowCount) {
 		return ExecutionSnapshot{}, executionResultAuthority{}, ErrResultsUnavailable
 	}
 	if hasKnowledge {
@@ -380,7 +384,7 @@ func (manager *Manager) executionSnapshotLocked(
 			jobID:            snapshot.ID,
 			generation:       entry.resultGeneration,
 			schema:           *entry.resultSchema,
-			rowCount:         uint64(len(entry.rows)),
+			rowCount:         entry.job.RowCount,
 			resultsTruncated: entry.job.ResultsTruncated,
 		},
 	)

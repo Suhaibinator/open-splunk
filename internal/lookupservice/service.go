@@ -53,8 +53,10 @@ var (
 
 // Scope is the authenticated, detached authority for one management request.
 type Scope struct {
-	TenantID string
-	OwnerID  string
+	OrganizationID    int64
+	SiteAdministrator bool
+	TenantID          string
+	OwnerID           string
 }
 
 // AssetRepository is the private immutable-asset dependency.
@@ -139,7 +141,7 @@ func (service *Service) Create(ctx context.Context, scope Scope, input *opensplu
 
 // CreateIdempotent checks an existing receipt before create-only validation or
 // CSV parsing, then co-commits physical publication, logical definition,
-// successful audit and receipt in one SQLite transaction.
+// successful audit and receipt in one PostgreSQL transaction.
 func (service *Service) CreateIdempotent(
 	ctx context.Context,
 	scope Scope,
@@ -162,7 +164,7 @@ func (service *Service) CreateIdempotent(
 			return nil, true, requestidempotency.ErrCorrupt
 		}
 		lookup, err := service.catalog.Get(ctx, lookupcatalog.GetRequest{
-			TenantID: scope.TenantID, OwnerID: scope.OwnerID,
+			TenantID: scope.TenantID, OrganizationID: scope.OrganizationID, SiteAdministrator: scope.SiteAdministrator, OwnerID: scope.OwnerID,
 			LookupID: receipt.Target.ID,
 		})
 		if errors.Is(err, lookupcatalog.ErrNotFound) {
@@ -215,7 +217,7 @@ func (service *Service) Get(ctx context.Context, scope Scope, input *opensplunk.
 		return nil, fmt.Errorf("%w: lookup identity or version is invalid", ErrInvalid)
 	}
 	lookup, err := service.catalog.Get(ctx, lookupcatalog.GetRequest{
-		TenantID: scope.TenantID, OwnerID: scope.OwnerID, LookupID: input.GetLookupId(), Version: input.GetVersion(),
+		TenantID: scope.TenantID, OrganizationID: scope.OrganizationID, SiteAdministrator: scope.SiteAdministrator, OwnerID: scope.OwnerID, LookupID: input.GetLookupId(), Version: input.GetVersion(),
 	})
 	if err != nil {
 		return nil, classify(err)
@@ -231,7 +233,7 @@ func (service *Service) Replace(ctx context.Context, scope Scope, input *openspl
 		return nil, fmt.Errorf("%w: replacement identity, version, and definition are required", ErrInvalid)
 	}
 	current, err := service.catalog.GetResolved(ctx, lookupcatalog.GetRequest{
-		TenantID: scope.TenantID, OwnerID: scope.OwnerID, LookupID: input.GetLookupId(),
+		TenantID: scope.TenantID, OrganizationID: scope.OrganizationID, SiteAdministrator: scope.SiteAdministrator, OwnerID: scope.OwnerID, LookupID: input.GetLookupId(),
 	})
 	if err != nil {
 		return nil, classify(err)
@@ -269,7 +271,7 @@ func (service *Service) Replace(ctx context.Context, scope Scope, input *openspl
 	}
 	definition = normalized.Definition
 	lookup, err := service.catalog.Replace(ctx, lookupcatalog.ReplaceRequest{
-		TenantID: scope.TenantID, OwnerID: scope.OwnerID, LookupID: input.GetLookupId(),
+		TenantID: scope.TenantID, OrganizationID: scope.OrganizationID, SiteAdministrator: scope.SiteAdministrator, OwnerID: scope.OwnerID, LookupID: input.GetLookupId(),
 		ExpectedVersion: input.GetExpectedVersion(), Definition: definition, Asset: current.Asset,
 	})
 	if err != nil {
@@ -287,7 +289,7 @@ func (service *Service) SetState(ctx context.Context, scope Scope, input *opensp
 		return nil, fmt.Errorf("%w: state route accepts only ACTIVE or DISABLED with an exact version", ErrInvalid)
 	}
 	lookup, err := service.catalog.SetState(ctx, lookupcatalog.StateRequest{
-		TenantID: scope.TenantID, OwnerID: scope.OwnerID, LookupID: input.GetLookupId(),
+		TenantID: scope.TenantID, OrganizationID: scope.OrganizationID, SiteAdministrator: scope.SiteAdministrator, OwnerID: scope.OwnerID, LookupID: input.GetLookupId(),
 		ExpectedVersion: input.GetExpectedVersion(), State: input.GetState(),
 	})
 	if err != nil {
@@ -304,7 +306,7 @@ func (service *Service) Delete(ctx context.Context, scope Scope, input *opensplu
 		return nil, fmt.Errorf("%w: deletion identity, version, and confirmation are required", ErrInvalid)
 	}
 	current, err := service.catalog.Get(ctx, lookupcatalog.GetRequest{
-		TenantID: scope.TenantID, OwnerID: scope.OwnerID, LookupID: input.GetLookupId(),
+		TenantID: scope.TenantID, OrganizationID: scope.OrganizationID, SiteAdministrator: scope.SiteAdministrator, OwnerID: scope.OwnerID, LookupID: input.GetLookupId(),
 	})
 	if err != nil {
 		return nil, classify(err)
@@ -315,7 +317,7 @@ func (service *Service) Delete(ctx context.Context, scope Scope, input *opensplu
 		return nil, ErrConflict
 	}
 	deleted, err := service.catalog.SetState(ctx, lookupcatalog.StateRequest{
-		TenantID: scope.TenantID, OwnerID: scope.OwnerID, LookupID: input.GetLookupId(),
+		TenantID: scope.TenantID, OrganizationID: scope.OrganizationID, SiteAdministrator: scope.SiteAdministrator, OwnerID: scope.OwnerID, LookupID: input.GetLookupId(),
 		ExpectedVersion: input.GetExpectedVersion(), State: opensplunk.LookupState_LOOKUP_STATE_DELETED,
 	})
 	if err != nil {
@@ -388,8 +390,12 @@ func (service *Service) List(ctx context.Context, scope Scope, input *opensplunk
 	if err != nil {
 		return nil, err
 	}
-	fingerprint := normalized.fingerprint(scope)
+	fingerprint, err := normalized.fingerprint(scope)
+	if err != nil {
+		return nil, err
+	}
 	request := lookupcatalog.ListPageRequest{
+		OrganizationID: scope.OrganizationID, SiteAdministrator: scope.SiteAdministrator,
 		TenantID:      scope.TenantID,
 		OwnerID:       scope.OwnerID,
 		AppID:         normalized.appID,
@@ -473,7 +479,7 @@ func (service *Service) createPublished(
 				finalizeContext,
 				transaction,
 				lookupcatalog.CreateRequest{
-					TenantID:   scope.TenantID,
+					OrganizationID: scope.OrganizationID, SiteAdministrator: scope.SiteAdministrator, TenantID: scope.TenantID,
 					OwnerID:    scope.OwnerID,
 					Definition: definition,
 					Asset:      published,
@@ -514,7 +520,7 @@ func (service *Service) createPublishedIdempotent(
 				finalizeContext,
 				transaction,
 				lookupcatalog.CreateRequest{
-					TenantID: scope.TenantID, OwnerID: scope.OwnerID,
+					OrganizationID: scope.OrganizationID, SiteAdministrator: scope.SiteAdministrator, TenantID: scope.TenantID, OwnerID: scope.OwnerID,
 					Definition: definition, Asset: published,
 				},
 			)
@@ -571,7 +577,7 @@ func (service *Service) replacePublished(
 				finalizeContext,
 				transaction,
 				lookupcatalog.ReplaceRequest{
-					TenantID:        scope.TenantID,
+					TenantID: scope.TenantID, OrganizationID: scope.OrganizationID, SiteAdministrator: scope.SiteAdministrator,
 					OwnerID:         scope.OwnerID,
 					LookupID:        current.Lookup.GetLookupId(),
 					ExpectedVersion: expectedVersion,
@@ -639,7 +645,7 @@ func (service *Service) validate(ctx context.Context, scope Scope) error {
 	if !service.Ready() {
 		return ErrUnavailable
 	}
-	if ctx == nil || !validIdentity(scope.TenantID, 255) || !validIdentity(scope.OwnerID, 255) {
+	if scope.OrganizationID <= 0 || ctx == nil || !validIdentity(scope.TenantID, 255) || !validIdentity(scope.OwnerID, 255) {
 		return fmt.Errorf("%w: authenticated scope is invalid", ErrInvalid)
 	}
 	return ctx.Err()
@@ -710,11 +716,21 @@ func normalizeList(input *opensplunk.ListLookupsRequest) (normalizedListRequest,
 	return result, nil
 }
 
-func (request normalizedListRequest) fingerprint(scope Scope) [sha256.Size]byte {
+func (request normalizedListRequest) fingerprint(scope Scope) ([sha256.Size]byte, error) {
+	organization, err := safecast.Conv[uint64](scope.OrganizationID)
+	if err != nil || organization == 0 {
+		return [sha256.Size]byte{}, fmt.Errorf("%w: organization must be positive", ErrInvalid)
+	}
 	hash := sha256.New()
 	writeFingerprintString(hash, "open-splunk/lookup-list/v1")
 	writeFingerprintString(hash, scope.TenantID)
 	writeFingerprintString(hash, scope.OwnerID)
+	var org [9]byte
+	binary.BigEndian.PutUint64(org[:8], organization)
+	if scope.SiteAdministrator {
+		org[8] = 1
+	}
+	_, _ = hash.Write(org[:])
 	writeFingerprintString(hash, request.appID)
 	writeFingerprintString(hash, request.text)
 	buffer := make([]byte, 8)
@@ -734,7 +750,7 @@ func (request normalizedListRequest) fingerprint(scope Scope) [sha256.Size]byte 
 	}
 	var result [sha256.Size]byte
 	copy(result[:], hash.Sum(nil))
-	return result
+	return result, nil
 }
 
 type stringWriter interface{ Write([]byte) (int, error) }

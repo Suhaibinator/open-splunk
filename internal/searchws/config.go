@@ -97,9 +97,12 @@ type Limits struct {
 // Config defines every resource and liveness bound owned by Service. Zero
 // values select conservative defaults; values above hard ceilings are rejected.
 type Config struct {
-	Searches SearchSnapshots
-	Exports  ExportSnapshots
-	Access   searchjobs.AccessScope
+	AccessForRequest func(*http.Request) (searchjobs.AccessScope, error)
+	AuthorizeJob     func(context.Context, searchjobs.AccessScope, searchjobs.Job) error
+	AuthorizeExport  func(context.Context, searchjobs.AccessScope, exportjobs.Job) error
+	Searches         SearchSnapshots
+	Exports          ExportSnapshots
+	Access           searchjobs.AccessScope
 
 	// CheckOrigin is passed to Gorilla's upgrader. Nil permits requests without
 	// Origin and otherwise requires Origin.Host to equal request.Host.
@@ -139,9 +142,12 @@ type Config struct {
 }
 
 type normalizedConfig struct {
-	searches SearchSnapshots
-	exports  ExportSnapshots
-	access   searchjobs.AccessScope
+	accessForRequest func(*http.Request) (searchjobs.AccessScope, error)
+	authorizeJob     func(context.Context, searchjobs.AccessScope, searchjobs.Job) error
+	authorizeExport  func(context.Context, searchjobs.AccessScope, exportjobs.Job) error
+	searches         SearchSnapshots
+	exports          ExportSnapshots
+	access           searchjobs.AccessScope
 
 	checkOrigin func(*http.Request) bool
 
@@ -169,16 +175,19 @@ type normalizedConfig struct {
 }
 
 func normalizeConfig(config Config) (normalizedConfig, error) {
+	if config.AccessForRequest != nil && (config.AuthorizeJob == nil || config.AuthorizeExport == nil) {
+		return normalizedConfig{}, errors.New("create search websocket: dynamic identity requires current resource authorization")
+	}
 	if nilcheck.IsNil(config.Searches) {
 		return normalizedConfig{}, errors.New("create search websocket: search snapshot reader is required")
 	}
 	if nilcheck.IsNil(config.Exports) {
 		return normalizedConfig{}, errors.New("create search websocket: export snapshot reader is required")
 	}
-	if err := validateIdentity(config.Access.TenantID, "tenant"); err != nil {
+	if err := validateIdentity(config.Access.TenantID, "tenant"); config.AccessForRequest == nil && err != nil {
 		return normalizedConfig{}, err
 	}
-	if err := validateIdentity(config.Access.OwnerID, "owner"); err != nil {
+	if err := validateIdentity(config.Access.OwnerID, "owner"); config.AccessForRequest == nil && err != nil {
 		return normalizedConfig{}, err
 	}
 
@@ -302,11 +311,14 @@ func normalizeConfig(config Config) (normalizedConfig, error) {
 		checkOrigin = sameOrigin
 	}
 	return normalizedConfig{
+		accessForRequest: config.AccessForRequest, authorizeJob: config.AuthorizeJob, authorizeExport: config.AuthorizeExport,
 		searches: config.Searches,
 		exports:  config.Exports,
 		access: searchjobs.AccessScope{
-			TenantID: strings.Clone(config.Access.TenantID),
-			OwnerID:  strings.Clone(config.Access.OwnerID),
+			TenantID:          strings.Clone(config.Access.TenantID),
+			OwnerID:           strings.Clone(config.Access.OwnerID),
+			OrganizationID:    strings.Clone(config.Access.OrganizationID),
+			SiteAdministrator: config.Access.SiteAdministrator,
 		},
 		checkOrigin:        checkOrigin,
 		maximumConnections: connections, maximumSubscriptions: subscriptions, maximumPreviewRows: previewRows,

@@ -6,6 +6,7 @@ import { getFrontendRuntimeConfig } from "@/lib/frontend-runtime-config";
 import { THEME_BOOT_SCRIPT } from "@/lib/theme-preference";
 
 import { ThemeSync } from "./_components/theme-sync";
+import { IdentityProvider } from "./_components/identity-provider";
 
 import "./styles/index.css";
 
@@ -32,7 +33,7 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
-  const { dataMode } = getFrontendRuntimeConfig();
+  const { apiBaseUrl, dataMode } = getFrontendRuntimeConfig();
   return (
     // `data-theme` is written by the boot script below before React hydrates,
     // and the server render cannot know which value that will be, so the
@@ -54,8 +55,10 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
       </head>
       <body>
-        <ThemeSync dataMode={dataMode} />
-        {children}
+        <IdentityProvider apiBaseUrl={apiBaseUrl} dataMode={dataMode}>
+          <ThemeSync dataMode={dataMode} />
+          {children}
+        </IdentityProvider>
       </body>
     </html>
   );

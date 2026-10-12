@@ -22,28 +22,26 @@ const (
 var (
 	publicationIndexAdmissionTenantDriverSQL = fmt.Sprintf(`
 		SELECT
-			CASE WHEN length(CAST(tenant.tenant_id AS BLOB)) BETWEEN 1 AND %[1]d
+			CASE WHEN octet_length(tenant.tenant_id) BETWEEN 1 AND %[1]d
 				THEN tenant.tenant_id ELSE '' END AS tenant_id,
-			length(CAST(tenant.tenant_id AS BLOB)) AS tenant_id_bytes,
+			octet_length(tenant.tenant_id) AS tenant_id_bytes,
 			tenant.catalog_revision,
 			tenant.active_object_count
 		FROM knowledge_catalog_tenants AS tenant
-		     INDEXED BY knowledge_catalog_tenants_nonempty_active_idx
 		WHERE tenant.active_object_count > 0
 		ORDER BY tenant.tenant_id
 		LIMIT %[2]d`, maximumTenantIDBytes, maximumPublicationIndexAdmissionTenants+1)
 
 	publicationIndexAdmissionRegistryDriverSQL = fmt.Sprintf(`
 		SELECT
-			CASE WHEN length(CAST(object.tenant_id AS BLOB)) BETWEEN 1 AND %[1]d
+			CASE WHEN octet_length(object.tenant_id) BETWEEN 1 AND %[1]d
 				THEN object.tenant_id ELSE '' END AS tenant_id,
-			length(CAST(object.tenant_id AS BLOB)) AS tenant_id_bytes,
-			CASE WHEN length(CAST(object.knowledge_object_id AS BLOB)) BETWEEN 1 AND %[2]d
+			octet_length(object.tenant_id) AS tenant_id_bytes,
+			CASE WHEN octet_length(object.knowledge_object_id) BETWEEN 1 AND %[2]d
 				THEN object.knowledge_object_id ELSE '' END AS knowledge_object_id,
-			length(CAST(object.knowledge_object_id AS BLOB)) AS knowledge_object_id_bytes,
+			octet_length(object.knowledge_object_id) AS knowledge_object_id_bytes,
 			object.current_version
 		FROM knowledge_objects AS object
-		     INDEXED BY knowledge_objects_active_tenant_idx
 		WHERE object.state = 'active'
 		ORDER BY object.tenant_id, object.knowledge_object_id
 		LIMIT %[3]d`, maximumTenantIDBytes, maximumObjectIDBytes, MaximumResolutionCandidates+1)
@@ -220,7 +218,7 @@ func (validator *IndexNameAdmissionValidator) ValidateIndexNameAdmissionInTransa
 		}
 	}
 
-	// Phase two hydrates each tenant sequentially on the fixed SQLite
+	// Phase two hydrates each tenant sequentially on the fixed PostgreSQL
 	// transaction. All global scalar ceilings have already been accepted.
 	for index := range tenantFacts {
 		if err := ctx.Err(); err != nil {
@@ -291,52 +289,46 @@ func (validator *IndexNameAdmissionValidator) ValidateIndexNameAdmissionInTransa
 			return err
 		}
 		facts := &tenantFacts[index]
-		// Counts are bounded by the app/index inventory limits before this batch is assembled.
-		expectedActiveAppCount := safecast.MustConv[uint16](len(facts.apps.active))
-		expectedPotentiallySearchableIndexCount := safecast.MustConv[uint16](len(indexFacts.names))
-		expectedCurrentActiveCount := safecast.MustConv[uint32](len(facts.winners))
-		authority, err := validatePublicationIndexNameAdmissionWithBudget(
-			ctx,
-			publicationIndexNameAdmissionInventory{
-				tenantID:                                strings.Clone(facts.driver.tenantID),
-				expectedDefinitionBytes:                 facts.aggregate.definitionBytes,
-				expectedProjectionBytes:                 facts.aggregate.projectionBytes,
-				expectedSelectorPatterns:                facts.aggregate.selectorPatterns,
-				expectedSelectorValueBytes:              facts.aggregate.selectorValueBytes,
-				expectedCanonicalSelectorBytes:          facts.aggregate.canonicalSelectorBytes,
-				expectedSelectorWork:                    facts.selectorWork,
-				expectedDependencyCount:                 facts.aggregate.dependencies,
-				expectedActiveAppCount:                  expectedActiveAppCount,
-				activeAppIDs:                            facts.apps.active,
-				expectedCurrentActiveCount:              expectedCurrentActiveCount,
-				currentActive:                           facts.winners,
-				expectedPotentiallySearchableIndexCount: expectedPotentiallySearchableIndexCount,
-				potentiallySearchableIndexNames:         indexFacts.names,
-				newlyPotentiallySearchableIndexName:     request.CanonicalName,
-			},
-			batchBudget,
-		)
+		inventories, err := publicationIndexOrganizationInventories(database, *facts, indexFacts.names, request.CanonicalName)
 		if err != nil {
 			return err
 		}
-		if authority.state == nil || authority.state.tenantID != facts.driver.tenantID ||
-			authority.state.indexName != request.CanonicalName {
-			return fmt.Errorf(
-				"%w: index-name admission semantic authority is invalid",
-				ErrCorrupt,
-			)
+		for _, inventory := range inventories {
+			authority, err := validatePublicationIndexNameAdmissionWithBudget(ctx, inventory, batchBudget)
+			if err != nil {
+				return err
+			}
+			if authority.state == nil || authority.state.tenantID != facts.driver.tenantID || authority.state.indexName != request.CanonicalName {
+				return fmt.Errorf("%w: index-name admission semantic authority is invalid", ErrCorrupt)
+			}
 		}
 	}
 
-	return validator.finalPublicationIndexAdmissionCheck(
-		ctx,
-		database,
-		request.CanonicalName,
-		indexFacts,
-		tenantDrivers,
-		registryDrivers,
-		tenantFacts,
-	)
+	return validator.finalPublicationIndexAdmissionCheck(ctx, database, request.CanonicalName, indexFacts, tenantDrivers, registryDrivers, tenantFacts)
+}
+
+func publicationIndexNameInventory(facts publicationIndexAdmissionTenantFacts, indexFacts publicationIndexAdmissionIndexFacts, canonicalName string) publicationIndexNameAdmissionInventory {
+	// Counts are bounded by the app/index inventory limits before this batch is assembled.
+	expectedActiveAppCount := safecast.MustConv[uint16](len(facts.apps.active))
+	expectedPotentiallySearchableIndexCount := safecast.MustConv[uint16](len(indexFacts.names))
+	expectedCurrentActiveCount := safecast.MustConv[uint32](len(facts.winners))
+	return publicationIndexNameAdmissionInventory{
+		tenantID:                                strings.Clone(facts.driver.tenantID),
+		expectedDefinitionBytes:                 facts.aggregate.definitionBytes,
+		expectedProjectionBytes:                 facts.aggregate.projectionBytes,
+		expectedSelectorPatterns:                facts.aggregate.selectorPatterns,
+		expectedSelectorValueBytes:              facts.aggregate.selectorValueBytes,
+		expectedCanonicalSelectorBytes:          facts.aggregate.canonicalSelectorBytes,
+		expectedSelectorWork:                    facts.selectorWork,
+		expectedDependencyCount:                 facts.aggregate.dependencies,
+		expectedActiveAppCount:                  expectedActiveAppCount,
+		activeAppIDs:                            facts.apps.active,
+		expectedCurrentActiveCount:              expectedCurrentActiveCount,
+		currentActive:                           facts.winners,
+		expectedPotentiallySearchableIndexCount: expectedPotentiallySearchableIndexCount,
+		potentiallySearchableIndexNames:         indexFacts.names,
+		newlyPotentiallySearchableIndexName:     canonicalName,
+	}
 }
 
 func (validator *IndexNameAdmissionValidator) validateInvocation(
@@ -419,7 +411,7 @@ func requirePublicationIndexAdmissionCandidateAbsent(
 	}
 	if err := database.Table("indexes AS candidate").Select(`
 		candidate.name AS name,
-		length(CAST(candidate.name AS BLOB)) AS name_bytes`).
+		octet_length(candidate.name) AS name_bytes`).
 		Where("candidate.name = ?", canonicalName).
 		Limit(2).
 		Find(&records).Error; err != nil {

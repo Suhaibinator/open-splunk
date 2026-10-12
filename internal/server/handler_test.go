@@ -97,6 +97,7 @@ func TestRegisteredProtobufRoutesAllDeclareASanitizer(t *testing.T) {
 	core, observed := observer.New(zapcore.WarnLevel)
 	handler := newTestHandler(t, Config{
 		Logger:                   zap.New(core),
+		TenantID:                 browserGateTenantID,
 		SearchJobs:               &fakeSearchJobs{},
 		Indexes:                  fakeIndexCatalog{},
 		RuntimeReadiness:         &fakeRuntimeReadiness{},
@@ -113,7 +114,7 @@ func TestRegisteredProtobufRoutesAllDeclareASanitizer(t *testing.T) {
 		SearchInspections:        &fakeSearchInspections{},
 		SearchFields:             &fakeSearchFields{maximumFields: 100, maximumPage: 10, maximumSummary: 20},
 		SearchSuggestions:        &fakeSearchSuggestions{maximum: 10},
-		BrowserAuthenticator:     testSearchInspectionAuthenticator(t),
+		IdentityAuthenticator:    adaptTestBrowserAuthenticator(testSearchInspectionAuthenticator(t)),
 		AppCursorKey:             appAdministrationCursorKey,
 		WebUI:                    testUI(),
 	})
@@ -125,7 +126,7 @@ func TestRegisteredProtobufRoutesAllDeclareASanitizer(t *testing.T) {
 		handler,
 		"/api/system/bootstrap",
 		&opensplunk.GetSystemBootstrapRequest{},
-		map[string]string{"Host": "example.com"},
+		map[string]string{"Host": "example.com", "Authorization": "Bearer " + adminIntegrationBearerToken},
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf("bootstrap status = %d, want %d", response.Code, http.StatusOK)
@@ -584,7 +585,7 @@ func validServerBuildMetadata(t *testing.T) *opensplunk.BuildMetadata {
 		UiBuildId:                  uiBuildID,
 		UiSha256:                   strings.Repeat("1", 64),
 		ProtobufSchemaSha256:       strings.Repeat("2", 64),
-		SqliteMigrationsSha256:     strings.Repeat("3", 64),
+		PostgresMigrationsSha256:   strings.Repeat("3", 64),
 		ClickhouseMigrationsSha256: strings.Repeat("4", 64),
 	}
 }
@@ -717,7 +718,7 @@ func TestSearchWebSocketLimitsAreValidated(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := NewHandler(Config{
+			_, err := newAuthenticatedTestHandler(Config{
 				SearchJobs: &fakeSearchJobs{}, SearchWebSocket: test.socket, Indexes: fakeIndexCatalog{},
 				SavedSearches: &fakeSavedSearches{}, WebUI: testUI(), AdministrativeAllowedHosts: []string{"example.com"},
 			})
@@ -728,7 +729,7 @@ func TestSearchWebSocketLimitsAreValidated(t *testing.T) {
 	}
 
 	var typedNil *fakeSearchWebSocket
-	if _, err := NewHandler(Config{
+	if _, err := newAuthenticatedTestHandler(Config{
 		SearchJobs: &fakeSearchJobs{}, SearchWebSocket: typedNil, Indexes: fakeIndexCatalog{},
 		SavedSearches: &fakeSavedSearches{}, WebUI: testUI(),
 	}); err != nil {
@@ -756,7 +757,7 @@ func TestSearchWebSocketIsNotAdvertisedOrRoutedWithoutService(t *testing.T) {
 }
 
 func TestBrowserAPIRoutesDefaultToLoopbackWithoutAdministration(t *testing.T) {
-	handler, err := NewHandler(Config{
+	handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: &fakeSavedSearches{}, WebUI: testUI(),
 	})
 	if err != nil {
@@ -784,7 +785,7 @@ func TestBrowserAPIRoutesDefaultToLoopbackWithoutAdministration(t *testing.T) {
 		t.Fatalf("origin-less loopback status = %d, body = %s", response.Code, response.Body.String())
 	}
 
-	_, err = NewHandler(Config{
+	_, err = newAuthenticatedTestHandler(Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: &fakeSavedSearches{}, WebUI: testUI(),
 		AdministrativeAllowedHosts: []string{"invalid.example/path"},
 	})
@@ -1085,7 +1086,7 @@ func TestCreateSearchResolvesTimeIntentAndValidatesIndexScope(t *testing.T) {
 			{ID: "idx-disabled", Definition: control.IndexDefinition{Name: "disabled", DisplayName: "Disabled", SearchEnabled: false}, State: control.IndexStateActive},
 		}},
 		WebUI:    testUI(),
-		OwnerID:  "owner-1",
+		OwnerID:  "1009",
 		TenantID: "tenant-1",
 		Now:      func() time.Time { return testNow },
 	})
@@ -1099,7 +1100,7 @@ func TestCreateSearchResolvesTimeIntentAndValidatesIndexScope(t *testing.T) {
 	jobs.mu.Lock()
 	captured := jobs.createRequest
 	jobs.mu.Unlock()
-	if captured.OwnerID != "owner-1" || captured.TenantID != "tenant-1" {
+	if captured.OwnerID != "1009" || captured.TenantID != "tenant-1" {
 		t.Fatalf("scope = owner %q tenant %q", captured.OwnerID, captured.TenantID)
 	}
 	if len(captured.RequestedIndexes) != 1 || captured.RequestedIndexes[0] != "main" {
@@ -1151,7 +1152,7 @@ func TestCreateSearchPreservesScopedSavedSearchProvenance(t *testing.T) {
 	t.Parallel()
 
 	const (
-		ownerID = "owner-1"
+		ownerID = "1009"
 		appID   = "app-main"
 		savedID = "saved-1"
 	)
@@ -1211,7 +1212,7 @@ func TestCreateSearchPreservesScopedSavedSearchProvenance(t *testing.T) {
 func TestCreateSearchRejectsNoncanonicalSavedSearchProvenance(t *testing.T) {
 	t.Parallel()
 
-	record := savedSearchRecord("saved-1", 1, "owner-1", "app-main", "Errors")
+	record := savedSearchRecord("saved-1", 1, "1009", "app-main", "Errors")
 	record.Definition.Search.AppId = new(" app-main ")
 	store := &fakeSavedSearches{getFn: func(context.Context, savedobjects.AccessScope, string) (*opensplunk.SavedSearch, error) {
 		return record, nil
@@ -1224,7 +1225,7 @@ func TestCreateSearchRejectsNoncanonicalSavedSearchProvenance(t *testing.T) {
 		}}},
 		SavedSearches: store,
 		WebUI:         testUI(),
-		OwnerID:       "owner-1",
+		OwnerID:       "1009",
 		TenantID:      "tenant-1",
 		Now:           func() time.Time { return testNow },
 	})
@@ -1418,14 +1419,14 @@ func TestResultsAreBoundedAndTyped(t *testing.T) {
 
 func TestCancelUsesScopedJobAndReturnsSnapshot(t *testing.T) {
 	jobs := &fakeSearchJobs{getJob: completeJob("job-1")}
-	handler := newTestHandler(t, Config{SearchJobs: jobs, Indexes: fakeIndexCatalog{}, WebUI: testUI(), OwnerID: "owner", TenantID: "tenant"})
+	handler := newTestHandler(t, Config{SearchJobs: jobs, Indexes: fakeIndexCatalog{}, WebUI: testUI(), OwnerID: "1008", TenantID: "tenant"})
 	response := postProto(t, handler, "/api/search/jobs/cancel", &opensplunk.CancelSearchJobRequest{SearchJobId: "job-1"})
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 	jobs.mu.Lock()
 	defer jobs.mu.Unlock()
-	if jobs.cancelID != "job-1" || jobs.cancelScope != (searchjobs.AccessScope{OwnerID: "owner", TenantID: "tenant"}) {
+	if jobs.cancelID != "job-1" || jobs.cancelScope != (searchjobs.AccessScope{OrganizationID: "1", OwnerID: "1008", TenantID: "tenant", SiteAdministrator: true}) {
 		t.Fatalf("cancel = %q %+v", jobs.cancelID, jobs.cancelScope)
 	}
 }
@@ -1442,7 +1443,7 @@ func TestCommittedSearchMutationsWinContextCancellationRace(t *testing.T) {
 			indexes: fakeIndexCatalog{indexes: []control.Index{{
 				ID: "idx-main", Definition: control.IndexDefinition{Name: "main", SearchEnabled: true}, State: control.IndexStateActive,
 			}}},
-			ownerID:  "owner-1",
+			ownerID:  "1009",
 			tenantID: "tenant-1",
 			now:      func() time.Time { return testNow },
 		}
@@ -1469,7 +1470,7 @@ func TestCommittedSearchMutationsWinContextCancellationRace(t *testing.T) {
 		}
 		handler := &apiHandler{
 			jobs:     jobs,
-			ownerID:  "owner-1",
+			ownerID:  "1009",
 			tenantID: "tenant-1",
 			now:      func() time.Time { return testNow },
 		}
@@ -1493,7 +1494,7 @@ func TestSearchCancellationRejectsAlreadyCanceledRequestBeforeMutation(t *testin
 	jobs := &fakeSearchJobs{getJob: completeJob("job-cancel")}
 	handler := &apiHandler{
 		jobs:     jobs,
-		ownerID:  "owner-1",
+		ownerID:  "1009",
 		tenantID: "tenant-1",
 		now:      func() time.Time { return testNow },
 	}
@@ -1803,7 +1804,7 @@ func newTestHandler(t *testing.T, config Config) *Handler {
 	if config.AdministrativeAllowedHosts == nil {
 		config.AdministrativeAllowedHosts = []string{"example.com"}
 	}
-	handler, err := NewHandler(config)
+	handler, err := newAuthenticatedTestHandler(config)
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
@@ -1873,8 +1874,9 @@ func createRequest(earliest, latest string, indexes ...string) *opensplunk.Creat
 func completeJob(id string) searchjobs.Job {
 	return searchjobs.Job{
 		ID:               id,
+		OrganizationID:   "1",
 		Version:          1,
-		OwnerID:          "owner-1",
+		OwnerID:          "1009",
 		TenantID:         "tenant-1",
 		SPL:              "index=main | head 10",
 		NormalizedSPL:    "index=main | head 10",

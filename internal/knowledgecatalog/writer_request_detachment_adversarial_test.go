@@ -345,8 +345,8 @@ func assertDetachedRequestReceipt(
 	if err := harness.database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT count(*)
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
-		  AND route = ? AND client_request_id = ?`,
+		WHERE tenant_id = $1 AND actor_kind = $2 AND actor_id = $3
+		  AND route = $4 AND client_request_id = $5`,
 		writerFaultTenant,
 		"browser",
 		"writer-fault-administrator",

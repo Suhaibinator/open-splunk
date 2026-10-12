@@ -28,6 +28,7 @@ import { AppIcon } from "./app-icon";
 import { installModalSurface } from "./modal-surface";
 import { useAppCatalog } from "./use-app-catalog";
 import { Wordmark } from "./wordmark";
+import { IdentityControls, useIdentity } from "./identity-provider";
 
 type ProductSection = "home" | "search" | "analytics" | "datasets" | "reports" | "dashboards" | "activity" | "admin" | "help";
 
@@ -206,10 +207,11 @@ export function ProductShell({
   const mobileTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileDrawerRef = useRef<HTMLDialogElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const identity = useIdentity();
   const localSession = dataMode === "backend";
-  const sessionInitial = localSession ? "L" : "A";
-  const sessionLabel = localSession ? "Local session" : "Administrator";
-  const sessionDetail = localSession ? "Single-user backend mode" : "admin@localhost";
+  const sessionLabel = identity.user?.name ?? "Preview account";
+  const sessionInitial = sessionLabel.slice(0, 1).toUpperCase();
+  const sessionDetail = identity.user?.email ?? "Frontend preview";
   const displayedBackendApps = backendAppCatalog?.apps ?? sharedCatalog.bootstrap?.apps ?? [];
   const displayedBackendAppId = backendAppCatalog?.selectedAppId ?? sharedCatalog.bootstrap?.selectedAppId ?? null;
   const displayedCatalogState = backendAppCatalog?.state
@@ -230,7 +232,7 @@ export function ProductShell({
       : activeSection === "datasets"
         ? "Search authorization comes from backend bootstrap; the registered index route adds available retention and source defaults."
         : activeSection === "activity"
-          ? "Activity shows retained jobs and search history, plus capability-gated mutation and search-attempt audit journals for administrator sessions."
+          ? "Activity shows retained jobs and search history, plus mutation and search-attempt audit journals when your account has access."
           : activeSection === "reports"
             ? "This page shows persisted backend saved searches; scheduling is not inferred."
             : activeSection === "home"
@@ -367,6 +369,7 @@ export function ProductShell({
           <span /><span /><span />
         </button>
         <Wordmark href={productHref("/")} />
+        {dataMode === "backend" ? <IdentityControls apiBaseUrl={apiBaseUrl} /> : null}
         {appSwitcher ?? <div className="suite-menu-anchor suite-catalog-anchor">
           <button
             className="suite-app-switcher"
@@ -453,7 +456,7 @@ export function ProductShell({
               <div className="suite-popover suite-utility-popover suite-user-popover" id={PRODUCT_MENU_POPOVER_IDS.user} role="menu" data-suite-menu="user">
                 <div className="suite-user-summary"><span aria-hidden="true">{sessionInitial}</span><div><strong>{sessionLabel}</strong><small>{sessionDetail}</small></div></div>
                 <Link role="menuitem" href={productHref("/admin/")}>{localSession ? "Server administration" : "Account settings"}</Link>
-                <Link role="menuitem" href="/signin/">{localSession ? "About local access" : "Sign out"}</Link>
+                <Link role="menuitem" href="/organizations/">Organization access</Link>
                 <ThemeMenu preference={themePreference} onSelect={setThemePreference} />
               </div>
             ) : null}
@@ -518,7 +521,7 @@ export function ProductShell({
           <span className="drawer-label">HELP</span>
           <a className={activeSection === "help" ? "active" : undefined} aria-current={activeSection === "help" ? "page" : undefined} href={productHref("/help/")}><span aria-hidden="true"><AppIcon name="file" size="md" /></span>Documentation</a>
           <span className="drawer-rule" />
-          <Link href="/signin/" onClick={onSignOut}><span aria-hidden="true"><AppIcon name={localSession ? "info" : "logout"} size="md" /></span>{localSession ? "About local access" : "Sign out"}</Link>
+          <Link href="/organizations/" onClick={onSignOut}><span aria-hidden="true"><AppIcon name="info" size="md" /></span>Organization access</Link>
         </dialog>
       ) : null}
       {mobileOpen ? <button className="drawer-backdrop" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} /> : null}

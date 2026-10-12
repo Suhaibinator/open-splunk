@@ -5,23 +5,23 @@ import (
 	"crypto/sha256"
 	"errors"
 	"io"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 )
 
 func TestHECAcknowledgmentStaysPendingAcrossAmbiguousSendUntilReconciliation(t *testing.T) {
 	ctx := context.Background()
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("open control database: %v", err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatalf("open visibility sequencer: %v", err)
 	}
@@ -142,10 +142,10 @@ func seedHECAcknowledgmentAuthority(t *testing.T, ctx context.Context, controlDB
 			INSERT INTO indexes (
 				index_id, version, name, display_name, ingestion_enabled,
 				search_enabled, state, created_at_unix_micro, updated_at_unix_micro
-			) VALUES ('hec-ack-index', 1, 'main', 'Main', 1, 1, 'active', ?, ?)`, []any{nowMicros, nowMicros}},
+			) VALUES ('hec-ack-index', 1, 'main', 'Main', 1, 1, 'active', $1, $2)`, []any{nowMicros, nowMicros}},
 		{`
 			INSERT INTO ingestion_tokens (
-				ingestion_token_id, version, name, description,
+				ingestion_token_id, organization_id, issuer_user_id, version, name, description,
 				token_prefix, token_digest, state,
 				created_at_unix_micro, updated_at_unix_micro,
 				expires_at_unix_micro, revoked_at_unix_micro,
@@ -153,8 +153,8 @@ func seedHECAcknowledgmentAuthority(t *testing.T, ctx context.Context, controlDB
 				max_ingest_events_per_second,
 				max_ingest_uncompressed_bytes_per_second, purpose
 			) VALUES (
-				'hec-ack-token', 1, 'HEC ACK', '', 'hecack00', ?, 'active',
-				?, ?, NULL, NULL, NULL, NULL, 0, 0, 'hec'
+				'hec-ack-token', 1, 42, 1, 'HEC ACK', '', 'hecack00', $1, 'active',
+				$2, $3, NULL, NULL, NULL, NULL, 0, 0, 'hec'
 			)`, []any{tokenDigest[:], nowMicros, nowMicros}},
 		{`
 			INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
@@ -163,7 +163,7 @@ func seedHECAcknowledgmentAuthority(t *testing.T, ctx context.Context, controlDB
 			INSERT INTO ingestion_token_hec_profiles (
 				ingestion_token_id, default_index_id, default_host,
 				default_source, default_sourcetype, indexer_acknowledgment
-			) VALUES ('hec-ack-token', 'hec-ack-index', NULL, NULL, NULL, 1)`, nil},
+			) VALUES ('hec-ack-token', 'hec-ack-index', NULL, NULL, NULL, TRUE)`, nil},
 	} {
 		if _, err := controlDB.SQLDB().ExecContext(ctx, statement.query, statement.arguments...); err != nil {
 			t.Fatalf("seed HEC acknowledgment authority: %v", err)
@@ -174,7 +174,7 @@ func seedHECAcknowledgmentAuthority(t *testing.T, ctx context.Context, controlDB
 func assertDurableHECAcknowledgment(
 	t *testing.T,
 	ctx context.Context,
-	sequencer *visibility.SQLiteSequencer,
+	sequencer *visibility.PostgreSQLSequencer,
 	acknowledgmentID uint64,
 	want bool,
 ) {
@@ -220,7 +220,7 @@ func assertHECAcknowledgmentLedgerState(
 		WHERE acknowledgment.tenant_id = 'tenant'
 		  AND acknowledgment.ingestion_token_id = 'hec-ack-token'
 		  AND acknowledgment.channel_id = 'ambiguous-channel'
-		  AND acknowledgment.acknowledgment_id = ?`, int64(acknowledgmentID)).Scan(
+		  AND acknowledgment.acknowledgment_id = $1`, int64(acknowledgmentID)).Scan(
 		&hecState,
 		&visibilityState,
 		&visibilityPhase,

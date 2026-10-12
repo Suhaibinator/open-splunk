@@ -67,7 +67,7 @@ func TestGORMModelsMatchAuthoritativeCollectorFleetMigration(t *testing.T) {
 			rows, err := database.SQLDB().QueryContext(
 				ctx,
 				fmt.Sprintf(
-					"SELECT name FROM pragma_table_xinfo('%s') ORDER BY cid",
+					"SELECT name FROM (SELECT a.attname AS name,a.attnum-1 AS cid,CASE WHEN t.typname='int8' THEN 'BIGINT' ELSE upper(t.typname) END AS type,CASE WHEN a.attnotnull THEN 1 ELSE 0 END AS \"notnull\",COALESCE((SELECT array_position(c.conkey,a.attnum) FROM pg_constraint c WHERE c.conrelid=r.oid AND c.contype='p'),0) AS pk,CASE WHEN a.attgenerated='s' THEN 3 ELSE 0 END AS hidden FROM pg_attribute a JOIN pg_class r ON r.oid=a.attrelid JOIN pg_namespace n ON n.oid=r.relnamespace JOIN pg_type t ON t.oid=a.atttypid WHERE n.nspname=current_schema() AND r.relname='%s' AND a.attnum>0 AND NOT a.attisdropped) AS column_metadata ORDER BY cid",
 					test.table,
 				),
 			)
@@ -108,16 +108,13 @@ func TestGORMModelsMatchAuthoritativeCollectorFleetMigration(t *testing.T) {
 			}
 			var createSQL string
 			if err := database.SQLDB().QueryRowContext(ctx, `
-				SELECT sql
-				FROM sqlite_schema
-				WHERE type = 'table' AND name = ?`,
+				SELECT string_agg('CONSTRAINT ' || c.conname || ' ' || pg_get_constraintdef(c.oid), ' ') AS sql FROM pg_constraint c JOIN pg_class r ON r.oid=c.conrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND r.relname=$1 AND c.contype='c'`,
 				test.table,
 			).Scan(&createSQL); err != nil {
 				t.Fatalf("read migrated table SQL: %v", err)
 			}
-			if !strings.Contains(createSQL, "STRICT") ||
-				!strings.Contains(createSQL, "WITHOUT ROWID") {
-				t.Fatalf("%s is not STRICT WITHOUT ROWID: %s", test.table, createSQL)
+			if createSQL == "" {
+				t.Fatalf("%s is missing native check constraints: %s", test.table, createSQL)
 			}
 			var migratedChecks []string
 			for _, match := range namedCheckPattern.FindAllStringSubmatch(createSQL, -1) {
@@ -186,7 +183,7 @@ func TestGORMModelsMatchAuthoritativeCollectorFleetMigration(t *testing.T) {
 	fleetChecks := statement.Schema.ParseCheckConstraints()
 	displayCheck, exists := fleetChecks["collector_fleet_display_name_bounded"]
 	if !exists ||
-		!strings.Contains(displayCheck.Constraint, "CAST(display_name AS BLOB)") {
+		!strings.Contains(displayCheck.Constraint, "octet_length(display_name)") {
 		t.Fatalf("GORM byte-bound display check drifted: %#v", displayCheck)
 	}
 	displaySortField := statement.Schema.LookUpField("DisplayNameSortKey")
@@ -207,7 +204,7 @@ func TestGORMModelsMatchAuthoritativeCollectorFleetMigration(t *testing.T) {
 	var displaySortNotNull int
 	if err := database.SQLDB().QueryRowContext(ctx, `
 		SELECT hidden, "notnull"
-		FROM pragma_table_xinfo('collector_fleet')
+		FROM (SELECT a.attname AS name,a.attnum-1 AS cid,CASE WHEN t.typname='int8' THEN 'BIGINT' ELSE upper(t.typname) END AS type,CASE WHEN a.attnotnull THEN 1 ELSE 0 END AS "notnull",COALESCE((SELECT array_position(c.conkey,a.attnum) FROM pg_constraint c WHERE c.conrelid=r.oid AND c.contype='p'),0) AS pk,CASE WHEN a.attgenerated='s' THEN 3 ELSE 0 END AS hidden FROM pg_attribute a JOIN pg_class r ON r.oid=a.attrelid JOIN pg_namespace n ON n.oid=r.relnamespace JOIN pg_type t ON t.oid=a.atttypid WHERE n.nspname=current_schema() AND r.relname='collector_fleet' AND a.attnum>0 AND NOT a.attisdropped) AS column_metadata
 		WHERE name = 'display_name_sort_key'
 	`).Scan(&displaySortGeneratedKind, &displaySortNotNull); err != nil {
 		t.Fatalf("read migrated display-name sort key: %v", err)
@@ -219,23 +216,15 @@ func TestGORMModelsMatchAuthoritativeCollectorFleetMigration(t *testing.T) {
 			displaySortNotNull,
 		)
 	}
-	var fleetCreateSQL string
-	if err := database.SQLDB().QueryRowContext(ctx, `
-		SELECT sql
-		FROM sqlite_schema
-		WHERE type = 'table' AND name = 'collector_fleet'
-	`).Scan(&fleetCreateSQL); err != nil {
-		t.Fatalf("read collector fleet schema: %v", err)
+	var generatedExpression string
+	if err := database.SQLDB().QueryRowContext(ctx, `SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid=d.adrelid AND a.attnum=d.adnum JOIN pg_class r ON r.oid=a.attrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND r.relname='collector_fleet' AND a.attname='display_name_sort_key'`).Scan(&generatedExpression); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(
-		fleetCreateSQL,
-		"GENERATED ALWAYS AS (coalesce(display_name, '')) STORED",
-	) {
-		t.Fatalf(
-			"migrated display-name sort key expression drifted: %s",
-			fleetCreateSQL,
-		)
+	normalizedExpression := strings.ToLower(strings.Join(strings.Fields(generatedExpression), ""))
+	if normalizedExpression != "coalesce(display_name,''::text)" {
+		t.Fatalf("generated display sort expression drifted: %s", generatedExpression)
 	}
+
 	revisionStatement := &gorm.Statement{DB: database.GORMDB()}
 	if err := revisionStatement.Parse(
 		&collectorCatalogRevisionRecord{},
@@ -303,7 +292,7 @@ func assertCollectorCatalogIndexesMatchModels(
 		rows, err := sqlDatabase.QueryContext(
 			context.Background(),
 			fmt.Sprintf(
-				"SELECT name FROM pragma_index_info('%s') ORDER BY seqno",
+				"SELECT name FROM (SELECT a.attname AS name,k.ordinality-1 AS seqno,1 AS \"key\",CASE WHEN (i.indoption[(k.ordinality-1)::int] & 1)=1 THEN 1 ELSE 0 END AS \"desc\" FROM pg_index i JOIN pg_class x ON x.oid=i.indexrelid JOIN pg_namespace n ON n.oid=x.relnamespace CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum,ordinality) JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum WHERE n.nspname=current_schema() AND x.relname='%s' AND k.ordinality<=i.indnkeyatts) AS index_metadata ORDER BY seqno",
 				name,
 			),
 		)
@@ -336,7 +325,7 @@ func TestCollectorFleetMigrationInstallsStrictFencingConstraints(t *testing.T) {
 	var migrationName string
 	if err := database.SQLDB().QueryRowContext(ctx, `
 		SELECT name
-		FROM schema_migrations
+		FROM open_splunk_schema_migrations
 		WHERE version = 1`).Scan(&migrationName); err != nil {
 		t.Fatalf("read collector fleet migration: %v", err)
 	}
@@ -352,7 +341,7 @@ func TestCollectorFleetMigrationInstallsStrictFencingConstraints(t *testing.T) {
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_fleet
 		SET collector_id = 'other'
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	); err == nil || !strings.Contains(err.Error(), "identity is immutable") {
@@ -361,7 +350,7 @@ func TestCollectorFleetMigrationInstallsStrictFencingConstraints(t *testing.T) {
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_runtime
 		SET lease_generation = lease_generation - 1
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	); err == nil || !strings.Contains(err.Error(), "cannot move backward") {
@@ -369,7 +358,7 @@ func TestCollectorFleetMigrationInstallsStrictFencingConstraints(t *testing.T) {
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		INSERT INTO collector_capabilities (tenant_id, collector_id, capability)
-		VALUES ('other-tenant', ?, 5)`,
+		VALUES ('other-tenant', $1, 5)`,
 		lease.CollectorID,
 	); err == nil || !strings.Contains(strings.ToLower(err.Error()), "foreign key") {
 		t.Fatalf("cross-tenant capability insert error = %v", err)
@@ -378,7 +367,7 @@ func TestCollectorFleetMigrationInstallsStrictFencingConstraints(t *testing.T) {
 		INSERT INTO collector_input_health (
 			tenant_id, collector_id, input_id, state, status_message,
 			discovered_sources, active_sources, events_read_total, bytes_read_total
-		) VALUES (?, ?, 'unregistered', 2, '', 0, 0, 0, 0)`,
+		) VALUES ($1, $2, 'unregistered', 2, '', 0, 0, 0, 0)`,
 		lease.TenantID,
 		lease.CollectorID,
 	); err == nil || !strings.Contains(strings.ToLower(err.Error()), "foreign key") {
@@ -387,7 +376,7 @@ func TestCollectorFleetMigrationInstallsStrictFencingConstraints(t *testing.T) {
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		INSERT INTO collector_inputs (
 			tenant_id, collector_id, input_id, input_type, index_name
-		) VALUES (?, ?, 'unauthorized-input', 1, 'other')`,
+		) VALUES ($1, $2, 'unauthorized-input', 1, 'other')`,
 		lease.TenantID,
 		lease.CollectorID,
 	); err == nil || !strings.Contains(strings.ToLower(err.Error()), "foreign key") {
@@ -396,7 +385,7 @@ func TestCollectorFleetMigrationInstallsStrictFencingConstraints(t *testing.T) {
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_runtime
 		SET boot_epoch = NULL
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	); err == nil {
@@ -404,8 +393,8 @@ func TestCollectorFleetMigrationInstallsStrictFencingConstraints(t *testing.T) {
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_runtime
-		SET observed_at_unix_micro = ?
-		WHERE tenant_id = ? AND collector_id = ?`,
+		SET observed_at_unix_micro = $1
+		WHERE tenant_id = $2 AND collector_id = $3`,
 		now.UnixMicro(),
 		lease.TenantID,
 		lease.CollectorID,
@@ -415,7 +404,7 @@ func TestCollectorFleetMigrationInstallsStrictFencingConstraints(t *testing.T) {
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_runtime
 		SET observation_sequence = 1
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	); err == nil {
@@ -423,8 +412,8 @@ func TestCollectorFleetMigrationInstallsStrictFencingConstraints(t *testing.T) {
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_fleet
-		SET display_name = ?
-		WHERE tenant_id = ? AND collector_id = ?`,
+		SET display_name = $1
+		WHERE tenant_id = $2 AND collector_id = $3`,
 		strings.Repeat("😀", maximumDisplayNameBytes/4+1),
 		lease.TenantID,
 		lease.CollectorID,
@@ -433,8 +422,8 @@ func TestCollectorFleetMigrationInstallsStrictFencingConstraints(t *testing.T) {
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_runtime
-		SET started_at_unix_micro = ?
-		WHERE tenant_id = ? AND collector_id = ?`,
+		SET started_at_unix_micro = $1
+		WHERE tenant_id = $2 AND collector_id = $3`,
 		int64(math.MaxInt64),
 		lease.TenantID,
 		lease.CollectorID,
@@ -465,11 +454,10 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 	}
 
 	rows, err := database.SQLDB().QueryContext(ctx, `
-		SELECT name
-		FROM sqlite_schema
-		WHERE type = 'trigger'
-		  AND name GLOB 'collector_catalog_revision_*'
-		ORDER BY name`)
+		SELECT t.tgname
+		FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace
+ WHERE n.nspname=current_schema() AND NOT t.tgisinternal AND t.tgname LIKE 'collector_catalog_revision_%'
+		ORDER BY t.tgname`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +490,7 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 	assertCatalogRevision(t, database.SQLDB(), lease.TenantID, 2, 1, 1)
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		DELETE FROM collector_catalog_revisions
-		WHERE tenant_id = ?`,
+		WHERE tenant_id = $1`,
 		lease.TenantID,
 	); err == nil ||
 		!strings.Contains(err.Error(), "revision marker cannot be deleted") {
@@ -524,7 +512,8 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 			sql: `
 				UPDATE collector_fleet
 				SET display_name = 'renamed'
-				WHERE tenant_id = ? AND collector_id = ?`,
+				WHERE tenant_id = $1 AND collector_id = $2`,
+
 			args: []any{lease.TenantID, lease.CollectorID},
 		},
 		{
@@ -534,7 +523,8 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 			sql: `
 				UPDATE collector_runtime
 				SET queued_bytes = 1
-				WHERE tenant_id = ? AND collector_id = ?`,
+				WHERE tenant_id = $1 AND collector_id = $2`,
+
 			args: []any{lease.TenantID, lease.CollectorID},
 		},
 		{
@@ -546,7 +536,8 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 					tenant_id, collector_id, admin_version, display_name,
 					administrative_state, first_seen_at_unix_micro,
 					updated_at_unix_micro
-				) VALUES (?, 'catalog-second', 1, NULL, 'enabled', 1, 1)`,
+				) VALUES ($1, 'catalog-second', 1, NULL, 'enabled', 1, 1)`,
+
 			args: []any{lease.TenantID},
 		},
 		{
@@ -561,9 +552,10 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 					operating_system, architecture, started_at_unix_micro,
 					connected_at_unix_micro, last_seen_at_unix_micro
 				) VALUES (
-					?, 'catalog-second', 1, 1, 'boot', 'stream', 'instance',
+					$1, 'catalog-second', 1, 1, 'boot', 'stream', 'instance',
 					'development', 'host', 'linux', 'amd64', 1, 1, 1
 				)`,
+
 			args: []any{lease.TenantID},
 		},
 		{
@@ -572,7 +564,8 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 			wantRuntimeCount: 1,
 			sql: `
 				DELETE FROM collector_runtime
-				WHERE tenant_id = ? AND collector_id = 'catalog-second'`,
+				WHERE tenant_id = $1 AND collector_id = 'catalog-second'`,
+
 			args: []any{lease.TenantID},
 		},
 		{
@@ -581,7 +574,8 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 			wantRuntimeCount: 1,
 			sql: `
 				DELETE FROM collector_fleet
-				WHERE tenant_id = ? AND collector_id = 'catalog-second'`,
+				WHERE tenant_id = $1 AND collector_id = 'catalog-second'`,
+
 			args: []any{lease.TenantID},
 		},
 	}
@@ -633,7 +627,7 @@ func TestCollectorFleetMigrationDefendsDurableCollectorCapacity(
 			administrative_state,
 			first_seen_at_unix_micro,
 			updated_at_unix_micro
-		) VALUES (?, ?, 1, NULL, 'enabled', ?, ?)`,
+		) VALUES ($1, $2, 1, NULL, 'enabled', $3, $4)`,
 		tenantID,
 		"collector-schema-over-capacity",
 		now.UnixMicro(),
@@ -753,7 +747,7 @@ func TestCollectorFleetCatalogCountsSurviveCascadeDeleteAndTenantReuse(
 
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		DELETE FROM collector_fleet
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	); err != nil {
@@ -817,8 +811,8 @@ func TestCollectorFleetCatalogRevisionOverflowAbortsMutationAtomically(
 			}
 			if _, err := database.SQLDB().ExecContext(ctx, `
 				UPDATE collector_catalog_revisions
-				SET revision = ?
-				WHERE tenant_id = ?`,
+				SET revision = $1
+				WHERE tenant_id = $2`,
 				int64(math.MaxInt64),
 				lease.TenantID,
 			); err != nil {
@@ -833,21 +827,25 @@ func TestCollectorFleetCatalogRevisionOverflowAbortsMutationAtomically(
 				mutation = `
 					UPDATE collector_fleet
 					SET display_name = 'must-roll-back'
-					WHERE tenant_id = ? AND collector_id = ?`
+					WHERE tenant_id = $1 AND collector_id = $2`
+
 				unchangedQuery = `
-					SELECT display_name IS NULL
+					SELECT CASE WHEN display_name IS NULL THEN 1 ELSE 0 END
 					FROM collector_fleet
-					WHERE tenant_id = ? AND collector_id = ?`
+					WHERE tenant_id = $1 AND collector_id = $2`
+
 				unchangedValue = int64(1)
 			case "runtime":
 				mutation = `
 					UPDATE collector_runtime
 					SET queued_bytes = 99
-					WHERE tenant_id = ? AND collector_id = ?`
+					WHERE tenant_id = $1 AND collector_id = $2`
+
 				unchangedQuery = `
 					SELECT queued_bytes
 					FROM collector_runtime
-					WHERE tenant_id = ? AND collector_id = ?`
+					WHERE tenant_id = $1 AND collector_id = $2`
+
 				unchangedValue = int64(0)
 			default:
 				t.Fatalf("unhandled target %q", target)
@@ -904,8 +902,9 @@ func TestCollectorFleetCatalogCountGuardsAbortMutationsAtomically(
 			name: "fleet count capacity boundary",
 			corruptionSQL: `
 				UPDATE collector_catalog_revisions
-				SET fleet_count = ?
-				WHERE tenant_id = ?`,
+				SET fleet_count = $1
+				WHERE tenant_id = $2`,
+
 			corruptionValue:  MaximumDurableCollectorsPerTenant,
 			mutation:         "claim",
 			errorFragment:    "counts are inconsistent",
@@ -916,8 +915,9 @@ func TestCollectorFleetCatalogCountGuardsAbortMutationsAtomically(
 			name: "runtime count capacity boundary",
 			corruptionSQL: `
 				UPDATE collector_catalog_revisions
-				SET runtime_count = ?
-				WHERE tenant_id = ?`,
+				SET runtime_count = $1
+				WHERE tenant_id = $2`,
+
 			corruptionValue:  MaximumDurableCollectorsPerTenant,
 			mutation:         "claim",
 			errorFragment:    "counts are inconsistent",
@@ -928,8 +928,9 @@ func TestCollectorFleetCatalogCountGuardsAbortMutationsAtomically(
 			name: "fleet count underflow",
 			corruptionSQL: `
 				UPDATE collector_catalog_revisions
-				SET fleet_count = ?
-				WHERE tenant_id = ?`,
+				SET fleet_count = $1
+				WHERE tenant_id = $2`,
+
 			mutation:         "delete fleet",
 			errorFragment:    "fleet count underflow",
 			wantFleetCount:   0,
@@ -939,8 +940,9 @@ func TestCollectorFleetCatalogCountGuardsAbortMutationsAtomically(
 			name: "runtime count underflow",
 			corruptionSQL: `
 				UPDATE collector_catalog_revisions
-				SET runtime_count = ?
-				WHERE tenant_id = ?`,
+				SET runtime_count = $1
+				WHERE tenant_id = $2`,
+
 			mutation:         "delete runtime",
 			errorFragment:    "runtime count underflow",
 			wantFleetCount:   1,
@@ -978,14 +980,14 @@ func TestCollectorFleetCatalogCountGuardsAbortMutationsAtomically(
 			case "delete fleet":
 				_, err = database.SQLDB().ExecContext(ctx, `
 					DELETE FROM collector_fleet
-					WHERE tenant_id = ? AND collector_id = ?`,
+					WHERE tenant_id = $1 AND collector_id = $2`,
 					lease.TenantID,
 					lease.CollectorID,
 				)
 			case "delete runtime":
 				_, err = database.SQLDB().ExecContext(ctx, `
 					DELETE FROM collector_runtime
-					WHERE tenant_id = ? AND collector_id = ?`,
+					WHERE tenant_id = $1 AND collector_id = $2`,
 					lease.TenantID,
 					lease.CollectorID,
 				)
@@ -1047,12 +1049,14 @@ func TestCollectorFleetCatalogMissingRevisionAbortsParentUpdates(
 				mutation = `
 					UPDATE collector_fleet
 					SET display_name = 'must-roll-back'
-					WHERE tenant_id = ? AND collector_id = ?`
+					WHERE tenant_id = $1 AND collector_id = $2`
+
 			case "runtime":
 				mutation = `
 					UPDATE collector_runtime
 					SET queued_bytes = 99
-					WHERE tenant_id = ? AND collector_id = ?`
+					WHERE tenant_id = $1 AND collector_id = $2`
+
 			default:
 				t.Fatalf("unhandled target %q", target)
 			}
@@ -1070,7 +1074,7 @@ func TestCollectorFleetCatalogMissingRevisionAbortsParentUpdates(
 			if err := database.SQLDB().QueryRowContext(ctx, `
 				SELECT count(*)
 				FROM collector_catalog_revisions
-				WHERE tenant_id = ?`,
+				WHERE tenant_id = $1`,
 				lease.TenantID,
 			).Scan(&markerCount); err != nil {
 				t.Fatalf("count revision markers: %v", err)
@@ -1105,7 +1109,7 @@ func assertCatalogRevision(
 	if err := database.QueryRowContext(context.Background(), `
 		SELECT revision, fleet_count, runtime_count
 		FROM collector_catalog_revisions
-		WHERE tenant_id = ?`,
+		WHERE tenant_id = $1`,
 		tenantID,
 	).Scan(
 		&gotRevision,
@@ -1142,8 +1146,8 @@ func assertCollectorParentCounts(
 	var runtimeCount int64
 	if err := database.QueryRowContext(context.Background(), `
 		SELECT
-			(SELECT count(*) FROM collector_fleet WHERE tenant_id = ?),
-			(SELECT count(*) FROM collector_runtime WHERE tenant_id = ?)`,
+			(SELECT count(*) FROM collector_fleet WHERE tenant_id = $1),
+			(SELECT count(*) FROM collector_runtime WHERE tenant_id = $2)`,
 		tenantID,
 		tenantID,
 	).Scan(&fleetCount, &runtimeCount); err != nil {
@@ -1169,13 +1173,13 @@ func forceCatalogRevisionMarkerLossForTest(
 
 	ctx := context.Background()
 	if _, err := database.ExecContext(ctx, `
-		DROP TRIGGER collector_catalog_revision_marker_is_undeletable`,
+		DROP TRIGGER collector_catalog_revision_marker_is_undeletable ON collector_catalog_revisions`,
 	); err != nil {
 		t.Fatalf("drop catalog revision delete guard: %v", err)
 	}
 	result, err := database.ExecContext(ctx, `
 		DELETE FROM collector_catalog_revisions
-		WHERE tenant_id = ?`,
+		WHERE tenant_id = $1`,
 		tenantID,
 	)
 	if err != nil {
@@ -1203,7 +1207,7 @@ func TestCollectorFleetMigrationRejectsAdministratorVersionRollback(t *testing.T
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_fleet
 		SET admin_version = 3
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	); err != nil {
@@ -1212,7 +1216,7 @@ func TestCollectorFleetMigrationRejectsAdministratorVersionRollback(t *testing.T
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_fleet
 		SET admin_version = 2
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	); err == nil || !strings.Contains(err.Error(), "cannot move backward") {
@@ -1233,7 +1237,7 @@ func TestCollectorFleetReadsBoundConstraintValidChildCardinality(t *testing.T) {
 	for capability := int64(1000); capability <= 1000+maximumCapabilities; capability++ {
 		if _, err := database.SQLDB().ExecContext(ctx, `
 			INSERT INTO collector_capabilities (tenant_id, collector_id, capability)
-			VALUES (?, ?, ?)`,
+			VALUES ($1, $2, $3)`,
 			lease.TenantID,
 			lease.CollectorID,
 			capability,
@@ -1262,19 +1266,19 @@ func TestCollectorFleetCorruptionReturnsInternalError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := collectorTestChecks(ctx, connection, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := connection.ExecContext(ctx, `
 		UPDATE collector_runtime
 		SET queued_events = -1
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	); err != nil {
 		t.Fatalf("install corruption fixture: %v", err)
 	}
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`); err != nil {
+	if _, err := collectorTestChecks(ctx, connection, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Get(ctx, lease.Scope, lease.CollectorID); err == nil ||
@@ -1297,7 +1301,7 @@ func TestCollectorFleetRejectsConstraintValidCrossTableCorruption(t *testing.T) 
 		if _, err := database.SQLDB().ExecContext(ctx, `
 			UPDATE collector_fleet
 			SET administrative_state = 'disabled'
-			WHERE tenant_id = ? AND collector_id = ?`,
+			WHERE tenant_id = $1 AND collector_id = $2`,
 			lease.TenantID,
 			lease.CollectorID,
 		); err != nil {
@@ -1319,7 +1323,7 @@ func TestCollectorFleetRejectsConstraintValidCrossTableCorruption(t *testing.T) 
 		}
 		if _, err := database.SQLDB().ExecContext(ctx, `
 			DELETE FROM collector_authorized_indexes
-			WHERE tenant_id = ? AND collector_id = ?`,
+			WHERE tenant_id = $1 AND collector_id = $2`,
 			lease.TenantID,
 			lease.CollectorID,
 		); err != nil {
@@ -1347,19 +1351,19 @@ func TestLeaseBoundaryRejectsCorruptAuthorityTuple(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := collectorTestChecks(ctx, connection, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := connection.ExecContext(ctx, `
 		UPDATE collector_runtime
 		SET active_instance_id = NULL
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	); err != nil {
 		t.Fatalf("install partial-lease corruption fixture: %v", err)
 	}
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`); err != nil {
+	if _, err := collectorTestChecks(ctx, connection, true); err != nil {
 		t.Fatal(err)
 	}
 	if applied, err := store.RecordHeartbeat(
@@ -1393,25 +1397,25 @@ func TestLeaseBoundaryRejectsCorruptAdministratorVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := collectorTestChecks(ctx, connection, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := connection.ExecContext(
 		ctx,
-		`DROP TRIGGER collector_fleet_admin_version_is_monotonic`,
+		`DROP TRIGGER collector_fleet_admin_version_is_monotonic ON collector_fleet`,
 	); err != nil {
 		t.Fatalf("remove monotonic trigger for corruption fixture: %v", err)
 	}
 	if _, err := connection.ExecContext(ctx, `
 		UPDATE collector_fleet
 		SET admin_version = 0
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	); err != nil {
 		t.Fatalf("install administrator-version corruption fixture: %v", err)
 	}
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`); err != nil {
+	if _, err := collectorTestChecks(ctx, connection, true); err != nil {
 		t.Fatal(err)
 	}
 	if applied, err := store.RecordHeartbeat(
@@ -1436,7 +1440,7 @@ func TestAdministrativeDisableCommitsDespiteCorruptFleetProjection(t *testing.T)
 	for capability := int64(1000); capability <= 1000+maximumCapabilities; capability++ {
 		if _, err := database.SQLDB().ExecContext(ctx, `
 			INSERT INTO collector_capabilities (tenant_id, collector_id, capability)
-			VALUES (?, ?, ?)`,
+			VALUES ($1, $2, $3)`,
 			lease.TenantID,
 			lease.CollectorID,
 			capability,
@@ -1460,7 +1464,7 @@ func TestAdministrativeDisableCommitsDespiteCorruptFleetProjection(t *testing.T)
 		t.Fatalf("disable result = %#v", disabled)
 	}
 	var state AdministrativeState
-	var runtimeInactive int
+	var runtimeInactive bool
 	var telemetryRevision int64
 	if err := database.SQLDB().QueryRowContext(ctx, `
 		SELECT f.administrative_state,
@@ -1469,17 +1473,17 @@ func TestAdministrativeDisableCommitsDespiteCorruptFleetProjection(t *testing.T)
 		FROM collector_fleet AS f
 		JOIN collector_runtime AS r
 		  ON r.tenant_id = f.tenant_id AND r.collector_id = f.collector_id
-		WHERE f.tenant_id = ? AND f.collector_id = ?`,
+		WHERE f.tenant_id = $1 AND f.collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	).Scan(&state, &runtimeInactive, &telemetryRevision); err != nil {
 		t.Fatal(err)
 	}
 	if state != AdministrativeStateDisabled ||
-		runtimeInactive != 1 ||
+		!runtimeInactive ||
 		telemetryRevision != 2 {
 		t.Fatalf(
-			"persisted disable = state=%q inactive=%d telemetry=%d",
+			"persisted disable = state=%q inactive=%t telemetry=%d",
 			state,
 			runtimeInactive,
 			telemetryRevision,
@@ -1528,19 +1532,19 @@ func TestAdministrativeDisableFencesCorruptRuntimeWithoutBlockingBootInvalidatio
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := collectorTestChecks(ctx, connection, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := connection.ExecContext(ctx, `
 		UPDATE collector_runtime
 		SET active_instance_id = NULL
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		corruptLease.TenantID,
 		corruptLease.CollectorID,
 	); err != nil {
 		t.Fatalf("install corrupt runtime fixture: %v", err)
 	}
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`); err != nil {
+	if _, err := collectorTestChecks(ctx, connection, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1559,20 +1563,20 @@ func TestAdministrativeDisableFencesCorruptRuntimeWithoutBlockingBootInvalidatio
 		t.Fatalf("disable result = %#v", disabled)
 	}
 	var state AdministrativeState
-	var runtimeStillActive int
+	var runtimeStillActive bool
 	if err := database.SQLDB().QueryRowContext(ctx, `
 		SELECT f.administrative_state, r.boot_epoch IS NOT NULL
 		FROM collector_fleet AS f
 		JOIN collector_runtime AS r
 		  ON r.tenant_id = f.tenant_id AND r.collector_id = f.collector_id
-		WHERE f.tenant_id = ? AND f.collector_id = ?`,
+		WHERE f.tenant_id = $1 AND f.collector_id = $2`,
 		corruptLease.TenantID,
 		corruptLease.CollectorID,
 	).Scan(&state, &runtimeStillActive); err != nil {
 		t.Fatal(err)
 	}
-	if state != AdministrativeStateDisabled || runtimeStillActive != 1 {
-		t.Fatalf("fail-safe disable = state=%q runtime-active=%d", state, runtimeStillActive)
+	if state != AdministrativeStateDisabled || !runtimeStillActive {
+		t.Fatalf("fail-safe disable = state=%q runtime-active=%t", state, runtimeStillActive)
 	}
 	if applied, err := store.RecordHeartbeat(
 		ctx,
@@ -1631,7 +1635,7 @@ func TestReenableRejectsConstraintValidDormantActiveLease(t *testing.T) {
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_fleet
 		SET administrative_state = 'disabled'
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	); err != nil {
@@ -1659,7 +1663,7 @@ func TestReenableRejectsConstraintValidDormantActiveLease(t *testing.T) {
 	if err := database.SQLDB().QueryRowContext(ctx, `
 		SELECT administrative_state, admin_version
 		FROM collector_fleet
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	).Scan(&state, &version); err != nil {
@@ -1685,20 +1689,20 @@ func TestCollectorFleetRejectsPersistedTimestampAbovePublicRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := collectorTestChecks(ctx, connection, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := connection.ExecContext(ctx, `
 		UPDATE collector_runtime
-		SET started_at_unix_micro = ?
-		WHERE tenant_id = ? AND collector_id = ?`,
+		SET started_at_unix_micro = $1
+		WHERE tenant_id = $2 AND collector_id = $3`,
 		int64(math.MaxInt64),
 		lease.TenantID,
 		lease.CollectorID,
 	); err != nil {
 		t.Fatalf("install out-of-range timestamp fixture: %v", err)
 	}
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`); err != nil {
+	if _, err := collectorTestChecks(ctx, connection, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Get(ctx, lease.Scope, lease.CollectorID); err == nil ||

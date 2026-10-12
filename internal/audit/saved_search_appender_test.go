@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 )
 
@@ -78,7 +79,7 @@ func TestSavedSearchMutationAppenderMapsAllActionsAndActorsInOneTransaction(t *t
 		},
 	}
 
-	tx := database.GORMDB().WithContext(ctx).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 	if tx.Error != nil {
 		t.Fatalf("begin shared transaction: %v", tx.Error)
 	}
@@ -212,7 +213,7 @@ func TestSavedSearchMutationAppenderRejectsUnknownAndInvalidEventsBeforeWriting(
 			},
 		},
 		{
-			name: "version outside SQLite range",
+			name: "version outside PostgreSQL bigint range",
 			event: savedobjects.SavedSearchMutationAuditEvent{
 				OccurredAt: auditTestTime, Action: savedobjects.SavedSearchMutationAuditActionDelete,
 				SavedSearchID: "saved-search", SavedSearchVersion: uint64(math.MaxInt64) + 1,
@@ -221,7 +222,7 @@ func TestSavedSearchMutationAppenderRejectsUnknownAndInvalidEventsBeforeWriting(
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			tx := database.GORMDB().WithContext(ctx).Begin()
+			tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 			if tx.Error != nil {
 				t.Fatalf("begin: %v", tx.Error)
 			}
@@ -280,7 +281,7 @@ func TestSavedSearchMutationAppenderRejectsForeignAndAutocommitTransactions(t *t
 	}
 
 	foreignDatabase := openAuditTestDatabase(t)
-	foreignTx := foreignDatabase.GORMDB().WithContext(ctx).Begin()
+	foreignTx := pgmeta.Begin(foreignDatabase.GORMDB().WithContext(ctx))
 	if foreignTx.Error != nil {
 		t.Fatalf("begin foreign transaction: %v", foreignTx.Error)
 	}
@@ -321,7 +322,7 @@ func TestSavedSearchMutationAppenderRollbackRemainsProvisional(t *testing.T) {
 		SavedSearchVersion: 1,
 	}
 
-	tx := database.GORMDB().WithContext(ctx).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 	if tx.Error != nil {
 		t.Fatalf("begin provisional transaction: %v", tx.Error)
 	}
@@ -371,7 +372,7 @@ func TestSavedSearchMutationAppenderRollbackRemainsProvisional(t *testing.T) {
 		t.Fatalf("tenant state survived caller rollback: %d", stateCount)
 	}
 
-	committedTx := database.GORMDB().WithContext(ctx).Begin()
+	committedTx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 	if committedTx.Error != nil {
 		t.Fatalf("begin committed transaction: %v", committedTx.Error)
 	}

@@ -1,5 +1,5 @@
 // Package knowledgecatalog provides bounded reads and transactional publication
-// of the immutable knowledge catalog created by SQLite migrations 0024 through
+// of the immutable knowledge catalog created by PostgreSQL migrations 0024 through
 // 0030. Management routes remain separately feature-gated by the server.
 package knowledgecatalog
 
@@ -57,9 +57,11 @@ var (
 // request body. The initial administrator policy sees owned private objects in
 // readable apps, app-shared objects in readable apps, and tenant-global objects.
 type ReadScope struct {
-	TenantID       string
-	OwnerID        string
-	ReadableAppIDs []string
+	OrganizationID    int64
+	SiteAdministrator bool
+	TenantID          string
+	OwnerID           string
+	ReadableAppIDs    []string
 }
 
 type ObjectType = audit.KnowledgeObjectType

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"gorm.io/gorm"
 )
 
@@ -64,7 +65,7 @@ func TestCollectorTokenRevokedRetentionIndexMatchesMigration(t *testing.T) {
 	var migratedColumns []migratedIndexColumn
 	query := db.GORMDB().Raw(
 		`SELECT name, "desc" AS descending
-		 FROM pragma_index_xinfo(?)
+		 FROM (SELECT a.attname AS name,k.ordinality-1 AS seqno,1 AS "key",CASE WHEN (i.indoption[(k.ordinality-1)::int] & 1)=1 THEN 1 ELSE 0 END AS "desc" FROM pg_index i JOIN pg_class x ON x.oid=i.indexrelid JOIN pg_namespace n ON n.oid=x.relnamespace CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum,ordinality) JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum WHERE n.nspname=current_schema() AND x.relname=? AND k.ordinality<=i.indnkeyatts) AS index_metadata
 		 WHERE "key" = 1
 		 ORDER BY seqno`,
 		indexName,
@@ -94,19 +95,16 @@ func TestCollectorTokenRevokedRetentionIndexMatchesMigration(t *testing.T) {
 
 	var migratedSQL string
 	query = db.GORMDB().Raw(
-		`SELECT sql
-		 FROM sqlite_schema
-		 WHERE type = 'index' AND name = ?`,
+		`SELECT pg_get_indexdef(r.oid) AS sql FROM pg_class r JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND r.relname=?`,
 		indexName,
 	).Scan(&migratedSQL)
 	if query.Error != nil {
 		t.Fatalf("read migrated %s definition: %v", indexName, query.Error)
 	}
-	const wantSQL = "CREATE INDEX ingestion_tokens_revoked_retention_idx " +
-		"ON ingestion_tokens ( revoked_at_unix_micro DESC, ingestion_token_id DESC ) " +
-		"WHERE state = 'revoked'"
-	if got := strings.Join(strings.Fields(migratedSQL), " "); got != wantSQL {
-		t.Fatalf("migrated %s SQL = %q, want %q", indexName, got, wantSQL)
+	// PostgreSQL qualifies the physical schema and casts the predicate literal.
+	// Key columns and descending order are checked through pg_index above.
+	if !strings.Contains(migratedSQL, "USING btree (revoked_at_unix_micro DESC, ingestion_token_id DESC)") || !strings.Contains(migratedSQL, "WHERE (state = 'revoked'::text)") {
+		t.Fatalf("migrated retention index has unexpected key/predicate: %q", migratedSQL)
 	}
 }
 
@@ -138,32 +136,27 @@ func TestCollectorTokenPruneVictimQueryUsesRevokedRetentionIndex(t *testing.T) {
 		)
 	}
 
-	var planRows []struct {
-		ID     int
-		Parent int
-		Unused int
-		Detail string
+	connection, err := db.SQLDB().Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
 	}
-	query := db.GORMDB().Raw(
-		"EXPLAIN QUERY PLAN "+generated.Statement.SQL.String(),
-		generated.Statement.Vars...,
-	).Scan(&planRows)
-	if query.Error != nil {
-		t.Fatalf("EXPLAIN QUERY PLAN collector token prune victims: %v", query.Error)
+	defer connection.Close()
+	// Empty fixture statistics otherwise favor a sequential scan. Assert that
+	// this bounded query can use the native partial index without a sort.
+	if _, err := connection.ExecContext(t.Context(), "SET enable_seqscan = off"); err != nil {
+		t.Fatal(err)
 	}
-	details := make([]string, len(planRows))
-	for rowIndex, row := range planRows {
-		details[rowIndex] = row.Detail
+	defer func() {
+		if _, err := connection.ExecContext(context.Background(), "RESET enable_seqscan"); err != nil {
+			t.Error(err)
+		}
+	}()
+	var plan string
+	if err := connection.QueryRowContext(t.Context(), "EXPLAIN (FORMAT JSON) "+generated.Statement.SQL.String(), generated.Statement.Vars...).Scan(&plan); err != nil {
+		t.Fatal(err)
 	}
-	want := []string{
-		"SCAN ingestion_tokens USING COVERING INDEX ingestion_tokens_revoked_retention_idx",
-	}
-	if !slices.Equal(details, want) {
-		t.Fatalf(
-			"collector token prune victim query plan = %q, want exactly %q",
-			details,
-			want,
-		)
+	if !strings.Contains(plan, `"Index Name": "ingestion_tokens_revoked_retention_idx"`) || strings.Contains(plan, `"Node Type": "Sort"`) {
+		t.Fatalf("bounded revoked-token query does not use retention index order: %s", plan)
 	}
 }
 
@@ -332,7 +325,7 @@ func TestCreateCollectorTokenCapacityRequiresExplicitRevocationAndRecovers(
 			Name:              name,
 			AllowedIndexNames: []string{"main"},
 			BoundCollectorID:  testCollectorID,
-			ExpiresAt:         expiresAt,
+			ExpiresAt:         expiresAt, OrganizationID: 1, IssuerUserID: 42,
 		})
 	}
 
@@ -443,7 +436,7 @@ func TestConcurrentCollectorTokenCreatesRespectTotalRecordLimit(t *testing.T) {
 				CreateCollectorTokenRequest{
 					Name:              fmt.Sprintf("concurrent-create-%02d", attempt),
 					AllowedIndexNames: []string{"main"},
-					BoundCollectorID:  fmt.Sprintf("collector-create-%02d", attempt),
+					BoundCollectorID:  fmt.Sprintf("collector-create-%02d", attempt), OrganizationID: 1, IssuerUserID: 42,
 				},
 			)
 			results <- createErr
@@ -504,7 +497,7 @@ func TestCollectorTokenCatalogLimitsAreLocalAcrossStores(t *testing.T) {
 			CreateCollectorTokenRequest{
 				Name:              fmt.Sprintf("reduction-%d", tokenIndex),
 				AllowedIndexNames: []string{"main"},
-				BoundCollectorID:  testCollectorID,
+				BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 			},
 		); err != nil {
 			t.Fatalf("CreateCollectorToken(%d): %v", tokenIndex, err)
@@ -533,7 +526,7 @@ func TestCollectorTokenCatalogLimitsAreLocalAcrossStores(t *testing.T) {
 		CreateCollectorTokenRequest{
 			Name:              "reduction-rejected",
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		},
 	); !errors.Is(err, control.ErrCapacityExceeded) {
 		t.Fatalf(
@@ -550,7 +543,7 @@ func TestCollectorTokenCatalogLimitsAreLocalAcrossStores(t *testing.T) {
 		CreateCollectorTokenRequest{
 			Name:              "large-store-fourth",
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		},
 	); err != nil {
 		t.Fatalf("CreateCollectorToken(large store fourth): %v", err)
@@ -594,7 +587,7 @@ func TestCreateCollectorTokenReconcilesReducedRetentionAndCapacityLimits(
 			CreateCollectorTokenRequest{
 				Name:              fmt.Sprintf("reconcile-%d", tokenIndex),
 				AllowedIndexNames: []string{"main"},
-				BoundCollectorID:  testCollectorID,
+				BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 			},
 		)
 		if err != nil {
@@ -626,7 +619,7 @@ func TestCreateCollectorTokenReconcilesReducedRetentionAndCapacityLimits(
 		CreateCollectorTokenRequest{
 			Name:              "reconciled replacement",
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		},
 	)
 	if err != nil {
@@ -716,7 +709,7 @@ func TestListCollectorTokensDetectsPhysicalStructuralOverflow(t *testing.T) {
 			State:              CollectorTokenStateActive,
 			CreatedAtUnixMicro: now,
 			UpdatedAtUnixMicro: now,
-			BoundCollectorID:   &boundCollectorID,
+			BoundCollectorID:   &boundCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		}
 	}
 	if err := db.GORMDB().
@@ -759,7 +752,7 @@ func TestListCollectorTokensRejectsIncompletePhysicalHydration(t *testing.T) {
 		CreateCollectorTokenRequest{
 			Name:              "healthy scoped token",
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		},
 	); err != nil {
 		t.Fatalf("CreateCollectorToken(healthy): %v", err)
@@ -779,7 +772,7 @@ func TestListCollectorTokensRejectsIncompletePhysicalHydration(t *testing.T) {
 		State:              CollectorTokenStateActive,
 		CreatedAtUnixMicro: now,
 		UpdatedAtUnixMicro: now,
-		BoundCollectorID:   &boundCollectorID,
+		BoundCollectorID:   &boundCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	}
 	if err := db.GORMDB().WithContext(ctx).Create(&orphan).Error; err != nil {
 		t.Fatalf("seed token without scope: %v", err)
@@ -986,7 +979,7 @@ func TestCollectorTokenMetadataRejectsOrphanScopeRows(t *testing.T) {
 		CreateCollectorTokenRequest{
 			Name:              "healthy token",
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		},
 	); err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -1007,23 +1000,21 @@ func TestCollectorTokenMetadataRejectsOrphanScopeRows(t *testing.T) {
 		t.Fatalf("acquire corruption connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(
-		ctx,
-		`PRAGMA foreign_keys = OFF`,
+	if _, err := pgtest.DropForeignKeys(
+		ctx, connection,
 	); err != nil {
 		t.Fatalf("disable foreign keys: %v", err)
 	}
 	if _, err := connection.ExecContext(
 		ctx,
 		`INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
-		 VALUES ('tok_missing_parent', ?)`,
+		 VALUES ('tok_missing_parent', $1)`,
 		indexID,
 	); err != nil {
 		t.Fatalf("insert orphan token scope: %v", err)
 	}
-	if _, err := connection.ExecContext(
-		ctx,
-		`PRAGMA foreign_keys = ON`,
+	if _, err := pgtest.RestoreForeignKeys(
+		ctx, connection,
 	); err != nil {
 		t.Fatalf("restore foreign keys: %v", err)
 	}
@@ -1178,7 +1169,7 @@ func TestCreateCollectorTokenRecoversGlobalScopeCapacityFromRevokedTombstone(
 		CreateCollectorTokenRequest{
 			Name:              "scope capacity replacement",
 			AllowedIndexNames: []string{indexNames[0]},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		},
 	)
 	if err != nil {
@@ -1303,7 +1294,7 @@ func TestCreateCollectorTokenInsertFailureRollsBackCapacityPrune(t *testing.T) {
 			CreateCollectorTokenRequest{
 				Name:              name,
 				AllowedIndexNames: []string{"main"},
-				BoundCollectorID:  testCollectorID,
+				BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 			},
 		)
 		if createErr != nil {
@@ -1321,11 +1312,7 @@ func TestCreateCollectorTokenInsertFailureRollsBackCapacityPrune(t *testing.T) {
 		t.Fatalf("RevokeCollectorToken(): %v", err)
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
-		CREATE TRIGGER reject_token_insert_after_capacity_prune
-		BEFORE INSERT ON ingestion_tokens
-		BEGIN
-			SELECT RAISE(ABORT, 'forced collector token insert failure');
-		END`); err != nil {
+		CREATE OR REPLACE FUNCTION reject_token_insert_after_capacity_prune_function() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING MESSAGE = 'forced collector token insert failure'; RETURN NEW; END $$; CREATE TRIGGER reject_token_insert_after_capacity_prune BEFORE INSERT ON ingestion_tokens FOR EACH ROW EXECUTE FUNCTION reject_token_insert_after_capacity_prune_function()`); err != nil {
 		t.Fatalf("create insert-failure trigger: %v", err)
 	}
 
@@ -1334,7 +1321,7 @@ func TestCreateCollectorTokenInsertFailureRollsBackCapacityPrune(t *testing.T) {
 		CreateCollectorTokenRequest{
 			Name:              "rejected replacement",
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		},
 	); err == nil {
 		t.Fatal("CreateCollectorToken(insert failure) unexpectedly succeeded")
@@ -1376,7 +1363,7 @@ func TestRevokeCollectorTokenStructuralOverflowDoesNotMutate(t *testing.T) {
 			CreateCollectorTokenRequest{
 				Name:              "overflow revoke target",
 				AllowedIndexNames: []string{"main"},
-				BoundCollectorID:  testCollectorID,
+				BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 			},
 		)
 		if err != nil {
@@ -1420,7 +1407,7 @@ func TestRevokeCollectorTokenStructuralOverflowDoesNotMutate(t *testing.T) {
 			CreateCollectorTokenRequest{
 				Name:              "scope overflow revoke target",
 				AllowedIndexNames: []string{"main"},
-				BoundCollectorID:  testCollectorID,
+				BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 			},
 		)
 		if err != nil {
@@ -1471,7 +1458,7 @@ func TestRevokeCollectorTokenPrunesOldestTombstonesAndScopes(t *testing.T) {
 		token, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 			Name:              name,
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		})
 		if err != nil {
 			t.Fatalf("CreateCollectorToken(%q): %v", name, err)
@@ -1480,7 +1467,7 @@ func TestRevokeCollectorTokenPrunesOldestTombstonesAndScopes(t *testing.T) {
 	}
 	if _, err := db.SQLDB().ExecContext(
 		ctx,
-		`UPDATE ingestion_tokens SET state = ? WHERE ingestion_token_id = ?`,
+		`UPDATE ingestion_tokens SET state = $1 WHERE ingestion_token_id = $2`,
 		CollectorTokenStateDisabled,
 		issued[4].Token.ID,
 	); err != nil {
@@ -1564,7 +1551,7 @@ func TestRevokeCollectorTokenRetainsCurrentTombstoneOnOrderingTie(t *testing.T) 
 		issued[tokenIndex], err = store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 			Name:              fmt.Sprintf("tie-%d", tokenIndex),
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		})
 		if err != nil {
 			t.Fatalf("CreateCollectorToken(%d): %v", tokenIndex, err)
@@ -1634,7 +1621,7 @@ func TestRevokeCollectorTokenPruneFailureRollsBack(t *testing.T) {
 		issued[tokenIndex], err = store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 			Name:              fmt.Sprintf("rollback-%d", tokenIndex),
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		})
 		if err != nil {
 			t.Fatalf("CreateCollectorToken(%d): %v", tokenIndex, err)
@@ -1648,12 +1635,7 @@ func TestRevokeCollectorTokenPruneFailureRollsBack(t *testing.T) {
 		t.Fatalf("RevokeCollectorToken(first): %v", err)
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
-		CREATE TRIGGER reject_revoked_token_prune
-		BEFORE DELETE ON ingestion_tokens
-		WHEN OLD.state = 'revoked'
-		BEGIN
-			SELECT RAISE(ABORT, 'forced token-prune failure');
-		END`); err != nil {
+		CREATE OR REPLACE FUNCTION reject_revoked_token_prune_function() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING MESSAGE = 'forced token-prune failure'; RETURN NEW; END $$; CREATE TRIGGER reject_revoked_token_prune BEFORE DELETE ON ingestion_tokens FOR EACH ROW WHEN (OLD.state = 'revoked') EXECUTE FUNCTION reject_revoked_token_prune_function()`); err != nil {
 		t.Fatalf("create prune failure trigger: %v", err)
 	}
 
@@ -1709,7 +1691,7 @@ func TestConcurrentCollectorTokenRevocationsPreserveRetentionLimit(t *testing.T)
 		issued[tokenIndex], err = store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 			Name:              fmt.Sprintf("concurrent-%02d", tokenIndex),
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		})
 		if err != nil {
 			t.Fatalf("CreateCollectorToken(%d): %v", tokenIndex, err)
@@ -1772,7 +1754,7 @@ func TestRevokeCollectorTokenRetentionHonorsCanceledContext(t *testing.T) {
 		issued[tokenIndex], err = store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 			Name:              fmt.Sprintf("canceled-%d", tokenIndex),
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		})
 		if err != nil {
 			t.Fatalf("CreateCollectorToken(%d): %v", tokenIndex, err)
@@ -1825,7 +1807,7 @@ func seedCollectorTokenScopeIndexes(
 			UNION ALL
 			SELECT value + 1
 			FROM sequence
-			WHERE value + 1 < ?
+			WHERE value + 1 < $1
 		)
 		INSERT INTO indexes (
 			index_id, version, name, display_name,
@@ -1833,15 +1815,15 @@ func seedCollectorTokenScopeIndexes(
 			created_at_unix_micro, updated_at_unix_micro
 		)
 		SELECT
-			printf('idx_token_scope_%03d', value),
+			'idx_token_scope_' || lpad((value)::text,3,'0') || '',
 			1,
-			printf('token-scope-%03d', value),
-			printf('Token Scope %03d', value),
+			'token-scope-' || lpad((value)::text,3,'0') || '',
+			'Token Scope ' || lpad((value)::text,3,'0') || '',
 			1,
 			1,
 			'active',
-			?,
-			?
+			$2,
+			$3
 		FROM sequence`,
 		count,
 		now,
@@ -1916,7 +1898,7 @@ func seedCollectorTokenScopeCatalog(
 			CreatedAtUnixMicro: now.UnixMicro(),
 			UpdatedAtUnixMicro: updatedAt,
 			RevokedAtUnixMicro: revokedAt,
-			BoundCollectorID:   &boundCollectorID,
+			BoundCollectorID:   &boundCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		}
 		for scopeIndex := range scopeCount {
 			memberships = append(
@@ -1966,7 +1948,7 @@ func seedCollectorTokenRecordWithID(
 		State:              CollectorTokenStateActive,
 		CreatedAtUnixMicro: now,
 		UpdatedAtUnixMicro: now,
-		BoundCollectorID:   &boundCollectorID,
+		BoundCollectorID:   &boundCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	}
 	if err := db.GORMDB().WithContext(ctx).Create(&record).Error; err != nil {
 		t.Fatalf("seed width-fixture token: %v", err)
@@ -2003,7 +1985,7 @@ func seedCollectorTokenParentsWithoutScopes(
 			State:              CollectorTokenStateActive,
 			CreatedAtUnixMicro: now,
 			UpdatedAtUnixMicro: now,
-			BoundCollectorID:   &boundCollectorID,
+			BoundCollectorID:   &boundCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		}
 	}
 	if err := db.GORMDB().
@@ -2025,9 +2007,8 @@ func seedOrphanCollectorTokenScopes(
 		t.Fatalf("acquire orphan-scope connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(
-		ctx,
-		`PRAGMA foreign_keys = OFF`,
+	if _, err := pgtest.DropForeignKeys(
+		ctx, connection,
 	); err != nil {
 		t.Fatalf("disable foreign keys: %v", err)
 	}
@@ -2036,9 +2017,8 @@ func seedOrphanCollectorTokenScopes(
 		if !foreignKeysDisabled {
 			return
 		}
-		if _, err := connection.ExecContext(
-			context.Background(),
-			`PRAGMA foreign_keys = ON`,
+		if _, err := pgtest.RestoreForeignKeys(
+			context.Background(), connection,
 		); err != nil {
 			t.Errorf("restore foreign keys after orphan scopes: %v", err)
 		}
@@ -2063,17 +2043,16 @@ func seedOrphanCollectorTokenScopes(
 		)
 		INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
 		SELECT
-			printf('tok_orphan_%05d', value),
-			printf('idx_orphan_%05d', value)
+			'tok_orphan_' || lpad((value)::text,5,'0') || '',
+			'idx_orphan_' || lpad((value)::text,5,'0') || ''
 		FROM numbers
-		WHERE value < ?`,
+		WHERE value < $1`,
 		count,
 	); err != nil {
 		t.Fatalf("seed orphan token scope overflow: %v", err)
 	}
-	if _, err := connection.ExecContext(
-		ctx,
-		`PRAGMA foreign_keys = ON`,
+	if _, err := pgtest.RestoreForeignKeys(
+		ctx, connection,
 	); err != nil {
 		t.Fatalf("restore foreign keys: %v", err)
 	}

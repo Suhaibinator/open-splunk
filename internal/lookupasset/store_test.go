@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,6 +11,8 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 const (
@@ -103,7 +104,7 @@ func TestStoreStagePublishReplaceAndReadExactVersions(t *testing.T) {
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT staged_asset_count, asset_identity_count,
 		       published_version_count, stored_content_bytes
-		FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id = ?`, testLookupTenant,
+		FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id = $1`, testLookupTenant,
 	).Scan(&stages, &identities, &versions, &storedBytes); err != nil {
 		t.Fatalf("read lookup ledger: %v", err)
 	}
@@ -139,7 +140,7 @@ func TestStoreAtomicPublicationRollsBackPhysicalVersionWhenFinalizerFails(t *tes
 			var count int
 			if queryErr := transaction.QueryRowContext(ctx, `
 				SELECT count(*) FROM knowledge_lookup_asset_versions
-				WHERE tenant_id = ? AND lookup_asset_id = ? AND asset_version = ?`,
+				WHERE tenant_id = $1 AND lookup_asset_id = $2 AND asset_version = $3`,
 				published.Ref.TenantID,
 				published.Ref.LookupAssetID,
 				published.Ref.Version,
@@ -155,7 +156,7 @@ func TestStoreAtomicPublicationRollsBackPhysicalVersionWhenFinalizerFails(t *tes
 	var stages, identities, versions int
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT staged_asset_count, asset_identity_count, published_version_count
-		FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id = ?`,
+		FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id = $1`,
 		testLookupTenant,
 	).Scan(&stages, &identities, &versions); err != nil {
 		t.Fatalf("read rollback ledger: %v", err)
@@ -187,16 +188,13 @@ func TestStorePublicationReclaimsStagedBytesBeforeVersionCapacityCheck(t *testin
 	// immutable version, but not for both that version and its staging copy.
 	// Publication must consume the stage before version-capacity triggers run.
 	if _, err := database.SQLDB().ExecContext(t.Context(), fmt.Sprintf(`
-		CREATE TRIGGER test_lookup_asset_exact_byte_quota
-		BEFORE INSERT ON knowledge_lookup_asset_versions
-		WHEN EXISTS (
-			SELECT 1 FROM knowledge_lookup_asset_tenant_ledgers
-			WHERE tenant_id = NEW.tenant_id
-			  AND stored_content_bytes > %d - NEW.canonical_bytes
-		)
-		BEGIN
-			SELECT RAISE(ABORT, 'test lookup asset exact byte quota exhausted');
-		END`, stage.SizeBytes)); err != nil {
+ CREATE FUNCTION test_lookup_asset_exact_byte_quota() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+  IF EXISTS (SELECT 1 FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id=NEW.tenant_id AND stored_content_bytes>%d-NEW.canonical_bytes) THEN
+   RAISE EXCEPTION 'test lookup asset exact byte quota exhausted' USING ERRCODE='23514';
+  END IF;
+  RETURN NEW;
+ END; $$;
+ CREATE TRIGGER test_lookup_asset_exact_byte_quota BEFORE INSERT ON knowledge_lookup_asset_versions FOR EACH ROW EXECUTE FUNCTION test_lookup_asset_exact_byte_quota()`, stage.SizeBytes)); err != nil {
 		t.Fatalf("install exact-byte quota: %v", err)
 	}
 
@@ -212,7 +210,7 @@ func TestStorePublicationReclaimsStagedBytesBeforeVersionCapacityCheck(t *testin
 	var storedBytes uint64
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT staged_asset_count, published_version_count, stored_content_bytes
-		FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id = ?`,
+		FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id = $1`,
 		testLookupTenant,
 	).Scan(&stages, &versions, &storedBytes); err != nil {
 		t.Fatalf("read exact-quota ledger: %v", err)
@@ -326,8 +324,11 @@ func TestStoreStagingStartsTTLAfterWaitingForWriter(t *testing.T) {
 		t.Fatalf("acquire blocking writer: %v", err)
 	}
 	defer writer.Close()
-	if _, err := writer.ExecContext(t.Context(), `BEGIN IMMEDIATE`); err != nil {
+	if _, err := writer.ExecContext(t.Context(), `BEGIN ISOLATION LEVEL READ COMMITTED`); err != nil {
 		t.Fatalf("begin blocking writer: %v", err)
+	}
+	if _, err := writer.ExecContext(t.Context(), "SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(), $1))", pgmeta.WriteLock); err != nil {
+		t.Fatalf("acquire metadata writer: %v", err)
 	}
 	writerOpen := true
 	defer func() {
@@ -351,14 +352,14 @@ func TestStoreStagingStartsTTLAfterWaitingForWriter(t *testing.T) {
 	}()
 	select {
 	case <-clockCalls:
-		t.Fatal("staging sampled its TTL before attempting to acquire the SQLite writer")
+		t.Fatal("staging sampled its TTL before attempting to acquire the PostgreSQL metadata writer")
 	case <-stageIDGenerated:
 	case <-time.After(3 * time.Second):
 		t.Fatal("StageCSV() did not reach the write boundary")
 	}
 	select {
 	case <-clockCalls:
-		t.Fatal("staging sampled its TTL while still blocked behind the SQLite writer")
+		t.Fatal("staging sampled its TTL while still blocked behind the PostgreSQL metadata writer")
 	case <-time.After(100 * time.Millisecond):
 	}
 
@@ -418,8 +419,11 @@ func TestStorePublicationRechecksExpiryAfterWaitingForWriter(t *testing.T) {
 		t.Fatalf("acquire blocking writer: %v", err)
 	}
 	defer writer.Close()
-	if _, err := writer.ExecContext(t.Context(), `BEGIN IMMEDIATE`); err != nil {
+	if _, err := writer.ExecContext(t.Context(), `BEGIN ISOLATION LEVEL READ COMMITTED`); err != nil {
 		t.Fatalf("begin blocking writer: %v", err)
+	}
+	if _, err := writer.ExecContext(t.Context(), "SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(), $1))", pgmeta.WriteLock); err != nil {
+		t.Fatalf("acquire metadata writer: %v", err)
 	}
 	writerOpen := true
 	defer func() {
@@ -440,7 +444,7 @@ func TestStorePublicationRechecksExpiryAfterWaitingForWriter(t *testing.T) {
 	<-publishStarted
 	select {
 	case <-clockCalls:
-		t.Fatal("publication sampled its clock before acquiring the SQLite writer")
+		t.Fatal("publication sampled its clock before acquiring the PostgreSQL metadata writer")
 	case <-time.After(100 * time.Millisecond):
 	}
 
@@ -470,7 +474,7 @@ func TestStorePublicationCancellationDuringPersistedVerificationRollsBack(t *tes
 	store := mustLookupStore(t, database, StoreOptions{
 		Clock: func() time.Time {
 			if clockCalls.Add(1) == 2 {
-				// Publish samples its clock only after BEGIN IMMEDIATE. Leave
+				// Publish samples its clock only after the metadata write lock. Leave
 				// enough checkpoints for the staged row to be read, then cancel
 				// during its context-aware persisted CSV verification.
 				publishContext.arm(4)
@@ -589,26 +593,26 @@ func TestMigrationForbidsPublishedVersionMutationAndUnpairedPointerAdvance(t *te
 	}
 	if _, err := database.SQLDB().ExecContext(t.Context(), `
 		UPDATE knowledge_lookup_asset_versions SET row_count = 0
-		WHERE tenant_id = ? AND lookup_asset_id = ? AND asset_version = 1`,
+		WHERE tenant_id = $1 AND lookup_asset_id = $2 AND asset_version = 1`,
 		testLookupTenant, published.Ref.LookupAssetID,
 	); err == nil {
 		t.Fatal("published version update unexpectedly succeeded")
 	}
 	if _, err := database.SQLDB().ExecContext(t.Context(), `
 		DELETE FROM knowledge_lookup_asset_versions
-		WHERE tenant_id = ? AND lookup_asset_id = ? AND asset_version = 1`,
+		WHERE tenant_id = $1 AND lookup_asset_id = $2 AND asset_version = 1`,
 		testLookupTenant, published.Ref.LookupAssetID,
 	); err == nil {
 		t.Fatal("published version delete unexpectedly succeeded")
 	}
-	tx, err := database.SQLDB().BeginTx(t.Context(), nil)
+	tx, err := pgmeta.BeginSQL(t.Context(), database.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin unpaired advance: %v", err)
 	}
 	if _, err := tx.ExecContext(t.Context(), `
 		UPDATE knowledge_lookup_assets
 		SET current_version = 2, updated_at_unix_micro = updated_at_unix_micro + 1
-		WHERE tenant_id = ? AND lookup_asset_id = ?`, testLookupTenant, published.Ref.LookupAssetID); err != nil {
+		WHERE tenant_id = $1 AND lookup_asset_id = $2`, testLookupTenant, published.Ref.LookupAssetID); err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("stage deferred unpaired advance: %v", err)
 	}
@@ -630,10 +634,10 @@ func TestStoreStagingCapacityIsAtomic(t *testing.T) {
 		t.Fatalf("over-capacity stage = %v", err)
 	}
 	var count, ledger int
-	if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT count(*) FROM knowledge_lookup_asset_stages WHERE tenant_id = ?`, testLookupTenant).Scan(&count); err != nil {
+	if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT count(*) FROM knowledge_lookup_asset_stages WHERE tenant_id = $1`, testLookupTenant).Scan(&count); err != nil {
 		t.Fatalf("count stages: %v", err)
 	}
-	if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT staged_asset_count FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id = ?`, testLookupTenant).Scan(&ledger); err != nil {
+	if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT staged_asset_count FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id = $1`, testLookupTenant).Scan(&ledger); err != nil {
 		t.Fatalf("read stage ledger: %v", err)
 	}
 	if count != MaximumStagedAssetsPerTenant || ledger != count {
@@ -673,11 +677,42 @@ func TestStageCSVReclaimsExpiredStagesWithoutExternalMaintenance(t *testing.T) {
 	var count int
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT count(*) FROM knowledge_lookup_asset_stages
-		WHERE tenant_id = ?`, testLookupTenant).Scan(&count); err != nil {
+		WHERE tenant_id = $1`, testLookupTenant).Scan(&count); err != nil {
 		t.Fatalf("count stages: %v", err)
 	}
 	if count != 1 {
 		t.Fatalf("stage count after opportunistic reclaim = %d, want 1", count)
+	}
+}
+
+func TestPruneExpiredStagesAccountsEachTenantAtomically(t *testing.T) {
+	database := openLookupTestDatabase(t)
+	clock := newTestClock(time.Unix(1_700_000_000, 0).UTC())
+	store := mustLookupStore(t, database, StoreOptions{Clock: clock.Now, StageTTL: time.Minute})
+	secondTenant := testLookupTenant + "-second"
+	if _, err := database.SQLDB().ExecContext(t.Context(), `INSERT INTO knowledge_catalog_tenants(tenant_id) VALUES($1)`, secondTenant); err != nil {
+		t.Fatal(err)
+	}
+	asset := mustParseAsset(t, "key,value\none,first\n")
+	for _, tenant := range []string{testLookupTenant, secondTenant} {
+		for range 2 {
+			if _, err := store.StageCSV(t.Context(), StageRequest{TenantID: tenant, OwnerID: testLookupOwner, Asset: asset}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	clock.Advance(time.Minute)
+	if deleted, err := store.PruneExpiredStages(t.Context(), clock.Now(), 4); err != nil || deleted != 4 {
+		t.Fatalf("multi-tenant expired-stage prune = %d, %v", deleted, err)
+	}
+	for _, tenant := range []string{testLookupTenant, secondTenant} {
+		var stages, bytes int64
+		if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT staged_asset_count,stored_content_bytes FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id=$1`, tenant).Scan(&stages, &bytes); err != nil {
+			t.Fatal(err)
+		}
+		if stages != 0 || bytes != 0 {
+			t.Fatalf("tenant %q retained deleted-stage accounting: count=%d bytes=%d", tenant, stages, bytes)
+		}
 	}
 }
 
@@ -708,7 +743,7 @@ func TestNewStoreAndRequestsRejectInvalidInput(t *testing.T) {
 
 func openLookupTestDatabase(t *testing.T) *control.DB {
 	t.Helper()
-	database, err := control.Open(t.Context(), filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := control.Open(t.Context(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("open control database: %v", err)
 	}
@@ -718,7 +753,7 @@ func openLookupTestDatabase(t *testing.T) *control.DB {
 		}
 	})
 	if _, err := database.SQLDB().ExecContext(t.Context(), `
-		INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES (?)`, testLookupTenant); err != nil {
+		INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ($1)`, testLookupTenant); err != nil {
 		t.Fatalf("provision lookup tenant: %v", err)
 	}
 	return database

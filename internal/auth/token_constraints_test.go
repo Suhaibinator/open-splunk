@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestCollectorTokenConstraintsRoundTripAndReplaceAtomically(t *testing.T) {
@@ -33,7 +34,7 @@ func TestCollectorTokenConstraintsRoundTripAndReplaceAtomically(t *testing.T) {
 		AllowedIndexNames:    []string{"main"},
 		BoundCollectorID:     testCollectorID,
 		AllowedHostRegexes:   []string{"^z$", "^a$", "^z$"},
-		AllowedSourceRegexes: []string{`^/var/log/[^/]+$`, `.*`, `.*`},
+		AllowedSourceRegexes: []string{`^/var/log/[^/]+$`, `.*`, `.*`}, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -172,7 +173,7 @@ func TestCollectorTokenConstraintValidationIsBoundedAndDeterministic(t *testing.
 				AllowedIndexNames:    []string{"main"},
 				BoundCollectorID:     testCollectorID,
 				AllowedHostRegexes:   test.hosts,
-				AllowedSourceRegexes: test.sources,
+				AllowedSourceRegexes: test.sources, OrganizationID: 1, IssuerUserID: 42,
 			})
 			if !errors.Is(createErr, control.ErrInvalidArgument) {
 				t.Fatalf("CreateCollectorToken() error = %v, want ErrInvalidArgument", createErr)
@@ -187,7 +188,7 @@ func TestCollectorTokenConstraintValidationIsBoundedAndDeterministic(t *testing.
 		Name:               "duplicate constraints",
 		AllowedIndexNames:  []string{"main"},
 		BoundCollectorID:   testCollectorID,
-		AllowedHostRegexes: duplicates,
+		AllowedHostRegexes: duplicates, OrganizationID: 1, IssuerUserID: 42,
 	}); err != nil {
 		t.Fatalf("CreateCollectorToken(duplicate constraints): %v", err)
 	}
@@ -200,7 +201,7 @@ func TestCollectorTokenConstraintValidationIsBoundedAndDeterministic(t *testing.
 		Name:               "boundary constraints",
 		AllowedIndexNames:  []string{"main"},
 		BoundCollectorID:   testCollectorID,
-		AllowedHostRegexes: boundary,
+		AllowedHostRegexes: boundary, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(boundary): %v", err)
@@ -231,7 +232,7 @@ func TestCollectorTokenConstraintHydrationFailsClosedOnCorruption(t *testing.T) 
 		Name:               "corruption target",
 		AllowedIndexNames:  []string{"main"},
 		BoundCollectorID:   testCollectorID,
-		AllowedHostRegexes: []string{"^valid$"},
+		AllowedHostRegexes: []string{"^valid$"}, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -240,7 +241,7 @@ func TestCollectorTokenConstraintHydrationFailsClosedOnCorruption(t *testing.T) 
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE ingestion_token_constraints
 		SET pattern = '['
-		WHERE ingestion_token_id = ? AND constraint_kind = 'host' AND ordinal = 0`,
+		WHERE ingestion_token_id = $1 AND constraint_kind = 'host' AND ordinal = 0`,
 		issued.Token.ID,
 	); err != nil {
 		t.Fatalf("corrupt stored constraint: %v", err)
@@ -255,7 +256,7 @@ func TestCollectorTokenConstraintHydrationFailsClosedOnCorruption(t *testing.T) 
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE ingestion_token_constraints
 		SET pattern = '^valid$', ordinal = 1
-		WHERE ingestion_token_id = ? AND constraint_kind = 'host' AND ordinal = 0`,
+		WHERE ingestion_token_id = $1 AND constraint_kind = 'host' AND ordinal = 0`,
 		issued.Token.ID,
 	); err != nil {
 		t.Fatalf("create stored ordinal gap: %v", err)
@@ -267,7 +268,7 @@ func TestCollectorTokenConstraintHydrationFailsClosedOnCorruption(t *testing.T) 
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE ingestion_token_constraints
 		SET pattern = 'z', ordinal = 0
-		WHERE ingestion_token_id = ? AND constraint_kind = 'host'`,
+		WHERE ingestion_token_id = $1 AND constraint_kind = 'host'`,
 		issued.Token.ID,
 	); err != nil {
 		t.Fatalf("repair stored ordinal: %v", err)
@@ -278,7 +279,7 @@ func TestCollectorTokenConstraintHydrationFailsClosedOnCorruption(t *testing.T) 
 			constraint_kind,
 			ordinal,
 			pattern
-		) VALUES (?, 'host', 1, 'a')`,
+		) VALUES ($1, 'host', 1, 'a')`,
 		issued.Token.ID,
 	); err != nil {
 		t.Fatalf("store non-lexical constraint: %v", err)
@@ -289,7 +290,7 @@ func TestCollectorTokenConstraintHydrationFailsClosedOnCorruption(t *testing.T) 
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE ingestion_token_constraints
 		SET pattern = 'z'
-		WHERE ingestion_token_id = ? AND constraint_kind = 'host' AND ordinal = 1`,
+		WHERE ingestion_token_id = $1 AND constraint_kind = 'host' AND ordinal = 1`,
 		issued.Token.ID,
 	); err != nil {
 		t.Fatalf("store duplicate constraint: %v", err)
@@ -299,7 +300,7 @@ func TestCollectorTokenConstraintHydrationFailsClosedOnCorruption(t *testing.T) 
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		DELETE FROM ingestion_token_constraints
-		WHERE ingestion_token_id = ? AND constraint_kind = 'host' AND ordinal = 1`,
+		WHERE ingestion_token_id = $1 AND constraint_kind = 'host' AND ordinal = 1`,
 		issued.Token.ID,
 	); err != nil {
 		t.Fatalf("remove duplicate constraint: %v", err)
@@ -308,7 +309,7 @@ func TestCollectorTokenConstraintHydrationFailsClosedOnCorruption(t *testing.T) 
 		if _, err := connection.ExecContext(ctx, `
 			UPDATE ingestion_token_constraints
 			SET constraint_kind = 'unknown'
-			WHERE ingestion_token_id = ? AND constraint_kind = 'host'`,
+			WHERE ingestion_token_id = $1 AND constraint_kind = 'host'`,
 			issued.Token.ID,
 		); err != nil {
 			t.Fatalf("store unknown constraint kind: %v", err)
@@ -320,7 +321,7 @@ func TestCollectorTokenConstraintHydrationFailsClosedOnCorruption(t *testing.T) 
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE ingestion_token_constraints
 		SET constraint_kind = 'host', pattern = 'a'
-		WHERE ingestion_token_id = ? AND constraint_kind = 'unknown'`,
+		WHERE ingestion_token_id = $1 AND constraint_kind = 'unknown'`,
 		issued.Token.ID,
 	); err != nil {
 		t.Fatalf("repair stored constraint kind: %v", err)
@@ -328,8 +329,8 @@ func TestCollectorTokenConstraintHydrationFailsClosedOnCorruption(t *testing.T) 
 	withIgnoredSQLiteChecks(t, ctx, database, func(connection *sql.Conn) {
 		if _, err := connection.ExecContext(ctx, `
 			UPDATE ingestion_token_constraints
-			SET pattern = ?
-			WHERE ingestion_token_id = ? AND constraint_kind = 'host'`,
+			SET pattern = $1
+			WHERE ingestion_token_id = $2 AND constraint_kind = 'host'`,
 			strings.Repeat("a", maximumTokenConstraintPatternBytes+1),
 			issued.Token.ID,
 		); err != nil {
@@ -344,7 +345,7 @@ func TestCollectorTokenConstraintHydrationFailsClosedOnCorruption(t *testing.T) 
 		if _, err := connection.ExecContext(ctx, `
 			UPDATE ingestion_token_constraints
 			SET pattern = 'a'
-			WHERE ingestion_token_id = ? AND constraint_kind = 'host'`,
+			WHERE ingestion_token_id = $1 AND constraint_kind = 'host'`,
 			issued.Token.ID,
 		); err != nil {
 			t.Fatalf("repair stored pattern width: %v", err)
@@ -356,7 +357,7 @@ func TestCollectorTokenConstraintHydrationFailsClosedOnCorruption(t *testing.T) 
 					constraint_kind,
 					ordinal,
 					pattern
-				) VALUES (?, 'host', ?, ?)`,
+				) VALUES ($1, 'host', $2, $3)`,
 				issued.Token.ID,
 				ordinal,
 				fmt.Sprintf("b%02d", ordinal),
@@ -390,18 +391,13 @@ func TestCollectorTokenConstraintReplacementRollsBackOnPersistenceFailure(t *tes
 		AllowedIndexNames:    []string{"main"},
 		BoundCollectorID:     testCollectorID,
 		AllowedHostRegexes:   []string{"^before-host$"},
-		AllowedSourceRegexes: []string{"^before-source$"},
+		AllowedSourceRegexes: []string{"^before-source$"}, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
-		CREATE TRIGGER reject_test_constraint_replacement
-		BEFORE INSERT ON ingestion_token_constraints
-		WHEN NEW.pattern = '^after-host$'
-		BEGIN
-			SELECT RAISE(ABORT, 'injected constraint persistence failure');
-		END`); err != nil {
+		CREATE OR REPLACE FUNCTION reject_test_constraint_replacement_function() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING MESSAGE = 'injected constraint persistence failure'; RETURN NEW; END $$; CREATE TRIGGER reject_test_constraint_replacement BEFORE INSERT ON ingestion_token_constraints FOR EACH ROW WHEN (NEW.pattern = '^after-host$') EXECUTE FUNCTION reject_test_constraint_replacement_function()`); err != nil {
 		t.Fatalf("create failure-injection trigger: %v", err)
 	}
 
@@ -456,7 +452,7 @@ func TestCollectorTokenConstraintRowsCascadeWhenRetentionPrunesParent(t *testing
 			Name:               name,
 			AllowedIndexNames:  []string{"main"},
 			BoundCollectorID:   testCollectorID,
-			AllowedHostRegexes: []string{pattern},
+			AllowedHostRegexes: []string{pattern}, OrganizationID: 1, IssuerUserID: 42,
 		})
 		if createErr != nil {
 			t.Fatalf("CreateCollectorToken(%q): %v", name, createErr)
@@ -516,17 +512,17 @@ func withIgnoredSQLiteChecks(
 	checksRestored := false
 	defer func() {
 		if !checksRestored {
-			_, _ = connection.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = OFF`)
+			_, _ = pgtest.Checks(context.Background(), connection, true)
 		}
 		if err := connection.Close(); err != nil {
 			t.Errorf("close corruption connection: %v", err)
 		}
 	}()
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(ctx, connection, false); err != nil {
 		t.Fatalf("disable test-only check constraints: %v", err)
 	}
 	mutate(connection)
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`); err != nil {
+	if _, err := pgtest.Checks(ctx, connection, true); err != nil {
 		t.Fatalf("restore check constraints: %v", err)
 	}
 	checksRestored = true

@@ -24,6 +24,10 @@ export interface BrowserApiLimitsModel {
   maximumWebsocketFrameBytes: bigint;
   maximumExportRows: bigint;
   maximumExportBytes: bigint;
+  maximumCaptureRows: bigint;
+  maximumCaptureBytes: bigint;
+  organizationRetentionBytes: bigint;
+  globalRetentionBytes: bigint;
   defaultSearchTimeoutMs: number;
   searchResultRetentionMs: number;
   maximumTimelineBuckets: number;
@@ -49,6 +53,7 @@ export interface SystemBootstrapModel {
   apps: GetSystemBootstrapResponse["apps"];
   indexes: BrowserIndexModel[];
   selectedAppId: string | null;
+  retainedStorageUsage?: GetSystemBootstrapResponse["retainedStorageUsage"];
   serverTime: Date;
   /** Local receipt time, retained when the envelope is shared between views. */
   receivedAt?: number;
@@ -115,6 +120,10 @@ export function adaptSystemBootstrap(response: GetSystemBootstrapResponse): Syst
       maximumWebsocketFrameBytes: limits?.maximumWebsocketFrameBytes ?? 0n,
       maximumExportRows: limits?.maximumExportRows ?? 0n,
       maximumExportBytes: limits?.maximumExportBytes ?? 0n,
+      maximumCaptureRows: limits?.maximumCaptureRows ?? 0n,
+      maximumCaptureBytes: limits?.maximumCaptureBytes ?? 0n,
+      organizationRetentionBytes: limits?.organizationRetentionBytes ?? 0n,
+      globalRetentionBytes: limits?.globalRetentionBytes ?? 0n,
       defaultSearchTimeoutMs: durationToMilliseconds(limits?.defaultSearchTimeout),
       searchResultRetentionMs: durationToMilliseconds(limits?.searchResultRetention),
       maximumTimelineBuckets: limits?.maximumTimelineBuckets ?? 0,
@@ -123,6 +132,7 @@ export function adaptSystemBootstrap(response: GetSystemBootstrapResponse): Syst
     apps: response.apps,
     indexes: response.indexes.map(adaptIndex),
     selectedAppId: response.selectedAppId?.trim() || null,
+    retainedStorageUsage: response.retainedStorageUsage === undefined ? undefined : { ...response.retainedStorageUsage },
     serverTime,
     receivedAt: Date.now(),
     palette: paletteFromProto(response.uiPalette),

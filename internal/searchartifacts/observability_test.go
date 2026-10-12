@@ -89,7 +89,7 @@ func TestStartupReconciliationAndCleanupObservationsAreDeterministic(t *testing.
 	if reconciled.Events != 1 || reconciled.Items != 2 || reconciled.Bytes != uint64(len(orphanContents)) {
 		t.Fatalf("reconciliation counter = %#v", reconciled)
 	}
-	if _, err := database.SQLDB().ExecContext(ctx, `DELETE FROM durable_search_jobs WHERE id = ?`, job.ID); err != nil {
+	if _, err := database.SQLDB().ExecContext(ctx, `DELETE FROM durable_search_jobs WHERE id = $1`, job.ID); err != nil {
 		t.Fatal(err)
 	}
 

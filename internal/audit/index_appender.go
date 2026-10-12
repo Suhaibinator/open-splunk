@@ -20,15 +20,15 @@ func (store *Store) AppendIndexMutationInTransaction(
 	tenantID string,
 	event control.IndexMutationAuditEvent,
 ) error {
-	if err := requireExplicitAdministrativeMutationActor(ctx); err != nil {
-		return err
-	}
 	action, ok := indexMutationAction(event.Action)
 	if !ok {
 		return fmt.Errorf(
 			"%w: index mutation audit action is invalid",
 			control.ErrInvalidArgument,
 		)
+	}
+	if err := requireExplicitSuccessfulMutationActor(ctx, action); err != nil {
+		return err
 	}
 	_, err := store.AppendInTransaction(ctx, tx, tenantID, SuccessfulEvent{
 		OccurredAt:    event.OccurredAt,

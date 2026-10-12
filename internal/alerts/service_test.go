@@ -19,10 +19,10 @@ type memoryRepository struct {
 
 func (repository *memoryRepository) FindCreateReplay(_ context.Context, ownerID, clientRequestID string, fingerprint [32]byte) (Alert, bool, error) {
 	if repository.createRecord.ClientRequestID != clientRequestID || repository.alert.OwnerID != ownerID {
-		return Alert{}, false, nil
+		return Alert{OrganizationID: "1"}, false, nil
 	}
 	if repository.createRecord.RequestFingerprint != fingerprint {
-		return Alert{}, false, ErrIdempotencyConflict
+		return Alert{OrganizationID: "1"}, false, ErrIdempotencyConflict
 	}
 	return repository.alert, true, nil
 }
@@ -40,7 +40,7 @@ func (repository *memoryRepository) Create(_ context.Context, record CreateRecor
 		ID: record.ID, OwnerID: record.OwnerID, Version: 1, State: record.State,
 		Definition: record.Definition, Endpoint: record.Endpoint,
 		EndpointGeneration: record.EndpointGeneration, WebhookHostname: record.WebhookHostname, SecretGeneration: record.SecretGeneration,
-		CreatedAt: record.CreatedAt, UpdatedAt: record.CreatedAt,
+		CreatedAt: record.CreatedAt, UpdatedAt: record.CreatedAt, OrganizationID: "1",
 	}
 	return CreateResult{Alert: repository.alert, Disposition: CreateCommitted}, nil
 }
@@ -51,7 +51,7 @@ func TestServiceCreateRetryReplaysWithoutReissuingSecret(t *testing.T) {
 	service := newTestService(t, repository, "")
 	input := CreateInput{
 		OwnerID: "owner-1", ClientRequestID: "alert-create-request-0001",
-		Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify",
+		Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	}
 	committed, err := service.Create(context.Background(), input)
 	if err != nil {
@@ -77,18 +77,18 @@ func TestServiceCreateRetryReplaysWithoutReissuingSecret(t *testing.T) {
 
 func (repository *memoryRepository) GetSecretBearing(_ context.Context, ownerID, id string) (Alert, error) {
 	if repository.alert.ID != id || repository.alert.OwnerID != ownerID {
-		return Alert{}, ErrNotFound
+		return Alert{OrganizationID: "1"}, ErrNotFound
 	}
 	return repository.alert, nil
 }
 
 func (repository *memoryRepository) GetSummary(_ context.Context, ownerID, id string) (AlertSummary, error) {
 	if repository.alert.ID != id || repository.alert.OwnerID != ownerID {
-		return AlertSummary{}, ErrNotFound
+		return AlertSummary{OrganizationID: "1"}, ErrNotFound
 	}
 	return AlertSummary{
 		ID: id, OwnerID: ownerID, Version: repository.alert.Version, State: repository.alert.State,
-		Definition: repository.alert.Definition,
+		Definition: repository.alert.Definition, OrganizationID: "1",
 	}, nil
 }
 
@@ -104,7 +104,7 @@ func (repository *memoryRepository) List(_ context.Context, ownerID string, _ in
 
 func (repository *memoryRepository) Update(_ context.Context, record UpdateRecord) (Alert, error) {
 	if repository.alert.Version != record.ExpectedVersion {
-		return Alert{}, ErrVersionConflict
+		return Alert{OrganizationID: "1"}, ErrVersionConflict
 	}
 	repository.alert.Version++
 	repository.alert.Definition = record.Definition
@@ -118,7 +118,7 @@ func (repository *memoryRepository) Update(_ context.Context, record UpdateRecor
 func (repository *memoryRepository) SetState(_ context.Context, record SetStateRecord) (Alert, error) {
 	repository.setStateCalls++
 	if repository.alert.Version != record.ExpectedVersion {
-		return Alert{}, ErrVersionConflict
+		return Alert{OrganizationID: "1"}, ErrVersionConflict
 	}
 	repository.alert.Version++
 	repository.alert.State = record.State
@@ -128,7 +128,7 @@ func (repository *memoryRepository) SetState(_ context.Context, record SetStateR
 
 func (repository *memoryRepository) RotateSecret(_ context.Context, record RotateSecretRecord) (Alert, error) {
 	if repository.alert.Version != record.ExpectedVersion || repository.alert.SecretGeneration.Generation != record.ExpectedGeneration {
-		return Alert{}, ErrVersionConflict
+		return Alert{OrganizationID: "1"}, ErrVersionConflict
 	}
 	repository.alert.Version++
 	repository.alert.SecretGeneration = record.SecretGeneration
@@ -168,7 +168,7 @@ func TestServiceCreateEncryptsSecretsAndStartsDisabled(t *testing.T) {
 	repository := &memoryRepository{}
 	service := newTestService(t, repository, "")
 	issued, err := service.Create(context.Background(), CreateInput{
-		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify",
+		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -198,7 +198,7 @@ func TestServiceCreateAndUpdateAcceptEmptyRetentionDefaults(t *testing.T) {
 	definition.DispatchTTL = ""
 	definition.WebhookTTL = ""
 	created, err := service.Create(context.Background(), CreateInput{
-		OwnerID: "owner-1", Definition: definition, WebhookURL: "https://hooks.example.com/notify",
+		OwnerID: "owner-1", Definition: definition, WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create(empty TTL defaults) error = %v", err)
@@ -209,7 +209,7 @@ func TestServiceCreateAndUpdateAcceptEmptyRetentionDefaults(t *testing.T) {
 	definition.Description = "updated with defaults"
 	updated, err := service.Update(context.Background(), UpdateInput{
 		ID: created.Alert.ID, OwnerID: "owner-1", ExpectedVersion: created.Alert.Version,
-		Definition: definition,
+		Definition: definition, Scope: AccessScope{OwnerID: "owner-1", OrganizationID: "1"},
 	})
 	if err != nil {
 		t.Fatalf("Update(empty TTL defaults) error = %v", err)
@@ -224,19 +224,19 @@ func TestServiceRequiresPublicBaseURLBeforeEnabling(t *testing.T) {
 	repository := &memoryRepository{}
 	service := newTestService(t, repository, "")
 	created, err := service.Create(context.Background(), CreateInput{
-		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify",
+		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if _, err := service.SetEnabled(context.Background(), "owner-1", created.Alert.ID, created.Alert.Version, true); err == nil {
+	if _, err := service.SetEnabled(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, created.Alert.ID, created.Alert.Version, true); err == nil {
 		t.Fatal("SetEnabled() accepted a missing public base URL")
 	}
 	if repository.setStateCalls != 0 {
 		t.Fatalf("SetEnabled() reached repository %d times", repository.setStateCalls)
 	}
 	service.publicBaseURL = "https://splunk.example.com/base"
-	enabled, err := service.SetEnabled(context.Background(), "owner-1", created.Alert.ID, created.Alert.Version, true)
+	enabled, err := service.SetEnabled(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, created.Alert.ID, created.Alert.Version, true)
 	if err != nil {
 		t.Fatalf("SetEnabled() error = %v", err)
 	}
@@ -249,7 +249,7 @@ func TestServiceRejectsPersistedEnabledAlertsWithoutPublicBaseURL(t *testing.T) 
 	t.Parallel()
 	repository := &memoryRepository{alert: Alert{
 		ID: "alert-enabled", OwnerID: "owner-1", State: AlertEnabled,
-		Definition: validDefinition(),
+		Definition: validDefinition(), OrganizationID: "1",
 	}}
 	service := newTestService(t, repository, "")
 	if err := service.ValidateEnabledRuntime(context.Background(), "owner-1"); err == nil {
@@ -271,7 +271,7 @@ func TestServiceSecretRotationSkipsOldRunDelivery(t *testing.T) {
 	repository := &memoryRepository{}
 	service := newTestService(t, repository, "https://splunk.example.com")
 	created, err := service.Create(context.Background(), CreateInput{
-		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify",
+		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -279,9 +279,9 @@ func TestServiceSecretRotationSkipsOldRunDelivery(t *testing.T) {
 	oldSnapshot := RunSnapshot{
 		AlertID: created.Alert.ID, AlertRunID: "run-old", OwnerID: created.Alert.OwnerID,
 		Endpoint: created.Alert.Endpoint, EndpointGeneration: created.Alert.EndpointGeneration,
-		SecretGeneration: created.Alert.SecretGeneration,
+		SecretGeneration: created.Alert.SecretGeneration, OrganizationID: "1",
 	}
-	rotated, err := service.RotateSecret(context.Background(), "owner-1", created.Alert.ID, created.Alert.Version)
+	rotated, err := service.RotateSecret(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, created.Alert.ID, created.Alert.Version)
 	if err != nil {
 		t.Fatalf("RotateSecret() error = %v", err)
 	}
@@ -315,7 +315,7 @@ func TestServiceAllowsOnlyOneDeliveryAttempt(t *testing.T) {
 	repository := &memoryRepository{}
 	service := newTestService(t, repository, "https://splunk.example.com")
 	created, err := service.Create(context.Background(), CreateInput{
-		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify",
+		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -323,7 +323,7 @@ func TestServiceAllowsOnlyOneDeliveryAttempt(t *testing.T) {
 	snapshot := RunSnapshot{
 		AlertID: created.Alert.ID, AlertRunID: "run-1", OwnerID: created.Alert.OwnerID,
 		Endpoint: created.Alert.Endpoint, EndpointGeneration: created.Alert.EndpointGeneration,
-		SecretGeneration: created.Alert.SecretGeneration,
+		SecretGeneration: created.Alert.SecretGeneration, OrganizationID: "1",
 	}
 	if _, err := service.AuthorizeAndOpenDelivery(context.Background(), snapshot, func() (string, error) { return "delivery-1", nil }); err != nil {
 		t.Fatalf("first AuthorizeAndOpenDelivery() error = %v", err)
@@ -338,14 +338,14 @@ func TestServiceUpdateSnapshotsANewEndpointGeneration(t *testing.T) {
 	repository := &memoryRepository{}
 	service := newTestService(t, repository, "")
 	created, err := service.Create(context.Background(), CreateInput{
-		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/one",
+		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/one", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	updated, err := service.Update(context.Background(), UpdateInput{
 		ID: created.Alert.ID, OwnerID: "owner-1", ExpectedVersion: created.Alert.Version,
-		Definition: validDefinition(), WebhookURL: "https://hooks.example.com/two",
+		Definition: validDefinition(), WebhookURL: "https://hooks.example.com/two", Scope: AccessScope{OwnerID: "owner-1", OrganizationID: "1"},
 	})
 	if err != nil {
 		t.Fatalf("Update() error = %v", err)
@@ -360,7 +360,7 @@ func TestServiceUpdatePreservesRedactedEndpointWhenURLIsOmitted(t *testing.T) {
 	repository := &memoryRepository{}
 	service := newTestService(t, repository, "")
 	created, err := service.Create(context.Background(), CreateInput{
-		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/one",
+		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/one", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -370,7 +370,7 @@ func TestServiceUpdatePreservesRedactedEndpointWhenURLIsOmitted(t *testing.T) {
 	definition.Description = "updated without revealing the endpoint"
 	updated, err := service.Update(context.Background(), UpdateInput{
 		ID: created.Alert.ID, OwnerID: "owner-1", ExpectedVersion: created.Alert.Version,
-		Definition: definition,
+		Definition: definition, Scope: AccessScope{OwnerID: "owner-1", OrganizationID: "1"},
 	})
 	if err != nil {
 		t.Fatalf("Update() error = %v", err)
@@ -385,12 +385,12 @@ func TestServiceOpensCurrentSecretsForTestWebhook(t *testing.T) {
 	repository := &memoryRepository{}
 	service := newTestService(t, repository, "https://splunk.example.com")
 	created, err := service.Create(context.Background(), CreateInput{
-		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/test",
+		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/test", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	opened, err := service.OpenTestDeliverySecrets(context.Background(), "owner-1", created.Alert.ID)
+	opened, err := service.OpenTestDeliverySecrets(context.Background(), AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, created.Alert.ID)
 	if err != nil {
 		t.Fatalf("OpenTestDeliverySecrets() error = %v", err)
 	}
@@ -436,14 +436,14 @@ func TestAlertServiceUsesClaimedPeriodScheduleValidation(t *testing.T) {
 	definition := validDefinition()
 	definition.Cron = "0 0 * * 7"
 	if _, err := service.Create(context.Background(), CreateInput{
-		OwnerID: "owner-1", Definition: definition, WebhookURL: "https://alerts.example.test/hook",
+		OwnerID: "owner-1", Definition: definition, WebhookURL: "https://alerts.example.test/hook", OrganizationID: "1",
 	}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("weekday 7 error = %v, want ErrInvalidArgument", err)
 	}
 	definition = validDefinition()
 	definition.WebhookTTL = "315360001"
 	if _, err := service.Create(context.Background(), CreateInput{
-		OwnerID: "owner-1", Definition: definition, WebhookURL: "https://alerts.example.test/hook",
+		OwnerID: "owner-1", Definition: definition, WebhookURL: "https://alerts.example.test/hook", OrganizationID: "1",
 	}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("over-limit TTL error = %v, want ErrInvalidArgument", err)
 	}

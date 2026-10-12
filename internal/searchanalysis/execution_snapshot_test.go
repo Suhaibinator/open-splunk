@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -15,6 +14,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
@@ -95,6 +95,9 @@ func sealSearchAnalysisSnapshotWithAuthorities(
 	lookupResolver searchjobs.LookupResolver,
 	compiler clickhouse.Compiler,
 ) (searchjobs.ExecutionSnapshot, error) {
+	if template.AppID != "" {
+		template.OrganizationID = "1"
+	}
 	timezone := template.SearchTimezone
 	if timezone == "" {
 		timezone = "UTC"
@@ -133,7 +136,7 @@ func sealSearchAnalysisSnapshotWithAuthorities(
 		)
 	}
 	defer func() { _ = manager.Close() }()
-	request := searchjobs.CreateRequest{
+	request := searchjobs.CreateRequest{OrganizationID: template.OrganizationID,
 		SPL:               template.SPL,
 		OwnerID:           template.OwnerID,
 		TenantID:          template.TenantID,
@@ -149,7 +152,7 @@ func sealSearchAnalysisSnapshotWithAuthorities(
 			err,
 		)
 	}
-	access := searchjobs.AccessScope{
+	access := searchjobs.AccessScope{OrganizationID: template.OrganizationID,
 		TenantID: template.TenantID,
 		OwnerID:  template.OwnerID,
 	}
@@ -203,7 +206,7 @@ func newSearchAnalysisKnowledgeFixture(
 	t.Helper()
 	database, err := control.Open(
 		context.Background(),
-		filepath.Join(t.TempDir(), "control.sqlite"),
+		pgtest.DSN(t),
 	)
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
@@ -226,7 +229,7 @@ func newSearchAnalysisKnowledgeFixture(
 	}
 	if _, err := apps.CreateApp(
 		context.Background(),
-		control.AppAccessScope{TenantID: template.TenantID},
+		control.AppAccessScope{OrganizationID: 1, TenantID: template.TenantID},
 		control.AppDefinition{Slug: "search-analysis", DisplayName: "Search Analysis"},
 	); err != nil {
 		t.Fatalf("CreateApp(): %v", err)
@@ -360,7 +363,7 @@ func changedEnabledEmptySearchAnalysisSnapshots(
 	}
 	if _, err := writer.Create(
 		actorContext,
-		knowledgecatalog.WriteScope{
+		knowledgecatalog.WriteScope{OrganizationID: 1,
 			TenantID:       template.TenantID,
 			OwnerID:        template.OwnerID,
 			WritableAppIDs: []string{searchAnalysisAuthorityAppID},

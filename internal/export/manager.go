@@ -27,6 +27,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
+	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -106,9 +107,12 @@ var errArtifactStorage = errors.New("export artifact storage operation failed")
 // select safe defaults. A negative CleanupInterval disables the background
 // cleanup loop for deterministic tests; Cleanup remains available explicitly.
 type Config struct {
-	Source        ResultSource
-	Journal       Journal
-	PatternSource PatternResultSource
+	Blobs          searchartifacts.BlobStore
+	RetentionQuota searchartifacts.RetentionQuota
+	Authorize      func(context.Context, searchjobs.AccessScope, string) error
+	Source         ResultSource
+	Journal        Journal
+	PatternSource  PatternResultSource
 
 	// ArtifactDir is an application-private base directory. New exclusively
 	// locks it, removes narrowly named sessions left by a crashed prior owner,
@@ -162,6 +166,9 @@ type Config struct {
 
 // Manager owns a bounded worker pool and temporary export artifacts.
 type Manager struct {
+	blobs               searchartifacts.BlobStore
+	retentionQuota      searchartifacts.RetentionQuota
+	authorize           func(context.Context, searchjobs.AccessScope, string) error
 	clockMu             sync.Mutex
 	clockHighWater      time.Time
 	idempotencyMu       sync.Mutex
@@ -244,14 +251,17 @@ type Manager struct {
 }
 
 type jobEntry struct {
-	mu         sync.RWMutex
-	access     searchjobs.AccessScope
-	generation uint64
-	job        Job
-	selection  columnSelection
-	lease      searchjobs.ResultLease
-	ctx        context.Context
-	cancel     context.CancelFunc
+	stopManagerCancellation func() bool
+	remoteIdentity          *searchartifacts.BlobIdentity
+	remoteDigest            []byte
+	mu                      sync.RWMutex
+	access                  searchjobs.AccessScope
+	generation              uint64
+	job                     Job
+	selection               columnSelection
+	lease                   searchjobs.ResultLease
+	ctx                     context.Context
+	cancel                  context.CancelFunc
 
 	leaseCloseOnce    sync.Once
 	leaseCloseErr     error
@@ -264,6 +274,7 @@ type jobEntry struct {
 	artifactPath      string
 	tempRemoving      bool
 	artifactRemoving  bool
+	journalPending    bool
 	artifactIdentity  os.FileInfo
 	downloads         map[*DownloadLease]struct{}
 }
@@ -430,6 +441,9 @@ func New(config Config) (*Manager, error) {
 	}
 	managerContext, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
+		blobs:                config.Blobs,
+		retentionQuota:       config.RetentionQuota,
+		authorize:            config.Authorize,
 		jobs:                 make(map[string]*jobEntry),
 		jobsByScope:          make(map[searchjobs.AccessScope]*exportListIndexNode),
 		reservedIDs:          make(map[string]admissionReservation),
@@ -803,7 +817,18 @@ func (manager *Manager) create(ctx context.Context, access searchjobs.AccessScop
 		manager.admissions.Done()
 	}()
 
-	jobContext, jobCancel := context.WithCancel(manager.ctx)
+	if manager.authorize != nil {
+		if err := manager.authorize(ctx, access, normalized.SearchJobID); err != nil {
+			return Job{}, err
+		}
+	}
+	jobContext, jobCancel := context.WithCancel(context.WithoutCancel(ctx))
+	stopManagerCancellation := context.AfterFunc(manager.ctx, jobCancel)
+	defer func() {
+		if !admitted {
+			stopManagerCancellation()
+		}
+	}()
 	stopRequestCancellation := context.AfterFunc(ctx, jobCancel)
 	abort := func(cause error) error {
 		stopRequestCancellation()
@@ -901,16 +926,18 @@ func (manager *Manager) create(ctx context.Context, access searchjobs.AccessScop
 
 	now := manager.nowUTC()
 	entry := &jobEntry{
-		access:            searchjobs.AccessScope{TenantID: strings.Clone(access.TenantID), OwnerID: strings.Clone(access.OwnerID)},
-		selection:         selection,
-		lease:             lease,
-		ctx:               jobContext,
-		cancel:            jobCancel,
-		accountedBytes:    normalized.ByteLimit,
-		accountedMetadata: resolvedMetadata,
+		stopManagerCancellation: stopManagerCancellation,
+		access:                  searchjobs.AccessScope{TenantID: strings.Clone(access.TenantID), OwnerID: strings.Clone(access.OwnerID), OrganizationID: strings.Clone(access.OrganizationID)},
+		selection:               selection,
+		lease:                   lease,
+		ctx:                     jobContext,
+		cancel:                  jobCancel,
+		accountedBytes:          normalized.ByteLimit,
+		accountedMetadata:       resolvedMetadata,
 		job: Job{
-			SourceKind: normalized.SourceKind,
-			Pattern:    normalized.Pattern, ID: id,
+			OrganizationID: strings.Clone(access.OrganizationID),
+			SourceKind:     normalized.SourceKind,
+			Pattern:        normalized.Pattern, ID: id,
 			Version:           1,
 			SearchJobID:       strings.Clone(normalized.SearchJobID),
 			Format:            normalized.Format,
@@ -1326,12 +1353,18 @@ func (manager *Manager) Get(ctx context.Context, access searchjobs.AccessScope, 
 		manager.mu.RUnlock()
 		if manager.journal != nil {
 			retained, err := manager.journal.Get(ctx, access, id)
-			return retained.Job, err
+			if err == nil && manager.authorize != nil {
+				err = manager.authorize(ctx, access, retained.Job.SearchJobID)
+			}
+			if err != nil {
+				return Job{}, err
+			}
+			return retained.Job, nil
 		}
 		return Job{}, ErrNotFound
 	}
 	entry.mu.Lock()
-	if entry.access != access {
+	if !sameAccess(entry.access, access) {
 		entry.mu.Unlock()
 		manager.mu.RUnlock()
 		return Job{}, ErrNotFound
@@ -1355,6 +1388,11 @@ func (manager *Manager) Get(ctx context.Context, access searchjobs.AccessScope, 
 	}
 	_ = manager.removeTrackedArtifact(entry, artifactPath)
 	_ = manager.removeTrackedTemp(entry, tempPath)
+	if manager.authorize != nil {
+		if err := manager.authorize(ctx, access, result.SearchJobID); err != nil {
+			return Job{}, err
+		}
+	}
 	return result, nil
 }
 
@@ -1382,7 +1420,7 @@ func (manager *Manager) Snapshot(ctx context.Context, access searchjobs.AccessSc
 		return Job{}, ErrNotFound
 	}
 	entry.mu.Lock()
-	if entry.access != access {
+	if !sameAccess(entry.access, access) {
 		entry.mu.Unlock()
 		manager.mu.RUnlock()
 		return Job{}, ErrNotFound
@@ -1402,6 +1440,11 @@ func (manager *Manager) Snapshot(ctx context.Context, access searchjobs.AccessSc
 	manager.mu.RUnlock()
 	if err := ctx.Err(); err != nil {
 		return Job{}, err
+	}
+	if manager.authorize != nil {
+		if err := manager.authorize(ctx, access, result.SearchJobID); err != nil {
+			return Job{}, err
+		}
 	}
 	return result, nil
 }
@@ -1427,7 +1470,7 @@ func (manager *Manager) Cancel(ctx context.Context, access searchjobs.AccessScop
 	}
 	entry.mu.Lock()
 	manager.mu.RUnlock()
-	if entry.access != access {
+	if !sameAccess(entry.access, access) {
 		entry.mu.Unlock()
 		return Job{}, ErrNotFound
 	}
@@ -1443,7 +1486,7 @@ func (manager *Manager) Cancel(ctx context.Context, access searchjobs.AccessScop
 	entry.job.FinishedAt = now
 	entry.job.ExpiresAt = now.Add(manager.artifactTTL)
 	entry.job.Progress.UpdatedAt = now
-	manager.persistEntryLocked(entry)
+	persistErr := manager.persistEntryLocked(entry)
 	result := cloneJob(entry.job)
 	cancel := entry.cancel
 	entry.mu.Unlock()
@@ -1451,6 +1494,9 @@ func (manager *Manager) Cancel(ctx context.Context, access searchjobs.AccessScop
 	_ = entry.requestLeaseClose()
 	if priorState == StateQueued {
 		manager.releaseEntryBytesIfUnbacked(entry)
+	}
+	if persistErr != nil {
+		return Job{}, fmt.Errorf("%w: %w", ErrArtifactUnavailable, persistErr)
 	}
 	return result, nil
 }
@@ -1491,7 +1537,11 @@ func (manager *Manager) run(entry *jobEntry) {
 	entry.job.Version++
 	entry.job.StartedAt = now
 	entry.job.Progress.UpdatedAt = now
-	manager.persistEntryLocked(entry)
+	if err := manager.persistEntryLocked(entry); err != nil {
+		entry.mu.Unlock()
+		manager.releaseEntryBytesIfUnbacked(entry)
+		return
+	}
 	rowLimit := entry.job.RowLimit
 	byteLimit := entry.job.ByteLimit
 	format := entry.job.Format
@@ -1499,6 +1549,10 @@ func (manager *Manager) run(entry *jobEntry) {
 
 	if entry.lease.RowCountExact() && entry.lease.RowCount() > rowLimit {
 		manager.finishFailure(entry, ErrRowLimit)
+		return
+	}
+	if manager.blobs != nil {
+		manager.runRemote(entry, rowLimit, byteLimit)
 		return
 	}
 	tempFile, err := os.CreateTemp(manager.artifactDir, ".open-splunk-export-"+entry.job.ID+"-*.partial")
@@ -1667,7 +1721,10 @@ func (manager *Manager) updateProgress(entry *jobEntry, rows, bytes uint64) {
 		entry.job.Progress.BytesWritten = bytes
 		entry.job.Progress.UpdatedAt = manager.nowUTC()
 		entry.job.Version++
-		manager.persistEntryLocked(entry)
+		if err := manager.persistEntryLocked(entry); err != nil {
+			entry.mu.Unlock()
+			return
+		}
 	}
 	entry.mu.Unlock()
 }
@@ -1702,8 +1759,13 @@ func (manager *Manager) finishCompleted(entry *jobEntry, path string, identity o
 	}
 	entry.job.Failure = nil
 	manager.reconcileEntryBytesLocked(entry, bytes)
-	manager.persistEntryLocked(entry)
+	persistErr := manager.persistEntryLocked(entry)
 	entry.mu.Unlock()
+	if persistErr != nil {
+		if err := manager.removeTrackedArtifact(entry, path); err != nil {
+			manager.reportCleanupError(err)
+		}
+	}
 }
 
 func (manager *Manager) finishCanceled(entry *jobEntry) {
@@ -1720,7 +1782,10 @@ func (manager *Manager) finishCanceled(entry *jobEntry) {
 		entry.job.ExpiresAt = now.Add(manager.artifactTTL)
 		entry.job.Progress.UpdatedAt = now
 	}
-	manager.persistEntryLocked(entry)
+	if err := manager.persistEntryLocked(entry); err != nil {
+		entry.mu.Unlock()
+		return
+	}
 	entry.mu.Unlock()
 	manager.releaseEntryBytesIfUnbacked(entry)
 }
@@ -1744,7 +1809,10 @@ func (manager *Manager) finishFailure(entry *jobEntry, cause error) {
 	entry.job.ExpiresAt = now.Add(manager.artifactTTL)
 	entry.job.Progress.UpdatedAt = now
 	entry.job.Failure = &failure
-	manager.persistEntryLocked(entry)
+	if err := manager.persistEntryLocked(entry); err != nil {
+		entry.mu.Unlock()
+		return
+	}
 	entry.mu.Unlock()
 	manager.releaseEntryBytesIfUnbacked(entry)
 }
@@ -1785,7 +1853,7 @@ func safeFailure(cause error) Failure {
 	switch {
 	case errors.Is(cause, ErrRowLimit):
 		code = FailureRowLimit
-	case errors.Is(cause, ErrByteLimit):
+	case errors.Is(cause, ErrByteLimit), errors.Is(cause, searchartifacts.ErrCapacity):
 		code = FailureByteLimit
 	case errors.Is(cause, ErrSourceUnavailable):
 		code = FailureSourceUnavailable
@@ -1825,6 +1893,10 @@ func (entry *jobEntry) finalizeLease() error {
 	entry.lease = nil
 	entry.selection = columnSelection{}
 	entry.leaseReleased = true
+	if entry.stopManagerCancellation != nil {
+		entry.stopManagerCancellation()
+		entry.stopManagerCancellation = nil
+	}
 	entry.mu.Unlock()
 	return err
 }
@@ -1919,7 +1991,18 @@ func (manager *Manager) cleanup(ctx context.Context, capacityTriggered bool) err
 			return errors.Join(cleanupErrors.err(), err)
 		}
 		entry.mu.Lock()
+		if entry.journalPending {
+			if err := manager.persistEntryLocked(entry); err != nil {
+				entry.mu.Unlock()
+				cleanupErrors.add(fmt.Errorf("retry export metadata: %w", err))
+				continue
+			}
+			manager.releaseEntryBytesIfUnbackedLocked(entry)
+		}
 		artifactPath, tempPath := manager.expireLocked(entry, now)
+		if artifactPath == "" && (entry.job.State == StateFailed || entry.job.State == StateCanceled) && entry.workerDone && entry.leaseReleased {
+			artifactPath = entry.artifactPath
+		}
 		entry.mu.Unlock()
 		if err := manager.removeTrackedArtifact(entry, artifactPath); err != nil {
 			cleanupErrors.add(fmt.Errorf("remove expired export artifact: %w", err))
@@ -1935,6 +2018,7 @@ func (manager *Manager) cleanup(ctx context.Context, capacityTriggered bool) err
 	for id, entry := range manager.jobs {
 		entry.mu.Lock()
 		remove := entry.job.State == StateExpired && entry.artifactPath == "" && entry.tempPath == "" &&
+			!entry.journalPending &&
 			!entry.artifactRemoving && !entry.tempRemoving && entry.accountedBytes == 0 &&
 			entry.workerDone && entry.leaseReleased &&
 			!entry.expiredAt.IsZero() && !entry.expiredAt.Add(manager.expiredRetention).After(now)
@@ -2102,6 +2186,9 @@ func (manager *Manager) LastCleanupError() error {
 }
 
 func (manager *Manager) entryCleanupDeadlineLocked(entry *jobEntry) (time.Time, bool) {
+	if entry.journalPending || ((entry.job.State == StateFailed || entry.job.State == StateCanceled) && entry.artifactPath != "" && entry.workerDone && entry.leaseReleased) {
+		return time.Time{}, true
+	}
 	switch entry.job.State {
 	case StateCompleted, StateFailed, StateCanceled:
 		if entry.workerDone && entry.leaseReleased && !entry.job.ExpiresAt.IsZero() {
@@ -2152,7 +2239,9 @@ func (manager *Manager) expireLocked(entry *jobEntry, now time.Time) (artifactPa
 		entry.job.State = StateExpired
 		entry.job.Version++
 		entry.job.Progress.UpdatedAt = now
-		manager.persistEntryLocked(entry)
+		if err := manager.persistEntryLocked(entry); err != nil {
+			return "", ""
+		}
 		entry.expiredAt = now
 	}
 	if entry.job.State == StateExpired {
@@ -2173,15 +2262,47 @@ func (manager *Manager) removeTrackedArtifact(entry *jobEntry, path string) erro
 		entry.mu.Unlock()
 		return nil
 	}
+	if entry.journalPending {
+		entry.mu.Unlock()
+		return ErrArtifactUnavailable
+	}
 	entry.artifactRemoving = true
+	remote := entry.remoteIdentity
 	entry.mu.Unlock()
-	err := manager.removePath(path)
+	var err error
+	if remote != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if remote.Version != "!conflict" {
+			err = manager.blobs.Delete(ctx, *remote)
+		}
+		cancel()
+	} else {
+		err = manager.removePath(path)
+	}
 	entry.mu.Lock()
 	entry.artifactRemoving = false
 	if err == nil && entry.artifactPath == path {
+		priorIdentity, priorDigest, priorFileIdentity := entry.remoteIdentity, entry.remoteDigest, entry.artifactIdentity
 		entry.artifactPath = ""
 		entry.artifactIdentity = nil
-		manager.releaseEntryBytesIfUnbackedLocked(entry)
+		entry.remoteIdentity = nil
+		entry.remoteDigest = nil
+		err = manager.persistEntryLocked(entry)
+		if err == nil && remote != nil && manager.retentionQuota != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err = manager.retentionQuota.ReleaseExport(ctx, entry.job.ID)
+			cancel()
+		}
+		if err != nil {
+			// The exact identity and quota stay tracked until metadata clearing
+			// and quota release both succeed. Pinned deletion is idempotent.
+			entry.artifactPath = path
+			entry.artifactIdentity = priorFileIdentity
+			entry.remoteIdentity, entry.remoteDigest = priorIdentity, priorDigest
+			entry.journalPending = true
+		} else {
+			manager.releaseEntryBytesIfUnbackedLocked(entry)
+		}
 	}
 	manager.noteCleanupStateChange()
 	entry.mu.Unlock()
@@ -2284,7 +2405,17 @@ func (manager *Manager) Close() error {
 			if err := manager.removePath(tempPath); err != nil {
 				manager.closeErr = errors.Join(manager.closeErr, fmt.Errorf("remove export partial: %w", err))
 			}
-			if manager.journal != nil {
+			if manager.blobs != nil {
+				entry.mu.Lock()
+				completed := entry.job.State == StateCompleted
+				entry.mu.Unlock()
+				if manager.journal == nil || !completed {
+					if err := manager.removeTrackedArtifact(entry, artifactPath); err != nil {
+						manager.closeErr = errors.Join(manager.closeErr, err)
+					}
+				}
+				artifactPath = ""
+			} else if manager.journal != nil {
 				artifactPath = ""
 			}
 			if err := manager.removePath(artifactPath); err != nil {

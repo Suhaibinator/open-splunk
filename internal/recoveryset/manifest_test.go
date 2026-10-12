@@ -53,11 +53,11 @@ func TestManifestRejectsInvalidFields(t *testing.T) {
 			value.ClickHouseIncluded = false
 		},
 		"source revision": func(value *Manifest) { value.SourceRevision = "main" },
-		"SQLite migration digest": func(value *Manifest) {
-			value.SQLiteMigrations.SHA256 = strings.Repeat("A", 64)
+		"PostgreSQL migration digest": func(value *Manifest) {
+			value.PostgresMigrations.SHA256 = strings.Repeat("A", 64)
 		},
-		"SQLite migration version": func(value *Manifest) {
-			value.SQLiteMigrations.LatestVersion = 0
+		"PostgreSQL migration version": func(value *Manifest) {
+			value.PostgresMigrations.LatestVersion = 0
 		},
 		"ClickHouse migration digest": func(value *Manifest) {
 			value.ClickHouseMigrations.SHA256 = ""
@@ -168,7 +168,7 @@ func validTestManifest() Manifest {
 		Scope:              deploymentRecoverySetScope,
 		ClickHouseIncluded: true,
 		SourceRevision:     "development",
-		SQLiteMigrations: controlbackup.MigrationIdentity{
+		PostgresMigrations: controlbackup.MigrationIdentity{
 			SHA256: strings.Repeat("1", 64), LatestVersion: 1,
 		},
 		ClickHouseMigrations: controlbackup.MigrationIdentity{

@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
@@ -80,19 +81,22 @@ func (handler *apiHandler) createSavedSearch(request *http.Request, input *opens
 	if err != nil {
 		return nil, err
 	}
-	definition, err := handler.savedSearchDefinition(input.GetDefinition())
+	definition, err := handler.savedSearchDefinition(input.GetDefinition(), request.Context())
 	if err != nil {
+		if transportError, ok := errors.AsType[*router.HTTPError](err); ok {
+			return nil, transportError
+		}
 		return nil, badRequestError(err.Error())
 	}
 	var record *opensplunk.SavedSearch
 	replayed := false
 	if intent == nil {
 		record, err = handler.savedSearches.Create(
-			request.Context(), handler.savedSearchScope(), definition,
+			request.Context(), handler.savedSearchScope(request.Context()), definition,
 		)
 	} else if idempotent, ok := handler.savedSearches.(idempotentSavedSearches); ok {
 		record, replayed, err = idempotent.CreateIdempotent(
-			request.Context(), handler.savedSearchScope(), definition, *intent,
+			request.Context(), handler.savedSearchScope(request.Context()), definition, *intent,
 		)
 	} else {
 		return nil, unavailableError("saved search idempotency is unavailable")
@@ -108,7 +112,7 @@ func (handler *apiHandler) createSavedSearch(request *http.Request, input *opens
 	if err := mapSavedSearchCallError(request.Context(), err); err != nil {
 		return nil, err
 	}
-	converted, err := handler.cloneSavedSearch(record)
+	converted, err := handler.cloneSavedSearch(record, request.Context())
 	if err != nil {
 		return nil, internalError()
 	}
@@ -123,11 +127,11 @@ func (handler *apiHandler) createSavedSearch(request *http.Request, input *opens
 
 func (handler *apiHandler) getSavedSearch(request *http.Request, input *opensplunk.GetSavedSearchRequest) (*opensplunk.GetSavedSearchResponse, error) {
 	id := input.GetSavedSearchId()
-	record, err := handler.savedSearches.Get(request.Context(), handler.savedSearchScope(), id)
+	record, err := handler.savedSearches.Get(request.Context(), handler.savedSearchScope(request.Context()), id)
 	if err := mapSavedSearchCallError(request.Context(), err); err != nil {
 		return nil, err
 	}
-	converted, err := handler.cloneSavedSearch(record)
+	converted, err := handler.cloneSavedSearch(record, request.Context())
 	if err != nil {
 		return nil, internalError()
 	}
@@ -163,7 +167,7 @@ func (handler *apiHandler) listSavedSearches(request *http.Request, input *opens
 			release()
 		}
 	}()
-	result, err := handler.savedSearches.List(request.Context(), handler.savedSearchScope(), savedobjects.ListRequest{
+	result, err := handler.savedSearches.List(request.Context(), handler.savedSearchScope(request.Context()), savedobjects.ListRequest{
 		PageSize:            pageSize,
 		PageToken:           pageToken,
 		IncludeTotal:        includeTotal,
@@ -189,7 +193,7 @@ func (handler *apiHandler) listSavedSearches(request *http.Request, input *opens
 		if err := savedSearchRequestContextError(request.Context()); err != nil {
 			return nil, err
 		}
-		converted[index], err = handler.cloneSavedSearch(record)
+		converted[index], err = handler.cloneSavedSearch(record, request.Context())
 		if err != nil {
 			return nil, internalError()
 		}
@@ -247,16 +251,28 @@ func (handler *apiHandler) listSavedSearches(request *http.Request, input *opens
 
 func (handler *apiHandler) updateSavedSearch(request *http.Request, input *opensplunk.UpdateSavedSearchRequest) (*opensplunk.UpdateSavedSearchResponse, error) {
 	id := input.GetSavedSearchId()
-	definition, err := handler.savedSearchDefinition(input.GetDefinition())
+	if handler.authorization != nil && input.GetDefinition().GetSearch() == nil {
+		current, err := handler.savedSearches.Get(request.Context(), handler.savedSearchScope(request.Context()), id)
+		if mapped := mapSavedSearchCallError(request.Context(), err); mapped != nil {
+			return nil, mapped
+		}
+		if err := handler.authorizeStoredSearchDefinition(request.Context(), current.GetDefinition().GetSearch()); err != nil {
+			return nil, err
+		}
+	}
+	definition, err := handler.savedSearchDefinition(input.GetDefinition(), request.Context())
 	if err != nil {
+		if transportError, ok := errors.AsType[*router.HTTPError](err); ok {
+			return nil, transportError
+		}
 		return nil, badRequestError(err.Error())
 	}
 	updateMask := cloneSavedSearchUpdateMask(input.GetUpdateMask())
-	record, err := handler.savedSearches.Update(request.Context(), handler.savedSearchScope(), id, input.GetExpectedVersion(), definition, updateMask)
+	record, err := handler.savedSearches.Update(request.Context(), handler.savedSearchScope(request.Context()), id, input.GetExpectedVersion(), definition, updateMask)
 	if err := mapSavedSearchCallError(request.Context(), err); err != nil {
 		return nil, err
 	}
-	converted, err := handler.cloneSavedSearch(record)
+	converted, err := handler.cloneSavedSearch(record, request.Context())
 	if err != nil {
 		return nil, internalError()
 	}
@@ -289,12 +305,12 @@ func (handler *apiHandler) duplicateSavedSearch(request *http.Request, input *op
 	replayed := false
 	if intent == nil {
 		record, err = handler.savedSearches.Duplicate(
-			request.Context(), handler.savedSearchScope(), id, newName,
+			request.Context(), handler.savedSearchScope(request.Context()), id, newName,
 			destinationAppID,
 		)
 	} else if idempotent, ok := handler.savedSearches.(idempotentSavedSearches); ok {
 		record, replayed, err = idempotent.DuplicateIdempotent(
-			request.Context(), handler.savedSearchScope(), id, newName,
+			request.Context(), handler.savedSearchScope(request.Context()), id, newName,
 			destinationAppID, *intent,
 		)
 	} else {
@@ -311,7 +327,7 @@ func (handler *apiHandler) duplicateSavedSearch(request *http.Request, input *op
 	if err := mapSavedSearchCallError(request.Context(), err); err != nil {
 		return nil, err
 	}
-	converted, err := handler.cloneSavedSearch(record)
+	converted, err := handler.cloneSavedSearch(record, request.Context())
 	if err != nil {
 		return nil, internalError()
 	}
@@ -333,26 +349,38 @@ func (handler *apiHandler) duplicateSavedSearch(request *http.Request, input *op
 
 func (handler *apiHandler) deleteSavedSearch(request *http.Request, input *opensplunk.DeleteSavedSearchRequest) (*opensplunk.DeleteSavedSearchResponse, error) {
 	id := input.GetSavedSearchId()
-	err := handler.savedSearches.Delete(request.Context(), handler.savedSearchScope(), id, input.GetExpectedVersion())
+	err := handler.savedSearches.Delete(request.Context(), handler.savedSearchScope(request.Context()), id, input.GetExpectedVersion())
 	if err := mapSavedSearchCallError(request.Context(), err); err != nil {
 		return nil, err
 	}
 	return &opensplunk.DeleteSavedSearchResponse{SavedSearchId: id}, nil
 }
 
-func (handler *apiHandler) savedSearchScope() savedobjects.AccessScope {
-	return savedobjects.AccessScope{OwnerID: handler.ownerID}
+func (handler *apiHandler) savedSearchScope(contexts ...context.Context) savedobjects.AccessScope {
+	result := savedobjects.AccessScope{OwnerID: handler.requestOwner(contexts...)}
+	if len(contexts) > 0 {
+		if scope, ok := authorization.FromContext(contexts[0]); ok {
+			result.OrganizationID = handler.requestOrganization(contexts[0])
+			result.SiteAdministrator = scope.Subject.IsSiteAdmin()
+		}
+	}
+	return result
 }
 
-func (handler *apiHandler) savedSearchDefinition(input *opensplunk.SavedSearchDefinition) (*opensplunk.SavedSearchDefinition, error) {
+func (handler *apiHandler) savedSearchDefinition(input *opensplunk.SavedSearchDefinition, contexts ...context.Context) (*opensplunk.SavedSearchDefinition, error) {
 	// The route sanitizers reject a missing definition before this runs. The
 	// guard survives so a direct caller reaches a 400 rather than dereferencing
 	// a nil definition below.
 	if input == nil {
 		return nil, errors.New("saved search definition is required")
 	}
-	if input.OwnerId != nil && input.GetOwnerId() != handler.ownerID {
+	if input.OwnerId != nil && input.GetOwnerId() != handler.requestOwner(contexts...) {
 		return nil, errors.New("saved search owner must match the authenticated owner")
+	}
+	if handler.authorization != nil && len(contexts) > 0 && input.GetSearch() != nil {
+		if err := handler.authorizeStoredSearchDefinition(contexts[0], input.GetSearch()); err != nil {
+			return nil, err
+		}
 	}
 	result := proto.Clone(input).(*opensplunk.SavedSearchDefinition)
 	// Scheduling has its own repository and optimistic config version. Never
@@ -362,7 +390,7 @@ func (handler *apiHandler) savedSearchDefinition(input *opensplunk.SavedSearchDe
 	return result, nil
 }
 
-func (handler *apiHandler) cloneSavedSearch(input *opensplunk.SavedSearch) (*opensplunk.SavedSearch, error) {
+func (handler *apiHandler) cloneSavedSearch(input *opensplunk.SavedSearch, contexts ...context.Context) (*opensplunk.SavedSearch, error) {
 	if input == nil || input.GetVersion() == 0 || input.GetDefinition() == nil {
 		return nil, errors.New("saved search service returned an invalid record")
 	}
@@ -373,7 +401,13 @@ func (handler *apiHandler) cloneSavedSearch(input *opensplunk.SavedSearch) (*ope
 	if proto.Size(definition) > maximumSavedSearchDefinitionBytes {
 		return nil, errors.New("saved search service returned an oversized definition")
 	}
-	if definition.OwnerId == nil || definition.GetOwnerId() != handler.ownerID {
+	sharedRead := false
+	if len(contexts) > 0 {
+		if scope, ok := authorization.FromContext(contexts[0]); ok {
+			sharedRead = scope.Subject.IsSiteAdmin() || definition.GetSharingScope() == opensplunk.SharingScope_SHARING_SCOPE_APP || definition.GetSharingScope() == opensplunk.SharingScope_SHARING_SCOPE_GLOBAL
+		}
+	}
+	if definition.OwnerId == nil || definition.GetOwnerId() != handler.requestOwner(contexts...) && !sharedRead {
 		return nil, errors.New("saved search service returned a record outside the authenticated owner scope")
 	}
 	if validateBoundedIdentifier(definition.GetName(), maximumSavedSearchNameBytes, false) != nil || definition.GetSearch() == nil ||
@@ -393,6 +427,11 @@ func (handler *apiHandler) cloneSavedSearch(input *opensplunk.SavedSearch) (*ope
 	}
 	if input.GetCreatedAt() == nil || input.GetCreatedAt().CheckValid() != nil || input.GetUpdatedAt() == nil || input.GetUpdatedAt().CheckValid() != nil || input.GetUpdatedAt().AsTime().Before(input.GetCreatedAt().AsTime()) {
 		return nil, errors.New("saved search service returned invalid timestamps")
+	}
+	if handler.authorization != nil && len(contexts) > 0 {
+		if err := handler.authorizeStoredSearchDefinition(contexts[0], definition.GetSearch()); err != nil {
+			return nil, err
+		}
 	}
 	result := proto.Clone(input).(*opensplunk.SavedSearch)
 	// These are joined projections owned by the scheduled-report service, not

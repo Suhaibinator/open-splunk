@@ -15,6 +15,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/patterns"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
@@ -34,7 +35,7 @@ func TestTruncatedPatternExportsPreserveExactDurableRelation(t *testing.T) {
 	const retainedRows = 10000
 	ctx := t.Context()
 	directory := t.TempDir()
-	database, err := control.Open(ctx, filepath.Join(directory, "control.db"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestTruncatedPatternExportsPreserveExactDurableRelation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	job := searchjobs.Job{ID: "truncated-pattern-source", Version: 1, TenantID: testAccess.TenantID, OwnerID: testAccess.OwnerID, SPL: "index=main | table _raw sequence", TimeRange: timeRange.Intent(), State: searchjobs.StateQueued, CreatedAt: now}
+	job := searchjobs.Job{OrganizationID: "1", ID: "truncated-pattern-source", Version: 1, TenantID: testAccess.TenantID, OwnerID: testAccess.OwnerID, SPL: "index=main | table _raw sequence", TimeRange: timeRange.Intent(), State: searchjobs.StateQueued, CreatedAt: now}
 	if err := store.Admit(ctx, job); err != nil {
 		t.Fatal(err)
 	}

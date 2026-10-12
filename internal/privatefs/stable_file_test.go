@@ -105,6 +105,11 @@ func TestStableRegularFileRejectsUnsafeMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(path, "wide"), []byte("wide"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// WriteFile applies the process umask. Establish the exact hostile mode so
+	// a restrictive release-runner umask cannot turn this into a safe fixture.
+	if err := os.Chmod(filepath.Join(path, "wide"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, name := range []string{"target", "symlink", "hardlink", "wide"} {
 		if _, err := InspectStableRegularFile(

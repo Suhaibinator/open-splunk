@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +22,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/indexes"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -108,7 +108,7 @@ func TestIndexDataDeletionCoordinatorAgainstClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	controlPath := filepath.Join(t.TempDir(), "control.sqlite")
+	controlPath := pgtest.DSN(t)
 	storeConfig := clickhouse.DefaultConfig()
 	storeConfig.Addresses = []string{container.Address}
 	storeConfig.Database = container.Database
@@ -747,7 +747,7 @@ func testCoordinatorSharedReadRetirement(
 	process := openCoordinatorIntegrationProcess(
 		t,
 		ctx,
-		filepath.Join(t.TempDir(), "read-fence-control.sqlite"),
+		pgtest.DSN(t),
 		storeConfig,
 		nil,
 	)
@@ -1298,7 +1298,7 @@ func assertCoordinatorTerminalControlState(
 
 type coordinatorIntegrationProcess struct {
 	control   *control.DB
-	sequencer *visibility.SQLiteSequencer
+	sequencer *visibility.PostgreSQLSequencer
 	store     *clickhouse.Store
 	closeOnce sync.Once
 	closeErr  error
@@ -1317,7 +1317,7 @@ func openCoordinatorIntegrationProcess(
 	if err != nil {
 		t.Fatalf("open coordinator control plane: %v", err)
 	}
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		_ = controlDB.Close()
 		t.Fatalf("open coordinator visibility sequencer: %v", err)

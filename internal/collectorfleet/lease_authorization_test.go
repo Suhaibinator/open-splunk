@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 )
 
 func TestIsCurrentLeaseInTransactionFencesExactEnabledLease(t *testing.T) {
@@ -22,7 +23,7 @@ func TestIsCurrentLeaseInTransactionFencesExactEnabledLease(t *testing.T) {
 	}
 	assertCurrent := func(t *testing.T, candidate Lease, want bool) {
 		t.Helper()
-		tx := database.GORMDB().WithContext(ctx).Begin(
+		tx := pgmeta.Begin(database.GORMDB().WithContext(ctx),
 			&sql.TxOptions{ReadOnly: true},
 		)
 		if tx.Error != nil {
@@ -110,7 +111,7 @@ func TestIsCurrentLeaseInTransactionRejectsInvalidBoundary(t *testing.T) {
 		t.Fatalf("root-handle error = %v, want ErrInvalidArgument", err)
 	}
 	lease.Generation = 0
-	tx := database.GORMDB().WithContext(ctx).Begin(
+	tx := pgmeta.Begin(database.GORMDB().WithContext(ctx),
 		&sql.TxOptions{ReadOnly: true},
 	)
 	if tx.Error != nil {

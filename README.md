@@ -25,10 +25,11 @@ gen/go/                   generated Go protobuf/gRPC code
 gen/ts/                   generated TypeScript protobuf code
 integration/              executable shipped-product gates
 internal/                 private Go packages
-migrations/               ordered SQLite and ClickHouse schema migrations
+migrations/               ordered PostgreSQL and ClickHouse schema migrations
 proto/open_splunk/        current protobuf source contracts
 public/                   static browser assets
 scripts/                  build and validation automation
+third_party/              pinned GoCommon module and frontend package
 ```
 
 The root TypeScript workspace builds the static browser export under `out/`.
@@ -38,28 +39,33 @@ The root Go package embeds that export in the server executable.
 
 Use the exact Go, Node.js, and npm versions pinned by `go.mod`, `.node-version`,
 and `package.json`. Docker with Compose v2 and OpenSSL are also required.
+Native metadata backup/restore from standalone binaries requires PostgreSQL 18
+`pg_dump` and `pg_restore` on `PATH`; the server OCI image includes these tools.
 Install the pinned frontend and protobuf tools once after cloning:
 
 ```sh
 make proto-tools
 ```
 
-Start the pinned ClickHouse dependency, then build and run the current source
-tree as a native development server:
+Generate local storage credentials, configure the Google Web OAuth client and
+an approved MinIO image, then start the dependencies and native server:
 
 ```sh
+./deploy/generate-env.sh --development
+# Edit deploy/.env.development: Google client ID/secret and MinIO image.
 make dev-clickhouse
 make run
 ```
 
-Neither command requires a clean worktree, Git commit, source hash, or product
-version. `make dev-clickhouse` generates reusable local credentials and starts
-one plaintext ClickHouse service in an isolated `open-splunk-development`
-Compose project; it starts no Open Splunk server.
-`make run` builds the embedded browser UI and server with the explicit
-`development` identity, applies ClickHouse migrations, and runs in the
-foreground. Open `http://127.0.0.1:8080/signin/`; the administrator token is
-stored in the owner-only `deploy/.env.development` file and is never printed.
+Neither command requires a clean worktree or product version. The isolated
+`open-splunk-development` Compose project starts ClickHouse, PostgreSQL and
+private MinIO with separate persistent volumes. `make run` builds the embedded
+browser UI and server, applies schema setup and runs in the foreground. Open
+`http://localhost:8080/signin/`. Register that origin's exact
+`/auth/oauth/callback/` URI in Google. Any Google account can register; new
+accounts have no organization memberships or index access. Database operators
+assign siteadmin type 44 explicitly to a registered account; there is no
+first-user promotion or browser administrator token.
 
 Stop the server with Ctrl-C. ClickHouse and all development data remain for the
 next run. Stop its containers without deleting state with:
@@ -77,12 +83,14 @@ stopped.
 `open-splunk-development` Compose volumes and the ignored
 `data/development`, `exports/development`, and `deploy/.env.development`
 paths. This permanently deletes the local
-database, ClickHouse data, exports, credentials, and administrator token; the
+PostgreSQL metadata, ClickHouse events, MinIO captures, staging and local credentials; the
 next `make dev-clickhouse` creates an empty environment:
 
 ```sh
 docker volume rm \
-  open-splunk-development_clickhouse-data
+  open-splunk-development_clickhouse-data \
+  open-splunk-development_postgres-data \
+  open-splunk-development_minio-data
 rm -rf -- \
   data/development \
   exports/development \
@@ -107,7 +115,7 @@ plugin versions; generated files are never edited manually.
 manifest, and links one build identity into the server and collector. Build the
 test/benchmark log generator separately with `make build-loggen`. The resulting
 development server still requires an existing
-ClickHouse with the single account described in
+ClickHouse, PostgreSQL, Google OAuth and private MinIO configured as described in
 [`deploy/README.md`](deploy/README.md). Its relevant flags are shown by
 `./build/open-splunk-server -help`. Direct `go build` is only a compile check.
 For deterministic UI-only demo work:
@@ -150,7 +158,7 @@ service, follow [Deployment](deploy/README.md).
 ## Product boundaries
 
 The backend includes protobuf HTTP, authenticated native gRPC ingestion, the
-optional HEC facade, collector WAL/tailing, SQLite control plane, ClickHouse
+optional HEC facade, collector WAL/tailing, PostgreSQL control plane, GoCommon users/organizations, private MinIO artifacts, ClickHouse
 event storage, bounded jobs/exports, durable result sharing, saved and scheduled
 searches, webhook alerts, dashboards, field knowledge, immutable CSV lookups,
 auditing, and the cumulative authored SPL profile documented in
@@ -175,8 +183,7 @@ and retained results.
 
 Saved searches offer Private, App, and Global labels during creation and Save
 As, with Private as the default. Reports can edit the label independently of
-the search and schedule. These labels organize content in the current
-single-user model; they do not grant access or provide multi-user RBAC.
+the search and schedule. These labels organize content; user sessions, organization membership and index permissions determine access. Membership is required before any index grant applies. Deny rules override allows; site administrators have unrestricted access.
 
 Eight create operations support [request retry receipts](docs/api.md): apps,
 indexes, ingestion tokens, search jobs, export jobs, saved searches, saved-search
@@ -188,8 +195,7 @@ revocation before replacement.
 The Administration Server page presents the full HEC operational snapshot,
 including grouping states, fill reasons, native waiters, three latency
 distributions, and five shape histograms. [Coordinated recovery](deploy/README.md)
-includes a TLS-configured deployment topology, an exact receipt-based restore
-retry, and a disposable restore drill. Bundled Help includes the documentation
+covers PostgreSQL metadata, private versioned MinIO artifacts, master keys and native ClickHouse backups. The TLS ClickHouse topology preserves its existing data and lock volumes. Bundled Help includes the documentation
 and linked examples with browser-side search. Its pages work without internet
 access or healthy backend APIs while the local static assets remain available.
 

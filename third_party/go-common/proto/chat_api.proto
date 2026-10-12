@@ -1,0 +1,556 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+import "google/protobuf/timestamp.proto";
+import "pagination.proto";
+import "chat.proto";
+import "attachment.proto";
+
+// --- Channel Operations ---
+
+message CreateChannelRequest {
+  optional bool unread_notifications_enabled = 8; // Omitted defaults to true.
+  string name = 1;
+  string description = 2;
+  ChannelType channel_type = 3;
+  repeated uint64 participant_user_ids = 4;
+  optional uint64 context_id = 5;
+  optional string context_display_name = 6;
+  optional uint64 context_entity_id = 7;
+  // Fork rules of the new channel. Omitted disables forking. They cannot be changed later.
+  ChannelForkRules fork_rules = 9;
+}
+
+message CreateChannelResponse {
+  Channel channel = 1;
+}
+
+// ForkChannelRequest copies a channel's history up to and including a message into a new channel.
+message ForkChannelRequest {
+  uint64 channel_id = 1;            // source channel
+  // Requested fork point, on the main timeline or inside a thread. History is copied up to it,
+  // but in-flight agent work at the fork point is cut, so it may not be copied.
+  uint64 fork_point_message_id = 2;
+  string name = 3;
+  // Members besides the forker, who is always the OWNER. The source's member_pool limits them;
+  // bot users of cloned agent sessions are added automatically.
+  repeated uint64 member_user_ids = 4;
+  // Honored only when the source's matching carry-over rule is FORKER_CHOOSES.
+  bool keep_org_access = 5;
+  bool keep_context = 6;
+  // Optional forker-chosen idempotency key. A retry that reuses it returns the fork it created
+  // instead of forking again. Empty disables idempotency. A replay is matched on channel_id and
+  // fork_point_message_id only: a reused key naming a different source or fork point is
+  // rejected. name, member_user_ids and keep_* on a replay are still validated against current
+  // limits but don't change the result: the original fork is returned.
+  string client_request_id = 7;
+}
+
+message ForkChannelResponse {
+  Channel channel = 1;
+}
+
+// Get-or-create a channel unique for the exact member tuple.
+// The backend will implicitly include the authenticated caller in the tuple.
+message GetOrCreateChannelByMembersUniqueRequest {
+  repeated uint64 member_user_ids = 1;
+  optional uint64 context_id = 2;
+  optional string context_display_name = 3;
+  optional uint64 context_entity_id = 4;
+}
+
+message GetOrCreateChannelByMembersUniqueResponse {
+  Channel channel = 1;
+  bool created = 2;
+}
+
+message GetChannelRequest {
+  uint64 channel_id = 1;
+}
+
+message GetChannelResponse {
+  Channel channel = 1;
+}
+
+// SetChannelPublicRead sets who beyond participants may read a channel. Owner only.
+message SetChannelPublicReadRequest {
+  uint64 channel_id = 1;
+  ChatChannelPublicRead public_read = 2;
+}
+
+message SetChannelPublicReadResponse {
+  Channel channel = 1;
+}
+
+// GetPublicChannel reads a CHAT_CHANNEL_PUBLIC_READ_ANYONE channel without signing in. Any other
+// channel, or any channel while public reads are disabled, answers as not found.
+message GetPublicChannelRequest {
+  uint64 channel_id = 1;
+}
+
+message GetPublicChannelResponse {
+  Channel channel = 1;
+}
+
+// ListPublicMessages lists an ANYONE channel's visible messages without signing in. Pagination,
+// parent_message_id, sort and sort_by behave as in ListMessagesRequest; hidden and deleted
+// messages are never returned.
+message ListPublicMessagesRequest {
+  uint64 channel_id = 1;
+  PaginationRequest pagination = 2;
+  uint64 parent_message_id = 3; // If set, lists messages in this thread (thread root ID)
+  SortRequest sort = 4;
+  ListMessagesSortBy sort_by = 5;
+}
+
+message ListPublicMessagesResponse {
+  repeated Message messages = 1;
+  PaginationResponse pagination = 2;
+}
+
+message UpdateChannelRequest {
+  optional bool unread_notifications_enabled = 6; // Omitted preserves the current setting.
+  uint64 channel_id = 1;
+  optional string name = 2;
+  optional string description = 3;
+  optional uint64 avatar_attachment_id = 4;
+  optional bool is_archived = 5;
+}
+
+message UpdateChannelResponse {
+  Channel channel = 1;
+}
+
+message ListChannelsRequest {
+  PaginationRequest pagination = 1;
+  bool include_archived = 2;
+}
+
+message ListChannelsResponse {
+  repeated Channel channels = 1;
+  PaginationResponse pagination = 2;
+}
+
+message LeaveChannelRequest {
+  uint64 channel_id = 1;
+}
+
+message LeaveChannelResponse {
+}
+
+// --- Participant Operations ---
+
+message AddParticipantsRequest {
+  uint64 channel_id = 1;
+  repeated uint64 user_ids = 2;
+}
+
+message AddParticipantsResponse {
+  repeated ChannelParticipant added_participants = 1;
+}
+
+message RemoveParticipantRequest {
+  uint64 channel_id = 1;
+  uint64 user_id = 2;
+}
+
+message RemoveParticipantResponse {
+}
+
+message UpdateParticipantRoleRequest {
+  uint64 channel_id = 1;
+  uint64 user_id = 2;
+  ChannelRole role = 3;
+}
+
+message UpdateParticipantRoleResponse {
+  ChannelParticipant participant = 1;
+}
+
+message UpdateParticipantPreferencesRequest {
+  uint64 channel_id = 1;
+  reserved 2;
+  reserved "is_muted";
+  optional bool is_pinned = 3;
+  // Omission preserves the current mode; unspecified and unknown modes are invalid.
+  optional ChannelNotificationMode notification_mode = 4;
+}
+
+message UpdateParticipantPreferencesResponse {
+  ChannelParticipant participant = 1;
+}
+
+message ListParticipantsRequest {
+  uint64 channel_id = 1;
+  PaginationRequest pagination = 2;
+}
+
+message ListParticipantsResponse {
+  repeated ChannelParticipant participants = 1;
+  PaginationResponse pagination = 2;
+  // The caller's active membership, independent of roster pagination.
+  // Absent for readers who are not channel participants.
+  ChannelParticipant current_participant = 3;
+}
+
+message ListParticipantsBatchRequest {
+  repeated uint64 channel_ids = 1;
+  PaginationRequest pagination = 2;
+}
+
+message ChannelParticipantsBatchItem {
+  uint64 channel_id = 1;
+  repeated ChannelParticipant participants = 2;
+  PaginationResponse pagination = 3;
+}
+
+message ListParticipantsBatchResponse {
+  repeated ChannelParticipantsBatchItem items = 1;
+}
+
+// --- Message Operations ---
+
+message CreateMessageEmbedRequest {
+  uint32 embed_type = 1;
+  bytes embed_data = 2;
+  string fallback_text = 3;
+  uint32 position = 4;
+}
+
+message SendMessageRequest {
+  uint64 channel_id = 1;
+  string content = 2;
+  uint64 parent_message_id = 3; // Thread root ID (0 = main timeline)
+  repeated CreateMessageEmbedRequest embeds = 4;
+  uint64 reply_to_message_id = 5; // Reply reference (0 = none)
+  repeated AttachmentMetadata attachments = 6;
+  // Also show this thread reply on the main timeline. Requires parent_message_id != 0
+  // and a channel with threads enabled; rejected with 400 otherwise.
+  bool broadcast_to_channel = 7;
+  // Optional sender-chosen idempotency key, unique per sender and channel. A retry that reuses it
+  // returns what the original send left, the queued input or, once delivered, the message, with
+  // its receipts and fresh upload instructions, instead of sending again, even when the agent
+  // session would now reject or cap a new send. Current hot send limits still apply to retries.
+  // Empty keys disable idempotency; removing a queued input forgets its key.
+  string client_message_id = 8;
+
+  // NOTE: agentic transcript kinds (TOOL_CALL/TOOL_RESULT/SYSTEM_EVENT/etc.) are
+  // intentionally NOT settable here. The only legitimate writers are server-side
+  // — bot handlers (RecordToolCall/RecordToolResult) and the ChatService
+  // PostSystemEvent facade — so the public send API does not expose kind/role/
+  // visibility/payload at all. The door is closed by design, not by validation.
+  // These fields are read-only on the Message entity (responses + websocket).
+}
+
+// A send answers with exactly one of message and queued_input. message is the message the send
+// wrote, or, when it joined input already queued for an idle session, the message its input was
+// delivered as. queued_input is set instead when the location's agent session is busy or suspended:
+// the input waits in the session's queue and becomes a message only when the agent receives it.
+message SendMessageResponse {
+  Message message = 1;
+  // Upload instructions for the send's attachments, which belong to the message or the queued
+  // input; a queued input's attachments move to its message when it is delivered.
+  repeated AttachmentUploadInfo new_attachments = 2;
+  // One receipt per agent session the send reached; empty outside agent sessions. RUN_STARTED or
+  // ADMITTED with message, PENDING or HELD with queued_input.
+  repeated AgentInputReceipt agent_input_receipts = 3;
+  AgentQueuedInput queued_input = 4;
+}
+
+message EditMessageRequest {
+  uint64 message_id = 1;
+  string content = 2;
+  repeated CreateMessageEmbedRequest embeds = 3; // Applied only when replace_embeds is true.
+  // Optional: when provided and replace_attachments is true, replaces the attachment list (empty = remove all).
+  repeated AttachmentMetadata attachments = 4;
+  // When true, replaces the entire opaque embed list (empty = remove all).
+  bool replace_embeds = 5;
+  // When true, replaces attachment list with attachments (empty = remove all).
+  bool replace_attachments = 6;
+}
+
+message EditMessageResponse {
+  Message message = 1;
+  repeated AttachmentUploadInfo new_attachments = 2;
+}
+
+message DeleteMessageRequest {
+  uint64 message_id = 1;
+}
+
+message DeleteMessageResponse {
+}
+
+message GetMessageRequest {
+  uint64 message_id = 1;
+  // Honored only for bot/service-authority callers and admin tooling; lets them
+  // read hidden_from_users rows (compaction summaries, agent notes).
+  bool include_hidden = 2;
+}
+
+message GetMessageResponse {
+  Message message = 1;
+}
+
+message BatchGetMessagesRequest {
+  uint64 channel_id = 1;
+  repeated uint64 message_ids = 2;
+  bool include_hidden = 3; // bot/service-authority + admin tooling only
+}
+
+message BatchGetMessagesResponse {
+  repeated Message messages = 1;
+  repeated uint64 missing_message_ids = 2; // not found / not visible / not in channel
+}
+
+enum ListMessagesSortBy {
+  LIST_MESSAGES_SORT_BY_UNSPECIFIED = 0;
+  LIST_MESSAGES_SORT_BY_ID = 1;
+}
+
+message ListMessagesRequest {
+  uint64 channel_id = 1;
+  PaginationRequest pagination = 2; // Usually cursor-based for chat history
+  uint64 parent_message_id = 3;     // If set, lists messages in this thread (thread root ID)
+  bool include_deleted = 4;
+  // Controls chronological direction for cursor pagination.
+  // Recommended/default for chat history: sort_by=LIST_MESSAGES_SORT_BY_ID, sort_desc=true (newest-first).
+  // When using cursor pagination, treat PaginationRequest.cursor as a message-id boundary:
+  // - sort_desc=true  => return messages with id < cursor (older); cursor=0 starts from newest
+  // - sort_desc=false => return messages with id > cursor (newer); cursor=0 starts from oldest
+  SortRequest sort = 5;
+  ListMessagesSortBy sort_by = 6;
+  bool include_hidden = 7; // bot/service-authority + admin tooling only
+}
+
+message ListMessagesResponse {
+  repeated Message messages = 1;
+  PaginationResponse pagination = 2;
+}
+
+// --- Edit History Operations ---
+
+message ListMessageEditHistoryRequest {
+  uint64 message_id = 1;
+  PaginationRequest pagination = 2;
+}
+
+message ListMessageEditHistoryResponse {
+  repeated ChatMessageEditHistoryEntry entries = 1;
+  PaginationResponse pagination = 2;
+}
+
+// --- Reaction Operations ---
+
+message AddReactionRequest {
+  uint64 message_id = 1;
+  string emoji = 2;
+}
+
+message AddReactionResponse {
+  MessageReaction reaction = 2;
+}
+
+message RemoveReactionRequest {
+  uint64 message_id = 1;
+  string emoji = 2;
+}
+
+message RemoveReactionResponse {
+}
+
+message ListReactionsRequest {
+  uint64 message_id = 1;
+  PaginationRequest pagination = 2;
+  optional string emoji_filter = 3; // Optional: list reactions for specific emoji
+}
+
+message ListReactionsResponse {
+  repeated MessageReaction reactions = 1;
+  PaginationResponse pagination = 2;
+}
+
+// --- Tool-call Approval Operations ---
+
+// ResolveToolCall approves or denies a TOOL_CALL message that is awaiting
+// human-in-the-loop approval (approval_status == PENDING). Authority is
+// enforced server-side: the triggering user, configured site tool-approval admins,
+// or channel admins when the run's captured policy allows them; application vetoes apply.
+// On deny/expiry the service auto-writes the paired error TOOL_RESULT.
+message ResolveToolCallRequest {
+  uint64 message_id = 1;
+  bool approve = 2;
+  optional string reason = 3; // optional human-readable denial/approval reason
+}
+
+message ResolveToolCallResponse {
+  Message message = 1; // the updated TOOL_CALL row
+}
+
+// --- Inference usage read APIs (Decision 2.5) ---
+//
+// These are HTTP routes using protobuf request/response bodies for
+// serialization, not gRPC service definitions. They back UI cost/usage views.
+// Usage reads return zeros (not errors) when no ledger rows exist.
+
+// GetChatInferenceTotals reads the cheap per-channel totals cache.
+message GetChatInferenceTotalsRequest {
+  uint64 channel_id = 1;
+}
+
+message GetChatInferenceTotalsResponse {
+  ChatInferenceTotals totals = 1;
+}
+
+// GetAgentSessionUsage returns totals scoped to the agent session/channel plus
+// breakdowns by run, purpose, provider, and model; run/model axes are independently paginated.
+message GetAgentSessionUsageRequest {
+  uint64 agent_session_id = 1;
+  PaginationRequest by_run_pagination = 2;
+  PaginationRequest by_model_pagination = 3;
+  // include_children aggregates a delegation parent together with its delegated child sessions
+  // and fills AgentSessionUsage.by_session. Ignored for a session with no children.
+  bool include_children = 4;
+}
+
+message GetAgentSessionUsageResponse {
+  AgentSessionUsage usage = 1;
+  PaginationResponse by_run_pagination = 2;
+  PaginationResponse by_model_pagination = 3;
+}
+
+// ListAgentRunInferenceCalls returns the append-only call ledger for one run
+// (debugging/audit). Paginated.
+message ListAgentRunInferenceCallsRequest {
+  uint64 agent_run_id = 1;
+  PaginationRequest pagination = 2;
+}
+
+message ListAgentRunInferenceCallsResponse {
+  repeated ChatInferenceCall calls = 1;
+  PaginationResponse pagination = 2;
+}
+
+// GetAgentRunStatus returns the authoritative run status for thread locations of one
+// channel. Any channel reader may call it, including read-only organization readers.
+message GetAgentRunStatusRequest {
+  uint64 channel_id = 1;
+  // Thread roots to report (0 = main timeline). Empty means the main timeline. At most chat_agent_run_status_max_locations (default 50).
+  repeated uint64 parent_message_ids = 2;
+  // Older runs to include per location besides the latest. At most chat_agent_run_status_max_history (default 10).
+  uint32 history_limit = 3;
+  // Append delegated child-session threads, deduplicated against parent_message_ids,
+  // up to chat_agent_run_status_max_locations; active runs come first, then newest children.
+  bool include_delegated_threads = 4;
+}
+
+// ListChannelAgentSessions returns the agent sessions bound to one channel, including
+// delegated child sessions. Any channel reader may call it. At most chat_agent_sessions_by_channel_max sessions (default 200).
+message ListChannelAgentSessionsRequest {
+  uint64 channel_id = 1;
+}
+
+message ListChannelAgentSessionsResponse {
+  repeated AgentSessionSummary sessions = 1;
+  // Server clock when this snapshot was read.
+  google.protobuf.Timestamp server_time = 2;
+}
+
+message GetAgentRunStatusResponse {
+  repeated ThreadAgentRunStatus threads = 1;
+  // Server clock when this snapshot was read.
+  google.protobuf.Timestamp server_time = 2;
+  // With include_delegated_threads: at least one delegated child thread with an active run is in
+  // neither parent_message_ids nor the appended threads (the request left no room, or more
+  // children are active than fit). Clients that count active children treat their count as a
+  // lower bound and ask again naming fewer threads, so the server can append the active ones.
+  bool active_delegated_threads_incomplete = 3;
+}
+
+// StopAgentRun stops one active run of a session whose policy allows user Stop and suspends the
+// session until Resume. Naming the run keeps a stale client from stopping a newer run.
+message StopAgentRunRequest {
+  uint64 agent_run_id = 1;
+}
+
+message StopAgentRunResponse {
+  AgentSessionInteraction interaction = 1;
+}
+
+// ResumeAgentSession lifts a suspension. Input held while suspended starts one new run; the
+// stopped run is not restarted.
+message ResumeAgentSessionRequest {
+  uint64 agent_session_id = 1;
+}
+
+message ResumeAgentSessionResponse {
+  AgentSessionInteraction interaction = 1;
+  optional uint64 agent_run_id = 2; // the run Resume started, if any
+}
+
+// ListAgentQueuedInputs pages one agent session's queue, oldest first, independent of transcript
+// pages. Anyone who can read the conversation may call it and sees everyone's queued input.
+// Paging is by cursor only (page must be 0 or 1); a page holds at most
+// chat_agent_max_pending_inputs entries.
+message ListAgentQueuedInputsRequest {
+  uint64 agent_session_id = 1;
+  PaginationRequest pagination = 2; // cursor: the previous page's next_cursor; 0 starts at the oldest
+}
+
+message ListAgentQueuedInputsResponse {
+  repeated AgentQueuedInput queued_inputs = 1;
+  PaginationResponse pagination = 2;
+}
+
+// EditAgentQueuedInput rewords a queued input before the agent receives it. Only its sender may
+// edit it while participating in a non-archived channel, subject to application authorization.
+// attachments replaces the whole list (an attachment left out is removed); embeds and the
+// reply target are kept. It fails with 409 once the input is no longer queued (delivered, removed
+// or discarded) or the channel is archived.
+message EditAgentQueuedInputRequest {
+  uint64 queued_input_id = 1;
+  string content = 2;
+  repeated AttachmentMetadata attachments = 3;
+}
+
+message EditAgentQueuedInputResponse {
+  AgentQueuedInput queued_input = 1;
+  // Upload instructions for the attachments the edit added.
+  repeated AttachmentUploadInfo new_attachments = 2;
+}
+
+// RemoveAgentQueuedInput withdraws a queued input before the agent receives it. Its sender and the
+// channel's admins may remove it while participating, subject to application authorization.
+// It fails with 409 once the input is no longer queued (delivered,
+// removed or discarded) or the channel is archived.
+message RemoveAgentQueuedInputRequest {
+  uint64 queued_input_id = 1;
+}
+
+message RemoveAgentQueuedInputResponse {}
+
+// GetMessageInferenceSummary returns derived usage for one assistant/compaction
+// message by aggregating linked ledger rows. Derived data, not stored on Message.
+message GetMessageInferenceSummaryRequest {
+  uint64 message_id = 1;
+}
+
+message GetMessageInferenceSummaryResponse {
+  MessageInferenceSummary summary = 1;
+}
+
+// BatchGetMessageInferenceSummaries returns derived summaries for a bounded set
+// of message IDs in one request, so token badges do not issue one HTTP call per
+// visible assistant message. Each summary includes its message_id; omitted IDs
+// mean no ledger rows or no visible/authorized message.
+message BatchGetMessageInferenceSummariesRequest {
+  uint64 channel_id = 1;
+  repeated uint64 message_ids = 2;
+}
+
+message BatchGetMessageInferenceSummariesResponse {
+  repeated MessageInferenceSummary summaries = 1;
+}

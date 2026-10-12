@@ -30,6 +30,7 @@ export * from "./open_splunk/history";
 export * from "./open_splunk/history_api";
 export * from "./open_splunk/index";
 export * from "./open_splunk/index_api";
+export * from "./open_splunk/index_permissions_api";
 export * from "./open_splunk/knowledge_api";
 export * from "./open_splunk/lookup";
 export * from "./open_splunk/lookup_api";

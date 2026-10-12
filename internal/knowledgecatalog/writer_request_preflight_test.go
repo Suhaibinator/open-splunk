@@ -293,7 +293,7 @@ func prepareMutationPreflightRequest(
 	scope := normalizedWriteScope{
 		tenantID:       testTenant,
 		ownerID:        testOwner,
-		writableAppIDs: []string{testApp},
+		writableAppIDs: []string{testApp}, organizationID: 1,
 	}
 	actor := audit.Actor{
 		Kind: audit.ActorKindBrowser,

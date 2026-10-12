@@ -8,6 +8,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -80,13 +82,13 @@ func NewWithContext(
 	if explicit {
 		var mismatch int64
 		query := database.GORMDB().WithContext(ctx).Raw(`
-			SELECT EXISTS (
+			SELECT CASE WHEN EXISTS (
 				SELECT 1
 				FROM search_attempt_audit_tenant_state
 				WHERE maximum_retained_attempts <> ?
 				LIMIT 1
 			)
-		`, maximum).Scan(&mismatch)
+		 THEN 1 ELSE 0 END`, maximum).Scan(&mismatch)
 		if query.Error != nil {
 			return nil, mapStoreError(
 				ctx,
@@ -120,7 +122,7 @@ func beginReadOnly(
 	operation string,
 	returnedErr *error,
 ) (tx *gorm.DB, markFinished func(), rollbackGuard func(), err error) {
-	tx = database.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx = pgmeta.Begin(database.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return nil, nil, nil, mapStoreError(ctx, "begin "+operation, tx.Error)
 	}
@@ -409,7 +411,7 @@ func validateTenantAppendBoundary(
 			expectedBoundaryRows = 1
 		}
 	}
-	var boundaryIsValid int64
+	var boundaryIsValid bool
 	if err := database.Raw(`
 		SELECT CASE
 			WHEN ? = 0 THEN NOT EXISTS (
@@ -435,7 +437,7 @@ func validateTenantAppendBoundary(
 	).Scan(&boundaryIsValid).Error; err != nil {
 		return err
 	}
-	if boundaryIsValid != 1 {
+	if !boundaryIsValid {
 		return fmt.Errorf(
 			"%w: search-attempt audit retained boundary does not match state",
 			ErrCorrupt,

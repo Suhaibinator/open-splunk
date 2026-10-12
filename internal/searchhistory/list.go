@@ -13,6 +13,7 @@ import (
 	"time"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/resourcepolicy"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -30,15 +31,16 @@ type normalizedFilter struct {
 }
 
 type normalizedListRequest struct {
-	filter       normalizedFilter
-	pageSize     uint32
-	pageToken    string
-	includeTotal bool
-	sortBy       opensplunk.SearchHistorySortBy
-	direction    opensplunk.SortDirection
+	policyFingerprint string
+	filter            normalizedFilter
+	pageSize          uint32
+	pageToken         string
+	includeTotal      bool
+	sortBy            opensplunk.SearchHistorySortBy
+	direction         opensplunk.SortDirection
 }
 
-// List returns an owner-scoped keyset page. SQLite's lower() makes text
+// List returns an owner-scoped keyset page. PostgreSQL's lower() makes text
 // filtering case-insensitive for ASCII; non-ASCII matching remains exact-case.
 // Sort-field mutations cannot occur because history entries are immutable.
 func (store *Store) List(ctx context.Context, scope AccessScope, request ListRequest) (ListResult, error) {
@@ -55,6 +57,10 @@ func (store *Store) List(ctx context.Context, scope AccessScope, request ListReq
 	}
 	retentionFloor := now.Add(-store.maximumAge).UnixMicro()
 	normalized.filter.retentionFloor = &retentionFloor
+	normalized.policyFingerprint, err = resourcepolicy.Fingerprint(ctx)
+	if err != nil {
+		return ListResult{}, err
+	}
 	filterHash, err := listFilterHash(normalized)
 	if err != nil {
 		return ListResult{}, err
@@ -222,17 +228,20 @@ func normalizeFilterTime(name string, value *time.Time) (*int64, error) {
 }
 
 type filterFingerprint struct {
-	Version       int     `json:"v"`
-	TenantID      string  `json:"t"`
-	OwnerID       string  `json:"o"`
-	AppID         *string `json:"a"`
-	States        []int32 `json:"s"`
-	Text          *string `json:"q"`
-	SavedSearchID *string `json:"r"`
-	CreatedAfter  *int64  `json:"f"`
-	CreatedBefore *int64  `json:"b"`
-	SortBy        int32   `json:"k"`
-	Direction     int32   `json:"d"`
+	Policy            string  `json:"policy"`
+	Version           int     `json:"v"`
+	OrganizationID    string  `json:"g"`
+	SiteAdministrator bool    `json:"x"`
+	TenantID          string  `json:"t"`
+	OwnerID           string  `json:"o"`
+	AppID             *string `json:"a"`
+	States            []int32 `json:"s"`
+	Text              *string `json:"q"`
+	SavedSearchID     *string `json:"r"`
+	CreatedAfter      *int64  `json:"f"`
+	CreatedBefore     *int64  `json:"b"`
+	SortBy            int32   `json:"k"`
+	Direction         int32   `json:"d"`
 }
 
 func listFilterHash(request normalizedListRequest) (string, error) {
@@ -241,7 +250,8 @@ func listFilterHash(request normalizedListRequest) (string, error) {
 		states[index] = int32(state)
 	}
 	payload, err := json.Marshal(filterFingerprint{
-		Version: historyCursorVersion, TenantID: request.filter.scope.TenantID,
+		Policy: request.policyFingerprint, Version: historyCursorVersion, TenantID: request.filter.scope.TenantID,
+		OrganizationID: request.filter.scope.OrganizationID, SiteAdministrator: request.filter.scope.SiteAdministrator,
 		OwnerID: request.filter.scope.OwnerID, AppID: request.filter.appID,
 		States: states, Text: request.filter.text,
 		SavedSearchID: request.filter.savedSearchID,
@@ -256,7 +266,7 @@ func listFilterHash(request normalizedListRequest) (string, error) {
 }
 
 func applyHistoryFilter(query *gorm.DB, filter normalizedFilter) *gorm.DB {
-	query = query.Where("tenant_id = ? AND owner_id = ?", filter.scope.TenantID, filter.scope.OwnerID)
+	query = resourcepolicy.Filter(applyHistoryScope(query, filter.scope), "search_history")
 	if filter.appID != nil {
 		query = query.Where("app_id = ?", *filter.appID)
 	}
@@ -268,7 +278,7 @@ func applyHistoryFilter(query *gorm.DB, filter normalizedFilter) *gorm.DB {
 		query = query.Where("final_state IN ?", states)
 	}
 	if filter.text != nil {
-		query = query.Where("instr(lower(search_text), lower(?)) > 0", *filter.text)
+		query = query.Where("strpos(lower(search_text), lower(?)) > 0", *filter.text)
 	}
 	if filter.savedSearchID != nil {
 		query = query.Where("saved_search_id = ?", *filter.savedSearchID)
@@ -340,4 +350,15 @@ func cloneStringPointer(value *string) *string {
 	}
 	cloned := strings.Clone(*value)
 	return &cloned
+}
+
+func applyHistoryScope(query *gorm.DB, scope AccessScope) *gorm.DB {
+	query = query.Where("tenant_id = ?", scope.TenantID)
+	if scope.OrganizationID != "" {
+		query = query.Where("organization_id = ?", scopeOrganization(scope))
+	}
+	if !scope.SiteAdministrator {
+		query = query.Where("owner_id = ?", scope.OwnerID)
+	}
+	return query
 }

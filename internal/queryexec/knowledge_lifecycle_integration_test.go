@@ -6,23 +6,27 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport/knowledgecompat"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -389,7 +393,7 @@ func newKnowledgeLifecycleCatalog(
 	indexName string,
 ) *knowledgeLifecycleCatalog {
 	t.Helper()
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.db"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("open lifecycle control database: %v", err)
 	}
@@ -409,7 +413,7 @@ func newKnowledgeLifecycleCatalog(
 	}
 	if _, err := apps.CreateApp(
 		ctx,
-		control.AppAccessScope{TenantID: tenantID},
+		control.AppAccessScope{OrganizationID: 1, TenantID: tenantID},
 		control.AppDefinition{Slug: "knowledge-lifecycle", DisplayName: "Knowledge Lifecycle"},
 	); err != nil {
 		t.Fatalf("create lifecycle app: %v", err)
@@ -422,6 +426,7 @@ func newKnowledgeLifecycleCatalog(
 	}); err != nil {
 		t.Fatalf("create lifecycle index: %v", err)
 	}
+	knowledgecompat.BindIndexes(t, database.GORMDB(), 1, indexName)
 	auditStore, err := audit.NewStore(database, audit.StoreOptions{CursorKey: knowledgeLifecycleCursorKey})
 	if err != nil {
 		t.Fatalf("create lifecycle audit store: %v", err)
@@ -452,7 +457,7 @@ func newKnowledgeLifecycleCatalog(
 		writer:   writer,
 		resolver: resolver,
 		actor:    actor,
-		writeScope: knowledgecatalog.WriteScope{
+		writeScope: knowledgecatalog.WriteScope{OrganizationID: 1,
 			TenantID:       tenantID,
 			OwnerID:        knowledgeLifecycleOwner,
 			WritableAppIDs: []string{knowledgeLifecycleAppID},
@@ -517,7 +522,7 @@ func (catalog *knowledgeLifecycleCatalog) publishV2(
 
 func (catalog *knowledgeLifecycleCatalog) resolve(t *testing.T) knowledgecatalog.Resolution {
 	t.Helper()
-	resolution, err := catalog.resolver.Resolve(catalog.actor, knowledgecatalog.ResolutionScope{
+	resolution, err := catalog.resolver.Resolve(catalog.actor, knowledgecatalog.ResolutionScope{OrganizationID: 1,
 		TenantID:                   catalog.tenantID,
 		PrincipalID:                knowledgeLifecycleOwner,
 		AppID:                      knowledgeLifecycleAppID,
@@ -700,7 +705,7 @@ func knowledgeLifecycleSearchRequest(
 	base time.Time,
 ) searchjobs.CreateRequest {
 	t.Helper()
-	return searchjobs.CreateRequest{
+	return searchjobs.CreateRequest{OrganizationID: "1",
 		SPL:               knowledgeLifecycleSPL(indexName),
 		OwnerID:           knowledgeLifecycleOwner,
 		TenantID:          tenantID,

@@ -11,7 +11,9 @@ ARG OPEN_SPLUNK_SOURCE_DATE_EPOCH
 ARG SOURCE_DATE_EPOCH
 WORKDIR /workspace
 COPY package.json package-lock.json ./
-RUN npm ci --include=dev
+COPY third_party ./third_party
+COPY scripts/check-go-common.mjs ./scripts/check-go-common.mjs
+RUN node scripts/check-go-common.mjs && npm ci --include=dev
 COPY app ./app
 COPY README.md AGENTS.md CLAUDE.md ./
 COPY docs ./docs
@@ -42,7 +44,22 @@ RUN env \
       TZ=UTC \
       npm run build
 
-FROM --platform=${BUILDPLATFORM} golang:1.27.0-alpine3.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395 AS binaries
+# Match the metadata database's major version on each target architecture.
+FROM --platform=${TARGETPLATFORM} postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873 AS postgres-tools
+RUN set -eu; \
+    mkdir -p /postgres-root/usr/local/bin; \
+    cp /usr/local/bin/pg_dump /usr/local/bin/pg_restore /postgres-root/usr/local/bin/; \
+    ldd /usr/local/bin/pg_dump /usr/local/bin/pg_restore | \
+      awk '$2 == "=>" && substr($3, 1, 1) == "/" {print $3} substr($1, 1, 1) == "/" {print $1}' | \
+      sort -u > /postgres-libraries; \
+    while IFS= read -r library; do \
+      mkdir -p "/postgres-root$(dirname "${library}")"; \
+      cp -L "${library}" "/postgres-root${library}"; \
+    done < /postgres-libraries; \
+    pg_dump --version | grep 'PostgreSQL) 18'; \
+    pg_restore --version | grep 'PostgreSQL) 18'
+
+FROM --platform=${BUILDPLATFORM} golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079 AS binaries
 ARG TARGETOS
 ARG TARGETARCH
 ARG OPEN_SPLUNK_EXPECTED_TARGETOS
@@ -66,8 +83,10 @@ ENV CGO_ENABLED=0 \
     GOWORK=off
 WORKDIR /workspace
 COPY go.mod go.sum ./
+COPY third_party/go-common ./third_party/go-common
 RUN go mod download all && go mod verify
 COPY . ./
+COPY --from=postgres-tools /postgres-root /postgres-tools
 COPY --from=ui /workspace/out ./out
 COPY --from=ui /workspace/.next/BUILD_ID ./.next/BUILD_ID
 RUN set -eu; \
@@ -123,10 +142,12 @@ RUN set -eu; \
 RUN set -eu; \
     install -d -o 0 -g 0 -m 0555 \
       /image-rootfs/server/etc \
+      /image-rootfs/server/etc/ssl/certs \
       /image-rootfs/server/usr \
       /image-rootfs/server/usr/local \
       /image-rootfs/server/usr/local/bin \
       /image-rootfs/collector/etc \
+      /image-rootfs/collector/etc/ssl/certs \
       /image-rootfs/collector/usr \
       /image-rootfs/collector/usr/local \
       /image-rootfs/collector/usr/local/bin; \
@@ -147,6 +168,12 @@ RUN set -eu; \
       /image-rootfs/server/var/lib/open-splunk/lock/private \
       /image-rootfs/collector/var/lib/open-splunk-collector; \
     install -o 0 -g 0 -m 0444 \
+      /etc/ssl/certs/ca-certificates.crt \
+      /image-rootfs/server/etc/ssl/certs/; \
+    install -o 0 -g 0 -m 0444 \
+      /etc/ssl/certs/ca-certificates.crt \
+      /image-rootfs/collector/etc/ssl/certs/; \
+    install -o 0 -g 0 -m 0444 \
       oci/rootfs/etc/passwd \
       oci/rootfs/etc/group \
       /image-rootfs/server/etc/; \
@@ -160,12 +187,18 @@ RUN set -eu; \
     install -o 0 -g 0 -m 0555 \
       /artifacts/open-splunk-collector \
       /image-rootfs/collector/usr/local/bin/open-splunk-collector; \
+    cp -a /postgres-tools/. /image-rootfs/server/; \
+    if [ "${TARGETARCH}" = "$(go env GOHOSTARCH)" ]; then \
+      chroot /image-rootfs/server /usr/local/bin/pg_dump --version | grep 'PostgreSQL) 18'; \
+      chroot /image-rootfs/server /usr/local/bin/pg_restore --version | grep 'PostgreSQL) 18'; \
+    fi; \
     find /image-rootfs -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 FROM scratch AS artifacts
 COPY --from=binaries /artifacts/ /
 
 FROM scratch AS server
+ENV PATH=/usr/local/bin
 ARG OPEN_SPLUNK_SOURCE_REVISION
 ARG OPEN_SPLUNK_PRODUCT_VERSION
 ARG OPEN_SPLUNK_IMAGE_CREATED

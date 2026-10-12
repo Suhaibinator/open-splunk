@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"fortio.org/safecast"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -149,51 +150,61 @@ func (catalog *Catalog) appendMutationAudit(
 }
 
 type CreateRequest struct {
-	TenantID   string
-	OwnerID    string
-	Definition *opensplunk.LookupDefinition
-	Asset      lookupasset.Version
+	OrganizationID    int64
+	SiteAdministrator bool
+	TenantID          string
+	OwnerID           string
+	Definition        *opensplunk.LookupDefinition
+	Asset             lookupasset.Version
 }
 
 type ReplaceRequest struct {
-	TenantID        string
-	OwnerID         string
-	LookupID        string
-	ExpectedVersion uint64
-	Definition      *opensplunk.LookupDefinition
-	Asset           lookupasset.Version
+	OrganizationID    int64
+	SiteAdministrator bool
+	TenantID          string
+	OwnerID           string
+	LookupID          string
+	ExpectedVersion   uint64
+	Definition        *opensplunk.LookupDefinition
+	Asset             lookupasset.Version
 }
 
 type GetRequest struct {
-	TenantID string
-	OwnerID  string
-	LookupID string
-	Version  uint64
+	OrganizationID    int64
+	SiteAdministrator bool
+	TenantID          string
+	OwnerID           string
+	LookupID          string
+	Version           uint64
 }
 
 type StateRequest struct {
-	TenantID        string
-	OwnerID         string
-	LookupID        string
-	ExpectedVersion uint64
-	State           opensplunk.LookupState
+	OrganizationID    int64
+	SiteAdministrator bool
+	TenantID          string
+	OwnerID           string
+	LookupID          string
+	ExpectedVersion   uint64
+	State             opensplunk.LookupState
 }
 
 // ListPageRequest is one normalized management-list query. Position and
 // ExpectedSnapshot are detached cursor authority supplied by lookupservice;
-// the catalog validates both inside the same SQLite read snapshot as the page.
+// the catalog validates both inside the same PostgreSQL read snapshot as the page.
 type ListPageRequest struct {
-	TenantID         string
-	OwnerID          string
-	AppID            string
-	States           []opensplunk.LookupState
-	TextFilter       string
-	SortBy           opensplunk.LookupSortBy
-	SortDirection    opensplunk.SortDirection
-	Limit            uint32
-	Position         *ListPosition
-	ExpectedSnapshot *ListSnapshot
-	IncludeTotal     bool
+	OrganizationID    int64
+	SiteAdministrator bool
+	TenantID          string
+	OwnerID           string
+	AppID             string
+	States            []opensplunk.LookupState
+	TextFilter        string
+	SortBy            opensplunk.LookupSortBy
+	SortDirection     opensplunk.SortDirection
+	Limit             uint32
+	Position          *ListPosition
+	ExpectedSnapshot  *ListSnapshot
+	IncludeTotal      bool
 }
 
 // ListPosition is the stable keyset immediately after the last returned row.
@@ -222,10 +233,12 @@ type ListPage struct {
 }
 
 type ResolveScope struct {
-	TenantID    string
-	PrincipalID string
-	AppID       string
-	Names       []string
+	OrganizationID    int64
+	SiteAdministrator bool
+	TenantID          string
+	PrincipalID       string
+	AppID             string
+	Names             []string
 }
 
 type Resolved struct {
@@ -234,7 +247,7 @@ type Resolved struct {
 }
 
 // AdmissionResolution is one atomic explicit-plus-automatic lookup authority.
-// Both slices were selected from the same SQLite read snapshot and passed the
+// Both slices were selected from the same PostgreSQL read snapshot and passed the
 // combined stage, cell, and canonical-byte budgets before any asset body load.
 type AdmissionResolution struct {
 	Explicit  []Resolved
@@ -257,16 +270,17 @@ type versionLifecycle struct {
 	deleted      sql.NullInt64
 }
 
-func requireActiveApp(ctx context.Context, query rowQuerier, tenantID, appID string) error {
-	if query == nil || !validIdentity(tenantID, 255) || !validIdentity(appID, 128) {
+func requireActiveApp(ctx context.Context, query rowQuerier, tenantID, appID string, organizationID int64) error {
+	if organizationID <= 0 || query == nil || !validIdentity(tenantID, 255) || !validIdentity(appID, 128) {
 		return fmt.Errorf("%w: lookup app authority is invalid", ErrInvalid)
 	}
 	var marker int
 	err := query.QueryRowContext(ctx, `
 		SELECT 1 FROM app_workspaces
-		WHERE tenant_id = ? AND app_id = ? AND state = 'active'`,
+		WHERE tenant_id = $1 AND app_id = $2 AND organization_id = $3 AND state = 'active'`,
 		tenantID,
 		appID,
+		organizationID,
 	).Scan(&marker)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("%w: lookup app is unavailable", ErrConflict)
@@ -294,7 +308,7 @@ func requireDefinitionCapacity(
 		var definitions uint64
 		if err := query.QueryRowContext(ctx, `
 			SELECT count(*) FROM knowledge_lookup_definitions
-			WHERE tenant_id = ?`, tenantID).Scan(&definitions); err != nil {
+			WHERE tenant_id = $1`, tenantID).Scan(&definitions); err != nil {
 			return fmt.Errorf("read lookup definition capacity: %w", err)
 		}
 		if definitions >= MaximumDefinitions {
@@ -304,7 +318,7 @@ func requireDefinitionCapacity(
 	var versions uint64
 	if err := query.QueryRowContext(ctx, `
 		SELECT count(*) FROM knowledge_lookup_definition_versions
-		WHERE tenant_id = ?`, tenantID).Scan(&versions); err != nil {
+		WHERE tenant_id = $1`, tenantID).Scan(&versions); err != nil {
 		return fmt.Errorf("read lookup definition version capacity: %w", err)
 	}
 	limit := uint64(MaximumOrdinaryVersions)
@@ -321,10 +335,10 @@ func (catalog *Catalog) Create(ctx context.Context, request CreateRequest) (*ope
 	if err := catalog.validateContext(ctx); err != nil {
 		return nil, err
 	}
-	if !validIdentity(request.TenantID, 255) || !validIdentity(request.OwnerID, 255) {
+	if request.OrganizationID <= 0 || !validIdentity(request.TenantID, 255) || !validIdentity(request.OwnerID, 255) {
 		return nil, fmt.Errorf("%w: lookup tenant or owner is invalid", ErrInvalid)
 	}
-	if err := requireActiveApp(ctx, catalog.database, request.TenantID, request.Definition.GetAppId()); err != nil {
+	if err := requireActiveApp(ctx, catalog.database, request.TenantID, request.Definition.GetAppId(), request.OrganizationID); err != nil {
 		return nil, err
 	}
 	normalized, asset, err := catalog.validateDefinitionAsset(ctx, request.TenantID, request.Definition, request.Asset)
@@ -347,7 +361,7 @@ func (catalog *Catalog) Create(ctx context.Context, request CreateRequest) (*ope
 		if !validIdentity(lookupID, 128) {
 			return nil, fmt.Errorf("%w: generated lookup identity is invalid", ErrInvalid)
 		}
-		created, createErr := catalog.createRows(ctx, request.TenantID, request.OwnerID, lookupID, normalized.Definition, definitionBytes, asset, now)
+		created, createErr := catalog.createRows(ctx, request.OrganizationID, request.TenantID, request.OwnerID, lookupID, normalized.Definition, definitionBytes, asset, now)
 		if createErr == nil {
 			return created, nil
 		}
@@ -362,7 +376,7 @@ func (catalog *Catalog) Create(ctx context.Context, request CreateRequest) (*ope
 // CreatePublished binds a physical version that was inserted on transaction
 // but has not committed yet. It is used only as a lookupasset publication
 // finalizer, making the physical version and visible logical definition one
-// atomic SQLite commit.
+// atomic PostgreSQL commit.
 func (catalog *Catalog) CreatePublished(
 	ctx context.Context,
 	transaction lookupasset.PublicationTransaction,
@@ -371,11 +385,11 @@ func (catalog *Catalog) CreatePublished(
 	if err := catalog.validateContext(ctx); err != nil {
 		return nil, err
 	}
-	if transaction == nil || !validIdentity(request.TenantID, 255) ||
+	if request.OrganizationID <= 0 || transaction == nil || !validIdentity(request.TenantID, 255) ||
 		!validIdentity(request.OwnerID, 255) {
 		return nil, fmt.Errorf("%w: atomic lookup creation authority is invalid", ErrInvalid)
 	}
-	if err := requireActiveApp(ctx, transaction, request.TenantID, request.Definition.GetAppId()); err != nil {
+	if err := requireActiveApp(ctx, transaction, request.TenantID, request.Definition.GetAppId(), request.OrganizationID); err != nil {
 		return nil, err
 	}
 	normalized, asset, err := validatePublishedDefinition(
@@ -403,9 +417,13 @@ func (catalog *Catalog) CreatePublished(
 		if !validIdentity(lookupID, 128) {
 			return nil, fmt.Errorf("%w: generated lookup identity is invalid", ErrInvalid)
 		}
+		if _, err := transaction.ExecContext(ctx, "SAVEPOINT lookup_create_attempt"); err != nil {
+			return nil, err
+		}
 		created, createErr := createRowsInTransaction(
 			ctx,
 			transaction,
+			request.OrganizationID,
 			request.TenantID,
 			request.OwnerID,
 			lookupID,
@@ -415,12 +433,21 @@ func (catalog *Catalog) CreatePublished(
 			now,
 		)
 		if createErr == nil {
+			if _, err := transaction.ExecContext(ctx, "RELEASE SAVEPOINT lookup_create_attempt"); err != nil {
+				return nil, err
+			}
 			if auditErr := catalog.appendMutationAudit(
 				ctx, transaction, request.TenantID, now, lookupID, 1, "lookup.create",
 			); auditErr != nil {
 				return nil, auditErr
 			}
 			return created, nil
+		}
+		if _, err := transaction.ExecContext(ctx, "ROLLBACK TO SAVEPOINT lookup_create_attempt"); err != nil {
+			return nil, err
+		}
+		if _, err := transaction.ExecContext(ctx, "RELEASE SAVEPOINT lookup_create_attempt"); err != nil {
+			return nil, err
 		}
 		if !errors.Is(createErr, ErrConflict) {
 			return nil, createErr
@@ -429,8 +456,8 @@ func (catalog *Catalog) CreatePublished(
 	return nil, fmt.Errorf("%w: lookup identity or logical name repeatedly collided", ErrConflict)
 }
 
-func (catalog *Catalog) createRows(ctx context.Context, tenantID, ownerID, lookupID string, definition *opensplunk.LookupDefinition, definitionBytes []byte, asset lookupasset.Version, now time.Time) (*opensplunk.Lookup, error) {
-	tx, err := catalog.database.BeginTx(ctx, nil)
+func (catalog *Catalog) createRows(ctx context.Context, organizationID int64, tenantID, ownerID, lookupID string, definition *opensplunk.LookupDefinition, definitionBytes []byte, asset lookupasset.Version, now time.Time) (*opensplunk.Lookup, error) {
+	tx, err := pgmeta.BeginSQL(ctx, catalog.database, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin lookup creation: %w", err)
 	}
@@ -438,6 +465,7 @@ func (catalog *Catalog) createRows(ctx context.Context, tenantID, ownerID, looku
 	created, err := createRowsInTransaction(
 		ctx,
 		tx,
+		organizationID,
 		tenantID,
 		ownerID,
 		lookupID,
@@ -463,6 +491,7 @@ func (catalog *Catalog) createRows(ctx context.Context, tenantID, ownerID, looku
 func createRowsInTransaction(
 	ctx context.Context,
 	transaction lookupasset.PublicationTransaction,
+	organizationID int64,
 	tenantID string,
 	ownerID string,
 	lookupID string,
@@ -473,8 +502,8 @@ func createRowsInTransaction(
 ) (*opensplunk.Lookup, error) {
 	// The public non-atomic path performs an early check before parsing the
 	// asset, but the app can be archived before this transaction begins. Keep
-	// the authoritative check on the same SQLite transaction as publication.
-	if err := requireActiveApp(ctx, transaction, tenantID, definition.GetAppId()); err != nil {
+	// the authoritative check on the same PostgreSQL transaction as publication.
+	if err := requireActiveApp(ctx, transaction, tenantID, definition.GetAppId(), organizationID); err != nil {
 		return nil, err
 	}
 	if err := requireDefinitionCapacity(ctx, transaction, tenantID, true, false); err != nil {
@@ -482,11 +511,11 @@ func createRowsInTransaction(
 	}
 	_, err := transaction.ExecContext(ctx, `
 		INSERT INTO knowledge_lookup_definitions (
-			tenant_id, lookup_id, owner_id, app_id, name, sharing_scope, automatic, current_version,
+			organization_id, tenant_id, lookup_id, owner_id, app_id, name, description, sharing_scope, automatic, current_version,
 			state, created_at_unix_micro, updated_at_unix_micro
-		) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'ACTIVE', ?, ?)`,
-		tenantID, lookupID, ownerID, definition.GetAppId(), definition.GetName(),
-		definition.GetSharingScope(), definition.GetAutomatic(), now.UnixMicro(), now.UnixMicro(),
+		) VALUES ($11, $1, $2, $3, $4, $5, $6, $7, $8, 1, 'ACTIVE', $9, $10)`,
+		tenantID, lookupID, ownerID, definition.GetAppId(), definition.GetName(), definition.GetDescription(),
+		definition.GetSharingScope(), definition.GetAutomatic(), now.UnixMicro(), now.UnixMicro(), organizationID,
 	)
 	if err != nil {
 		if storageCapacity(err) {
@@ -517,10 +546,10 @@ func (catalog *Catalog) Replace(ctx context.Context, request ReplaceRequest) (*o
 	if err := catalog.validateContext(ctx); err != nil {
 		return nil, err
 	}
-	if !validIdentity(request.TenantID, 255) || !validIdentity(request.OwnerID, 255) || !validIdentity(request.LookupID, 128) || request.ExpectedVersion == 0 {
+	if request.OrganizationID <= 0 || !validIdentity(request.TenantID, 255) || !validIdentity(request.OwnerID, 255) || !validIdentity(request.LookupID, 128) || request.ExpectedVersion == 0 {
 		return nil, fmt.Errorf("%w: lookup replacement authority is invalid", ErrInvalid)
 	}
-	if err := requireActiveApp(ctx, catalog.database, request.TenantID, request.Definition.GetAppId()); err != nil {
+	if err := requireActiveApp(ctx, catalog.database, request.TenantID, request.Definition.GetAppId(), request.OrganizationID); err != nil {
 		return nil, err
 	}
 	normalized, asset, err := catalog.validateDefinitionAsset(ctx, request.TenantID, request.Definition, request.Asset)
@@ -535,7 +564,7 @@ func (catalog *Catalog) Replace(ctx context.Context, request ReplaceRequest) (*o
 	if err != nil {
 		return nil, err
 	}
-	tx, err := catalog.database.BeginTx(ctx, nil)
+	tx, err := pgmeta.BeginSQL(ctx, catalog.database, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin lookup replacement: %w", err)
 	}
@@ -580,12 +609,12 @@ func (catalog *Catalog) ReplacePublished(
 	if err := catalog.validateContext(ctx); err != nil {
 		return nil, err
 	}
-	if transaction == nil || !validIdentity(request.TenantID, 255) ||
+	if request.OrganizationID <= 0 || transaction == nil || !validIdentity(request.TenantID, 255) ||
 		!validIdentity(request.OwnerID, 255) || !validIdentity(request.LookupID, 128) ||
 		request.ExpectedVersion == 0 {
 		return nil, fmt.Errorf("%w: atomic lookup replacement authority is invalid", ErrInvalid)
 	}
-	if err := requireActiveApp(ctx, transaction, request.TenantID, request.Definition.GetAppId()); err != nil {
+	if err := requireActiveApp(ctx, transaction, request.TenantID, request.Definition.GetAppId(), request.OrganizationID); err != nil {
 		return nil, err
 	}
 	normalized, asset, err := validatePublishedDefinition(
@@ -647,6 +676,7 @@ func replaceRowsInTransaction(
 		transaction,
 		request.TenantID,
 		definition.GetAppId(),
+		request.OrganizationID,
 	); err != nil {
 		return nil, err
 	}
@@ -670,9 +700,10 @@ func replaceRowsInTransaction(
 		  ON version.tenant_id = registry.tenant_id
 		 AND version.lookup_id = registry.lookup_id
 		 AND version.definition_version = registry.current_version
-		WHERE registry.tenant_id = ? AND registry.lookup_id = ?`,
+		WHERE registry.tenant_id = $1 AND registry.lookup_id = $2 AND registry.organization_id = $3`,
 		request.TenantID,
 		request.LookupID,
+		request.OrganizationID,
 	).Scan(
 		&owner,
 		&current,
@@ -691,7 +722,7 @@ func replaceRowsInTransaction(
 	} else if err != nil {
 		return nil, fmt.Errorf("read lookup replacement authority: %w", err)
 	}
-	if owner != request.OwnerID || current != request.ExpectedVersion || state == "DELETED" {
+	if (!request.SiteAdministrator && owner != request.OwnerID) || current != request.ExpectedVersion || state == "DELETED" {
 		return nil, ErrConflict
 	}
 	if currentAssetID == asset.Ref.LookupAssetID &&
@@ -710,7 +741,7 @@ func replaceRowsInTransaction(
 		return nil, err
 	}
 	version := current + 1
-	result, err := transaction.ExecContext(ctx, `UPDATE knowledge_lookup_definitions SET app_id = ?, name = ?, sharing_scope = ?, automatic = ?, current_version = ?, updated_at_unix_micro = ? WHERE tenant_id = ? AND lookup_id = ? AND owner_id = ? AND current_version = ? AND state != 'DELETED'`, definition.GetAppId(), definition.GetName(), definition.GetSharingScope(), definition.GetAutomatic(), version, now.UnixMicro(), request.TenantID, request.LookupID, request.OwnerID, current)
+	result, err := transaction.ExecContext(ctx, `UPDATE knowledge_lookup_definitions SET app_id = $1, name = $2, description = $3, sharing_scope = $4, automatic = $5, current_version = $6, updated_at_unix_micro = $7 WHERE tenant_id = $8 AND lookup_id = $9 AND owner_id = $10 AND current_version = $11 AND state != 'DELETED'`, definition.GetAppId(), definition.GetName(), definition.GetDescription(), definition.GetSharingScope(), definition.GetAutomatic(), version, now.UnixMicro(), request.TenantID, request.LookupID, owner, current)
 	if err != nil {
 		if storageConflict(err) {
 			return nil, ErrConflict
@@ -772,7 +803,7 @@ func insertVersion(
 			definition_proto, columns_blob, mutation_kind, state,
 			disabled_at_unix_micro, deleted_at_unix_micro,
 			created_at_unix_micro
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		tenantID,
 		lookupID,
 		version,
@@ -807,6 +838,9 @@ func (catalog *Catalog) Get(ctx context.Context, request GetRequest) (*opensplun
 	if err := catalog.validateContext(ctx); err != nil {
 		return nil, err
 	}
+	if err := authorizeLookupOrganization(ctx, catalog.database, request.TenantID, request.LookupID, request.OrganizationID); err != nil {
+		return nil, err
+	}
 	record, err := catalog.getProjectionRecord(
 		ctx,
 		request.TenantID,
@@ -816,7 +850,7 @@ func (catalog *Catalog) Get(ctx context.Context, request GetRequest) (*opensplun
 	if err != nil {
 		return nil, err
 	}
-	if record.lookup.GetOwnerId() != request.OwnerID {
+	if !request.SiteAdministrator && record.lookup.GetOwnerId() != request.OwnerID {
 		return nil, ErrNotFound
 	}
 	return proto.Clone(record.lookup).(*opensplunk.Lookup), nil
@@ -829,11 +863,14 @@ func (catalog *Catalog) GetResolved(ctx context.Context, request GetRequest) (Re
 	if err := catalog.validateContext(ctx); err != nil {
 		return Resolved{}, err
 	}
+	if _, err := catalog.Get(ctx, request); err != nil {
+		return Resolved{}, err
+	}
 	resolved, err := catalog.getResolved(ctx, request.TenantID, request.LookupID, request.Version)
 	if err != nil {
 		return Resolved{}, err
 	}
-	if resolved.Lookup.GetOwnerId() != request.OwnerID {
+	if !request.SiteAdministrator && resolved.Lookup.GetOwnerId() != request.OwnerID {
 		return Resolved{}, ErrNotFound
 	}
 	return cloneResolved([]Resolved{resolved})[0], nil
@@ -845,7 +882,7 @@ func (catalog *Catalog) SetState(ctx context.Context, request StateRequest) (*op
 	if err := catalog.validateContext(ctx); err != nil {
 		return nil, err
 	}
-	if !validIdentity(request.TenantID, 255) || !validIdentity(request.OwnerID, 255) || !validIdentity(request.LookupID, 128) || request.ExpectedVersion == 0 ||
+	if request.OrganizationID <= 0 || !validIdentity(request.TenantID, 255) || !validIdentity(request.OwnerID, 255) || !validIdentity(request.LookupID, 128) || request.ExpectedVersion == 0 ||
 		(request.State != opensplunk.LookupState_LOOKUP_STATE_ACTIVE && request.State != opensplunk.LookupState_LOOKUP_STATE_DISABLED && request.State != opensplunk.LookupState_LOOKUP_STATE_DELETED) {
 		return nil, fmt.Errorf("%w: lookup state authority is invalid", ErrInvalid)
 	}
@@ -853,7 +890,7 @@ func (catalog *Catalog) SetState(ctx context.Context, request StateRequest) (*op
 	if err != nil {
 		return nil, err
 	}
-	tx, err := catalog.database.BeginTx(ctx, nil)
+	tx, err := pgmeta.BeginSQL(ctx, catalog.database, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin lookup state transition: %w", err)
 	}
@@ -862,12 +899,12 @@ func (catalog *Catalog) SetState(ctx context.Context, request StateRequest) (*op
 	var current uint64
 	var previousUpdatedMicro int64
 	var currentDisabledMicro sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT owner_id, app_id, current_version, state, updated_at_unix_micro, disabled_at_unix_micro FROM knowledge_lookup_definitions WHERE tenant_id = ? AND lookup_id = ?`, request.TenantID, request.LookupID).Scan(&owner, &appID, &current, &currentState, &previousUpdatedMicro, &currentDisabledMicro); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT owner_id, app_id, current_version, state, updated_at_unix_micro, disabled_at_unix_micro FROM knowledge_lookup_definitions WHERE tenant_id = $1 AND lookup_id = $2 AND organization_id = $3`, request.TenantID, request.LookupID, request.OrganizationID).Scan(&owner, &appID, &current, &currentState, &previousUpdatedMicro, &currentDisabledMicro); errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	} else if err != nil {
 		return nil, fmt.Errorf("read lookup state authority: %w", err)
 	}
-	if owner != request.OwnerID || current != request.ExpectedVersion || currentState == "DELETED" ||
+	if (!request.SiteAdministrator && owner != request.OwnerID) || current != request.ExpectedVersion || currentState == "DELETED" ||
 		(request.State == opensplunk.LookupState_LOOKUP_STATE_DELETED && currentState != "DISABLED") {
 		return nil, ErrConflict
 	}
@@ -880,7 +917,7 @@ func (catalog *Catalog) SetState(ctx context.Context, request StateRequest) (*op
 		return nil, err
 	}
 	if request.State == opensplunk.LookupState_LOOKUP_STATE_ACTIVE {
-		if err := requireActiveApp(ctx, tx, request.TenantID, appID); err != nil {
+		if err := requireActiveApp(ctx, tx, request.TenantID, appID, request.OrganizationID); err != nil {
 			return nil, err
 		}
 	}
@@ -909,12 +946,12 @@ func (catalog *Catalog) SetState(ctx context.Context, request StateRequest) (*op
 	version := current + 1
 	result, err := tx.ExecContext(ctx, `
 		UPDATE knowledge_lookup_definitions
-		SET current_version = ?, state = ?, updated_at_unix_micro = ?,
-			disabled_at_unix_micro = ?, deleted_at_unix_micro = ?
-		WHERE tenant_id = ? AND lookup_id = ? AND owner_id = ?
-			AND current_version = ? AND state != 'DELETED'`,
+		SET current_version = $1, state = $2, updated_at_unix_micro = $3,
+			disabled_at_unix_micro = $4, deleted_at_unix_micro = $5
+		WHERE tenant_id = $6 AND lookup_id = $7 AND owner_id = $8
+			AND current_version = $9 AND state != 'DELETED'`,
 		version, nextState, now.UnixMicro(), disabledValue, deletedValue,
-		request.TenantID, request.LookupID, request.OwnerID, current,
+		request.TenantID, request.LookupID, owner, current,
 	)
 	if err != nil {
 		if storageCapacity(err) {
@@ -936,11 +973,11 @@ func (catalog *Catalog) SetState(ctx context.Context, request StateRequest) (*op
 			disabled_at_unix_micro, deleted_at_unix_micro,
 			created_at_unix_micro
 		)
-		SELECT tenant_id, lookup_id, ?, lookup_asset_id, asset_version,
+		SELECT tenant_id, lookup_id, $1, lookup_asset_id, asset_version,
 			asset_size_bytes, asset_content_sha256, definition_proto, columns_blob,
-			?, ?, ?, ?, ?
+			$2, $3, $4, $5, $6
 		FROM knowledge_lookup_definition_versions
-		WHERE tenant_id = ? AND lookup_id = ? AND definition_version = ?`,
+		WHERE tenant_id = $7 AND lookup_id = $8 AND definition_version = $9`,
 		version, mutationKind, nextState, disabledValue, deletedValue,
 		now.UnixMicro(), request.TenantID, request.LookupID, current,
 	)
@@ -970,7 +1007,7 @@ func (catalog *Catalog) SetState(ctx context.Context, request StateRequest) (*op
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit lookup state transition: %w", err)
 	}
-	return catalog.Get(ctx, GetRequest{TenantID: request.TenantID, OwnerID: request.OwnerID, LookupID: request.LookupID, Version: version})
+	return catalog.Get(ctx, GetRequest{OrganizationID: request.OrganizationID, SiteAdministrator: request.SiteAdministrator, TenantID: request.TenantID, OwnerID: request.OwnerID, LookupID: request.LookupID, Version: version})
 }
 
 // ResolveAdmission selects explicit names and automatic winners from one read
@@ -984,15 +1021,18 @@ func (catalog *Catalog) ResolveAdmission(
 	if err := catalog.validateContext(ctx); err != nil {
 		return AdmissionResolution{}, err
 	}
-	if !validIdentity(scope.TenantID, 255) || !validIdentity(scope.PrincipalID, 255) ||
+	if scope.OrganizationID <= 0 || !validIdentity(scope.TenantID, 255) || !validIdentity(scope.PrincipalID, 255) ||
 		!validIdentity(scope.AppID, 128) || len(scope.Names) > MaximumResolvedLookups {
 		return AdmissionResolution{}, fmt.Errorf("%w: lookup admission resolution scope is invalid", ErrInvalid)
 	}
-	tx, err := catalog.database.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := pgmeta.BeginSQL(ctx, catalog.database, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return AdmissionResolution{}, fmt.Errorf("begin lookup admission resolution snapshot: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := requireActiveApp(ctx, tx, scope.TenantID, scope.AppID, scope.OrganizationID); err != nil {
+		return AdmissionResolution{}, ErrNotFound
+	}
 	explicitRecords := make([]persistedProjection, 0, len(scope.Names))
 	for _, name := range scope.Names {
 		if !lookupdefinition.IsValidLookupName(name) {
@@ -1059,11 +1099,11 @@ func (catalog *Catalog) resolveAutomaticProjectionRecords(
 		  ON visible_app.tenant_id = definition.tenant_id
 		 AND visible_app.app_id = definition.app_id
 		 AND visible_app.state = 'active'
-		WHERE definition.tenant_id = ?
+		WHERE definition.tenant_id = $1 AND $5::text = $1 AND visible_app.organization_id = $6
 		  AND definition.state = 'ACTIVE'
 		  AND (
-		    (definition.sharing_scope = 1 AND definition.owner_id = ? AND definition.app_id = ?)
-		    OR (definition.sharing_scope = 2 AND definition.app_id = ?)
+		    (definition.sharing_scope = 1 AND (definition.owner_id = $2 OR $7) AND definition.app_id = $3)
+		    OR (definition.sharing_scope = 2 AND definition.app_id = $4)
 		    OR definition.sharing_scope = 3
 		  )`
 	arguments := []any{
@@ -1071,6 +1111,9 @@ func (catalog *Catalog) resolveAutomaticProjectionRecords(
 		scope.PrincipalID,
 		scope.AppID,
 		scope.AppID,
+		scope.TenantID,
+		scope.OrganizationID,
+		scope.SiteAdministrator,
 	}
 	var visibleCount, maximumWinningMatches int64
 	if err := query.QueryRowContext(ctx, `
@@ -1105,7 +1148,7 @@ func (catalog *Catalog) resolveAutomaticProjectionRecords(
 		SELECT `+projectionSelectColumns+`
 		FROM winners
 		JOIN knowledge_lookup_definitions AS registry
-		  ON registry.tenant_id = ?
+		  ON registry.tenant_id = $5
 		 AND registry.lookup_id = winners.lookup_id
 		JOIN knowledge_lookup_definition_versions AS version
 		  ON version.tenant_id = registry.tenant_id
@@ -1118,9 +1161,9 @@ func (catalog *Catalog) resolveAutomaticProjectionRecords(
 		 AND asset.content_sha256 = version.asset_content_sha256
 		 AND asset.canonical_bytes = version.asset_size_bytes
 		WHERE winners.precedence_rank = winners.winning_rank
-		  AND winners.automatic = 1
+		  AND winners.automatic = TRUE
 		ORDER BY winners.name, winners.lookup_id
-		LIMIT ?`, append(arguments, scope.TenantID, maximum+1)...)
+		LIMIT $8`, append(arguments, maximum+1)...)
 	if err != nil {
 		return nil, fmt.Errorf("read automatic lookup winners: %w", err)
 	}
@@ -1198,12 +1241,12 @@ func (catalog *Catalog) resolutionWinnerID(
 		  ON app.tenant_id = definition.tenant_id
 		 AND app.app_id = definition.app_id
 		 AND app.state = 'active'
-		WHERE definition.tenant_id = ?
-		  AND definition.name = ?
+		WHERE definition.tenant_id = $1 AND app.organization_id = $6
+		  AND definition.name = $2
 		  AND definition.state = 'ACTIVE'
 		  AND (
-		    (definition.sharing_scope = 1 AND definition.owner_id = ? AND definition.app_id = ?)
-		    OR (definition.sharing_scope = 2 AND definition.app_id = ?)
+		    (definition.sharing_scope = 1 AND (definition.owner_id = $3 OR $7) AND definition.app_id = $4)
+		    OR (definition.sharing_scope = 2 AND definition.app_id = $5)
 		    OR definition.sharing_scope = 3
 		  )
 		ORDER BY definition.lookup_id LIMIT 4`,
@@ -1212,6 +1255,8 @@ func (catalog *Catalog) resolutionWinnerID(
 		scope.PrincipalID,
 		scope.AppID,
 		scope.AppID,
+		scope.OrganizationID,
+		scope.SiteAdministrator,
 	)
 	if err != nil {
 		return "", fmt.Errorf("resolve lookup %q: %w", name, err)
@@ -1522,7 +1567,7 @@ func (catalog *Catalog) getProjectionRecordWith(
 		return persistedProjection{}, ErrInvalid
 	}
 	registry := persistedRegistry{tenantID: tenantID, lookupID: lookupID}
-	if err := query.QueryRowContext(ctx, `SELECT owner_id, app_id, name, sharing_scope, automatic, current_version, state, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro, deleted_at_unix_micro FROM knowledge_lookup_definitions WHERE tenant_id = ? AND lookup_id = ?`, tenantID, lookupID).Scan(&registry.ownerID, &registry.appID, &registry.name, &registry.sharingScope, &registry.automatic, &registry.currentVersion, &registry.state, &registry.createdMicro, &registry.updatedMicro, &registry.disabledMicro, &registry.deletedMicro); errors.Is(err, sql.ErrNoRows) {
+	if err := query.QueryRowContext(ctx, `SELECT owner_id, app_id, name, sharing_scope, automatic, current_version, state, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro, deleted_at_unix_micro FROM knowledge_lookup_definitions WHERE tenant_id = $1 AND lookup_id = $2`, tenantID, lookupID).Scan(&registry.ownerID, &registry.appID, &registry.name, &registry.sharingScope, &registry.automatic, &registry.currentVersion, &registry.state, &registry.createdMicro, &registry.updatedMicro, &registry.disabledMicro, &registry.deletedMicro); errors.Is(err, sql.ErrNoRows) {
 		return persistedProjection{}, ErrNotFound
 	} else if err != nil {
 		return persistedProjection{}, fmt.Errorf("read lookup registry: %w", err)
@@ -1549,8 +1594,8 @@ func (catalog *Catalog) getProjectionRecordWith(
 		 AND asset.asset_version = version.asset_version
 		 AND asset.content_sha256 = version.asset_content_sha256
 		 AND asset.canonical_bytes = version.asset_size_bytes
-		WHERE version.tenant_id = ? AND version.lookup_id = ?
-		  AND version.definition_version = ?`,
+		WHERE version.tenant_id = $1 AND version.lookup_id = $2
+		  AND version.definition_version = $3`,
 		tenantID,
 		lookupID,
 		version,
@@ -1923,6 +1968,10 @@ func storageConflict(err error) bool {
 	if err == nil {
 		return false
 	}
+	var state interface{ SQLState() string }
+	if errors.As(err, &state) && state.SQLState() == "23505" {
+		return true
+	}
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "unique constraint") ||
 		strings.Contains(message, "primary key") ||
@@ -1946,4 +1995,16 @@ func cloneResolved(values []Resolved) []Resolved {
 		result[index] = Resolved{Lookup: proto.Clone(value.Lookup).(*opensplunk.Lookup), Asset: value.Asset}
 	}
 	return result
+}
+
+func authorizeLookupOrganization(ctx context.Context, query rowQuerier, tenantID, lookupID string, organizationID int64) error {
+	if organizationID <= 0 {
+		return ErrInvalid
+	}
+	var marker int
+	err := query.QueryRowContext(ctx, `SELECT 1 FROM knowledge_lookup_definitions AS registry JOIN app_workspaces AS app ON app.tenant_id=registry.tenant_id AND app.app_id=registry.app_id WHERE registry.tenant_id=$1 AND registry.lookup_id=$2 AND registry.organization_id=$3 AND app.organization_id=$3`, tenantID, lookupID, organizationID).Scan(&marker)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
 }

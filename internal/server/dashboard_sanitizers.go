@@ -17,10 +17,10 @@ import (
 // canonical app ID with a search definition on every panel.
 
 func (handler *apiHandler) sanitizeCreateDashboardRequest(
-	_ context.Context,
+	ctx context.Context,
 	request *opensplunk.CreateDashboardRequest,
 ) (*opensplunk.CreateDashboardRequest, error) {
-	if err := handler.sanitizeDashboardDefinition(request.GetDefinition()); err != nil {
+	if err := handler.sanitizeDashboardDefinition(request.GetDefinition(), ctx); err != nil {
 		return request, err
 	}
 	return request, nil
@@ -54,7 +54,7 @@ func sanitizeListDashboardsRequest(
 }
 
 func (handler *apiHandler) sanitizeUpdateDashboardRequest(
-	_ context.Context,
+	ctx context.Context,
 	request *opensplunk.UpdateDashboardRequest,
 ) (*opensplunk.UpdateDashboardRequest, error) {
 	id, err := dashboardID(request.GetDashboardId())
@@ -65,7 +65,7 @@ func (handler *apiHandler) sanitizeUpdateDashboardRequest(
 	if err := administrationExpectedVersion(request.GetExpectedVersion()); err != nil {
 		return request, badRequestError(err.Error())
 	}
-	if err := handler.sanitizeDashboardDefinition(request.GetDefinition()); err != nil {
+	if err := handler.sanitizeDashboardDefinition(request.GetDefinition(), ctx); err != nil {
 		return request, err
 	}
 	return request, nil
@@ -118,6 +118,7 @@ func dashboardPanelID(input string) (string, error) {
 // and stays in the handler.
 func (handler *apiHandler) sanitizeDashboardDefinition(
 	definition *opensplunk.DashboardDefinition,
+	contexts ...context.Context,
 ) error {
 	if definition == nil {
 		return badRequestError("dashboard definition is required")
@@ -126,7 +127,7 @@ func (handler *apiHandler) sanitizeDashboardDefinition(
 		return badRequestError("dashboard definition is too large")
 	}
 	if definition.OwnerId != nil && definition.GetOwnerId() != "" &&
-		definition.GetOwnerId() != handler.ownerID {
+		definition.GetOwnerId() != handler.requestOwner(contexts...) {
 		return badRequestError("dashboard owner must match the authenticated owner")
 	}
 	appID, err := normalizeSearchAppID(definition.GetAppId())

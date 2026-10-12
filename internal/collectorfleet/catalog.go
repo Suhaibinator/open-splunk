@@ -7,9 +7,9 @@ import (
 	"fmt"
 
 	"fortio.org/safecast"
-	"gorm.io/gorm"
-
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"gorm.io/gorm"
 )
 
 // ListResult is one detached, revision-stable collector catalog page.
@@ -72,7 +72,7 @@ func (catalog *Catalog) Get(
 		return CatalogEntry{}, err
 	}
 
-	tx := catalog.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(catalog.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return CatalogEntry{}, mapContextError(
 			ctx,
@@ -100,7 +100,7 @@ func (catalog *Catalog) Get(
 }
 
 // List returns one bounded keyset page. The first page's database revision,
-// rows, optional exact count, and child hydration share one SQLite read
+// rows, optional exact count, and child hydration share one PostgreSQL read
 // snapshot. The revision row also validates fleet/runtime parent integrity
 // with one constant-size indexed read. Signed continuations carry the exact
 // count without recounting and are invalidated when either durable list-visible
@@ -128,7 +128,7 @@ func (catalog *Catalog) List(
 		return ListResult{}, err
 	}
 
-	tx := catalog.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(catalog.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return ListResult{}, mapContextError(
 			ctx,

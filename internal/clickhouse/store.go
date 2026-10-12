@@ -633,14 +633,16 @@ func visibilityHECAdmission(batch ingest.StoreBatch) *visibility.HECAdmissionReq
 		return nil
 	}
 	return &visibility.HECAdmissionRequest{
-		TenantID:              batch.TenantID,
-		TokenID:               batch.HECAdmission.TokenID,
-		TokenVersion:          batch.HECAdmission.TokenVersion,
-		AuthorizedIndexes:     visibilityHECIndexAuthorities(batch.HECAdmission.AuthorizedIndexes),
-		RequestID:             batch.HECAdmission.RequestID,
-		Acknowledgment:        batch.HECAdmission.AcknowledgmentEnabled,
-		AcknowledgmentChannel: batch.HECAdmission.Channel,
-		CreatedAt:             batch.HECAdmission.CreatedAt,
+		OrganizationID:               batch.HECAdmission.OrganizationID,
+		RequireOrganizationOwnership: batch.HECAdmission.RequireOrganizationOwnership,
+		TenantID:                     batch.TenantID,
+		TokenID:                      batch.HECAdmission.TokenID,
+		TokenVersion:                 batch.HECAdmission.TokenVersion,
+		AuthorizedIndexes:            visibilityHECIndexAuthorities(batch.HECAdmission.AuthorizedIndexes),
+		RequestID:                    batch.HECAdmission.RequestID,
+		Acknowledgment:               batch.HECAdmission.AcknowledgmentEnabled,
+		AcknowledgmentChannel:        batch.HECAdmission.Channel,
+		CreatedAt:                    batch.HECAdmission.CreatedAt,
 	}
 }
 
@@ -679,7 +681,7 @@ func stageResultForReservation(reservation visibility.Reservation) (ingest.Stage
 }
 
 // RejectBatch atomically records a terminal whole-batch response in the
-// SQLite visibility ledger. It never prepares or sends a ClickHouse block.
+// PostgreSQL visibility ledger. It never prepares or sends a ClickHouse block.
 // If another exact outcome won the identity race, that first durable outcome
 // is returned unchanged.
 func (s *Store) RejectBatch(
@@ -736,7 +738,7 @@ func (s *Store) rejectBatchAdmitted(
 		QuotaEvaluatedAt:   rejected.QuotaEvaluatedAt,
 	})
 	if err != nil {
-		// A failed SQLite commit can be outcome-ambiguous: the rejection may
+		// A failed PostgreSQL commit can be outcome-ambiguous: the rejection may
 		// already be terminal even though this caller did not observe it. Wake
 		// maintenance unless quota denied before any write, so an exact replay
 		// cannot leave terminal retention dependent on restart.
@@ -1091,7 +1093,7 @@ func (s *Store) storeAdmitted(
 		reservation, err = s.visibility.Reserve(ctx, request)
 	}
 	if err != nil {
-		// A failed SQLite commit can be outcome-ambiguous. Wake the server-owned
+		// A failed PostgreSQL commit can be outcome-ambiguous. Wake the server-owned
 		// reconciler so any reservation that did persist is not dependent on a
 		// collector retry or process restart.
 		if _, ok := errors.AsType[*ingestquota.ExceededError](err); !ok {
@@ -1523,7 +1525,7 @@ func (s *Store) writeGroup(
 	cancelCommit()
 	if err != nil {
 		// The transaction result can be uncertain. Wake native callers so they
-		// re-read SQLite and wake the reconciler to acquire the exact group again;
+		// re-read PostgreSQL and wake the reconciler to acquire the exact group again;
 		// never try to rewrite terminal state through a best-effort release.
 		sequences := writeGroupSequences(group)
 		s.waiterWakeups.Add(uint64(s.commitWaiters.notify(sequences)))
@@ -1696,7 +1698,7 @@ func (s *Store) reconcilePending(ctx context.Context, proveDrained bool) error {
 			if proveDrained {
 				return replayErr
 			}
-			// Rejected outcomes are SQLite-only and may keep arriving while a
+			// Rejected outcomes are PostgreSQL-only and may keep arriving while a
 			// persistent ClickHouse failure prevents this pending replay. Perform one
 			// bounded prune attempt before returning so terminal metadata retention
 			// continues to make progress. Preserve the replay failure as the primary
@@ -1930,7 +1932,7 @@ func (s *Store) finishPreSend(reservation visibility.Reservation, attemptID stri
 
 // finishMarkSendingFailure resolves the local durability transition itself.
 // If MarkSending provably left the phase unsent, Abandon succeeds and prevents
-// a dead client from wedging all later batches. If SQLite applied the update but
+// a dead client from wedging all later batches. If PostgreSQL applied the update but
 // the caller lost its result, Abandon fails closed and the ambiguous reservation
 // is retained by releasing only its attempt lease.
 func (s *Store) finishMarkSendingFailure(reservation visibility.Reservation, attemptID string, operationErr error) error {

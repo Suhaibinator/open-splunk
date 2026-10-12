@@ -16,7 +16,7 @@ message BuildMetadata {
   string ui_build_id = 3;
   string ui_sha256 = 4;
   string protobuf_schema_sha256 = 5;
-  string sqlite_migrations_sha256 = 6;
+  string postgres_migrations_sha256 = 6;
   string clickhouse_migrations_sha256 = 8;
   optional string product_version = 11;
 }

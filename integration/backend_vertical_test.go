@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
@@ -124,11 +126,12 @@ func TestBackendVertical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlDBPath := filepath.Join(work, "control.sqlite")
-	administratorTokenPath, administratorToken := provisionAdministratorToken(
+	controlDSN := pgtest.DSN(t)
+	googleIdentity, googleSession := provisionGoogleSession(
 		t,
-		work,
+		work, controlDSN,
 	)
+	controlDSN = googleIdentity.PostgresDSN
 	assertEmptyDirectory(t, serverRuntimeDir)
 	serverEnvironment := clickHouseServerEnvironment(
 		os.Environ(),
@@ -144,9 +147,9 @@ func TestBackendVertical(t *testing.T) {
 		"-http-listen-address=" + httpAddress,
 		"-http-tls-certificate-file=" + httpTLSIdentity.CertificateFile,
 		"-http-tls-private-key-file=" + httpTLSIdentity.PrivateKeyFile,
-		"-control-database-file=" + controlDBPath,
+		"-postgres-dsn=" + controlDSN,
 		"-master-key-file=" + filepath.Join(work, "server.key"),
-		"-administrator-token-file=" + administratorTokenPath,
+
 		"-collector-grpc-listen-address=" + collectorAddress,
 		"-collector-grpc-plaintext-enabled",
 		"-tenant-id=" + verticalTenantID,
@@ -170,15 +173,15 @@ func TestBackendVertical(t *testing.T) {
 	waitForHealth(t, ctx, httpClient, baseURL, serverProcess)
 	assertPlaintextCannotReachHTTPSHealth(t, ctx, httpAddress)
 	assertStandaloneServerSurface(t, ctx, httpClient, baseURL)
-	assertInstancePaletteRoundTrip(t, ctx, httpClient, baseURL, administratorToken)
+	assertInstancePaletteRoundTrip(t, ctx, httpClient, baseURL, googleSession)
 
 	var createdIndex opensplunk.CreateIndexResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		httpClient,
 		baseURL+"/api/indexes/create",
-		administratorToken,
+		googleSession,
 		&opensplunk.CreateIndexRequest{
 			Definition: &opensplunk.IndexDefinition{
 				Name:            verticalIndexName,
@@ -199,7 +202,7 @@ func TestBackendVertical(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		fixtureStart,
 	)
 
@@ -223,7 +226,7 @@ func TestBackendVertical(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		"backend-vertical-collector",
 		verticalIndexName,
 		collectorID,
@@ -231,7 +234,7 @@ func TestBackendVertical(t *testing.T) {
 		[]string{`app\.log`},
 	)
 	serverSecrets := []string{
-		administratorToken,
+		googleSession,
 		plaintextToken,
 		clickhouse.Password,
 		clickhouse.MigrationPassword,
@@ -315,13 +318,13 @@ func TestBackendVertical(t *testing.T) {
 	serverProcesses = append(serverProcesses, serverProcess)
 	waitForHealth(t, ctx, httpClient, baseURL, serverProcess)
 	assertStandaloneServerSurface(t, ctx, httpClient, baseURL)
-	assertInstancePaletteAfterRestart(t, ctx, httpClient, baseURL, administratorToken)
+	assertInstancePaletteAfterRestart(t, ctx, httpClient, baseURL, googleSession)
 	persistedSavedSearch := assertVerticalLookupFixtureAfterRestart(
 		t,
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		lookupFixture,
 	)
 
@@ -359,7 +362,7 @@ func TestBackendVertical(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		storage,
 		createdIndex.GetIndex().GetIndexId(),
 		visibilityCutoff,
@@ -369,7 +372,7 @@ func TestBackendVertical(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		storage,
 		createdIndex.GetIndex().GetIndexId(),
 		fixtureStart,
@@ -397,7 +400,7 @@ func TestBackendVertical(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		search.jobID,
 		serverProcess,
 		serverSecrets,
@@ -446,7 +449,7 @@ func TestBackendVertical(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		historyRerunIndexName,
 		"Backend history rerun",
 	)
@@ -460,7 +463,7 @@ func TestBackendVertical(t *testing.T) {
 		httpClient,
 		storage,
 		baseURL,
-		administratorToken,
+		googleSession,
 	))
 
 	serverSecrets = append(serverSecrets, assertCurrentGradeThisMigration(
@@ -473,7 +476,7 @@ func TestBackendVertical(t *testing.T) {
 		httpClient,
 		baseURL,
 		storage,
-		administratorToken,
+		googleSession,
 	))
 
 	createBackendIndex(
@@ -481,12 +484,12 @@ func TestBackendVertical(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		bulkIndexName,
 		"Backend vertical bulk export",
 	)
 	bulkStart := insertBulkEvents(t, ctx, storage, visibilityCutoff)
-	assertBrowserFeatureCompletion(t, ctx, repository, baseURL, fixtureStart, bulkStart, persistedSavedSearch.GetSavedSearchId(), lookupFixture.appID, administratorToken, serverProcess)
+	assertBrowserFeatureCompletion(t, ctx, repository, baseURL, fixtureStart, bulkStart, persistedSavedSearch.GetSavedSearchId(), lookupFixture.appID, googleSession, serverProcess)
 	serverSecrets = append(serverSecrets, assertTruncatedPreviewExportsAllRows(
 		t, ctx, httpClient, storage, baseURL, bulkStart, visibilityCutoff,
 	))
@@ -513,7 +516,7 @@ func provisionVerticalLookupFixture(
 	t *testing.T,
 	ctx context.Context,
 	client *http.Client,
-	baseURL, administratorToken string,
+	baseURL, googleSession string,
 	fixtureStart time.Time,
 ) verticalLookupFixture {
 	t.Helper()
@@ -523,12 +526,12 @@ func provisionVerticalLookupFixture(
 		DefaultIndexNames: []string{verticalIndexName},
 	}
 	var createdApp opensplunk.CreateAppResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/apps/create",
-		administratorToken,
+		googleSession,
 		&opensplunk.CreateAppRequest{Definition: appDefinition},
 		&createdApp,
 	)
@@ -554,12 +557,12 @@ func provisionVerticalLookupFixture(
 		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 	}
 	var createdLookup opensplunk.CreateLookupResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/knowledge/lookups/create",
-		administratorToken,
+		googleSession,
 		&opensplunk.CreateLookupRequest{
 			Definition: lookupDefinition,
 			CsvData: []byte(
@@ -639,17 +642,17 @@ func assertVerticalLookupFixtureAfterRestart(
 	t *testing.T,
 	ctx context.Context,
 	client *http.Client,
-	baseURL, administratorToken string,
+	baseURL, googleSession string,
 	fixture verticalLookupFixture,
 ) *opensplunk.SavedSearch {
 	t.Helper()
 	var gotApp opensplunk.GetAppResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/apps/get",
-		administratorToken,
+		googleSession,
 		&opensplunk.GetAppRequest{Selector: &opensplunk.AppSelector{
 			Selector: &opensplunk.AppSelector_AppId{AppId: fixture.appID},
 		}},
@@ -664,12 +667,12 @@ func assertVerticalLookupFixtureAfterRestart(
 
 	lookupVersion := fixture.lookupVersion
 	var gotLookup opensplunk.GetLookupResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/knowledge/lookups/get",
-		administratorToken,
+		googleSession,
 		&opensplunk.GetLookupRequest{
 			LookupId: fixture.lookupID,
 			Version:  &lookupVersion,
@@ -922,7 +925,7 @@ func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *ht
 		build.GetSourceRevision() != integrationSourceRevision ||
 		build.GetUiBuildId() != integrationUIBuildID ||
 		build.GetUiSha256() == "" || build.GetProtobufSchemaSha256() == "" ||
-		build.GetSqliteMigrationsSha256() == "" ||
+		build.GetPostgresMigrationsSha256() == "" ||
 		build.GetClickhouseMigrationsSha256() == "" ||
 		limits.GetMaximumPreviewRows() == 0 || limits.GetMaximumWebsocketSubscriptions() == 0 ||
 		limits.GetMaximumWebsocketFrameBytes() < 1<<10 || limits.GetMaximumWebsocketFrameBytes() > 1<<20 ||
@@ -936,7 +939,7 @@ func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *ht
 // assertInstancePaletteRoundTrip proves the compiled server wires the
 // appearance store into the settings object bootstrap reads: on a fresh
 // control database bootstrap serves classic, an administrator update lands at
-// version 1, the unauthenticated bootstrap immediately serves the new palette,
+// version 1, the user session bootstrap immediately serves the new palette,
 // and a fresh authenticated read agrees. The in-process palette smoke
 // (`palette_smoke_test.go`) restates this wiring over a test settings object;
 // this is the only gate that exercises `cmd/open-splunk-server`'s own.
@@ -944,19 +947,19 @@ func assertInstancePaletteRoundTrip(
 	t *testing.T,
 	ctx context.Context,
 	client *http.Client,
-	baseURL, administratorToken string,
+	baseURL, googleSession string,
 ) {
 	t.Helper()
 	if got := bootstrapUIPalette(t, ctx, client, baseURL); got != opensplunk.UiPalette_UI_PALETTE_CLASSIC {
 		t.Fatalf("fresh bootstrap ui_palette = %v, want classic", got)
 	}
 	var initial opensplunk.GetServerAppearanceResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/server/appearance/get",
-		administratorToken,
+		googleSession,
 		&opensplunk.GetServerAppearanceRequest{},
 		&initial,
 	)
@@ -967,12 +970,12 @@ func assertInstancePaletteRoundTrip(
 	}
 
 	var updated opensplunk.UpdateServerAppearanceResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/server/appearance/update",
-		administratorToken,
+		googleSession,
 		&opensplunk.UpdateServerAppearanceRequest{
 			ExpectedVersion: 0,
 			Palette:         verticalInstancePalette,
@@ -984,7 +987,7 @@ func assertInstancePaletteRoundTrip(
 		updated.GetCurrent().GetUpdatedAt() == nil {
 		t.Fatalf("updated appearance = %+v", &updated)
 	}
-	assertInstancePaletteServed(t, ctx, client, baseURL, administratorToken)
+	assertInstancePaletteServed(t, ctx, client, baseURL, googleSession)
 }
 
 // assertInstancePaletteAfterRestart proves the restarted binary reloads the
@@ -994,29 +997,29 @@ func assertInstancePaletteAfterRestart(
 	t *testing.T,
 	ctx context.Context,
 	client *http.Client,
-	baseURL, administratorToken string,
+	baseURL, googleSession string,
 ) {
 	t.Helper()
-	assertInstancePaletteServed(t, ctx, client, baseURL, administratorToken)
+	assertInstancePaletteServed(t, ctx, client, baseURL, googleSession)
 }
 
 func assertInstancePaletteServed(
 	t *testing.T,
 	ctx context.Context,
 	client *http.Client,
-	baseURL, administratorToken string,
+	baseURL, googleSession string,
 ) {
 	t.Helper()
 	if got := bootstrapUIPalette(t, ctx, client, baseURL); got != verticalInstancePalette {
 		t.Fatalf("bootstrap ui_palette = %v, want %v", got, verticalInstancePalette)
 	}
 	var current opensplunk.GetServerAppearanceResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/server/appearance/get",
-		administratorToken,
+		googleSession,
 		&opensplunk.GetServerAppearanceRequest{},
 		&current,
 	)
@@ -1044,6 +1047,7 @@ func waitForHealth(
 	protectedValues ...string,
 ) {
 	t.Helper()
+	configureNativeWorkspaceClient(t, client, baseURL)
 	deadline := time.NewTimer(45 * time.Second)
 	defer deadline.Stop()
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -1097,7 +1101,7 @@ func createIndexScopedIngestionToken(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 	name string,
 	indexName string,
 	collectorID string,
@@ -1106,12 +1110,12 @@ func createIndexScopedIngestionToken(
 ) string {
 	t.Helper()
 	var created opensplunk.CreateIngestionTokenResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/ingestion-tokens/create",
-		administratorToken,
+		googleSession,
 		&opensplunk.CreateIngestionTokenRequest{
 			Definition: &opensplunk.IngestionTokenDefinition{
 				Name: name,
@@ -1149,7 +1153,7 @@ func assertCurrentGradeThisMigration(
 	client *http.Client,
 	baseURL string,
 	connection clickhousedriver.Conn,
-	administratorToken string,
+	googleSession string,
 ) string {
 	t.Helper()
 
@@ -1164,7 +1168,7 @@ func assertCurrentGradeThisMigration(
 		ctx,
 		client,
 		baseURL,
-		administratorToken,
+		googleSession,
 		gradethiscorpus.MigrationIndexName,
 		"Current GradeThis collector migration",
 	)
@@ -1199,7 +1203,7 @@ func assertCurrentGradeThisMigration(
 		ctx,
 		client,
 		baseURL,
-		administratorToken,
+		googleSession,
 		"gradethis-current-migration",
 		gradethiscorpus.MigrationIndexName,
 		collectorID,
@@ -1494,19 +1498,17 @@ func exportAndDownloadJSONLines(
 	t.Helper()
 	completed := createCompletedJSONLinesExport(t, ctx, client, baseURL, searchJobID, columns, expectedRows)
 
-	var granted opensplunk.GetExportJobResponse
-	postProto(t, ctx, client, baseURL+"/api/search/exports/get", &opensplunk.GetExportJobRequest{
-		ExportJobId:        completed.GetExportJobId(),
-		IssueDownloadGrant: true,
-	}, &granted)
-	grant := granted.GetDownloadGrant()
-	if granted.GetExportJob().GetState() != opensplunk.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
-		grant.GetDownloadPath() != "/api/search/exports/download" || grant.GetDownloadToken() == "" ||
-		grant.GetExpiresAt() == nil || !grant.GetExpiresAt().AsTime().After(time.Now().UTC()) {
-		t.Fatalf("granted completed export = %+v", granted.GetExportJob())
+	var got opensplunk.GetExportJobResponse
+	postProto(t, ctx, client, baseURL+"/api/search/exports/get", &opensplunk.GetExportJobRequest{ExportJobId: completed.GetExportJobId()}, &got)
+	if got.GetExportJob().GetState() != opensplunk.ExportJobState_EXPORT_JOB_STATE_COMPLETED || got.GetDownloadGrant() != nil {
+		t.Fatal("completed export did not preserve native session download contract")
 	}
-	artifact := downloadGrantedArtifact(t, ctx, client, baseURL, granted.GetExportJob().GetArtifact(), grant)
-	return granted.GetExportJob(), artifact, grant.GetDownloadToken()
+	artifact := downloadUserArtifact(t, ctx, client, baseURL, got.GetExportJob().GetArtifact(), completed.GetExportJobId())
+	session := ""
+	if fixture := fixtureForURL(baseURL, ""); fixture != nil {
+		session = fixture.Session
+	}
+	return got.GetExportJob(), artifact, session
 }
 
 func createCompletedJSONLinesExport(
@@ -1734,29 +1736,28 @@ func waitForCompletedExport(t *testing.T, ctx context.Context, client *http.Clie
 	}
 }
 
-func downloadGrantedArtifact(
+func downloadUserArtifact(
 	t *testing.T,
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
 	artifact *opensplunk.ExportArtifact,
-	grant *opensplunk.ExportDownloadGrant,
+	exportJobID string,
 ) []byte {
 	t.Helper()
-	if artifact == nil || grant == nil || artifact.GetSizeBytes() > 16<<20 {
-		t.Fatalf("invalid downloadable artifact: artifact present=%t grant present=%t size=%d",
-			artifact != nil, grant != nil, artifact.GetSizeBytes())
+	if artifact == nil || exportJobID == "" || artifact.GetSizeBytes() > 16<<20 {
+		t.Fatalf("invalid downloadable artifact: artifact present=%t export present=%t size=%d",
+			artifact != nil, exportJobID != "", artifact.GetSizeBytes())
 	}
 	if artifact.GetMediaType() != "application/x-ndjson; charset=utf-8" ||
 		!strings.HasSuffix(artifact.GetFileName(), ".jsonl") {
 		t.Fatalf("JSON Lines artifact metadata = type %q filename %q", artifact.GetMediaType(), artifact.GetFileName())
 	}
-	downloadURL := baseURL + grant.GetDownloadPath()
+	downloadURL := baseURL + "/api/search/exports/download?export_job_id=" + url.QueryEscape(exportJobID)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("Authorization", "Bearer "+grant.GetDownloadToken())
 	response, err := client.Do(request)
 	if err != nil {
 		t.Fatalf("download export artifact: %v", err)
@@ -1789,24 +1790,26 @@ func downloadGrantedArtifact(
 		t.Fatalf("download safety headers = %+v", response.Header)
 	}
 
-	replay, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	// An existing Google session string sent as a bearer header is not a
+	// logged-in browser session and must not disclose the private artifact.
+	anonymous := &http.Client{Transport: underlyingNativeTransport(client.Transport), Timeout: client.Timeout}
+	untrusted, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	replay.Header.Set("Authorization", "Bearer "+grant.GetDownloadToken())
-	replayed, err := client.Do(replay)
+	if fixture := fixtureForURL(baseURL, ""); fixture != nil {
+		untrusted.Header.Set("Authorization", "Bearer "+fixture.Session)
+	}
+	rejected, err := anonymous.Do(untrusted)
 	if err != nil {
-		t.Fatalf("replay export grant: %v", err)
+		t.Fatal(err)
 	}
-	replayBody, replayReadErr := io.ReadAll(io.LimitReader(replayed.Body, 1<<20))
-	_ = replayed.Body.Close()
-	if replayReadErr != nil {
-		t.Fatalf("read replay rejection: %v", replayReadErr)
+	rejectedBody, readErr := io.ReadAll(io.LimitReader(rejected.Body, 1<<20))
+	_ = rejected.Body.Close()
+	if readErr != nil || rejected.StatusCode != http.StatusUnauthorized || bytes.Contains(rejectedBody, []byte(artifact.GetFileName())) {
+		t.Fatalf("unauthenticated artifact access status=%d read=%v", rejected.StatusCode, readErr)
 	}
-	if replayed.StatusCode != http.StatusUnauthorized || replayed.Header.Get("WWW-Authenticate") == "" ||
-		bytes.Contains(replayBody, []byte(grant.GetDownloadToken())) || bytes.Contains(replayBody, []byte(artifact.GetFileName())) {
-		t.Fatalf("grant replay response = status %d headers %+v body %q", replayed.StatusCode, replayed.Header, replayBody)
-	}
+
 	return body
 }
 
@@ -2753,7 +2756,7 @@ func assertBackendIndexStatistics(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 	connection clickhousedriver.Conn,
 	indexID string,
 	visibilityCutoff uint64,
@@ -2767,12 +2770,12 @@ func assertBackendIndexStatistics(
 		)
 	}
 	var response opensplunk.GetIndexStatsResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/indexes/stats/get",
-		administratorToken,
+		googleSession,
 		&opensplunk.GetIndexStatsRequest{
 			Selector: &opensplunk.IndexSelector{
 				Selector: &opensplunk.IndexSelector_IndexId{
@@ -2796,7 +2799,7 @@ func assertBackendIndexStatistics(
 		ctx,
 		client,
 		baseURL,
-		administratorToken,
+		googleSession,
 		connection,
 		indexID,
 		visibilityCutoff,
@@ -2808,7 +2811,7 @@ func assertBackendIndexFields(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 	connection clickhousedriver.Conn,
 	indexID string,
 	fixtureStart time.Time,
@@ -2844,12 +2847,12 @@ func assertBackendIndexFields(
 		NameFilter: &nameFilter,
 	}
 	var first opensplunk.ListIndexFieldsResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/indexes/fields/list",
-		administratorToken,
+		googleSession,
 		request,
 		&first,
 	)
@@ -2874,12 +2877,12 @@ func assertBackendIndexFields(
 		PageToken: &token,
 	}
 	var second opensplunk.ListIndexFieldsResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/indexes/fields/list",
-		administratorToken,
+		googleSession,
 		request,
 		&second,
 	)
@@ -2971,7 +2974,7 @@ func assertBackendIndexListStatistics(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 	connection clickhousedriver.Conn,
 	indexID string,
 	visibilityCutoff uint64,
@@ -2980,12 +2983,12 @@ func assertBackendIndexListStatistics(
 	pageSize := uint32(64)
 	textFilter := verticalIndexName
 	var response opensplunk.ListIndexesResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/indexes/list",
-		administratorToken,
+		googleSession,
 		&opensplunk.ListIndexesRequest{
 			Page:         &opensplunk.PageRequest{PageSize: &pageSize},
 			TextFilter:   &textFilter,
@@ -3242,18 +3245,14 @@ func assertTruncatedPreviewExportsAllRows(
 		t.Fatalf("created bulk search job = %+v", created.GetSearchJob())
 	}
 	completed := waitForCompletedSearch(t, ctx, client, baseURL, jobID, 60*time.Second)
-	if !completed.GetResultsTruncated() || completed.GetProgress().GetProducedRows() != 10_000 ||
+	if completed.GetResultsTruncated() || !completed.GetPreviewTruncated() || !completed.GetCaptureComplete() || completed.GetCaptureRows() != bulkEventCount || completed.GetProgress().GetProducedRows() != bulkEventCount ||
 		len(completed.GetEffectiveIndexScope()) != 1 || completed.GetEffectiveIndexScope()[0] != bulkIndexName {
 		t.Fatalf("completed bulk search = %+v", completed)
 	}
-	foundTruncationWarning := false
 	for _, warning := range completed.GetWarnings() {
 		if warning.GetCode() == "RESULTS_TRUNCATED" {
-			foundTruncationWarning = true
+			t.Fatal("complete capture was labeled truncated")
 		}
-	}
-	if !foundTruncationWarning {
-		t.Fatalf("completed bulk search warnings = %+v", completed.GetWarnings())
 	}
 	if completed.GetIndexTimeCutoff() == nil {
 		t.Fatalf("completed bulk search lacks an index-time cutoff: %+v", completed)
@@ -3266,9 +3265,9 @@ func assertTruncatedPreviewExportsAllRows(
 		Page:        &opensplunk.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
 	}, &preview)
 	page := preview.GetResultPage()
-	if page.GetSnapshotComplete() || page.GetPage().GetTotalSizeExact() || page.GetPage().GetTotalSize() != 10_000 ||
+	if !page.GetSnapshotComplete() || !page.GetPage().GetTotalSizeExact() || page.GetPage().GetTotalSize() != bulkEventCount ||
 		len(page.GetRows()) != int(pageSize) {
-		t.Fatalf("truncated bulk preview = %+v", page)
+		t.Fatalf("complete captured bulk page = %+v", page)
 	}
 
 	// Insert one decoy for every replay predicate only after the search has
@@ -3453,17 +3452,17 @@ func assertVerticalLookupInspection(
 	t *testing.T,
 	ctx context.Context,
 	client *http.Client,
-	baseURL, administratorToken, jobID string,
+	baseURL, googleSession, jobID string,
 	serverProcess *managedProcess,
 	serverSecrets []string,
 ) {
 	t.Helper()
 	var inspected opensplunk.InspectSearchJobResponse
-	if _, err := postProtoRequestWithBearer(
+	if _, err := postProtoRequestWithSession(
 		ctx,
 		client,
 		baseURL+"/api/search/jobs/inspect",
-		administratorToken,
+		googleSession,
 		&opensplunk.InspectSearchJobRequest{SearchJobId: jobID},
 		&inspected,
 	); err != nil {
@@ -3500,7 +3499,7 @@ func assertBackendHistoryRerun(
 	repository, collectorBinary, collectorAddress, work string,
 	client *http.Client,
 	connection clickhousedriver.Conn,
-	baseURL, administratorToken string,
+	baseURL, googleSession string,
 ) string {
 	t.Helper()
 
@@ -3533,7 +3532,7 @@ func assertBackendHistoryRerun(
 		ctx,
 		client,
 		baseURL,
-		administratorToken,
+		googleSession,
 		"backend-history-rerun",
 		historyRerunIndexName,
 		collectorID,
@@ -4336,6 +4335,13 @@ func observeCompletedSearchWebSocket(
 	endpoint.RawPath = ""
 	endpoint.RawQuery = ""
 	endpoint.Fragment = ""
+	webSocketHeaders := http.Header{"Origin": []string{baseURL}, "Sec-Fetch-Site": []string{"same-origin"}}
+	if fixture := fixtureForURL(baseURL, ""); fixture != nil {
+		query := endpoint.Query()
+		query.Set("organization_id", fixture.OrganizationID)
+		endpoint.RawQuery = query.Encode()
+		webSocketHeaders.Set("Cookie", "open_splunk_session="+fixture.Session)
+	}
 
 	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
 	if endpoint.Scheme == "wss" {
@@ -4345,10 +4351,7 @@ func observeCompletedSearchWebSocket(
 		}
 		dialer.TLSClientConfig = tlsConfig
 	}
-	connection, response, err := dialer.DialContext(watchContext, endpoint.String(), http.Header{
-		"Origin":         []string{baseURL},
-		"Sec-Fetch-Site": []string{"same-origin"},
-	})
+	connection, response, err := dialer.DialContext(watchContext, endpoint.String(), webSocketHeaders)
 	if err != nil {
 		status := 0
 		if response != nil {
@@ -4560,7 +4563,10 @@ func webSocketTLSConfig(client *http.Client) (*tls.Config, error) {
 	if client == nil {
 		return nil, errors.New("HTTPS backend requires an HTTP client")
 	}
-	transport, ok := client.Transport.(*http.Transport)
+	if client.Transport == nil {
+		return nil, errors.New("HTTPS backend client requires an explicitly trusted TLS transport")
+	}
+	transport, ok := underlyingNativeTransport(client.Transport).(*http.Transport)
 	if !ok || transport.TLSClientConfig == nil {
 		return nil, errors.New(
 			"HTTPS backend client requires a trusted TLS transport",

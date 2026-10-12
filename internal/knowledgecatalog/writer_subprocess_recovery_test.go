@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -17,6 +16,10 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
@@ -94,12 +97,12 @@ func TestWriterSubprocessExistingRoutesRecoverAtCommitBoundary(t *testing.T) {
 
 func exerciseWriterRecoveryCrash(t *testing.T, route string, boundary writerHookBoundary) {
 	t.Helper()
-	databasePath := filepath.Join(t.TempDir(), "control.sqlite")
+	databasePath := pgtest.DSN(t)
 	before := initializeWriterRecoveryDatabase(t, databasePath, route)
 	killWriterRecoveryChildAtBoundary(t, databasePath, route, boundary)
 
-	// Deliberately do not unlink, rename, checkpoint, or copy the WAL/SHM. Open
-	// must recover the exact database and sidecars left by the killed process.
+	// Reopen the same PostgreSQL schema after the killed client disconnects.
+	// PostgreSQL must roll back its uncommitted transaction and preserve commits.
 	database := openWriterRecoveryDatabase(t, databasePath)
 	defer closeWriterRecoveryDatabase(t, database)
 	assertWriterRecoveryIntegrity(t, database)
@@ -221,10 +224,11 @@ func TestWriterSubprocessRecoveryHelper(t *testing.T) {
 
 func initializeWriterRecoveryDatabase(t *testing.T, databasePath, route string) writerRecoverySnapshot {
 	t.Helper()
-	if !filepath.IsAbs(databasePath) {
-		t.Fatalf("writer recovery database path is not absolute: %q", databasePath)
-	}
+	validateWriterRecoveryDSN(t, databasePath)
 	database := openWriterRecoveryDatabase(t, databasePath)
+	if err := database.GORMDB().Exec(`CREATE TABLE os_index_organizations (index_id TEXT PRIMARY KEY REFERENCES indexes(index_id), organization_id BIGINT NOT NULL CHECK (organization_id > 0))`).Error; err != nil {
+		t.Fatalf("create native index ownership fixture: %v", err)
+	}
 	apps, err := control.NewAppCatalog(database, control.AppCatalogOptions{
 		CursorKey: writerRecoveryCursorKey,
 		Clock: func() time.Time {
@@ -238,7 +242,7 @@ func initializeWriterRecoveryDatabase(t *testing.T, databasePath, route string) 
 	}
 	created, err := apps.CreateApp(
 		t.Context(),
-		control.AppAccessScope{TenantID: writerRecoveryTenantID},
+		control.AppAccessScope{TenantID: writerRecoveryTenantID, OrganizationID: 1},
 		control.AppDefinition{Slug: "writer-recovery", DisplayName: "Writer recovery"},
 	)
 	if err != nil {
@@ -326,7 +330,7 @@ func writerRecoveryScope() WriteScope {
 	return WriteScope{
 		TenantID:       writerRecoveryTenantID,
 		OwnerID:        writerRecoveryOwnerID,
-		WritableAppIDs: []string{writerRecoveryAppID},
+		WritableAppIDs: []string{writerRecoveryAppID}, OrganizationID: 1,
 	}
 }
 
@@ -540,9 +544,7 @@ func writerRecoveryChildEnvironment(databasePath, route string, boundary writerH
 func requireWriterRecoveryChildPath(t *testing.T) string {
 	t.Helper()
 	value := os.Getenv(writerRecoveryDatabasePathEnv)
-	if value == "" || !filepath.IsAbs(value) || filepath.Clean(value) != value {
-		t.Fatalf("invalid writer recovery database path %q", value)
-	}
+	validateWriterRecoveryDSN(t, value)
 	return value
 }
 
@@ -601,10 +603,7 @@ type writerRecoverySnapshot map[string][]string
 func readWriterRecoverySnapshot(t *testing.T, database *control.DB) writerRecoverySnapshot {
 	t.Helper()
 	rows, err := database.SQLDB().QueryContext(t.Context(), `
-		SELECT name
-		FROM sqlite_schema
-		WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-		ORDER BY name`)
+		SELECT tablename FROM pg_tables WHERE schemaname=current_schema() ORDER BY tablename`)
 	if err != nil {
 		t.Fatalf("list writer recovery tables: %v", err)
 	}
@@ -633,7 +632,7 @@ func readWriterRecoverySnapshot(t *testing.T, database *control.DB) writerRecove
 		quotedTable := `"` + strings.ReplaceAll(table, `"`, `""`) + `"`
 		resultRows, err := database.SQLDB().QueryContext(
 			t.Context(),
-			`SELECT * FROM `+quotedTable+` WHERE tenant_id = ?`,
+			pgtest.Parameters(`SELECT * FROM `+quotedTable+` WHERE tenant_id = $1`),
 			writerRecoveryTenantID,
 		)
 		if err != nil {
@@ -679,30 +678,11 @@ func readWriterRecoverySnapshot(t *testing.T, database *control.DB) writerRecove
 
 func writerRecoveryTableHasTenantID(t *testing.T, database *control.DB, table string) bool {
 	t.Helper()
-	quotedTable := `"` + strings.ReplaceAll(table, `"`, `""`) + `"`
-	rows, err := database.SQLDB().QueryContext(t.Context(), `PRAGMA table_info(`+quotedTable+`)`)
-	if err != nil {
+	var present bool
+	if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM pg_attribute a JOIN pg_class r ON r.oid=a.attrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND r.relname=$1 AND a.attname='tenant_id' AND a.attnum>0 AND NOT a.attisdropped)`, table).Scan(&present); err != nil {
 		t.Fatalf("inspect writer recovery table %s: %v", table, err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var sequence int64
-		var name string
-		var columnType string
-		var notNull int64
-		var defaultValue any
-		var primaryKey int64
-		if err := rows.Scan(&sequence, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			t.Fatalf("scan writer recovery table info %s: %v", table, err)
-		}
-		if name == "tenant_id" {
-			return true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate writer recovery table info %s: %v", table, err)
-	}
-	return false
+	return present
 }
 
 func assertWriterRecoverySnapshotsEqual(
@@ -828,7 +808,7 @@ func assertWriterRecoveryExistingRouteCommitted(
 	readScope := ReadScope{
 		TenantID:       writerRecoveryTenantID,
 		OwnerID:        writerRecoveryOwnerID,
-		ReadableAppIDs: []string{writerRecoveryAppID},
+		ReadableAppIDs: []string{writerRecoveryAppID}, OrganizationID: 1,
 	}
 	versionOne := uint64(1)
 	prior, err := store.Get(t.Context(), readScope, writerRecoveryObjectID, &versionOne)
@@ -876,8 +856,8 @@ func assertWriterRecoveryExistingRouteCommitted(
 		  ON dependencies.tenant_id = version.tenant_id
 		 AND dependencies.knowledge_object_id = version.knowledge_object_id
 		 AND dependencies.object_version = version.object_version
-		WHERE version.tenant_id = ?
-		  AND version.knowledge_object_id = ?
+		WHERE version.tenant_id = $1
+		  AND version.knowledge_object_id = $2
 		  AND version.object_version IN (1, 2)
 		  AND lifecycle.state = version.state
 		  AND version.dependency_count = 0
@@ -915,7 +895,7 @@ func assertWriterRecoveryExistingRouteCommitted(
 		  ON selector.tenant_id = projection.tenant_id
 		 AND selector.knowledge_object_id = projection.knowledge_object_id
 		 AND selector.object_version = projection.object_version
-		WHERE object.tenant_id = ? AND object.knowledge_object_id = ?
+		WHERE object.tenant_id = $1 AND object.knowledge_object_id = $2
 		  AND object.current_version = 2
 		  AND projection.app_id = version.app_id
 		  AND projection.owner_id = version.owner_id
@@ -929,7 +909,7 @@ func assertWriterRecoveryExistingRouteCommitted(
 		  AND projection.sourcetype_selector_count = 0
 		  AND projection_seal.projection_bytes = projection.projection_bytes
 		  AND projection_seal.canonical_selector_bytes = projection.canonical_selector_bytes
-		  AND order_key.created_at_unix_micro = ?
+		  AND order_key.created_at_unix_micro = $3
 		  AND order_key.updated_at_unix_micro = version.created_at_unix_micro
 		  AND selector.dimension = 'host' AND selector.ordinal = 0
 		  AND selector.match_kind = 'exact' AND selector.value = 'writer-recovery-host'
@@ -968,8 +948,8 @@ func assertWriterRecoveryExistingRouteCommitted(
 		 AND committed.object_version = receipt.object_version
 		 AND committed.occurred_at_unix_micro = receipt.created_at_unix_micro
 		 AND committed.successful_audit_sequence = receipt.successful_audit_sequence
-		WHERE receipt.tenant_id = ?
-		  AND receipt.knowledge_object_id = ?
+		WHERE receipt.tenant_id = $1
+		  AND receipt.knowledge_object_id = $2
 		  AND receipt.object_version IN (1, 2)
 		  AND receipt.committed_catalog_revision = receipt.object_version
 		  AND receipt.request_digest_format_version = 1
@@ -978,7 +958,7 @@ func assertWriterRecoveryExistingRouteCommitted(
 		  AND length(receipt.outcome_proto) BETWEEN 1 AND 1024
 		  AND receipt.created_at_unix_micro = version.created_at_unix_micro
 		  AND receipt.retention_anchor_unix_micro >= receipt.created_at_unix_micro
-		  AND receipt.retain_until_unix_micro = receipt.retention_anchor_unix_micro + ?
+		  AND receipt.retain_until_unix_micro = receipt.retention_anchor_unix_micro + $3
 		  AND event.actor_kind = receipt.actor_kind
 		  AND event.actor_id = receipt.actor_id
 		  AND event.actor_role = 'administrator'
@@ -990,14 +970,14 @@ func assertWriterRecoveryExistingRouteCommitted(
 		  AND event.sharing_scope = version.sharing_scope
 		  AND ((receipt.object_version = 1
 		        AND receipt.route = 'objects.create'
-		        AND receipt.client_request_id = ?
+		        AND receipt.client_request_id = $4
 		        AND receipt.mutation_kind = 'create'
 		        AND event.action = 'knowledge.object.create')
 		    OR (receipt.object_version = 2
-		        AND receipt.route = ?
-		        AND receipt.client_request_id = ?
-		        AND receipt.mutation_kind = ?
-		        AND event.action = ?))`,
+		        AND receipt.route = $5
+		        AND receipt.client_request_id = $6
+		        AND receipt.mutation_kind = $7
+		        AND event.action = $8))`,
 		writerRecoveryTenantID,
 		writerRecoveryObjectID,
 		int64((8*24*time.Hour)/time.Microsecond),
@@ -1026,7 +1006,7 @@ func assertWriterRecoveryExistingRouteCommitted(
 		  ON receipt.tenant_id = head.tenant_id
 		 AND receipt.committed_catalog_revision = head.catalog_revision
 		 AND receipt.committed_catalog_state_token = head.state_token
-		WHERE tenant.tenant_id = ?
+		WHERE tenant.tenant_id = $1
 		  AND tenant.catalog_revision = 2
 		  AND tenant.identity_count = 1
 		  AND tenant.version_count = 2
@@ -1041,8 +1021,8 @@ func assertWriterRecoveryExistingRouteCommitted(
 		      SELECT coalesce(sum(projection_bytes), 0)
 		      FROM knowledge_object_list_projections
 		      WHERE tenant_id = tenant.tenant_id)
-		  AND receipt.route = ?
-		  AND receipt.client_request_id = ?`,
+		  AND receipt.route = $2
+		  AND receipt.client_request_id = $3`,
 		writerRecoveryTenantID,
 		route,
 		wantRequestID,
@@ -1058,7 +1038,7 @@ func assertWriterRecoveryExistingRouteCommitted(
 		if err := database.SQLDB().QueryRowContext(t.Context(), `
 			SELECT committed_catalog_state_token
 			FROM knowledge_mutation_idempotency
-			WHERE tenant_id = ? AND route = ? AND client_request_id = ?`,
+			WHERE tenant_id = $1 AND route = $2 AND client_request_id = $3`,
 			writerRecoveryTenantID,
 			route,
 			wantRequestID,
@@ -1210,13 +1190,13 @@ func assertWriterRecoveryCommitted(
 		  ON head.tenant_id = receipt.tenant_id
 		 AND head.catalog_revision = receipt.committed_catalog_revision
 		 AND head.state_token = receipt.committed_catalog_state_token
-		WHERE object.tenant_id = ?
-		  AND object.knowledge_object_id = ?
+		WHERE object.tenant_id = $1
+		  AND object.knowledge_object_id = $2
 		  AND object.current_version = 1
-		  AND object.app_id = ?
-		  AND object.owner_id = ?
+		  AND object.app_id = $3
+		  AND object.owner_id = $4
 		  AND object.object_type = 'field_alias'
-		  AND object.name = ?
+		  AND object.name = $5
 		  AND object.sharing_scope = 'private'
 		  AND object.state = 'draft'
 		  AND object.definition_digest = version.definition_digest
@@ -1232,18 +1212,18 @@ func assertWriterRecoveryCommitted(
 		  AND order_key.created_at_unix_micro = object.created_at_unix_micro
 		  AND order_key.updated_at_unix_micro = object.updated_at_unix_micro
 		  AND receipt.actor_kind = 'browser'
-		  AND receipt.actor_id = ?
+		  AND receipt.actor_id = $6
 		  AND receipt.route = 'objects.create'
-		  AND receipt.client_request_id = ?
+		  AND receipt.client_request_id = $7
 		  AND receipt.mutation_kind = 'create'
 		  AND receipt.request_digest_format_version = 1
 		  AND length(receipt.request_digest) = 32
 		  AND receipt.outcome_format_version = 1
 		  AND length(receipt.outcome_proto) BETWEEN 1 AND 1024
 		  AND receipt.committed_catalog_revision = 1
-		  AND receipt.created_at_unix_micro = ?
+		  AND receipt.created_at_unix_micro = $8
 		  AND receipt.retention_anchor_unix_micro >= receipt.created_at_unix_micro
-		  AND receipt.retain_until_unix_micro = receipt.retention_anchor_unix_micro + ?
+		  AND receipt.retain_until_unix_micro = receipt.retention_anchor_unix_micro + $9
 		  AND event.occurred_at_unix_micro = receipt.created_at_unix_micro
 		  AND event.actor_kind = receipt.actor_kind
 		  AND event.actor_id = receipt.actor_id
@@ -1298,7 +1278,7 @@ func assertWriterRecoveryCommitted(
 	durableObject, err := store.Get(t.Context(), ReadScope{
 		TenantID:       writerRecoveryTenantID,
 		OwnerID:        writerRecoveryOwnerID,
-		ReadableAppIDs: []string{writerRecoveryAppID},
+		ReadableAppIDs: []string{writerRecoveryAppID}, OrganizationID: 1,
 	}, writerRecoveryObjectID, nil)
 	if err != nil {
 		t.Fatalf("read committed writer recovery object: %v", err)
@@ -1357,7 +1337,7 @@ func writerRecoveryTableCount(t *testing.T, database *control.DB, table string) 
 	var count int64
 	if err := database.SQLDB().QueryRowContext(
 		t.Context(),
-		`SELECT count(*) FROM `+quotedTable+` WHERE tenant_id = ?`,
+		pgtest.Parameters(`SELECT count(*) FROM `+quotedTable+` WHERE tenant_id = $1`),
 		writerRecoveryTenantID,
 	).Scan(&count); err != nil {
 		t.Fatalf("count committed writer recovery table %s: %v", table, err)
@@ -1368,4 +1348,12 @@ func writerRecoveryTableCount(t *testing.T, database *control.DB, table string) 
 func assertWriterRecoveryIntegrity(t *testing.T, database *control.DB) {
 	t.Helper()
 	assertWriterFaultIntegrity(t, database)
+}
+
+func validateWriterRecoveryDSN(t *testing.T, value string) {
+	t.Helper()
+	config, err := pgx.ParseConfig(value)
+	if err != nil || !strings.HasPrefix(strings.Trim(config.RuntimeParams["search_path"], "\""), "os_test_") {
+		t.Fatal("writer recovery requires an isolated native PostgreSQL schema")
+	}
 }

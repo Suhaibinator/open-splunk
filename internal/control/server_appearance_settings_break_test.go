@@ -4,21 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/uipalette"
 	"gorm.io/gorm"
 )
 
 // openAppearanceBreakDatabase opens a fresh control database for one test and
-// closes it on cleanup so the SQLite handle never outlives the test.
+// closes it on cleanup so the PostgreSQL pool never outlives the test.
 func openAppearanceBreakDatabase(t *testing.T) *DB {
 	t.Helper()
-	database, err := Open(context.Background(), filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := Open(context.Background(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestServerAppearanceSettingsConcurrentUpdatesAdmitExactlyOneWriter(t *testi
 	) error {
 		var visible int64
 		if err := tx.Raw(
-			`SELECT count(*) FROM server_appearance_settings WHERE singleton_id = 1 AND version = ?`,
+			`SELECT count(*) FROM server_appearance_settings WHERE singleton_id = 1 AND version = $1`,
 			event.Version,
 		).Scan(&visible).Error; err != nil {
 			return err
@@ -159,7 +159,7 @@ func TestServerAppearanceSettingsSchemaRejectsEveryOutOfContractRow(t *testing.T
 	database := openAppearanceBreakDatabase(t)
 	const insert = `
 		INSERT INTO server_appearance_settings (singleton_id, version, palette, updated_at_unix_micro)
-		VALUES (?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4)
 	`
 	for _, row := range []struct {
 		name      string
@@ -252,16 +252,16 @@ func TestServerAppearanceSettingsGetRefusesCorruptRowsInsteadOfDefaulting(t *tes
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+			if _, err := pgtest.Checks(ctx, connection, false); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := connection.ExecContext(ctx, `
 				INSERT INTO server_appearance_settings (singleton_id, version, palette, updated_at_unix_micro)
-				VALUES (1, ?, ?, ?)
+				VALUES (1, $1, $2, $3)
 			`, corrupt.version, corrupt.palette, corrupt.updatedAt); err != nil {
 				t.Fatalf("plant corrupt row: %v", err)
 			}
-			if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`); err != nil {
+			if _, err := pgtest.Checks(ctx, connection, true); err != nil {
 				t.Fatal(err)
 			}
 			if err := connection.Close(); err != nil {

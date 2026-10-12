@@ -122,7 +122,7 @@ func TestSearchAttemptAuditAppendsOnceAfterPendingInsertInSameTransaction(t *tes
 	appender := &recordingSearchAttemptAuditAppender{persist: true}
 	store := newSearchAttemptAuditStore(t, database, appender)
 	ctx := context.Background()
-	scope := AccessScope{TenantID: " tenant-a ", OwnerID: " owner-a "}
+	scope := AccessScope{OrganizationID: "1", TenantID: " tenant-a ", OwnerID: " owner-a "}
 	created := time.Date(2026, time.August, 4, 12, 34, 56, 987_654_321, time.FixedZone("test", -7*60*60))
 	input := pendingHistoryEntry(" job-a ", "index=main", created)
 	input.KnowledgeSnapshot = &opensplunk.KnowledgeSnapshotSummary{
@@ -173,7 +173,7 @@ func TestSearchAttemptAuditAppendsOnceAfterPendingInsertInSameTransaction(t *tes
 	if _, err := store.BeginAttempt(ctx, scope, changed); !errors.Is(err, control.ErrVersionConflict) {
 		t.Fatalf("changed BeginAttempt() error = %v, want ErrVersionConflict", err)
 	}
-	if _, err := store.BeginAttempt(ctx, AccessScope{TenantID: "tenant-a", OwnerID: "other"}, original); !errors.Is(err, control.ErrAlreadyExists) {
+	if _, err := store.BeginAttempt(ctx, AccessScope{OrganizationID: "1", TenantID: "tenant-a", OwnerID: "other"}, original); !errors.Is(err, control.ErrAlreadyExists) {
 		t.Fatalf("cross-owner BeginAttempt() error = %v, want ErrAlreadyExists", err)
 	}
 	if calls := appender.snapshot(); len(calls) != 1 {
@@ -191,7 +191,7 @@ func TestSearchAttemptAuditFailureRollsBackPendingAndAuditRows(t *testing.T) {
 
 	if _, err := store.BeginAttempt(
 		context.Background(),
-		AccessScope{TenantID: "tenant", OwnerID: "owner"},
+		AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"},
 		entry,
 	); !errors.Is(err, errTestSearchAttemptAuditAppend) {
 		t.Fatalf("BeginAttempt() error = %v, want audit append failure", err)
@@ -215,7 +215,7 @@ func TestSearchAttemptAuditTerminalJobIDReuseAppendsNothing(t *testing.T) {
 	appender := &recordingSearchAttemptAuditAppender{persist: true}
 	store := newSearchAttemptAuditStore(t, database, appender)
 	ctx := context.Background()
-	scope := AccessScope{TenantID: "tenant-terminal", OwnerID: "owner-terminal"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant-terminal", OwnerID: "owner-terminal"}
 	created := time.Date(2026, time.August, 5, 10, 11, 12, 345_678_000, time.UTC)
 	pending := pendingHistoryEntry("job-terminal-reuse", "index=main", created)
 
@@ -305,7 +305,7 @@ func TestSearchAttemptAuditConcurrentExactRetriesAppendOnce(t *testing.T) {
 	appender := &recordingSearchAttemptAuditAppender{persist: true}
 	store := newSearchAttemptAuditStore(t, database, appender)
 	entry := pendingHistoryEntry("job-concurrent", "index=main", time.Now().UTC())
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 
 	const workers = 12
 	start := make(chan struct{})
@@ -337,7 +337,7 @@ func TestSearchAttemptAuditConcurrentConflictingAdmissionsAppendOnce(t *testing.
 	createSearchAttemptAuditTestTable(t, database)
 	appender := &recordingSearchAttemptAuditAppender{persist: true}
 	store := newSearchAttemptAuditStore(t, database, appender)
-	scope := AccessScope{TenantID: "tenant-conflict", OwnerID: "owner-conflict"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant-conflict", OwnerID: "owner-conflict"}
 	created := time.Date(2026, time.August, 5, 13, 14, 15, 456_789_000, time.UTC)
 	entries := []*opensplunk.SearchHistoryEntry{
 		pendingHistoryEntry("job-concurrent-conflict", "index=main", created),
@@ -436,8 +436,8 @@ func createSearchAttemptAuditTestTable(t *testing.T, database *control.DB) {
 			search_job_id TEXT PRIMARY KEY NOT NULL,
 			tenant_id TEXT NOT NULL,
 			owner_id TEXT NOT NULL,
-			occurred_at_unix_micro INTEGER NOT NULL
-		) STRICT
+			occurred_at_unix_micro BIGINT NOT NULL
+		)
 	`).Error; err != nil {
 		t.Fatalf("create search-attempt audit test table: %v", err)
 	}

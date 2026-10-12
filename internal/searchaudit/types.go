@@ -1,5 +1,5 @@
 // Package searchaudit persists the separately bounded, payload-free security
-// record of admitted search attempts. It is a SQLite/GORM control-plane package;
+// record of admitted search attempts. It is a PostgreSQL/GORM control-plane package;
 // it never stores SPL, index scope, generated SQL, results, or failures.
 package searchaudit
 

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"slices"
+	"strconv"
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
@@ -104,11 +105,17 @@ func (manager *Manager) resolveLookupAdmission(
 	if request.AppID == "" {
 		return nil, nil, ErrKnowledgeUnavailable
 	}
+	organization, organizationErr := strconv.ParseInt(request.OrganizationID, 10, 64)
+	if organizationErr != nil || organization <= 0 || strconv.FormatInt(organization, 10) != request.OrganizationID {
+		return nil, nil, ErrKnowledgeUnavailable
+	}
 	scope := LookupAdmissionResolutionScope{
-		TenantID:    request.TenantID,
-		PrincipalID: request.OwnerID,
-		AppID:       request.AppID,
-		Names:       slices.Clone(names),
+		OrganizationID:    organization,
+		SiteAdministrator: request.siteAdministrator,
+		TenantID:          request.TenantID,
+		PrincipalID:       request.OwnerID,
+		AppID:             request.AppID,
+		Names:             slices.Clone(names),
 	}
 	resolved, err := manager.lookupResolver.ResolveLookupAdmission(ctx, scope)
 	if err != nil {

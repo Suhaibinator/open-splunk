@@ -229,10 +229,10 @@ func TestIntegrationRecognizedInactiveSourcesSkipExecutableScopeAndStateSemantic
 	// must neither apply executable scope/state rules nor open the target body.
 	dropTrigger(t, database, "knowledge_definition_blob_update_is_forbidden")
 	mustExec(t, database, `UPDATE knowledge_definition_blobs
-		SET definition_proto = X'00', definition_bytes = 1
-		WHERE tenant_id = ? AND definition_digest = (
+		SET definition_proto = decode('00','hex'), definition_bytes = 1
+		WHERE tenant_id = $1 AND definition_digest = (
 			SELECT definition_digest FROM knowledge_objects
-			WHERE tenant_id = ? AND knowledge_object_id = 'ko-inactive-target'
+			WHERE tenant_id = $2 AND knowledge_object_id = 'ko-inactive-target'
 		)`, testTenant, testTenant)
 	for _, fixture := range fixtures {
 		object, err := store.Get(context.Background(), testReadScope(), fixture.id, nil)

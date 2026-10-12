@@ -18,15 +18,15 @@ func TestDeploymentCommandHelpInventoryAndForms(t *testing.T) {
 	for _, heading := range []string{
 		"Server options:",
 		"Deployment commands:",
-		"Coordinated deployment recovery (control plane and ClickHouse; stopped server only):",
-		"Control-plane-only recovery (SQLite and local artifacts; stopped server only):",
+		"Coordinated deployment recovery (PostgreSQL, MinIO and ClickHouse; stopped server only):",
+		"Control-plane-only recovery (PostgreSQL and private result objects; stopped server only):",
 	} {
 		if !strings.Contains(root.String(), heading) {
 			t.Errorf("root help omitted heading %q:\n%s", heading, root.String())
 		}
 	}
 	for _, option := range []string{
-		"-administrator-token-file",
+		"-postgres-dsn",
 		"-clickhouse-address",
 		"-server-lock-file",
 	} {
@@ -88,7 +88,6 @@ func TestDeploymentCommandInventorySeparatesRecoveryScopes(t *testing.T) {
 	wantGroups := map[string]deploymentCommandGroup{
 		"version":                              deploymentCommandGroupRuntime,
 		"healthcheck":                          deploymentCommandGroupRuntime,
-		"provision-administrator-token":        deploymentCommandGroupRuntime,
 		"migrate-clickhouse":                   deploymentCommandGroupRuntime,
 		"prepare-clickhouse-recovery-volume":   deploymentCommandGroupCoordinatedRecovery,
 		"backup-deployment-recovery-set":       deploymentCommandGroupCoordinatedRecovery,

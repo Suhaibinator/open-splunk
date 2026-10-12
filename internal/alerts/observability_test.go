@@ -20,7 +20,7 @@ func TestObservedRepositoryRecordsLifecycleOutcomes(t *testing.T) {
 	}
 	repository := ObserveRepository(base, ObservabilityOptions{Observer: metrics})
 	ctx := context.Background()
-	if _, err := repository.Create(ctx, CreateRecord{}); err != nil {
+	if _, err := repository.Create(ctx, CreateRecord{OrganizationID: "1"}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	if _, err := repository.Update(ctx, UpdateRecord{}); !errors.Is(err, ErrVersionConflict) {
@@ -146,15 +146,15 @@ func (repository *observabilityRepositoryStub) Create(context.Context, CreateRec
 }
 
 func (repository *observabilityRepositoryStub) Update(context.Context, UpdateRecord) (Alert, error) {
-	return Alert{}, repository.updateErr
+	return Alert{OrganizationID: "1"}, repository.updateErr
 }
 
 func (*observabilityRepositoryStub) SetState(context.Context, SetStateRecord) (Alert, error) {
-	return Alert{}, nil
+	return Alert{OrganizationID: "1"}, nil
 }
 
 func (repository *observabilityRepositoryStub) RotateSecret(context.Context, RotateSecretRecord) (Alert, error) {
-	return Alert{}, repository.rotateErr
+	return Alert{OrganizationID: "1"}, repository.rotateErr
 }
 
 func (repository *observabilityRepositoryStub) DeleteIfIdle(context.Context, DeleteRecord) error {
@@ -173,7 +173,7 @@ func (repository *observabilityRunRepositoryStub) ClaimDue(context.Context, time
 }
 
 func (repository *observabilityRunRepositoryStub) ClaimRunNow(context.Context, string, string, time.Time) (RunSnapshot, bool, error) {
-	return RunSnapshot{}, repository.runNowActive, nil
+	return RunSnapshot{OrganizationID: "1"}, repository.runNowActive, nil
 }
 
 func (*observabilityRunRepositoryStub) RecordOverlap(context.Context, RunSummary) error { return nil }

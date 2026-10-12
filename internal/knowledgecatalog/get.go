@@ -8,6 +8,7 @@ import (
 	"math"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"gorm.io/gorm"
 )
 
@@ -52,7 +53,7 @@ func (store *Store) Get(
 		requestedVersion = int64(*version)
 	}
 
-	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(store.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return Object{}, mapError(ctx.Err(), "begin get", tx.Error)
 	}

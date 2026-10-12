@@ -11,6 +11,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 )
@@ -66,12 +67,12 @@ func startClickHouseStoreFixture(
 	config.Addresses = []string{container.Address}
 	config.Username = container.Username
 	config.Password = container.Password
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("open fixture visibility control database: %v", err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatalf("create fixture visibility sequencer: %v", err)
 	}

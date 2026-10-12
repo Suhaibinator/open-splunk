@@ -14,8 +14,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/Suhaibinator/open-splunk/internal/controlbackup"
 )
 
 func TestRecoveryLockRejectsLegacySetting(t *testing.T) {
@@ -146,43 +144,22 @@ func TestRecoveryCommandsShareRuntimeSingletonAcrossProcesses(t *testing.T) {
 			}
 
 			missing := filepath.Join(directory, "must-not-be-accessed")
-			databasePath := filepath.Join(missing, "recovery.db")
-			release := testRecoveryReleaseIdentity()
+			postgresDSN := "postgres://postgres@localhost/control?sslmode=disable"
+			objectArguments := recoveryObjectArgumentsForTest()
+			controlBackupArguments := append([]string{"-postgres-dsn", postgresDSN, "-master-key", filepath.Join(missing, "master.key"), "-destination", filepath.Join(missing, "bundle")}, objectArguments...)
+			controlRestoreArguments := append([]string{"-postgres-dsn", postgresDSN, "-master-key", filepath.Join(missing, "master.key"), "-source", filepath.Join(missing, "bundle")}, objectArguments...)
+			clickHouseArguments := []string{"-archive-root", filepath.Join(missing, "archives"), "-address", "127.0.0.1:9440", "-password-file", filepath.Join(missing, "password"), "-ca-cert", filepath.Join(missing, "ca.pem"), "-server-name", "clickhouse"}
 			commands := map[string]func() error{
-				"backup-control-plane": func() error {
-					return runBackupControlPlane(t.Context(), controlbackup.CreateOptions{
-						DatabasePath: databasePath,
-						Destination:  filepath.Join(missing, "bundle"),
-					}, release, acquireServerLock)
-				},
-				"restore-control-plane": func() error {
-					return runRestoreControlPlane(t.Context(), controlbackup.RestoreOptions{
-						DatabasePath: databasePath,
-						Source:       filepath.Join(missing, "bundle"),
-					}, release, acquireHostServerLock)
-				},
+				"backup-control-plane":  func() error { return runBackupControlPlaneSubcommand(controlBackupArguments) },
+				"restore-control-plane": func() error { return runRestoreControlPlaneSubcommand(controlRestoreArguments) },
 				"backup-deployment-recovery-set": func() error {
-					return runBackupDeploymentRecoverySetWithDependencies(
-						t.Context(),
-						deploymentRecoveryBackupOptions{DatabasePath: databasePath},
-						release,
-						defaultDeploymentRecoveryDependencies(),
-					)
+					return runBackupDeploymentRecoverySetSubcommand(append(append([]string{}, controlBackupArguments...), clickHouseArguments...))
 				},
 				"restore-deployment-recovery-set": func() error {
-					return runRestoreDeploymentRecoverySetWithDependencies(
-						t.Context(),
-						deploymentRecoveryRestoreOptions{DatabasePath: databasePath},
-						release,
-						defaultDeploymentRecoveryDependencies(),
-					)
+					return runRestoreDeploymentRecoverySetSubcommand(append(append([]string{}, controlRestoreArguments...), clickHouseArguments...))
 				},
 				"reconcile-deployment-recovery-marker": func() error {
-					return runDeploymentRecoveryMarkerReconcile(
-						t.Context(),
-						validDeploymentRecoveryMarkerReconcileOptions(),
-						defaultDeploymentRecoveryMarkerReconcileDependencies(),
-					)
+					return runDeploymentRecoveryMarkerReconcile(t.Context(), validDeploymentRecoveryMarkerReconcileOptions(), defaultDeploymentRecoveryMarkerReconcileDependencies())
 				},
 			}
 			for name, run := range commands {
@@ -258,7 +235,7 @@ func TestRecoverySingletonProcessHelper(t *testing.T) {
 	if err := normalizeRuntimeOptions(&config); err != nil {
 		t.Fatal(err)
 	}
-	lock, err := acquireConfiguredServerLock(config.controlDBPath, config.serverLockFile)
+	lock, err := acquireHostServerLockAt(config.serverLockFile)
 	if err != nil {
 		t.Fatal(err)
 	}

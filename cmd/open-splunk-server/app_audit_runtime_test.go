@@ -11,7 +11,6 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
-	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -19,7 +18,7 @@ import (
 func TestRuntimeAppCatalogAuditsEveryMutationWithAuthenticatedActor(t *testing.T) {
 	ctx := context.Background()
 	directory := t.TempDir()
-	database, err := control.Open(ctx, filepath.Join(directory, "control.db"))
+	database, err := openTestControl(t, ctx, filepath.Join(directory, "control.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,15 +70,15 @@ func TestRuntimeAppCatalogAuditsEveryMutationWithAuthenticatedActor(t *testing.T
 		mismatchedContext,
 		server.AppAdministrationScope{
 			TenantID: "tenant-a",
-			ActorID:  "administrator",
+			ActorID:  "1",
 		},
 		server.AppAdministrationDefinition{Slug: "wrong-attribution"},
 	); !errors.Is(mismatchErr, server.ErrAppAdministrationInvalidArgument) {
 		t.Fatalf("mismatched app audit actor error = %v", mismatchErr)
 	}
 
-	bearerToken := bytes.Repeat([]byte("b"), auth.MinimumBrowserBearerTokenBytes)
-	authenticator, err := auth.NewBearerTokenAuthenticator(
+	bearerToken := bytes.Repeat([]byte("b"), runtimeSessionCredentialBytes)
+	authenticator, err := newRuntimeSessionAuthenticator(
 		bearerToken,
 		"tenant-a",
 		"administrator",
@@ -276,7 +275,7 @@ func TestRuntimeAppCatalogAuditsEveryMutationWithAuthenticatedActor(t *testing.T
 			event.GetTargetId() != created.GetAppId() ||
 			event.GetActorKind() !=
 				opensplunk.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER ||
-			event.GetActorId() != "administrator" ||
+			event.GetActorId() != "1" ||
 			event.GetActorRole() !=
 				opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR {
 			t.Fatalf(

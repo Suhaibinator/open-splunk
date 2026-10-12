@@ -12,9 +12,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"gorm.io/gorm"
-	"modernc.org/sqlite"
-	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const maximumTenantIDBytes = 255
@@ -129,7 +128,7 @@ func (store *Store) AuthorizeLease(
 	if lease.TenantID != store.scope.TenantID {
 		return auth.Authentication{}, ErrLeaseNotCurrent
 	}
-	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(store.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return auth.Authentication{}, fmt.Errorf(
 			"begin collector lease authorization: %w",
@@ -202,7 +201,7 @@ func (store *Store) Admit(
 		return Result{}, err
 	}
 
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(store.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return Result{}, fmt.Errorf(
 			"begin collector admission: %w",
@@ -265,12 +264,8 @@ func preferContextCancellation(ctx context.Context, err error) error {
 		// have been completed by another caller.
 		return contextErr
 	}
-	var sqliteErr *sqlite.Error
-	if errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqlite3.SQLITE_INTERRUPT {
-		// modernc cancels in-flight work with sqlite3_interrupt and may return
-		// its native code rather than wrapping ctx.Err().
-		// Prefer the causal context sentinel only for that exact base code; an
-		// unrelated storage failure racing with cancellation remains visible.
+	var postgresErr interface{ SQLState() string }
+	if errors.As(err, &postgresErr) && postgresErr.SQLState() == "57014" {
 		return contextErr
 	}
 	return err

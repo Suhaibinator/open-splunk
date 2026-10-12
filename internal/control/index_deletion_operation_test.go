@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"math"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestBeginIndexDataDeletionAtomicallyPersistsRestartableIntent(t *testing.T) {
@@ -17,7 +18,7 @@ func TestBeginIndexDataDeletionAtomicallyPersistsRestartableIntent(t *testing.T)
 
 	ctx := context.Background()
 	scope := IndexDataDeletionScope{TenantID: "tenant-a"}
-	path := filepath.Join(t.TempDir(), "control.sqlite")
+	path := pgtest.DSN(t)
 	db, err := Open(ctx, path)
 	if err != nil {
 		t.Fatalf("Open(): %v", err)
@@ -217,7 +218,7 @@ func TestBeginIndexDataDeletionRejectsInvalidTenantWithoutMutation(t *testing.T)
 	}
 }
 
-func TestBeginIndexDataDeletionSupportsFinalSQLiteVersion(t *testing.T) {
+func TestBeginIndexDataDeletionSupportsFinalPostgreSQLVersion(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -232,8 +233,8 @@ func TestBeginIndexDataDeletionSupportsFinalSQLiteVersion(t *testing.T) {
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		UPDATE indexes
-		SET version = ?
-		WHERE index_id = ?`,
+		SET version = $1
+		WHERE index_id = $2`,
 		int64(math.MaxInt64-1),
 		archived.ID,
 	); err != nil {
@@ -736,12 +737,7 @@ func TestBeginIndexDataDeletionRollsBackWhenTransitionFails(t *testing.T) {
 		t.Fatalf("archive index: %v", err)
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
-		CREATE TRIGGER test_index_deletion_transition_failure
-		AFTER UPDATE OF state ON indexes
-		WHEN NEW.state = 'deleting'
-		BEGIN
-			SELECT RAISE(ABORT, 'injected deletion transition failure');
-		END`,
+		CREATE FUNCTION os_test_failure_e9db01e349ef5180() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.state = 'deleting' THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='injected deletion transition failure'; END IF;RETURN NEW; END $$; CREATE TRIGGER test_index_deletion_transition_failure AFTER UPDATE OF state ON indexes FOR EACH ROW EXECUTE FUNCTION os_test_failure_e9db01e349ef5180()`,
 	); err != nil {
 		t.Fatalf("install transition failure: %v", err)
 	}
@@ -842,7 +838,7 @@ func TestIndexDeletionOperationSQLGuards(t *testing.T) {
 		UPDATE indexes
 		SET state = 'deleting',
 		    version = version + 1
-		WHERE index_id = ?`,
+		WHERE index_id = $1`,
 		archived.ID,
 	); err == nil {
 		t.Fatal("entering deleting without an operation unexpectedly succeeded")
@@ -948,7 +944,7 @@ func TestIndexDeletionOperationSQLGuards(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := db.SQLDB().ExecContext(
 				ctx,
-				statement.statement,
+				pgtest.Parameters(statement.statement),
 				statement.arguments...,
 			); err == nil {
 				t.Fatal("invalid operation insert unexpectedly succeeded")
@@ -988,7 +984,7 @@ func TestIndexDeletionOperationSQLGuards(t *testing.T) {
 				INSERT INTO index_deletion_operations (
 					deletion_operation_id, index_id, index_name,
 					tenant_id, archived_index_version, created_at_unix_micro
-				) VALUES (?, ?, ?, ?, ?, ?)`,
+				) VALUES ($1, $2, $3, $4, $5, $6)`,
 				tenant.operationID,
 				archived.ID,
 				archived.Definition.Name,
@@ -1042,7 +1038,7 @@ func TestIndexDeletionOperationSQLGuards(t *testing.T) {
 				name == "delete deleting index" {
 				id = archived.ID
 			}
-			if _, err := db.SQLDB().ExecContext(ctx, statement, id); err == nil {
+			if _, err := db.SQLDB().ExecContext(ctx, pgtest.Parameters(statement), id); err == nil {
 				t.Fatal("direct SQL mutation unexpectedly succeeded")
 			}
 		})
@@ -1138,14 +1134,14 @@ func TestIndexDeletionOperationReplaceCannotOrphanDeletingIndex(t *testing.T) {
 	}
 	createdAt := max(time.Now().UTC().UnixMicro(), second.UpdatedAt.UnixMicro())
 	if _, err := db.SQLDB().ExecContext(ctx, `
-		INSERT OR REPLACE INTO index_deletion_operations (
+		INSERT INTO index_deletion_operations (
 			deletion_operation_id,
 			index_id,
 			index_name,
 			tenant_id,
 			archived_index_version,
 			created_at_unix_micro
-		) VALUES (?, ?, ?, ?, ?, ?)`,
+		) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT(deletion_operation_id) DO UPDATE SET index_id=EXCLUDED.index_id,index_name=EXCLUDED.index_name,tenant_id=EXCLUDED.tenant_id,archived_index_version=EXCLUDED.archived_index_version,created_at_unix_micro=EXCLUDED.created_at_unix_micro`,
 		operation.ID,
 		second.ID,
 		second.Definition.Name,
@@ -1154,6 +1150,8 @@ func TestIndexDeletionOperationReplaceCannotOrphanDeletingIndex(t *testing.T) {
 		createdAt,
 	); err == nil {
 		t.Fatal("operation identity replacement unexpectedly succeeded")
+	} else {
+		requireNativeControlGuard(t, err, "index deletion operation identity is already in use")
 	}
 
 	currentFirst, err := db.GetIndex(ctx, first.ID)

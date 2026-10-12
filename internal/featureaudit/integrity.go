@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 )
 
 func validateStartupIntegrity(ctx context.Context, database *sql.DB) error {
-	tx, err := database.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := pgmeta.BeginSQL(ctx, database, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("begin feature audit startup validation: %w", err)
 	}
@@ -20,11 +22,13 @@ func validateStartupIntegrity(ctx context.Context, database *sql.DB) error {
 	for _, trigger := range requiredTriggers {
 		var present int
 		if err := tx.QueryRowContext(ctx, `
-			SELECT EXISTS (
-				SELECT 1 FROM sqlite_master
-				WHERE type = 'trigger' AND name = ?
+			SELECT CASE WHEN EXISTS (
+				SELECT 1 FROM pg_trigger AS trigger
+				JOIN pg_class AS table_ ON table_.oid = trigger.tgrelid
+				JOIN pg_namespace AS namespace ON namespace.oid = table_.relnamespace
+				WHERE namespace.nspname = current_schema() AND trigger.tgname = $1 AND NOT trigger.tgisinternal
 			)
-		`, trigger).Scan(&present); err != nil {
+		 THEN 1 ELSE 0 END`, trigger).Scan(&present); err != nil {
 			return fmt.Errorf("verify feature audit trigger: %w", err)
 		}
 		if present != 1 {
@@ -33,7 +37,7 @@ func validateStartupIntegrity(ctx context.Context, database *sql.DB) error {
 	}
 	var corrupt int
 	if err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS (
+		SELECT CASE WHEN EXISTS (
 			SELECT 1
 			FROM feature_operation_audit_tenant_state AS state
 			WHERE state.retained_count <> (
@@ -97,7 +101,7 @@ func validateStartupIntegrity(ctx context.Context, database *sql.DB) error {
 					)
 			   )
 		)
-	`).Scan(&corrupt); err != nil {
+	 THEN 1 ELSE 0 END`).Scan(&corrupt); err != nil {
 		return fmt.Errorf("validate feature audit startup integrity: %w", err)
 	}
 	if corrupt != 0 {

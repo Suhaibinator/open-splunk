@@ -370,13 +370,13 @@ func TestIngestionTokenListFiltersSortsAndReportsExactTotals(t *testing.T) {
 			t.Fatalf("CreateIndex(%q): %v", name, err)
 		}
 	}
-	alpha, err := tokenStore.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{
+	alpha, err := tokenStore.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 		Name: "Alpha", BoundCollectorID: "collector-alpha", AllowedIndexNames: []string{"main"},
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(alpha): %v", err)
 	}
-	if _, err := tokenStore.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{
+	if _, err := tokenStore.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 		Name: "Beta audit", Description: "secondary", BoundCollectorID: "collector-beta",
 		AllowedIndexNames: []string{"audit"},
 	}); err != nil {
@@ -423,7 +423,7 @@ func TestPrunedIngestionTokenTombstonesDisappearFromAdministrativeCatalog(t *tes
 		t.Helper()
 		issued, err := tokenStore.CreateCollectorToken(
 			ctx,
-			auth.CreateCollectorTokenRequest{
+			auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 				Name:              name,
 				Description:       description,
 				BoundCollectorID:  collectorID,
@@ -707,7 +707,7 @@ func TestAdministrativeIngestionTokenCapacityIsSanitizedAndRecoverable(
 		t.Helper()
 		issued, err := tokenStore.CreateCollectorToken(
 			ctx,
-			auth.CreateCollectorTokenRequest{
+			auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 				Name:              name,
 				BoundCollectorID:  collectorID,
 				AllowedIndexNames: []string{"audit"},
@@ -826,7 +826,7 @@ func TestAdministrativeRevokePruneFailureIsSanitizedAndRollsBack(
 		t.Helper()
 		issued, err := tokenStore.CreateCollectorToken(
 			ctx,
-			auth.CreateCollectorTokenRequest{
+			auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 				Name:              name,
 				Description:       "prune rollback fixture",
 				BoundCollectorID:  collectorID,
@@ -850,12 +850,14 @@ func TestAdministrativeRevokePruneFailureIsSanitizedAndRollsBack(
 
 	const pruneFailureDetail = "forced token-prune database-secret"
 	if _, err := db.SQLDB().ExecContext(ctx, `
+		CREATE FUNCTION reject_administrative_revoked_token_prune() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF OLD.state = 'revoked' THEN RAISE EXCEPTION 'forced token-prune database-secret'; END IF;
+			RETURN OLD;
+		END $$;
 		CREATE TRIGGER reject_administrative_revoked_token_prune
 		BEFORE DELETE ON ingestion_tokens
-		WHEN OLD.state = 'revoked'
-		BEGIN
-			SELECT RAISE(ABORT, 'forced token-prune database-secret');
-		END`); err != nil {
+		FOR EACH ROW EXECUTE FUNCTION reject_administrative_revoked_token_prune()`); err != nil {
 		t.Fatalf("create prune failure trigger: %v", err)
 	}
 
@@ -1264,7 +1266,7 @@ func TestHandlerRejectsInvalidTenantIdentity(t *testing.T) {
 		"invalid UTF-8": string([]byte{0xff}),
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := NewHandler(Config{
+			_, err := newAuthenticatedTestHandler(Config{
 				SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: &fakeSavedSearches{},
 				WebUI: testUI(), TenantID: tenantID,
 			})
@@ -1302,7 +1304,7 @@ func newAdminIntegrationHandlerWithTokenOptions(
 	options auth.StoreOptions,
 ) (*adminIntegrationHandler, *control.DB, *auth.Store) {
 	t.Helper()
-	db, err := control.Open(context.Background(), t.TempDir()+"/control.sqlite")
+	db, err := openTestControl(t, context.Background(), t.TempDir()+"/control.sqlite")
 	if err != nil {
 		t.Fatalf("control.Open: %v", err)
 	}
@@ -1316,10 +1318,10 @@ func newAdminIntegrationHandlerWithTokenOptions(
 	if err != nil {
 		t.Fatalf("auth.NewStoreWithOptions: %v", err)
 	}
-	browserAuthenticator, err := auth.NewBearerTokenAuthenticator(
+	browserAuthenticator, err := newTestBearerTokenAuthenticator(
 		[]byte(adminIntegrationBearerToken),
 		"default",
-		"single-user",
+		"1030",
 		auth.BrowserRoleAdministrator,
 	)
 	if err != nil {
@@ -1329,7 +1331,7 @@ func newAdminIntegrationHandlerWithTokenOptions(
 		SearchJobs: &fakeSearchJobs{}, Indexes: db, IngestionTokens: tokens,
 		SavedSearches: &fakeSavedSearches{}, WebUI: testUI(), Now: func() time.Time { return testNow },
 		AdministrativeAllowedHosts: []string{"example.com"},
-		BrowserAuthenticator:       browserAuthenticator,
+		IdentityAuthenticator:      adaptTestBrowserAuthenticator(browserAuthenticator),
 	})
 	return &adminIntegrationHandler{
 		raw:   raw,

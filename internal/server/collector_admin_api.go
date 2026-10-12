@@ -13,6 +13,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
@@ -322,6 +323,33 @@ func (handler *apiHandler) collectorAdministrationAccess(
 	principal, err := handler.administratorPrincipal(request)
 	if err != nil {
 		return collectorfleet.Scope{}, err
+	}
+	scope, ok := authorization.FromContext(request.Context())
+	if !ok {
+		return collectorfleet.Scope{}, forbiddenError("organization access is required")
+	}
+	if !scope.Subject.IsSiteAdmin() {
+		indexes, err := handler.indexes.ListIndexes(request.Context())
+		if err != nil {
+			return collectorfleet.Scope{}, unavailableError("collector authorization is unavailable")
+		}
+		allowed := make([]string, 0, len(indexes))
+		for _, index := range indexes {
+			if err := handler.authorizeIndexCapability(request.Context(), index.ID, authorization.Ingest); err != nil {
+				if errors.Is(err, authorization.ErrForbidden) || errors.Is(err, authorization.ErrUnassigned) {
+					continue
+				}
+				return collectorfleet.Scope{}, mapAuthorizationError(err)
+			}
+			if err := handler.authorizeIndexCapability(request.Context(), index.ID, authorization.Grants); err != nil {
+				if errors.Is(err, authorization.ErrForbidden) || errors.Is(err, authorization.ErrUnassigned) {
+					continue
+				}
+				return collectorfleet.Scope{}, mapAuthorizationError(err)
+			}
+			allowed = append(allowed, index.Definition.Name)
+		}
+		return collectorfleet.RestrictIndexes(principal.TenantID(), scope.Subject.OwnerID()+":"+handler.requestOrganization(request.Context()), allowed)
 	}
 	return collectorfleet.Scope{
 		TenantID: strings.Clone(principal.TenantID()),

@@ -683,7 +683,7 @@ func TestRuntimeCollectorAdministrationNilRuntimeIsOfflineAndResultsDetach(
 
 	ctx := context.Background()
 	directory := t.TempDir()
-	database, err := control.Open(
+	database, err := openTestControl(t,
 		ctx,
 		filepath.Join(directory, "control.db"),
 	)
@@ -819,7 +819,7 @@ func TestRuntimeCollectorAdministrationCursorSurvivesReopen(t *testing.T) {
 	databasePath := filepath.Join(directory, "control.db")
 	keyPath := filepath.Join(directory, "server.key")
 
-	firstDatabase, err := control.Open(ctx, databasePath)
+	firstDatabase, err := openTestControl(t, ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -876,7 +876,7 @@ func TestRuntimeCollectorAdministrationCursorSurvivesReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	secondDatabase, err := control.Open(ctx, databasePath)
+	secondDatabase, err := openTestControl(t, ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}

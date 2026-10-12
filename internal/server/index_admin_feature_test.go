@@ -65,14 +65,14 @@ func TestIndexAdministrationFeatureRequiresCompleteRouteFamily(t *testing.T) {
 			t.Parallel()
 
 			config := Config{
-				SearchJobs:           &fakeSearchJobs{},
-				Indexes:              administration,
-				IndexAdmin:           administration,
-				SavedSearches:        &fakeSavedSearches{},
-				BrowserAuthenticator: authenticator,
-				WebUI:                testUI(),
-				TenantID:             browserGateTenantID,
-				OwnerID:              browserGateOwnerID,
+				SearchJobs:            &fakeSearchJobs{},
+				Indexes:               administration,
+				IndexAdmin:            administration,
+				SavedSearches:         &fakeSavedSearches{},
+				IdentityAuthenticator: adaptTestBrowserAuthenticator(authenticator),
+				WebUI:                 testUI(),
+				TenantID:              browserGateTenantID,
+				OwnerID:               browserGateOwnerID,
 				AdministrativeAllowedHosts: []string{
 					"example.com",
 				},
@@ -96,16 +96,11 @@ func TestIndexAdministrationFeatureRequiresCompleteRouteFamily(t *testing.T) {
 				config.IndexDataDeletionWaker = waker
 			}
 
-			handler, err := NewHandler(config)
+			handler, err := newAuthenticatedTestHandler(config)
 			if err != nil {
 				t.Fatalf("NewHandler: %v", err)
 			}
-			response := postProto(
-				t,
-				handler,
-				"/api/system/bootstrap",
-				&opensplunk.GetSystemBootstrapRequest{},
-			)
+			response := postProtoHeaders(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 			if response.Code != http.StatusOK {
 				t.Fatalf(
 					"bootstrap status = %d, body = %s",

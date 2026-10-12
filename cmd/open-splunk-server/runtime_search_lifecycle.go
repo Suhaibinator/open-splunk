@@ -7,7 +7,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	internalclickhouse "github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
@@ -44,7 +44,8 @@ type runtimeSearchLifecycleConfig struct {
 	searchArtifactDirectory string
 	exportArtifactDirectory string
 	tenantID                string
-	ownerID                 string
+	identity                *runtimeIdentity
+	captureOptions          searchartifacts.CaptureOptions
 	logger                  *zap.Logger
 	closeTimeout            time.Duration
 }
@@ -76,6 +77,9 @@ type runtimeSearchLifecycle struct {
 }
 
 func newRuntimeSearchLifecycle(config runtimeSearchLifecycleConfig) (_ *runtimeSearchLifecycle, err error) {
+	if config.identity == nil {
+		return nil, fmt.Errorf("google identity and private result storage are required")
+	}
 	lifecycle := &runtimeSearchLifecycle{logger: config.logger, closeTimeout: config.closeTimeout}
 	defer func() {
 		if err != nil {
@@ -126,8 +130,11 @@ func newRuntimeSearchLifecycle(config runtimeSearchLifecycleConfig) (_ *runtimeS
 	if err != nil {
 		return nil, fmt.Errorf("create search-history job journal: %w", err)
 	}
+	captureOptions := config.captureOptions
+	captureOptions.Authorize = config.identity.authorizeCapture
 	lifecycle.artifacts, err = searchartifacts.New(config.ctx, searchartifacts.Config{
 		DB: config.controlDB.SQLDB(), Directory: config.searchArtifactDirectory, Observer: config.featureOperations,
+		Blobs: config.identity.blobs, CaptureOptions: captureOptions,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open durable search artifacts: %w", err)
@@ -152,8 +159,20 @@ func newRuntimeSearchLifecycle(config runtimeSearchLifecycleConfig) (_ *runtimeS
 	if err != nil {
 		return nil, err
 	}
+	captureFactory, err := searchartifacts.NewCaptureFactory(lifecycle.artifacts)
+	if err != nil {
+		return nil, fmt.Errorf("create retained result capture: %w", err)
+	}
 	lifecycle.jobs, err = searchjobs.New(searchjobs.Config{
-		Executor: executor, Snapshotter: visibilitySnapshotter{sequencer: config.sequencer}, Journal: jobJournal,
+		ResolveAdmissionScope: func(ctx context.Context, access searchjobs.AccessScope) (searchjobs.AccessScope, error) {
+			if access.TenantID != config.identity.tenantID {
+				return searchjobs.AccessScope{}, authorization.ErrForbidden
+			}
+			return config.identity.freshAccess(ctx, access.OwnerID, access.OrganizationID)
+		},
+		CaptureFactory: captureFactory,
+		AuthorizeJob:   config.identity.authorizeJob,
+		Executor:       executor, Snapshotter: visibilitySnapshotter{sequencer: config.sequencer}, Journal: jobJournal,
 		KnowledgeResolver: lifecycle.knowledge.resolver, LookupResolver: lifecycle.knowledge.lookupResolver,
 		OnJournalError: func(err error) { config.logger.Warn("persist search-job history", zap.Error(err)) },
 		OnFailure:      func(notification searchjobs.FailureNotification) { logSearchFailure(config.logger, notification) },
@@ -184,21 +203,21 @@ func newRuntimeSearchLifecycle(config runtimeSearchLifecycleConfig) (_ *runtimeS
 		return nil, fmt.Errorf("create search inspection services: %w", err)
 	}
 	lifecycle.closeInspection = lifecycle.inspection.Close
-	exportExecutor, err := newRuntimeQueryExecutor(config.connection, config.exportSettings.queryExecutorConfig(), config.indexReads.admission)
+	exportSource, err := exportjobs.NewCaptureSource(lifecycle.artifacts)
 	if err != nil {
-		return nil, fmt.Errorf("create export query executor: %w", err)
-	}
-	exportSource, err := exportjobs.NewReexecutionSource(exportjobs.ReexecutionSourceConfig{
-		Searches: lifecycle.jobs, Executor: exportExecutor, Compiler: compiler,
-		MaxRuntime: config.exportSettings.reexecutionMaxRuntime,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create export re-execution source: %w", err)
+		return nil, fmt.Errorf("create captured export source: %w", err)
 	}
 	exportConfig := config.exportSettings.managerConfig(
 		exportSource, config.exportArtifactDirectory, newExportCleanupErrorReporter(config.logger),
 	)
 	exportConfig.Journal = config.exportJournal
+	exportConfig.Blobs = config.identity.blobs
+	exportConfig.RetentionQuota = lifecycle.artifacts
+	exportConfig.MaxTotalBytes = config.captureOptions.GlobalBytes
+	if exportConfig.MaxTotalBytes == 0 {
+		exportConfig.MaxTotalBytes = searchartifacts.DefaultGlobalCaptureBytes
+	}
+	exportConfig.Authorize = config.identity.exportAuthorizer(lifecycle.artifacts)
 	exportConfig.PatternSource = lifecycle.patterns
 	lifecycle.exports, err = exportjobs.New(exportConfig)
 	if err != nil {
@@ -206,7 +225,7 @@ func newRuntimeSearchLifecycle(config runtimeSearchLifecycleConfig) (_ *runtimeS
 	}
 	lifecycle.closeExports = lifecycle.exports.Close
 	lifecycle.analysis, err = newRuntimeSearchAnalysis(runtimeSearchAnalysisConfig{
-		Searches: lifecycle.jobs, Compiler: compiler, Executor: executor,
+		Searches: runtimeAnalysisAuthority{jobs: lifecycle.jobs, identity: config.identity}, Compiler: compiler, Executor: executor,
 		FieldCursorScope: "open-splunk-server/search-fields",
 	})
 	if err != nil {
@@ -215,7 +234,9 @@ func newRuntimeSearchLifecycle(config runtimeSearchLifecycleConfig) (_ *runtimeS
 	lifecycle.closeAnalysis = lifecycle.analysis.Close
 	lifecycle.webSocket, err = searchws.New(searchws.Config{
 		Searches: lifecycle.jobs, Exports: lifecycle.exports,
-		Access: searchjobs.AccessScope{TenantID: config.tenantID, OwnerID: config.ownerID},
+		AccessForRequest: config.identity.accessForRequest,
+		AuthorizeJob:     config.identity.authorizeJob,
+		AuthorizeExport:  config.identity.websocketExportAuthorizer(lifecycle.artifacts),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create search websocket service: %w", err)

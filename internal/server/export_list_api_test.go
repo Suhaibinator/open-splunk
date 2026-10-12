@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
@@ -41,16 +43,16 @@ func TestExportListRouteRoundTripsScopeCanonicalFiltersAndAllStates(t *testing.T
 		scope searchjobs.AccessScope,
 		_ exportjobs.ListRequest,
 	) (exportjobs.ListPage, error) {
-		assertExportScope(t, scope, "tenant-list", "owner-list")
+		assertExportScope(t, scope, "tenant-list", "1022")
 		return exportjobs.ListPage{
-			Jobs:           scopedExportListItems("tenant-list", "owner-list", jobs...),
+			Jobs:           scopedExportListItems("tenant-list", "1022", jobs...),
 			NextPageToken:  "next-export-page",
 			TotalSize:      &total,
 			TotalSizeExact: true,
 		}, nil
 	}}
 	handler := newExportListTestHandler(t, service, Config{
-		OwnerID: "owner-list", TenantID: "tenant-list",
+		OwnerID: "1022", TenantID: "tenant-list",
 	})
 	pageSize := uint32(len(jobs))
 	pageToken, searchJobID := "current-export-page", "search-1"
@@ -89,7 +91,7 @@ func TestExportListRouteRoundTripsScopeCanonicalFiltersAndAllStates(t *testing.T
 	if calls != 1 {
 		t.Fatalf("list calls = %d, want 1", calls)
 	}
-	if capturedScope != (searchjobs.AccessScope{OwnerID: "owner-list", TenantID: "tenant-list"}) {
+	if capturedScope != (searchjobs.AccessScope{OwnerID: "1022", TenantID: "tenant-list", OrganizationID: "1"}) {
 		t.Fatalf("scope = %+v", capturedScope)
 	}
 	if captured.PageSize != len(jobs) || captured.PageToken != pageToken || !captured.IncludeTotal {
@@ -345,7 +347,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				items := exportListItems(base("export-a", testNow))
-				items[0].OwnerID = "other-owner"
+				items[0].OwnerID = "1007"
 				return exportjobs.ListPage{Jobs: items}
 			},
 		},
@@ -1116,10 +1118,17 @@ func newExportListTestHandler(
 	overrides.Exports = exports
 	overrides.WebUI = testUI()
 	if overrides.OwnerID == "" {
-		overrides.OwnerID = "owner-list"
+		overrides.OwnerID = "1022"
 	}
 	if overrides.TenantID == "" {
 		overrides.TenantID = "tenant-list"
+	}
+	if overrides.IdentityAuthenticator == nil {
+		id, err := strconv.ParseUint(overrides.OwnerID, 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		overrides.IdentityAuthenticator = fixtureOrganizationIdentity{userSessionStub{subject: authorization.Subject{UserID: id, UserType: 12}}}
 	}
 	overrides.Now = func() time.Time { return testNow }
 	return newTestHandler(t, overrides)
@@ -1180,7 +1189,7 @@ func validListExportJob(
 }
 
 func exportListItems(jobs ...exportjobs.Job) []exportjobs.ListItem {
-	return scopedExportListItems("tenant-list", "owner-list", jobs...)
+	return scopedExportListItems("tenant-list", "1022", jobs...)
 }
 
 func scopedExportListItems(

@@ -27,10 +27,10 @@ type versionLifecycleWidth struct {
 }
 
 const versionLifecycleWidthProjection = `
-	length(CAST(lifecycle.tenant_id AS BLOB)) AS tenant_id_bytes,
-	length(CAST(lifecycle.knowledge_object_id AS BLOB)) AS object_id_bytes,
-	length(CAST(lifecycle.state AS BLOB)) AS state_bytes,
-	coalesce(length(CAST(lifecycle.quarantine_reason AS BLOB)), 0) AS quarantine_reason_bytes,
+	octet_length(lifecycle.tenant_id) AS tenant_id_bytes,
+	octet_length(lifecycle.knowledge_object_id) AS object_id_bytes,
+	octet_length(lifecycle.state) AS state_bytes,
+	coalesce(octet_length(lifecycle.quarantine_reason), 0) AS quarantine_reason_bytes,
 	CASE
 		WHEN lifecycle.state <> 'disabled' THEN 1
 		WHEN EXISTS (

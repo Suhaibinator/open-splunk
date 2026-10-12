@@ -3,7 +3,6 @@ package searchjobs
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -11,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
@@ -654,7 +655,7 @@ func TestKnowledgeAdmissionCancellationAndCloseInterruptResolver(t *testing.T) {
 func newEmptyKnowledgeResolver(t *testing.T) (KnowledgeResolver, string) {
 	t.Helper()
 	tenantID := "tenant"
-	database, err := control.Open(context.Background(), filepath.Join(t.TempDir(), "control.db"))
+	database, err := control.Open(context.Background(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
 	}
@@ -673,7 +674,7 @@ func newEmptyKnowledgeResolver(t *testing.T) (KnowledgeResolver, string) {
 	if err != nil {
 		t.Fatalf("NewAppCatalog(): %v", err)
 	}
-	if _, err := appCatalog.CreateApp(context.Background(), control.AppAccessScope{TenantID: tenantID}, control.AppDefinition{
+	if _, err := appCatalog.CreateApp(context.Background(), control.AppAccessScope{OrganizationID: 1, TenantID: tenantID}, control.AppDefinition{
 		Slug: "search-app", DisplayName: "Search App",
 	}); err != nil {
 		t.Fatalf("CreateApp(): %v", err)

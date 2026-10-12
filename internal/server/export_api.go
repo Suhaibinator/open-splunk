@@ -38,7 +38,7 @@ func (handler *apiHandler) createExportJob(request *http.Request, input *openspl
 		if !supported {
 			return nil, mapRequestIdempotencyError(requestidempotency.ErrUnavailable)
 		}
-		job, found, err := keyed.ReplayIdempotent(request.Context(), handler.accessScope(), *intent)
+		job, found, err := keyed.ReplayIdempotent(request.Context(), handler.accessScope(request.Context()), *intent)
 		if err != nil {
 			return nil, mapExportCallError(request.Context(), err)
 		}
@@ -64,9 +64,9 @@ func (handler *apiHandler) createExportJob(request *http.Request, input *openspl
 	var job exportjobs.Job
 	replayed := false
 	if intent == nil {
-		job, err = handler.exports.Create(request.Context(), handler.accessScope(), definition)
+		job, err = handler.exports.Create(request.Context(), handler.accessScope(request.Context()), definition)
 	} else {
-		job, replayed, err = keyed.CreateIdempotent(request.Context(), handler.accessScope(), definition, *intent)
+		job, replayed, err = keyed.CreateIdempotent(request.Context(), handler.accessScope(request.Context()), definition, *intent)
 	}
 	if callErr := mapExportCallError(request.Context(), err); callErr != nil {
 		return nil, callErr
@@ -80,7 +80,7 @@ func (handler *apiHandler) createExportJob(request *http.Request, input *openspl
 
 func (handler *apiHandler) getExportJob(request *http.Request, input *opensplunk.GetExportJobRequest) (*opensplunk.GetExportJobResponse, error) {
 	id := input.GetExportJobId()
-	job, err := handler.exports.Get(request.Context(), handler.accessScope(), id)
+	job, err := handler.exports.Get(request.Context(), handler.accessScope(request.Context()), id)
 	if callErr := mapExportCallError(request.Context(), err); callErr != nil {
 		return nil, callErr
 	}
@@ -89,27 +89,12 @@ func (handler *apiHandler) getExportJob(request *http.Request, input *opensplunk
 		return nil, internalError()
 	}
 	response := &opensplunk.GetExportJobResponse{ExportJob: converted}
-	if input.GetIssueDownloadGrant() {
-		grant, grantErr := handler.exports.CreateDownloadGrant(request.Context(), handler.accessScope(), id)
-		if callErr := mapExportGrantCallError(request.Context(), grantErr); callErr != nil {
-			return nil, callErr
-		}
-		expiresAt, timestampErr := validTimestamp(grant.ExpiresAt)
-		if timestampErr != nil {
-			return nil, internalError()
-		}
-		response.DownloadGrant = &opensplunk.ExportDownloadGrant{
-			DownloadPath:  exportDownloadPath,
-			DownloadToken: grant.Token,
-			ExpiresAt:     expiresAt,
-		}
-	}
 	return response, nil
 }
 
 func (handler *apiHandler) cancelExportJob(request *http.Request, input *opensplunk.CancelExportJobRequest) (*opensplunk.CancelExportJobResponse, error) {
 	id := input.GetExportJobId()
-	job, err := handler.exports.Cancel(request.Context(), handler.accessScope(), id)
+	job, err := handler.exports.Cancel(request.Context(), handler.accessScope(request.Context()), id)
 	if callErr := mapExportCallError(request.Context(), err); callErr != nil {
 		return nil, callErr
 	}
@@ -350,23 +335,4 @@ func mapExportCallError(ctx context.Context, operationErr error) error {
 		return router.NewHTTPError(http.StatusRequestTimeout, "export request was canceled")
 	}
 	return mapExportError(operationErr)
-}
-
-func mapExportGrantCallError(ctx context.Context, operationErr error) error {
-	if operationErr == nil {
-		return nil
-	}
-	if requestContextFailure(ctx, operationErr) != nil {
-		return router.NewHTTPError(http.StatusRequestTimeout, "export request was canceled")
-	}
-	switch {
-	case errors.Is(operationErr, exportjobs.ErrSourceNotReady):
-		return router.NewHTTPError(http.StatusConflict, "export artifact is not ready")
-	case errors.Is(operationErr, exportjobs.ErrSourceExpired):
-		return router.NewHTTPError(http.StatusGone, "export artifact expired")
-	case errors.Is(operationErr, exportjobs.ErrSourceUnavailable):
-		return router.NewHTTPError(http.StatusConflict, "export artifact is unavailable")
-	default:
-		return mapExportError(operationErr)
-	}
 }

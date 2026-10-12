@@ -59,7 +59,7 @@ func TestKnowledgeHTTPListUsesDetachedCanonicalCatalogRequest(t *testing.T) {
 		// The handler retains a separate canonical authority snapshot for response
 		// validation; mutating the service-owned request must not affect it.
 		*request.AppIDFilter = knowledgeHTTPOtherAppID
-		*request.OwnerIDFilter = "attacker-owner"
+		*request.OwnerIDFilter = "1100"
 		*request.TextFilter = "absent"
 		*request.SelectorTextFilter = "absent"
 		request.ObjectTypeFilters[0] = knowledgecatalog.ObjectTypeFieldExtraction
@@ -319,12 +319,12 @@ func TestKnowledgeHTTPListRejectsObjectsOutsideEveryNormalizedFilter(t *testing.
 			},
 			object: knowledgeListResponseObject(
 				t,
-				"ko-list-foreign-owner",
+				"1103",
 				"filter-object",
 				knowledgecatalog.ObjectTypeFieldAlias,
 				knowledgecatalog.SharingScopeGlobal,
 				knowledgeHTTPAppID,
-				"foreign-owner",
+				"1101",
 			),
 		},
 		{
@@ -563,7 +563,7 @@ func TestKnowledgeListPageAllowsTenantGlobalProvenanceOutsideReadableApps(t *tes
 		knowledgecatalog.ObjectTypeFieldAlias,
 		knowledgecatalog.SharingScopeGlobal,
 		knowledgeHTTPOtherAppID,
-		"foreign-owner",
+		"1101",
 	)
 	response, err := knowledgeListPageToProto(
 		knowledgeListResponseScopes(),
@@ -685,7 +685,7 @@ func assertKnowledgeHTTPListPageRejected(
 
 func knowledgeListResponseScopes() knowledgeScopes {
 	return knowledgeScopes{
-		read: knowledgecatalog.ReadScope{
+		read: knowledgecatalog.ReadScope{OrganizationID: 1,
 			TenantID:       knowledgeBoundaryTenantID,
 			OwnerID:        knowledgeBoundaryOwnerID,
 			ReadableAppIDs: []string{knowledgeHTTPAppID},

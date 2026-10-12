@@ -86,7 +86,7 @@ func TestCompletedResultPagePublishesSnapshotRef(t *testing.T) {
 	}}
 	handler := nearbyTestAPIHandler(jobs)
 	result, err := handler.getSearchResults(
-		httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/search/jobs/results", nil),
+		httptest.NewRequestWithContext(serverFixtureScope(context.Background(), 1009), http.MethodPost, "/api/search/jobs/results", nil),
 		&opensplunk.GetSearchResultsRequest{SearchJobId: job.ID},
 	)
 	if err != nil {
@@ -128,7 +128,7 @@ func TestPrepareNearbyContextUsesFreshLiveAdmissionAndExactValues(t *testing.T) 
 		SearchJobId: "job:colon", SnapshotRef: ref, RowId: "job:colon:17",
 	}
 	result, err := handler.prepareNearbyContext(
-		httptest.NewRequestWithContext(context.Background(), http.MethodPost, nearbyContextPath, nil),
+		httptest.NewRequestWithContext(serverFixtureScope(context.Background(), 1009), http.MethodPost, nearbyContextPath, nil),
 		input,
 	)
 	if err != nil {
@@ -136,7 +136,7 @@ func TestPrepareNearbyContextUsesFreshLiveAdmissionAndExactValues(t *testing.T) 
 	}
 	defer result.release()
 	response := result.message
-	if jobs.calls != 1 || jobs.access != (searchjobs.AccessScope{TenantID: "tenant-1", OwnerID: "owner-1"}) ||
+	if jobs.calls != 1 || jobs.access != (searchjobs.AccessScope{OrganizationID: "1", TenantID: "tenant-1", OwnerID: "1009"}) ||
 		jobs.id != "job:colon" || jobs.gen != 7 || jobs.row != 17 {
 		t.Fatalf("live admission = calls %d access %+v id %q gen %d row %d", jobs.calls, jobs.access, jobs.id, jobs.gen, jobs.row)
 	}
@@ -168,7 +168,7 @@ func TestPrepareNearbyContextHonorsDurableTerminalAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = handler.prepareNearbyContext(
-		httptest.NewRequestWithContext(context.Background(), http.MethodPost, nearbyContextPath, nil),
+		httptest.NewRequestWithContext(serverFixtureScope(context.Background(), 1009), http.MethodPost, nearbyContextPath, nil),
 		&opensplunk.PrepareNearbyContextRequest{SearchJobId: job.ID, SnapshotRef: ref, RowId: job.ID + ":0"},
 	)
 	assertHTTPErrorStatus(t, err, http.StatusConflict)
@@ -274,13 +274,13 @@ func TestPrepareNearbyContextReadsDurableGenerationAfterRestart(t *testing.T) {
 		fakeSearchJobs: &fakeSearchJobs{}, err: searchjobs.ErrNotFound,
 	})
 	handler.searchArtifacts = artifacts
-	handler.ownerID = "viewer"
+	handler.ownerID = "1031"
 	ref, err := handler.resultSnapshotRef(job.ID, 41)
 	if err != nil {
 		t.Fatal(err)
 	}
 	result, err := handler.prepareNearbyContext(
-		httptest.NewRequestWithContext(context.Background(), http.MethodPost, nearbyContextPath, nil),
+		httptest.NewRequestWithContext(serverFixtureScope(context.Background(), 1031), http.MethodPost, nearbyContextPath, nil),
 		&opensplunk.PrepareNearbyContextRequest{
 			SearchJobId: job.ID, SnapshotRef: ref, RowId: job.ID + ":5",
 		},
@@ -292,7 +292,7 @@ func TestPrepareNearbyContextReadsDurableGenerationAfterRestart(t *testing.T) {
 	if result.message.GetAnchorTime() != "2026-09-12T07:08:09.987654321Z" || result.message.GetIndex() != "shared" {
 		t.Fatalf("durable nearby response = %+v", result.message)
 	}
-	if artifacts.acquireScope != (searchjobs.AccessScope{TenantID: "tenant-1", OwnerID: "viewer"}) ||
+	if artifacts.acquireScope != (searchjobs.AccessScope{OrganizationID: "1", TenantID: "tenant-1", OwnerID: "1031"}) ||
 		len(artifacts.getModes) != 2 || artifacts.getModes[0] != searchartifacts.AccessRefresh ||
 		artifacts.getModes[1] != searchartifacts.AccessInspect {
 		t.Fatalf("durable admissions = scope %+v modes %v", artifacts.acquireScope, artifacts.getModes)
@@ -348,7 +348,7 @@ func TestPrepareNearbyContextRejectsStaleDurableIdentityAndLegacyMetadata(t *tes
 				t.Fatal(err)
 			}
 			_, err = handler.prepareNearbyContext(
-				httptest.NewRequestWithContext(context.Background(), http.MethodPost, nearbyContextPath, nil),
+				httptest.NewRequestWithContext(serverFixtureScope(context.Background(), 1009), http.MethodPost, nearbyContextPath, nil),
 				&opensplunk.PrepareNearbyContextRequest{
 					SearchJobId: job.ID, SnapshotRef: ref, RowId: test.rowID,
 				},
@@ -432,7 +432,7 @@ func TestNearbyResponseCodecEnforcesEightMiBLimit(t *testing.T) {
 
 func nearbyTestAPIHandler(jobs SearchJobs) *apiHandler {
 	handler := &apiHandler{
-		jobs: jobs, tenantID: "tenant-1", ownerID: "owner-1",
+		jobs: jobs, tenantID: "tenant-1", ownerID: "1009",
 		serializationGate: make(chan struct{}, 1),
 	}
 	for index := range handler.searchArtifactCursorKey {

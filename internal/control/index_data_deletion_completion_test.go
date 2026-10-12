@@ -4,18 +4,19 @@ import (
 	"context"
 	"errors"
 	"math"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestCompleteIndexDataDeletionAtomicallyPersistsTerminalAudit(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "control.sqlite")
+	path := pgtest.DSN(t)
 	db, err := Open(ctx, path)
 	if err != nil {
 		t.Fatalf("Open(): %v", err)
@@ -127,7 +128,7 @@ func TestCompleteIndexDataDeletionAtomicallyPersistsTerminalAudit(t *testing.T) 
 			err,
 		)
 	}
-	rows, err := db.SQLDB().QueryContext(ctx, `PRAGMA foreign_key_check`)
+	rows, err := db.SQLDB().QueryContext(ctx, `SELECT r.relname,0::bigint,c.confrelid::regclass::text,c.oid::bigint FROM pg_constraint c JOIN pg_class r ON r.oid=c.conrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND c.contype='f' AND NOT c.convalidated`)
 	if err != nil {
 		t.Fatalf("foreign_key_check: %v", err)
 	}
@@ -193,7 +194,7 @@ func TestCompleteIndexDataDeletionAtomicallyPersistsTerminalAudit(t *testing.T) 
 	}
 }
 
-func TestCompleteIndexDataDeletionSupportsFinalSQLiteVersion(t *testing.T) {
+func TestCompleteIndexDataDeletionSupportsFinalPostgreSQLVersion(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -213,8 +214,8 @@ func TestCompleteIndexDataDeletionSupportsFinalSQLiteVersion(t *testing.T) {
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		UPDATE indexes
-		SET version = ?
-		WHERE index_id = ?`,
+		SET version = $1
+		WHERE index_id = $2`,
 		int64(math.MaxInt64-1),
 		archived.ID,
 	); err != nil {
@@ -398,11 +399,7 @@ func TestCompleteIndexDataDeletionRollsBackEveryTerminalEffect(t *testing.T) {
 		t.Fatalf("EnsureIndexDeletionMutationAttempt(): %v", err)
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
-		CREATE TRIGGER test_terminal_tombstone_failure
-		BEFORE INSERT ON index_deletion_tombstones
-		BEGIN
-			SELECT RAISE(ABORT, 'injected terminal tombstone failure');
-		END`,
+		CREATE FUNCTION os_test_failure_6cd7dcf706536d4e() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='injected terminal tombstone failure';RETURN NEW; END $$; CREATE TRIGGER test_terminal_tombstone_failure BEFORE INSERT ON index_deletion_tombstones FOR EACH ROW EXECUTE FUNCTION os_test_failure_6cd7dcf706536d4e()`,
 	); err != nil {
 		t.Fatalf("install terminal failure: %v", err)
 	}
@@ -471,11 +468,7 @@ func TestCompleteIndexDataDeletionRollsBackWhenOperationCleanupFails(
 		t.Fatalf("EnsureIndexDeletionMutationAttempt(): %v", err)
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
-		CREATE TRIGGER test_terminal_operation_cleanup_failure
-		BEFORE DELETE ON index_deletion_operations
-		BEGIN
-			SELECT RAISE(ABORT, 'injected operation cleanup failure');
-		END`,
+		CREATE FUNCTION os_test_failure_35e64a48b5be83f9() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='injected operation cleanup failure';RETURN OLD; END $$; CREATE TRIGGER test_terminal_operation_cleanup_failure BEFORE DELETE ON index_deletion_operations FOR EACH ROW EXECUTE FUNCTION os_test_failure_35e64a48b5be83f9()`,
 	); err != nil {
 		t.Fatalf("install cleanup failure: %v", err)
 	}
@@ -508,11 +501,7 @@ func TestCompleteIndexDataDeletionRollsBackWhenAttemptCleanupFails(
 		t.Fatalf("EnsureIndexDeletionMutationAttempt(): %v", err)
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
-		CREATE TRIGGER test_terminal_attempt_cleanup_failure
-		BEFORE DELETE ON index_deletion_mutation_attempts
-		BEGIN
-			SELECT RAISE(ABORT, 'injected attempt cleanup failure');
-		END`,
+		CREATE FUNCTION os_test_failure_12b31fe7afb86bb7() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='injected attempt cleanup failure';RETURN OLD; END $$; CREATE TRIGGER test_terminal_attempt_cleanup_failure BEFORE DELETE ON index_deletion_mutation_attempts FOR EACH ROW EXECUTE FUNCTION os_test_failure_12b31fe7afb86bb7()`,
 	); err != nil {
 		t.Fatalf("install attempt cleanup failure: %v", err)
 	}
@@ -523,7 +512,7 @@ func TestCompleteIndexDataDeletionRollsBackWhenAttemptCleanupFails(
 	assertOutstandingIndexDeletion(t, db, operation, attempt)
 	if _, err := db.SQLDB().ExecContext(
 		ctx,
-		`DROP TRIGGER test_terminal_attempt_cleanup_failure`,
+		`DROP TRIGGER test_terminal_attempt_cleanup_failure ON index_deletion_mutation_attempts`,
 	); err != nil {
 		t.Fatalf("remove attempt cleanup failure: %v", err)
 	}
@@ -614,7 +603,7 @@ func TestCompleteIndexDataDeletionConvergesConcurrently(t *testing.T) {
 	}
 }
 
-func TestCompleteIndexDataDeletionRetryDoesNotReserveSQLiteWriter(
+func TestCompleteIndexDataDeletionRetryDoesNotReservePostgreSQLWriter(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -644,22 +633,22 @@ func TestCompleteIndexDataDeletionRetryDoesNotReserveSQLiteWriter(
 	if err != nil {
 		t.Fatalf("acquire writer connection: %v", err)
 	}
-	if _, err := writer.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+	if _, err := writer.ExecContext(ctx, `BEGIN; SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(),5716000640707417153))`); err != nil {
 		if closeErr := writer.Close(); closeErr != nil {
 			t.Fatalf(
-				"reserve SQLite writer: %v; close connection: %v",
+				"reserve PostgreSQL writer: %v; close connection: %v",
 				err,
 				closeErr,
 			)
 		}
-		t.Fatalf("reserve SQLite writer: %v", err)
+		t.Fatalf("reserve PostgreSQL writer: %v", err)
 	}
 	defer func() {
 		if _, err := writer.ExecContext(
 			context.Background(),
 			`ROLLBACK`,
 		); err != nil {
-			t.Errorf("release SQLite writer: %v", err)
+			t.Errorf("release PostgreSQL writer: %v", err)
 		}
 		if err := writer.Close(); err != nil {
 			t.Errorf("close writer connection: %v", err)
@@ -667,11 +656,11 @@ func TestCompleteIndexDataDeletionRetryDoesNotReserveSQLiteWriter(
 	}()
 
 	// Leave enough headroom for connection setup under the race detector. A
-	// retry that incorrectly reserves a writer still fails when SQLite's
+	// retry that incorrectly reserves a writer still fails when PostgreSQL's
 	// shorter busy timeout expires while the writer above remains reserved.
 	retryContext, cancel := context.WithTimeout(
 		ctx,
-		defaultBusyTimeout+time.Second,
+		6*time.Second,
 	)
 	defer cancel()
 	retried, err := db.CompleteIndexDataDeletion(retryContext, attempt)
@@ -904,7 +893,7 @@ func TestIndexDataDeletionCompletionSchemaRejectsForgeryAndReplacement(
 			name,
 			deleted_version,
 			deleted_at_unix_micro
-		) VALUES (?, ?, ?, ?)`,
+		) VALUES ($1, $2, $3, $4)`,
 		directOperation.IndexID,
 		directOperation.IndexName,
 		directOperation.DeletingVersion,
@@ -984,18 +973,20 @@ func TestIndexDataDeletionCompletionSchemaRejectsForgeryAndReplacement(
 			WHERE deletion_operation_id = ?`,
 		"delete": `DELETE FROM index_data_deletion_completions
 			WHERE deletion_operation_id = ?`,
-		"replace": `INSERT OR REPLACE INTO
+		"replace": `INSERT INTO
 			index_data_deletion_completions
 			SELECT * FROM index_data_deletion_completions
-			WHERE deletion_operation_id = ?`,
+			WHERE deletion_operation_id = $1 ON CONFLICT(deletion_operation_id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := db.SQLDB().ExecContext(
 				ctx,
-				statement,
+				pgtest.Parameters(statement),
 				operation.ID,
 			); err == nil {
 				t.Fatalf("%s unexpectedly succeeded", name)
+			} else {
+				requireNativeControlGuard(t, err, "index data deletion completion")
 			}
 		})
 	}
@@ -1028,7 +1019,7 @@ func TestIndexDataDeletionCompletionSchemaRejectsForgeryAndReplacement(
 		t.Fatalf("DeleteIndex(KEEP_DATA): %v", err)
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
-		INSERT OR REPLACE INTO index_deletion_tombstones (
+		INSERT INTO index_deletion_tombstones (
 			index_id,
 			name,
 			deleted_version,
@@ -1040,10 +1031,12 @@ func TestIndexDataDeletionCompletionSchemaRejectsForgeryAndReplacement(
 			deleted_version,
 			deleted_at_unix_micro + 1
 		FROM index_deletion_tombstones
-		WHERE index_id = ?`,
+		WHERE index_id = $1 ON CONFLICT(index_id) DO UPDATE SET deleted_at_unix_micro=EXCLUDED.deleted_at_unix_micro`,
 		keepData.ID,
 	); err == nil {
 		t.Fatal("KEEP_DATA tombstone replacement unexpectedly succeeded")
+	} else {
+		requireNativeControlGuard(t, err, "index deletion tombstone identity is already in use")
 	}
 }
 

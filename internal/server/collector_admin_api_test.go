@@ -161,7 +161,7 @@ func TestCollectorAdministrationListPassesOpaqueTokenAndReleasesPermit(
 
 	const (
 		tenantID = "tenant-collector-list"
-		ownerID  = "owner-collector-list"
+		ownerID  = "1015"
 	)
 	pageSize := uint32(2)
 	requestToken := "opaque.request-token.v1"
@@ -281,7 +281,7 @@ func TestCollectorAdministrationReadSerializationCancellationReleasesPermit(
 
 	const (
 		tenantID = "tenant-collector-encode-cancel"
-		ownerID  = "owner-collector-encode-cancel"
+		ownerID  = "1013"
 	)
 	service := &fakeCollectorAdministration{
 		listFn: func(
@@ -349,7 +349,7 @@ func TestCollectorAdministrationCommittedMutationSurvivesCancellation(
 
 	const (
 		tenantID    = "tenant-collector-update"
-		ownerID     = "owner-collector-update"
+		ownerID     = "1017"
 		collectorID = "collector-update"
 	)
 	now := collectorAdministrationTestTime()
@@ -460,7 +460,7 @@ func TestCollectorAdministrationRejectsInvalidListOutputAndReleasesPermit(
 
 	const (
 		tenantID = "tenant-invalid-collector-list-output"
-		ownerID  = "owner-invalid-collector-list-output"
+		ownerID  = "1020"
 	)
 	entry := func() collectorfleet.CatalogEntry {
 		return validCollectorCatalogEntry(
@@ -638,7 +638,7 @@ func TestCollectorAdministrationRejectsInvalidMutationVersionAndReleasesPermit(
 
 	const (
 		tenantID    = "tenant-invalid-collector-mutation"
-		ownerID     = "owner-invalid-collector-mutation"
+		ownerID     = "1021"
 		collectorID = "collector-invalid-mutation"
 	)
 	displayName := "Invalid mutation response"
@@ -708,7 +708,7 @@ func TestCollectorAdministrationRejectsTenantMismatchAndReleasesPermit(
 
 	const (
 		tenantID = "tenant-collector-output"
-		ownerID  = "owner-collector-output"
+		ownerID  = "1016"
 	)
 	service := &fakeCollectorAdministration{
 		getFn: func(
@@ -960,7 +960,7 @@ func TestCollectorAdministrationRejectsMalformedRequestsBeforeService(
 
 	const (
 		tenantID    = "tenant-malformed-collector-request"
-		ownerID     = "owner-malformed-collector-request"
+		ownerID     = "1025"
 		collectorID = "collector-malformed-request"
 	)
 	service := &fakeCollectorAdministration{}
@@ -1266,7 +1266,7 @@ func TestCollectorAdministrationRoutesRequireAuthAndAdvertiseFeature(
 
 	const (
 		tenantID    = "tenant-collector-http"
-		ownerID     = "owner-collector-http"
+		ownerID     = "1014"
 		collectorID = "collector-http"
 	)
 	displayName := "HTTP Collector"
@@ -1419,7 +1419,7 @@ func TestCollectorAdministrationRoutesRequireAuthAndAdvertiseFeature(
 		handler,
 		"/api/system/bootstrap",
 		&opensplunk.GetSystemBootstrapRequest{},
-		"",
+		collectorAdministrationBearerToken,
 	)
 	if bootstrap.Code != http.StatusOK {
 		t.Fatalf(
@@ -1468,7 +1468,7 @@ func collectorAdministrationDirectRequest(
 	path string,
 ) *http.Request {
 	t.Helper()
-	authenticator, err := auth.NewBearerTokenAuthenticator(
+	authenticator, err := newTestBearerTokenAuthenticator(
 		[]byte(collectorAdministrationBearerToken),
 		tenantID,
 		ownerID,
@@ -1485,11 +1485,7 @@ func collectorAdministrationDirectRequest(
 		t.Fatalf("Authenticate: %v", err)
 	}
 	request := httptest.NewRequestWithContext(ctx, http.MethodPost, path, nil)
-	return request.WithContext(context.WithValue(
-		request.Context(),
-		browserPrincipalContextKey{},
-		principal,
-	))
+	return request.WithContext(serverFixturePrincipalContext(request.Context(), principal))
 }
 
 func newCollectorAdministrationHTTPHandler(
@@ -1500,7 +1496,7 @@ func newCollectorAdministrationHTTPHandler(
 	role auth.BrowserRole,
 ) *Handler {
 	t.Helper()
-	authenticator, err := auth.NewBearerTokenAuthenticator(
+	authenticator, err := newTestBearerTokenAuthenticator(
 		[]byte(collectorAdministrationBearerToken),
 		tenantID,
 		ownerID,
@@ -1509,12 +1505,12 @@ func newCollectorAdministrationHTTPHandler(
 	if err != nil {
 		t.Fatalf("NewBearerTokenAuthenticator: %v", err)
 	}
-	handler, err := NewHandler(Config{
+	handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:                 &fakeSearchJobs{},
 		Indexes:                    fakeIndexCatalog{},
 		CollectorAdmin:             service,
 		SavedSearches:              &fakeSavedSearches{},
-		BrowserAuthenticator:       authenticator,
+		IdentityAuthenticator:      adaptTestBrowserAuthenticator(authenticator),
 		WebUI:                      testUI(),
 		TenantID:                   tenantID,
 		OwnerID:                    ownerID,

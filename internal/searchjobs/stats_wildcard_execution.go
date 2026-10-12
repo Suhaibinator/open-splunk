@@ -22,6 +22,8 @@ func (manager *Manager) prepareAndCompileStatsWildcard(
 	parsed *spl.Query,
 	scope plan.Scope,
 	limits searchlimits.Policy,
+	authority Job,
+	entry *jobEntry,
 ) (*plan.Query, clickhouse.CompiledQuery, plan.StatsWildcardExpansion, time.Duration, error) {
 	maxRuntime := limits.MaxRuntime
 	preparation, err := plan.PrepareStatsWildcard(parsed, scope)
@@ -29,6 +31,9 @@ func (manager *Manager) prepareAndCompileStatsWildcard(
 		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
 	}
 	if full := preparation.FullPlan(); full != nil {
+		if err := bindPlanningSources(entry, full.EffectiveIndexes); err != nil {
+			return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
+		}
 		compiled, compileErr := manager.compiler.CompileContext(ctx, full)
 		return full, compiled, plan.StatsWildcardExpansion{}, maxRuntime, compileErr
 	}
@@ -37,6 +42,9 @@ func (manager *Manager) prepareAndCompileStatsWildcard(
 	if request.IsZero() || prefix == nil {
 		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0,
 			errors.New("compile search query: wildcard preparation is incomplete")
+	}
+	if err := bindPlanningSources(entry, prefix.EffectiveIndexes); err != nil {
+		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
 	}
 	discoveryContext := ctx
 	if manager.limitSource != nil {
@@ -48,6 +56,7 @@ func (manager *Manager) prepareAndCompileStatsWildcard(
 		prefix,
 		request,
 		maxRuntime,
+		authority,
 	)
 	if err != nil {
 		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
@@ -77,12 +86,30 @@ func (manager *Manager) prepareAndCompileStatsWildcard(
 	return logical, compiled, expansion.Clone(), remainingRuntime, nil
 }
 
+// bindPlanningSources preserves proven read authority before an inventory can
+// execute or fail. A failed storage read must never resemble an unbound parse
+// failure when current permissions are checked later.
+func bindPlanningSources(entry *jobEntry, indexes []string) error {
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if err := entry.ctx.Err(); err != nil {
+		return err
+	}
+	if entry.job.State != StatePlanning || len(indexes) == 0 {
+		return ErrInvalidResult
+	}
+	entry.job.EffectiveIndexes = cloneStrings(indexes)
+	incrementJobVersion(&entry.job)
+	return nil
+}
+
 func (manager *Manager) executeStatsWildcardInventory(
 	ctx context.Context,
 	compiler clickhouse.Compiler,
 	prefix *plan.Query,
 	request plan.StatsWildcardRequest,
 	maximumRuntime time.Duration,
+	authority Job,
 ) (
 	plan.StatsWildcardExpansion,
 	clickhouse.CompiledStatsWildcardInventory,
@@ -135,6 +162,9 @@ func (manager *Manager) executeStatsWildcardInventory(
 	inventoryStarted := time.Now()
 	executionContext, cancelExecution := context.WithTimeout(ctx, maximumRuntime)
 	defer cancelExecution()
+	if err := manager.authorizeSourceJob(executionContext, authority, prefix.EffectiveIndexes); err != nil {
+		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, 0, err
+	}
 	expansion, err := capability.ExecuteStatsWildcardInventory(executionContext, executable)
 	inventoryRuntime := time.Since(inventoryStarted)
 	executionContextErr := executionContext.Err()
@@ -159,6 +189,24 @@ func (manager *Manager) executeStatsWildcardInventory(
 		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, inventoryRuntime, ErrInvalidResult
 	}
 	return expansion.Clone(), pristine, inventoryRuntime, nil
+}
+
+// authorizeSourceJob checks a detached, trusted planner scope immediately
+// before storage reads. Only proven planner indexes may reach this boundary.
+func (manager *Manager) authorizeSourceJob(ctx context.Context, authority Job, indexes []string) error {
+	if manager.authorizeJob == nil {
+		return nil
+	}
+	if len(indexes) == 0 {
+		return ErrSourceForbidden
+	}
+	job := cloneJob(authority)
+	job.EffectiveIndexes = cloneStrings(indexes)
+	access := AccessScope{TenantID: job.TenantID, OwnerID: job.OwnerID, OrganizationID: job.OrganizationID}
+	if err := manager.authorizeJob(ctx, access, job); err != nil {
+		return fmt.Errorf("%w: %w", ErrSourceForbidden, err)
+	}
+	return nil
 }
 
 func remainingStatsWildcardRuntime(maximum, consumed time.Duration) (time.Duration, bool) {

@@ -14,7 +14,7 @@ test("development runner passes the complete host-server contract", async (t) =>
   t.after(() => rm(fixture, { force: true, recursive: true }));
   const invocation = path.join(fixture, "invocation");
   const binary = path.join(fixture, "open-splunk-server");
-  await writeFile(binary, `#!/bin/sh\nprintf 'args=%s\\n' "$*" >${JSON.stringify(invocation)}\nprintf 'listen=%s\\n' "$OPEN_SPLUNK_SERVER_HTTP_LISTEN_ADDRESS" >>${JSON.stringify(invocation)}\nprintf 'control_database=%s\\n' "$OPEN_SPLUNK_SERVER_CONTROL_DATABASE_FILE" >>${JSON.stringify(invocation)}\nprintf 'master_key=%s\\n' "$OPEN_SPLUNK_SERVER_MASTER_KEY_FILE" >>${JSON.stringify(invocation)}\nprintf 'lock=%s\\n' "$OPEN_SPLUNK_SERVER_LOCK_FILE" >>${JSON.stringify(invocation)}\nprintf 'exports=%s\\n' "$OPEN_SPLUNK_SERVER_EXPORT_ARTIFACT_DIRECTORY" >>${JSON.stringify(invocation)}\nprintf 'clickhouse_address=%s\\n' "$OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS" >>${JSON.stringify(invocation)}\nprintf 'clickhouse_username=%s\\n' "$OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME" >>${JSON.stringify(invocation)}\nprintf 'clickhouse_secret=%s\\n' "$OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD" >>${JSON.stringify(invocation)}\nprintf 'administrator_token=%s\\n' "$OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN" >>${JSON.stringify(invocation)}\n`);
+  await writeFile(binary, `#!/bin/sh\nprintf 'args=%s\\n' "$*" >${JSON.stringify(invocation)}\nprintf 'listen=%s\\n' "$OPEN_SPLUNK_SERVER_HTTP_LISTEN_ADDRESS" >>${JSON.stringify(invocation)}\nprintf 'postgres_dsn=%s\\n' "$OPEN_SPLUNK_SERVER_POSTGRES_DSN" >>${JSON.stringify(invocation)}\nprintf 'master_key=%s\\n' "$OPEN_SPLUNK_SERVER_MASTER_KEY_FILE" >>${JSON.stringify(invocation)}\nprintf 'lock=%s\\n' "$OPEN_SPLUNK_SERVER_LOCK_FILE" >>${JSON.stringify(invocation)}\nprintf 'exports=%s\\n' "$OPEN_SPLUNK_SERVER_EXPORT_ARTIFACT_DIRECTORY" >>${JSON.stringify(invocation)}\nprintf 'clickhouse_address=%s\\n' "$OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS" >>${JSON.stringify(invocation)}\nprintf 'clickhouse_username=%s\\n' "$OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME" >>${JSON.stringify(invocation)}\nprintf 'clickhouse_secret=%s\\n' "$OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD" >>${JSON.stringify(invocation)}\nprintf 'google_secret=%s\\n' "$OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_SECRET" >>${JSON.stringify(invocation)}\n`);
   await chmod(binary, 0o755);
 
   const environment = path.join(fixture, "development.env");
@@ -22,7 +22,14 @@ test("development runner passes the complete host-server contract", async (t) =>
     `OPEN_SPLUNK_DEVELOPMENT_SERVER_BINARY=${JSON.stringify(binary)}`,
     `OPEN_SPLUNK_DEVELOPMENT_STATE_ROOT=${JSON.stringify(path.join(fixture, "state"))}`,
     `OPEN_SPLUNK_DEVELOPMENT_EXPORT_ROOT=${JSON.stringify(path.join(fixture, "exports"))}`,
-    "OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN=administrator-secret",
+    "OPEN_SPLUNK_SERVER_POSTGRES_DSN=postgres://open_splunk:test@127.0.0.1/open_splunk",
+    "OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_ID=test-google-client",
+    "OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_SECRET=google-secret",
+    "OPEN_SPLUNK_SERVER_PUBLIC_BASE_URL=http://localhost:18080",
+    "OPEN_SPLUNK_SERVER_MINIO_ENDPOINT=127.0.0.1:19001",
+    "OPEN_SPLUNK_SERVER_MINIO_ACCESS_KEY=open-splunk",
+    "OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY=minio-secret",
+    "OPEN_SPLUNK_SERVER_MINIO_BUCKET=private-artifacts",
     "OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD=clickhouse-secret",
     "OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME=clickhouse",
     "OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS=127.0.0.1:19000",
@@ -32,13 +39,12 @@ test("development runner passes the complete host-server contract", async (t) =>
 
   const result = spawnSync("sh", [runner, environment], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /http:\/\/127\.0\.0\.1:18080\/signin\//);
+  assert.match(result.stdout, /http:\/\/localhost:18080\/signin\//);
   const argumentsText = await readFile(invocation, "utf8");
   for (const expected of [
     "args=",
     "listen=127.0.0.1:18080",
-    "control_database=",
-    "open-splunk.db",
+    "postgres_dsn=postgres://open_splunk:test@127.0.0.1/open_splunk",
     "master_key=",
     "master.key",
     "lock=",
@@ -50,7 +56,7 @@ test("development runner passes the complete host-server contract", async (t) =>
     assert.match(argumentsText, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
   assert.match(argumentsText, /^clickhouse_secret=clickhouse-secret$/m);
-  assert.match(argumentsText, /^administrator_token=administrator-secret$/m);
+  assert.match(argumentsText, /^google_secret=google-secret$/m);
   const privateDirectories = [
     path.join(fixture, "state", "private"),
     path.join(fixture, "exports", "private"),

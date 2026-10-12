@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
@@ -20,9 +21,9 @@ func TestDurabilityReviewRealArtifactRestartPreservesGroupsAndCursors(t *testing
 	ctx := t.Context()
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
 	directory := t.TempDir()
-	databasePath := filepath.Join(directory, "control.sqlite")
+	databasePath := pgtest.DSN(t)
 	artifactPath := filepath.Join(directory, "artifacts")
-	access := searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	access := searchjobs.AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	key := []byte("patterns-durable-review-key-32-bytes")
 	schema := searchjobs.Schema{Columns: []searchjobs.Column{
 		{Name: "_raw", Kind: searchjobs.ValueKindMixed, Nullable: true},
@@ -64,7 +65,7 @@ func TestDurabilityReviewRealArtifactRestartPreservesGroupsAndCursors(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	job := searchjobs.Job{ID: "durable-patterns", Version: 1, TenantID: access.TenantID, OwnerID: access.OwnerID,
+	job := searchjobs.Job{OrganizationID: "1", ID: "durable-patterns", Version: 1, TenantID: access.TenantID, OwnerID: access.OwnerID,
 		SPL: "index=main", TimeRange: rangeValue.Intent(), State: searchjobs.StateQueued, CreatedAt: now}
 	if err := store.Admit(ctx, job); err != nil {
 		t.Fatal(err)
@@ -149,7 +150,7 @@ func TestDurabilityReviewBoundedExportStreamsTenThousandRetainedMembers(t *testi
 	ctx := t.Context()
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
 	directory := t.TempDir()
-	database, err := control.Open(ctx, filepath.Join(directory, "control.sqlite"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +161,7 @@ func TestDurabilityReviewBoundedExportStreamsTenThousandRetainedMembers(t *testi
 	}
 	defer store.Close()
 	service := newReviewService(t, Config{Source: store})
-	access := searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	access := searchjobs.AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	schema := searchjobs.Schema{Columns: []searchjobs.Column{{Name: "_raw", Kind: searchjobs.ValueKindString}}}
 	rows := make([]searchjobs.ResultRow, 10000)
 	for index := range rows {
@@ -170,7 +171,7 @@ func TestDurabilityReviewBoundedExportStreamsTenThousandRetainedMembers(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	job := searchjobs.Job{ID: "retained-ten-thousand", Version: 1, TenantID: access.TenantID, OwnerID: access.OwnerID,
+	job := searchjobs.Job{OrganizationID: "1", ID: "retained-ten-thousand", Version: 1, TenantID: access.TenantID, OwnerID: access.OwnerID,
 		SPL: "index=main", TimeRange: rangeValue.Intent(), State: searchjobs.StateQueued, CreatedAt: now}
 	if err := store.Admit(ctx, job); err != nil {
 		t.Fatal(err)

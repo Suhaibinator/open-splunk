@@ -114,17 +114,6 @@ function artifactIsUnexpired(job: ExportJob, now = Date.now()): boolean {
   return expiration === undefined || expiration.valueOf() > now;
 }
 
-function downloadBlob(blob: Blob, fileName: string): void {
-  const objectUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = objectUrl;
-  anchor.download = fileName;
-  anchor.rel = "noopener";
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
-}
 
 export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsProps) {
   const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
@@ -264,8 +253,7 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
       if (result.status === "unavailable") {
         setNotice({ kind: "error", message: "Export download is unavailable on this backend." });
       } else {
-        downloadBlob(result.value.blob, result.value.fileName);
-        setNotice({ kind: "success", message: `Downloaded ${result.value.fileName}.` });
+        setNotice({ kind: "success", message: `Download started: ${result.value.fileName}.` });
       }
     } catch (reason) {
       setNotice({ kind: "error", message: errorMessage(reason) });

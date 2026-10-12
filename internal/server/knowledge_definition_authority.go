@@ -14,7 +14,7 @@ import (
 
 // validKnowledgeCatalogDefinitionAuthority validates an injected catalog's
 // detached definition before ObjectToProto clones it. The concrete catalog
-// performs the same checks while hydrating SQLite state, but the server accepts
+// performs the same checks while hydrating PostgreSQL state, but the server accepts
 // a configurable KnowledgeCatalog and therefore cannot rely on that
 // implementation detail at its response boundary.
 func validKnowledgeCatalogDefinitionAuthority(object knowledgecatalog.Object) bool {

@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+message InferenceUsage {
+  int32 input_tokens = 1;
+  int32 output_tokens = 2;
+  int32 total_tokens = 3;
+  int32 thoughts_tokens = 4;
+  int32 cached_content_tokens = 5;
+  map<string, int32> custom = 6;
+}

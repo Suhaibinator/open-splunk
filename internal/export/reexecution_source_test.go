@@ -134,7 +134,7 @@ func (searches *reexecutionTestSearches) startManagerLocked() error {
 	if searches.resolvedRange != nil {
 		resolved = *searches.resolvedRange
 	}
-	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{
+	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{OrganizationID: "1",
 		SPL:               searches.job.SPL,
 		OwnerID:           searches.job.OwnerID,
 		TenantID:          searches.job.TenantID,

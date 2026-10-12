@@ -13,16 +13,16 @@ import (
 
 func TestMutationIntentUsesStableActorAcrossCredentialRotation(t *testing.T) {
 	principal := browserGatePrincipal(
-		t, "tenant-stable-actor", "owner-stable-actor", auth.BrowserRoleAdministrator,
+		t, "tenant-stable-actor", "1111", auth.BrowserRoleAdministrator,
 	)
 	var authenticatedCredentials []string
 	handler := &apiHandler{
-		browserAuthenticator: &recordingBrowserAuthenticator{
+		identityAuthenticator: adaptTestBrowserAuthenticator(&recordingBrowserAuthenticator{
 			fn: func(_ context.Context, credential []byte) (auth.BrowserPrincipal, error) {
 				authenticatedCredentials = append(authenticatedCredentials, string(credential))
 				return principal, nil
 			},
-		},
+		}),
 		tenantID: "tenant-stable-actor",
 	}
 	requestID := "rotated credential request 01"
@@ -59,7 +59,7 @@ func TestMutationIntentUsesStableActorAcrossCredentialRotation(t *testing.T) {
 		authenticatedCredentials[0] == authenticatedCredentials[1] {
 		t.Fatalf("authenticated credentials = %q", authenticatedCredentials)
 	}
-	if intents[0] != intents[1] || intents[0].ActorID != "owner-stable-actor" ||
+	if intents[0] != intents[1] || intents[0].ActorID != "1111" ||
 		intents[0].ActorKind != "browser" {
 		t.Fatalf("credential rotation changed logical actor intent: %#v != %#v", intents[0], intents[1])
 	}

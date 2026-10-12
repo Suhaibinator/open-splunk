@@ -1,0 +1,308 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "./proto_models";
+
+enum AuthProvider {
+    AUTH_PROVIDER_UNSPECIFIED = 0; // Default unspecified state
+    // Per-brand OAuth providers are retired: OAuth is AUTH_PROVIDER_OAUTH plus a provider slug.
+    reserved 1 to 8;
+    reserved "AUTH_PROVIDER_GOOGLE", "AUTH_PROVIDER_FACEBOOK", "AUTH_PROVIDER_TWITTER", "AUTH_PROVIDER_GITHUB",
+             "AUTH_PROVIDER_DISCORD", "AUTH_PROVIDER_APPLE", "AUTH_PROVIDER_LINKEDIN", "AUTH_PROVIDER_OKTA";
+    AUTH_PROVIDER_EMAIL = 9;      // Email/password authentication
+    AUTH_PROVIDER_PHONE = 10;     // Phone/SMS authentication
+    AUTH_PROVIDER_OAUTH = 11;     // OAuth/OIDC authentication; the provider is identified by slug
+  }
+  
+  enum TokenType {
+    TOKEN_TYPE_UNSPECIFIED = 0; // Default unspecified state
+    TOKEN_TYPE_AUTHENTICATION = 1; // Standard session authentication token
+    TOKEN_TYPE_EMAIL_VERIFICATION = 2; // Token for verifying email address
+    TOKEN_TYPE_PASSWORD_RESET = 3; // Token for initiating password reset
+    TOKEN_TYPE_ACCOUNT_INVITATION = 5; // Admin-created account password setup
+    TOKEN_TYPE_PHONE_VERIFICATION = 4; // OTP code for verifying phone number
+  }
+
+  enum TokenStatus {
+    TOKEN_STATUS_UNSPECIFIED = 0; // Treated as ALL when omitted in filters
+    TOKEN_STATUS_ALL = 1;
+    TOKEN_STATUS_ACTIVE = 2;
+    TOKEN_STATUS_EXPIRED = 3;
+    TOKEN_STATUS_REVOKED = 4;
+  }
+  
+  enum MessageType {
+    MESSAGE_TYPE_UNSPECIFIED = 0; // Default unspecified state
+    MESSAGE_TYPE_SMS = 1; // Regular SMS message
+    MESSAGE_TYPE_WHATSAPP = 2; // WhatsApp message
+  }
+  
+// --------------------
+// Email Registration Messages
+// --------------------
+message EmailRegistrationRequest {
+  string email = 1;     // User's email address
+  string password = 2;  // User's password
+  optional string username = 3;
+  optional string first_name = 4;
+  optional string last_name = 5;
+  optional string phone_number = 6; // Phone number in E.164 international format (optional)
+  optional string frontend_origin = 7; // Origin of the requesting frontend (e.g. "https://students.example.com"); must be in the server's allowed frontend origins
+}
+
+message EmailRegistrationResponse {
+}
+
+// --------------------
+// Email Authentication Messages
+// --------------------
+
+// Request for email/password authentication
+message EmailAuthRequest {
+  string email = 1;     // User's email address
+  string password = 2;  // User's password
+  optional string otp_code = 3;  // Optional OTP code for 2FA
+}
+
+// Response for email/password authentication.
+// Successful completed logins issue the session through Set-Cookie.
+message EmailAuthResponse {
+  bool otp_required = 2;       // Whether OTP code is required for this user
+  optional string message = 3; // Message to display to user (e.g., "Please provide your 6-digit authenticator code")
+}
+
+// --------------------
+// Password Management Messages
+// --------------------
+
+// Request to reset a password
+message PasswordResetRequest {
+  string email = 1;  // Email address of the account
+  optional string frontend_origin = 2; // Origin of the requesting frontend (e.g. "https://students.example.com"); must be in the server's allowed frontend origins
+}
+
+// Response to a password reset request
+message PasswordResetResponse {
+}
+
+// Request to change a password
+message PasswordChangeRequest {
+  string old_password = 1;  // Current password
+  string new_password = 2;  // New password
+}
+
+// Response to a password change request
+message PasswordChangeResponse {
+}
+
+// Request to complete password reset using a verification code and new password
+message PasswordResetCompleteRequest {
+  string verification_code = 1; // Opaque security token from the password-reset email link
+  string new_password = 2;      // The new password chosen by the user
+}
+
+// --------------------
+// Email Verification Messages
+// --------------------
+
+// Request to verify an email address using a verification code
+message EmailVerificationRequest {
+  string verification_code = 1;  // Opaque security token from the verification-email link
+}
+
+// --------------------
+// Phone Verification Messages  
+// --------------------
+
+// Request to send a phone verification OTP code
+message SendPhoneOTPRequest {
+  string phone_number = 1;  // Phone number in E.164 international format
+}
+
+// Response for sending phone OTP
+message SendPhoneOTPResponse {
+  // Empty response - errors are handled by SRouter
+}
+
+// Request to verify a phone number using OTP code
+message VerifyPhoneOTPRequest {
+  string otp_code = 1;  // 6-digit OTP code received via SMS
+}
+
+// Response for phone OTP verification
+message VerifyPhoneOTPResponse {
+  // Empty response - errors are handled by SRouter
+}
+
+// Request to resend phone verification OTP
+message ResendPhoneOTPRequest {
+  // No fields needed - uses authenticated user's pending verification
+}
+
+// Response for phone OTP resend
+message ResendPhoneOTPResponse {
+  // Empty response - errors are handled by SRouter
+}
+
+// --------------------
+// OAuth Messages
+// --------------------
+
+message OAuthStateRequest {
+  reserved 1;
+  reserved "provider";
+  string return_url = 2;     // Frontend destination after authentication
+  string redirect_uri = 3;   // Exact registered callback URI used for this attempt
+  string provider_slug = 4;  // Slug of the configured OAuth provider the state will be used with
+  optional string frontend_callback_url = 5; // Frontend callback page the form_post relay redirects to; must be an allowed frontend URL
+}
+
+message OAuthStateResponse {
+  string state = 1; // Server-issued, browser-bound OAuth state
+  string redirect_uri = 2; // Validated callback URI to use in the authorization request
+  string authorization_url = 3; // Complete provider authorization URL (PKCE, nonce, and response mode included)
+}
+
+message OAuthCodeRequest {
+  string code = 1;         // OAuth code from the provider
+  reserved 2;
+  reserved "provider";
+  string state = 3;        // Opaque server-issued state returned by the provider
+}
+
+message OAuthTokenResponse {
+  bool account_created = 1;
+  string return_url = 2;     // Frontend destination recorded in the verified state
+  string provider_slug = 3;  // Slug of the provider that authenticated the user
+}
+
+// Public description of a configured OAuth provider, used to render sign-in buttons
+message OAuthProviderDescriptor {
+  string slug = 1;         // Stable provider slug
+  string display_name = 2; // Human-readable provider name
+  string icon_key = 3;     // Frontend icon key; empty selects the generic icon
+  // True when the provider answers with response_mode=form_post. The frontend
+  // then uses the backend relay (/auth/oauth/form-post) as redirect_uri and
+  // passes its own callback page as frontend_callback_url.
+  bool form_post = 4;
+}
+
+message ListOAuthProvidersResponse {
+  repeated OAuthProviderDescriptor providers = 1;
+}
+
+// --------------------
+// Logout Messages
+// --------------------
+
+// Request to logout
+message LogoutRequest {
+  bool logout_everywhere = 1; // Optional: logout from all devices/sessions
+}
+
+// Response for logout
+message LogoutResponse {
+}
+
+// --------------------
+// Active Session Messages
+// --------------------
+
+message ActiveSession {
+  string session_id = 1;
+  bool current = 2;
+  AuthProvider auth_method = 3;
+  string ip_address = 4;
+  string user_agent = 5;
+  string device_id = 6;
+  google.protobuf.Timestamp issued_at = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  google.protobuf.Timestamp last_used_at = 9;
+  optional string oauth_provider_slug = 10; // Set when auth_method is AUTH_PROVIDER_OAUTH
+}
+
+// --------------------
+// Multi-Auth Messages
+// --------------------
+
+// Request to add password authentication to an existing account
+message AddPasswordRequest {
+  string password = 1;         // The password to set for the account
+  string confirm_password = 2; // Password confirmation to prevent typos
+}
+
+// Response for add password request
+message AddPasswordResponse {
+  reserved 3;
+  reserved "error";
+}
+
+// Information about an OAuth provider connection
+message OAuthProviderInfo {
+  reserved 1;
+  reserved "provider";
+  string email = 2;                       // Email associated with this provider
+  google.protobuf.Timestamp first_login = 3; // When this provider was first linked
+  google.protobuf.Timestamp last_login = 4;  // Most recent login with this provider
+  uint32 login_count = 5;                 // Number of times user has logged in with this provider
+  string provider_slug = 6;               // Slug of the linked OAuth provider
+  string display_name = 7;                // Provider display name from the current provider sample; empty when no longer configured
+}
+
+// Response containing user's authentication methods
+message GetAuthMethodsResponse {
+  bool has_password = 1;                          // Whether the user has password authentication set up
+  repeated OAuthProviderInfo oauth_providers = 2; // List of connected OAuth providers
+  uint32 total_methods = 3;                       // Password method plus linked OAuth providers; TOTP is not counted separately
+  bool otp_enabled = 4;                           // Whether OTP/TOTP 2FA is enabled for the user
+  optional google.protobuf.Timestamp otp_verified_at = 5; // When OTP/TOTP 2FA was enabled (if available)
+}
+
+// --------------------
+// OTP (TOTP) Authentication Messages
+// --------------------
+
+// Request to set up OTP/TOTP 2FA
+message SetupOTPRequest {
+  string current_password = 1;         // Current password required for security
+}
+
+// Response containing OTP setup information
+message SetupOTPResponse {
+  optional string secret = 2;          // Base32 encoded TOTP secret for QR code
+  optional string qr_code_url = 3;     // otpauth:// URI; the frontend generates its QR code from this URI
+  reserved 5;
+  reserved "error";
+}
+
+// Request to verify OTP setup with a test code
+message VerifyOTPSetupRequest {
+  string otp_code = 1;                 // 6-digit TOTP code from authenticator app
+  string current_password = 2;         // Current password required for security
+}
+
+// Response for OTP setup verification
+message VerifyOTPSetupResponse {
+  reserved 3;
+  reserved "error";
+}
+
+// Request to disable OTP/TOTP 2FA
+message DisableOTPRequest {
+  string current_password = 1;         // Current password required for security
+}
+
+// Response for OTP disable request
+message DisableOTPResponse {
+  reserved 3;
+  reserved "error";
+}
+
+message EmailAcceptInvitationRequest {
+  string token = 1;
+  string password = 2;
+}
+message EmailAcceptInvitationResponse {}

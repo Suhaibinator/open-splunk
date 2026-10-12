@@ -53,8 +53,7 @@ loads the latest version, keeps the proposed sharing value visible, and
 requires another explicit submission. If a response is lost, the page reads
 the current definition before deciding whether the update succeeded.
 
-Sharing scope is organizational metadata in the current single-user model. It
-does not grant access and is not a promise of role-based authorization.
+Sharing scope organizes content. User sessions, organization membership and index permissions enforce access independently of this label.
 
 ## Scheduled searches
 
@@ -162,7 +161,7 @@ uses typed API adapters and feature components rather than duplicating wire
 interpretation inside screens.
 
 Durable jobs, scheduled reports, and alerts emit bounded operational counters,
-identity-free log records, and a tenant-scoped immutable SQLite audit journal.
+identity-free log records, and a tenant-scoped immutable PostgreSQL audit journal.
 The journal assigns a monotonic sequence and canonical occurrence time,
 persists across restart and coordinated control-plane recovery, rejects
 external updates and deletes, and atomically rolls the oldest event after

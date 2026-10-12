@@ -9,13 +9,14 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"gorm.io/gorm"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"gorm.io/gorm"
 )
 
 func TestWriterActiveCounterPreflightsUseBoundedTenantPrefixes(t *testing.T) {
-	registerBoundedPreflightVisitFunction(t)
 	tests := []struct {
 		name string
 		kind activeCounterPreflightKind
@@ -49,6 +50,7 @@ func TestWriterActiveCounterPreflightsUseBoundedTenantPrefixes(t *testing.T) {
 			token := "writer-counter-bound-" + test.name
 			probe := &boundedPreflightProbe{}
 			boundedPreflightProbes.Store(token, probe)
+			prepareBoundedPostgresProbe(t, database, token, probe)
 			defer boundedPreflightProbes.Delete(token)
 			query = activeCounterPreflightQuery(database.GORMDB(), testTenant, spec).Where(
 				boundedPreflightVisitFunction+"(?, counter."+spec.countColumn+") = 1", token,
@@ -123,7 +125,6 @@ func TestWriterActiveCounterPreflightRejectsKeysAndScalarsBeforeGrouping(t *test
 }
 
 func TestWriterActiveCounterPreflightCancellationReleasesConnection(t *testing.T) {
-	registerBoundedPreflightVisitFunction(t)
 	database, _ := newCatalogTestStore(t)
 	spec := activeCounterSpec(activeOwnerCounterPreflight)
 	dropTableTriggers(t, database, spec.table)
@@ -143,6 +144,7 @@ func TestWriterActiveCounterPreflightCancellationReleasesConnection(t *testing.T
 	probe := &boundedPreflightProbe{cancelAt: 8, cancel: cancel}
 	const token = "writer-owner-counter-cancel"
 	boundedPreflightProbes.Store(token, probe)
+	prepareBoundedPostgresProbe(t, database, token, probe)
 	defer boundedPreflightProbes.Delete(token)
 	query := activeCounterPreflightQuery(database.GORMDB().WithContext(ctx), testTenant, spec).Where(
 		boundedPreflightVisitFunction+"(?, counter."+spec.countColumn+") = 1", token,
@@ -212,7 +214,7 @@ func TestWriterProjectionCardinalityRejectsMissingZeroChargeProjection(t *testin
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT count(*), coalesce(sum(projection_bytes), 0)
 		FROM knowledge_object_list_projections
-		WHERE tenant_id = ?`, testTenant,
+		WHERE tenant_id = $1`, testTenant,
 	).Scan(&projectionCount, &projectionBytes); err != nil {
 		t.Fatalf("read zero-charge projection fixture: %v", err)
 	}
@@ -234,7 +236,7 @@ func TestWriterProjectionCardinalityRejectsMissingZeroChargeProjection(t *testin
 		`DELETE FROM knowledge_object_list_projections
 		 WHERE tenant_id = ? AND knowledge_object_id = 'ko-writer-health-zero-projection'`,
 	} {
-		result, err := database.SQLDB().ExecContext(t.Context(), statement, testTenant)
+		result, err := database.SQLDB().ExecContext(t.Context(), pgtest.Parameters(statement), testTenant)
 		if err != nil {
 			t.Fatalf("remove zero-charge projection authority: %v", err)
 		}
@@ -254,7 +256,6 @@ func TestWriterDefinitionBlobCardinalityExactAndOverCapacityBoundaries(t *testin
 	if testing.Short() {
 		t.Skip("seeds the exact 65,536-row immutable version/blob boundary")
 	}
-	registerBoundedPreflightVisitFunction(t)
 	database, _ := newCatalogTestStore(t)
 	insertFixtureObject(t, database, fixtureObject{
 		id: "ko-writer-health-definition-boundary", owner: testOwner,
@@ -314,6 +315,7 @@ func assertWriterDefinitionCardinalityProgressAndCancellation(t *testing.T, data
 	const progressToken = "writer-definition-cardinality-progress"
 	progress := &boundedPreflightProbe{}
 	boundedPreflightProbes.Store(progressToken, progress)
+	prepareBoundedPostgresProbe(t, database, progressToken, progress)
 	defer boundedPreflightProbes.Delete(progressToken)
 	var count int64
 	if err := database.GORMDB().Raw(query, testTenant, progressToken).Scan(&count).Error; err != nil {
@@ -336,6 +338,7 @@ func assertWriterDefinitionCardinalityProgressAndCancellation(t *testing.T, data
 	canceled := &boundedPreflightProbe{cancelAt: 8, cancel: cancel}
 	const cancelToken = "writer-definition-cardinality-cancel"
 	boundedPreflightProbes.Store(cancelToken, canceled)
+	prepareBoundedPostgresProbe(t, database, cancelToken, canceled)
 	defer boundedPreflightProbes.Delete(cancelToken)
 	count = 0
 	err := database.GORMDB().WithContext(ctx).Raw(query, testTenant, cancelToken).Scan(&count).Error
@@ -397,10 +400,10 @@ func assertWriterHealthPreflightPlan(t *testing.T, database *control.DB, query *
 	}
 	details := writerHealthExplainDetails(t, database, compiled.Statement.SQL.String(), compiled.Statement.Vars...)
 	joined := strings.Join(details, "\n")
-	if strings.Contains(joined, "USE TEMP B-TREE") {
+	if strings.Contains(joined, "Sort") {
 		t.Fatalf("writer health preflight uses a temporary sort/group:\n%s", joined)
 	}
-	if !strings.Contains(joined, "SEARCH "+alias+" USING PRIMARY KEY (tenant_id=?)") {
+	if !strings.Contains(joined, "on "+alias+" table ") || !strings.Contains(joined, "_pkey") || !strings.Contains(joined, "tenant_id =") {
 		t.Fatalf("writer health preflight does not use the exact tenant primary-key prefix:\n%s", joined)
 	}
 }
@@ -411,17 +414,21 @@ func assertWriterDefinitionCardinalityPlan(t *testing.T, database *control.DB) {
 		t, database, mutationDefinitionCardinalitySQL, testTenant, testTenant,
 	)
 	joined := strings.Join(details, "\n")
-	if strings.Contains(joined, "USE TEMP B-TREE") {
+	if strings.Contains(joined, "Sort") {
 		t.Fatalf("definition cardinality preflight uses a temporary sort/group:\n%s", joined)
 	}
-	for table, plan := range map[string]string{
-		"knowledge_object_versions":  `SEARCH knowledge_object_versions USING COVERING INDEX sqlite_autoindex_knowledge_object_versions_3 (tenant_id=?)`,
-		"knowledge_definition_blobs": `SEARCH knowledge_definition_blobs USING PRIMARY KEY (tenant_id=?)`,
-	} {
-		if !strings.Contains(joined, plan) {
-			t.Fatalf("definition cardinality preflight does not use %s exact tenant-prefix index:\n%s", table, joined)
+	for _, table := range []string{"knowledge_object_versions", "knowledge_definition_blobs"} {
+		found := false
+		for _, detail := range details {
+			if strings.Contains(detail, "on "+table+" table "+table+" using ") && strings.Contains(detail, "tenant_id =") && !strings.HasPrefix(detail, "Seq Scan") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("definition cardinality lacks exact tenant-prefix index for%s:\n%s", table, joined)
 		}
 	}
+
 }
 
 func assertWriterPhysicalHealthProjectionPlan(t *testing.T, database *control.DB) {
@@ -439,7 +446,7 @@ func assertWriterPhysicalHealthProjectionPlan(t *testing.T, database *control.DB
 		testTenant,
 	)
 	joined := strings.Join(details, "\n")
-	if strings.Contains(joined, "USE TEMP B-TREE") {
+	if strings.Contains(joined, "Sort") {
 		t.Fatalf("physical projection health query uses a temporary sort/group:\n%s", joined)
 	}
 	const boundedProjectionPrefix = "knowledge_object_list_projections WHERE tenant_id = ? LIMIT 8193"
@@ -452,7 +459,7 @@ func assertWriterPhysicalHealthProjectionPlan(t *testing.T, database *control.DB
 			continue
 		}
 		projectionAccesses++
-		if !strings.Contains(detail, "(tenant_id=?)") || strings.HasPrefix(detail, "SCAN ") {
+		if !strings.Contains(detail, "tenant_id =") || strings.HasPrefix(detail, "Seq Scan ") {
 			t.Fatalf("physical projection health lacks exact tenant-prefix access:\n%s", joined)
 		}
 	}
@@ -463,7 +470,7 @@ func assertWriterPhysicalHealthProjectionPlan(t *testing.T, database *control.DB
 
 func writerHealthExplainDetails(t *testing.T, database *control.DB, query string, arguments ...any) []string {
 	t.Helper()
-	return explainSQLiteQueryPlan(t, database.SQLDB(), query, arguments)
+	return explainPostgreSQLQueryPlan(t, database.SQLDB(), query, arguments)
 }
 
 func insertWriterActiveCounterRange(
@@ -480,19 +487,19 @@ func insertWriterActiveCounterRange(
 	switch kind {
 	case activeAppCounterPreflight:
 		statement = `WITH RECURSIVE identities(n) AS (
-			SELECT ? UNION ALL SELECT n + 1 FROM identities WHERE n + 1 < ?
+			SELECT ?::bigint UNION ALL SELECT n + 1 FROM identities WHERE n + 1 < ?
 		)
 		INSERT INTO knowledge_app_active_counters (tenant_id, app_id, active_object_count)
-		SELECT ?, printf('app_%021dA', n), 0 FROM identities`
+		SELECT ?, 'app_' || lpad((n)::text,21,'0') || 'A', 0 FROM identities`
 	case activeOwnerCounterPreflight:
 		statement = `WITH RECURSIVE identities(n) AS (
-			SELECT ? UNION ALL SELECT n + 1 FROM identities WHERE n + 1 < ?
+			SELECT ?::bigint UNION ALL SELECT n + 1 FROM identities WHERE n + 1 < ?
 		)
 		INSERT INTO knowledge_owner_active_counters (tenant_id, owner_id, active_private_object_count)
-		SELECT ?, printf('owner-health-%05d', n), 0 FROM identities`
+		SELECT ?, 'owner-health-' || lpad((n)::text,5,'0') || '', 0 FROM identities`
 	case activeTypeCounterPreflight:
 		statement = `WITH RECURSIVE identities(n) AS (
-			SELECT ? UNION ALL SELECT n + 1 FROM identities WHERE n + 1 < ?
+			SELECT ?::bigint UNION ALL SELECT n + 1 FROM identities WHERE n + 1 < ?
 		)
 		INSERT INTO knowledge_type_active_counters (tenant_id, object_type, active_object_count)
 		SELECT ?, CASE n
@@ -502,11 +509,11 @@ func insertWriterActiveCounterRange(
 			ELSE 'future_type' END, 0 FROM identities`
 	case activeAppTypeCounterPreflight:
 		statement = `WITH RECURSIVE identities(n) AS (
-			SELECT ? UNION ALL SELECT n + 1 FROM identities WHERE n + 1 < ?
+			SELECT ?::bigint UNION ALL SELECT n + 1 FROM identities WHERE n + 1 < ?
 		)
 		INSERT INTO knowledge_app_type_active_counters
 			(tenant_id, app_id, object_type, active_object_count)
-		SELECT ?, printf('app_%021dA', n / 3), CASE n % 3
+		SELECT ?, 'app_' || lpad((n / 3)::text,21,'0') || 'A', CASE n % 3
 			WHEN 0 THEN 'field_extraction'
 			WHEN 1 THEN 'field_alias'
 			ELSE 'calculated_field' END, 0 FROM identities`
@@ -514,7 +521,7 @@ func insertWriterActiveCounterRange(
 		t.Fatalf("unknown active counter kind %d", kind)
 	}
 	withWriterHealthCorruptionConnection(t, database, func(connection *sql.Conn) {
-		if _, err := connection.ExecContext(t.Context(), statement, start, end, testTenant); err != nil {
+		if _, err := connection.ExecContext(t.Context(), pgtest.Parameters(statement), start, end, testTenant); err != nil {
 			t.Fatalf("insert active %d counter range [%d,%d): %v", kind, start, end, err)
 		}
 	})
@@ -548,9 +555,20 @@ func insertWriterActiveCounterRecord(
 		t.Fatalf("unknown active counter kind %d", kind)
 	}
 	withWriterHealthCorruptionConnection(t, database, func(connection *sql.Conn) {
+		spec := activeCounterSpec(kind)
+		if len(firstKey) > 8192 {
+			if err := pgtest.AllowOversizedIndexedValue(t.Context(), connection, spec.table, spec.firstKeyColumn); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(secondKey) > 8192 {
+			if err := pgtest.AllowOversizedIndexedValue(t.Context(), connection, spec.table, spec.secondKeyColumn); err != nil {
+				t.Fatal(err)
+			}
+		}
 		if _, err := connection.ExecContext(
 			t.Context(),
-			statement,
+			pgtest.Parameters(statement),
 			arguments...,
 		); err != nil {
 			t.Fatalf("insert invalid active %d counter: %v", kind, err)
@@ -573,20 +591,23 @@ func withWriterHealthCorruptionConnection(
 		t.Fatalf("acquire writer health corruption connection: %v", err)
 	}
 	defer func() {
-		for _, pragma := range []string{"PRAGMA ignore_check_constraints = OFF", "PRAGMA foreign_keys = ON"} {
-			if _, err := connection.ExecContext(context.Background(), pragma); err != nil {
-				t.Errorf("restore writer health corruption connection: %v", err)
-			}
+		if _, err := pgtest.Checks(context.Background(), connection, true); err != nil {
+			t.Errorf("restore writer health checks: %v", err)
+		}
+		if _, err := pgtest.RestoreForeignKeys(context.Background(), connection); err != nil {
+			t.Errorf("restore writer health foreign keys: %v", err)
 		}
 		if err := connection.Close(); err != nil {
 			t.Errorf("close writer health corruption connection: %v", err)
 		}
 	}()
-	for _, pragma := range []string{"PRAGMA foreign_keys = OFF", "PRAGMA ignore_check_constraints = ON"} {
-		if _, err := connection.ExecContext(context.Background(), pragma); err != nil {
-			t.Fatalf("configure writer health corruption connection: %v", err)
-		}
+	if _, err := pgtest.DropForeignKeys(t.Context(), connection); err != nil {
+		t.Fatal(err)
 	}
+	if _, err := pgtest.Checks(t.Context(), connection, false); err != nil {
+		t.Fatal(err)
+	}
+
 	work(connection)
 }
 
@@ -597,46 +618,46 @@ func seedWriterHealthDefinitionBoundary(t *testing.T, database *control.DB) {
 		t.Fatalf("acquire definition boundary connection: %v", err)
 	}
 	defer func() { _ = connection.Close() }()
-	tx, err := connection.BeginTx(context.Background(), nil)
+	tx, err := pgmeta.BeginSQL(context.Background(), connection, nil)
 	if err != nil {
 		t.Fatalf("begin definition boundary transaction: %v", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(context.Background(), `WITH RECURSIVE versions(n) AS (
 		SELECT 2
-		UNION ALL SELECT n + 1 FROM versions WHERE n < ?
+		UNION ALL SELECT n + 1 FROM versions WHERE n < $1
 	)
 	INSERT INTO knowledge_definition_blobs (
 		tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro
 	)
-	SELECT ?, CAST(printf('health-definition-%014d', n) AS BLOB), X'01', 1, 100 + n
+	SELECT $2, convert_to('health-definition-' || lpad((n)::text,14,'0') || '','UTF8'), decode('01','hex'), 1, 100 + n
 	FROM versions`, maximumVersionsPerTenant, testTenant); err != nil {
 		t.Fatalf("seed exact definition blob boundary: %v", err)
 	}
 	if _, err := tx.ExecContext(context.Background(), `WITH RECURSIVE versions(n) AS (
 		SELECT 2
-		UNION ALL SELECT n + 1 FROM versions WHERE n < ?
+		UNION ALL SELECT n + 1 FROM versions WHERE n < $1
 	)
 	INSERT INTO knowledge_object_versions (
 		tenant_id, knowledge_object_id, object_version, app_id, owner_id,
 		object_type, name, sharing_scope, state, definition_digest,
 		dependency_count, mutation_kind, quarantine_reason, created_at_unix_micro
 	)
-	SELECT ?, 'ko-writer-health-definition-boundary', n, ?, ?,
+	SELECT $2, 'ko-writer-health-definition-boundary', n, $3, $4,
 		'field_alias', 'writer-health-definition-boundary', 'private', 'draft',
-		CAST(printf('health-definition-%014d', n) AS BLOB),
+		convert_to('health-definition-' || lpad((n)::text,14,'0') || '','UTF8'),
 		0, 'update', NULL, 100 + n
 	FROM versions`, maximumVersionsPerTenant, testTenant, testApp, testOwner); err != nil {
 		t.Fatalf("seed exact immutable version boundary: %v", err)
 	}
 	if _, err := tx.ExecContext(context.Background(), `UPDATE knowledge_catalog_tenants
 		SET version_count = (
-			SELECT count(*) FROM knowledge_object_versions WHERE tenant_id = ?
+			SELECT count(*) FROM knowledge_object_versions WHERE tenant_id = $1
 		), definition_body_bytes = (
 			SELECT coalesce(sum(definition_bytes), 0)
-			FROM knowledge_definition_blobs WHERE tenant_id = ?
+			FROM knowledge_definition_blobs WHERE tenant_id = $2
 		)
-		WHERE tenant_id = ?`, testTenant, testTenant, testTenant); err != nil {
+		WHERE tenant_id = $3`, testTenant, testTenant, testTenant); err != nil {
 		t.Fatalf("set exact definition boundary ledger: %v", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -648,7 +669,7 @@ func insertWriterHealthDefinitionBlob(t *testing.T, database *control.DB, ordina
 	t.Helper()
 	if err := database.GORMDB().Exec(`INSERT INTO knowledge_definition_blobs (
 		tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro
-	) VALUES (?, CAST(printf('health-definition-%014d', ?) AS BLOB), X'01', 1, ?)`,
+	) VALUES (?, convert_to('health-definition-' || lpad((?::bigint)::text,14,'0') || '','UTF8'), decode('01','hex'), 1, ?)`,
 		testTenant, ordinal, 100+ordinal,
 	).Error; err != nil {
 		t.Fatalf("insert writer health definition blob %d: %v", ordinal, err)

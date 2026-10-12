@@ -265,7 +265,7 @@ func TestArtifactCacheUsesCatalogDigestAndReconcilesOnRestart(t *testing.T) {
 
 	wrongDigest := sha256.Sum256([]byte("wrong artifact"))
 	if _, err := database.SQLDB().ExecContext(ctx, `
-		UPDATE durable_search_jobs SET artifact_sha256 = ? WHERE id = ?`, wrongDigest[:], job.ID); err != nil {
+		UPDATE durable_search_jobs SET artifact_sha256 = $1 WHERE id = $2`, wrongDigest[:], job.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Acquire(ctx, testAccess(), job.ID); !errors.Is(err, ErrCorrupt) {

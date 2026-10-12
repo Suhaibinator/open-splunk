@@ -79,7 +79,7 @@ func dashboardAPITestRecord(ownerID string) *opensplunk.Dashboard {
 }
 
 func TestRunDashboardPanelUsesOnlyStoredDefinitionAndSealsProvenance(t *testing.T) {
-	ownerID, tenantID, appID := "owner-1", "tenant-1", "app-main"
+	ownerID, tenantID, appID := "1009", "tenant-1", "app-main"
 	record := dashboardAPITestRecord(ownerID)
 	store := &fakeDashboards{getFn: func(_ context.Context, scope dashboards.AccessScope, id string) (*opensplunk.Dashboard, error) {
 		if scope.OwnerID != ownerID || id != record.GetDashboardId() {
@@ -123,14 +123,14 @@ func TestRunDashboardPanelUsesOnlyStoredDefinitionAndSealsProvenance(t *testing.
 }
 
 func TestRunDashboardPanelRejectsUnknownPanelBeforeCreatingJob(t *testing.T) {
-	record := dashboardAPITestRecord("owner-1")
+	record := dashboardAPITestRecord("1009")
 	jobs := &fakeSearchJobs{createJob: completeJob("must-not-create")}
 	handler := newTestHandler(t, Config{
 		SearchJobs: jobs,
 		Dashboards: &fakeDashboards{getFn: func(context.Context, dashboards.AccessScope, string) (*opensplunk.Dashboard, error) {
 			return record, nil
 		}},
-		Indexes: fakeIndexCatalog{}, OwnerID: "owner-1", WebUI: testUI(),
+		Indexes: fakeIndexCatalog{}, OwnerID: "1009", WebUI: testUI(),
 	})
 	response := postProto(t, handler, "/api/dashboards/panels/run", &opensplunk.RunDashboardPanelRequest{DashboardId: "dash-1", PanelId: "missing"})
 	if response.Code != http.StatusNotFound || jobs.createCalls != 0 {
@@ -139,7 +139,7 @@ func TestRunDashboardPanelRejectsUnknownPanelBeforeCreatingJob(t *testing.T) {
 }
 
 func TestCreateDashboardRejectsUnavailablePanelIndexBeforePersistence(t *testing.T) {
-	ownerID, appID := "owner-1", "app-main"
+	ownerID, appID := "1009", "app-main"
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{createJob: completeJob("unused")},
 		Dashboards: &fakeDashboards{createFn: func(context.Context, dashboards.AccessScope, *opensplunk.DashboardDefinition) (*opensplunk.Dashboard, error) {

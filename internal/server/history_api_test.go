@@ -83,7 +83,7 @@ func (store *fakeSearchHistory) callCount() int {
 }
 
 func TestSearchHistoryRoutesRoundTripProtobufAndScope(t *testing.T) {
-	ownerID, tenantID := "owner-1", "tenant-1"
+	ownerID, tenantID := "1009", "tenant-1"
 	entry := historyEntry("job-1", testNow, "app-main", "saved-1")
 	after := timestamppb.New(testNow.Add(-time.Hour).Add(999 * time.Nanosecond))
 	before := timestamppb.New(testNow.Add(time.Hour).Add(999 * time.Nanosecond))
@@ -521,7 +521,7 @@ func TestCommittedSearchHistoryMutationsWinContextCancellationRace(t *testing.T)
 			ctx, cancel := context.WithCancel(context.Background())
 			store := &fakeSearchHistory{}
 			test.stub(store, cancel)
-			handler := &apiHandler{searchHistory: store, ownerID: "owner-1", tenantID: "tenant-1"}
+			handler := &apiHandler{searchHistory: store, ownerID: "1009", tenantID: "tenant-1"}
 			request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/search/history/"+test.name, nil).WithContext(ctx)
 			if err := test.call(handler, request); err != nil {
 				t.Fatalf("committed %s returned error = %v", test.name, err)
@@ -555,7 +555,7 @@ func TestSearchHistoryRoutesAreExactAndConditional(t *testing.T) {
 		t.Fatalf("disabled route status = %d, body = %s", response.Code, response.Body.String())
 	}
 	var typedNil *fakeSearchHistory
-	if _, err := NewHandler(Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: &fakeSavedSearches{}, SearchHistory: typedNil, WebUI: testUI()}); err != nil {
+	if _, err := newAuthenticatedTestHandler(Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: &fakeSavedSearches{}, SearchHistory: typedNil, WebUI: testUI()}); err != nil {
 		t.Fatalf("typed-nil optional history: %v", err)
 	}
 }

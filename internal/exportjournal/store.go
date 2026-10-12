@@ -7,9 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/audit"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -32,9 +38,11 @@ func New(db *gorm.DB, events *audit.Store) (*Store, error) {
 }
 
 type record struct {
+	OrganizationID int64  `gorm:"column:organization_id;type:bigint"`
 	TenantID       string `gorm:"column:tenant_id"`
 	OwnerID        string `gorm:"column:owner_id"`
 	ExportID       string `gorm:"column:export_id"`
+	SourceJobID    string `gorm:"column:source_job_id"`
 	Version        uint64 `gorm:"column:version"`
 	JobJSON        []byte `gorm:"column:job_json"`
 	CreatedAt      int64  `gorm:"column:created_at_us"`
@@ -47,13 +55,33 @@ type record struct {
 
 func (record) TableName() string { return "durable_export_jobs" }
 
+func validSourceJobID(value string) bool {
+	if value == "" || len(value) > 256 || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
 func encode(retained exportjobs.DurableJob) (record, error) {
 	job := retained.Job
+	organization, err := strconv.ParseInt(retained.Access.OrganizationID, 10, 64)
+	if err != nil || organization <= 0 || strconv.FormatInt(organization, 10) != retained.Access.OrganizationID {
+		return record{}, errors.New("invalid export organization")
+	}
+	if job.OrganizationID != "" && job.OrganizationID != retained.Access.OrganizationID {
+		return record{}, errors.New("export organization authority mismatch")
+	}
+	job.OrganizationID = retained.Access.OrganizationID
 	payload, err := json.Marshal(job)
 	if err != nil || len(payload) > maximumProjectionBytes {
 		return record{}, errors.New("export metadata exceeds persistence bound")
 	}
-	if retained.Access.TenantID == "" || retained.Access.OwnerID == "" || job.ID == "" || job.Version == 0 || job.CreatedAt.IsZero() {
+	if !validSourceJobID(job.SearchJobID) || retained.Access.TenantID == "" || retained.Access.OwnerID == "" || job.ID == "" || job.Version == 0 || job.CreatedAt.IsZero() {
 		return record{}, errors.New("invalid export journal identity")
 	}
 	var expires *int64
@@ -61,7 +89,7 @@ func encode(retained exportjobs.DurableJob) (record, error) {
 		value := job.ExpiresAt.UnixMicro()
 		expires = &value
 	}
-	return record{TenantID: retained.Access.TenantID, OwnerID: retained.Access.OwnerID, ExportID: job.ID, Version: job.Version, JobJSON: payload, CreatedAt: job.CreatedAt.UnixMicro(), UpdatedAt: job.Progress.UpdatedAt.UnixMicro(), ExpiresAt: expires, MetadataBytes: max(retained.MetadataBytes, uint64(len(payload)+4096)), ArtifactName: retained.ArtifactName, ArtifactSHA256: retained.ArtifactSHA256}, nil
+	return record{OrganizationID: organization, TenantID: retained.Access.TenantID, OwnerID: retained.Access.OwnerID, ExportID: job.ID, SourceJobID: job.SearchJobID, Version: job.Version, JobJSON: payload, CreatedAt: job.CreatedAt.UnixMicro(), UpdatedAt: job.Progress.UpdatedAt.UnixMicro(), ExpiresAt: expires, MetadataBytes: max(retained.MetadataBytes, uint64(len(payload)+4096)), ArtifactName: retained.ArtifactName, ArtifactSHA256: retained.ArtifactSHA256}, nil
 }
 
 func decode(row record) (exportjobs.DurableJob, error) {
@@ -72,10 +100,11 @@ func decode(row record) (exportjobs.DurableJob, error) {
 	if err := json.Unmarshal(row.JobJSON, &job); err != nil {
 		return exportjobs.DurableJob{}, errors.New("invalid export journal encoding")
 	}
-	if job.ID != row.ExportID || job.Version != row.Version || job.CreatedAt.UnixMicro() != row.CreatedAt || row.OwnerID == "" || row.TenantID == "" {
+	if !validSourceJobID(row.SourceJobID) || job.SearchJobID != row.SourceJobID || row.OrganizationID <= 0 || (job.OrganizationID != "" && job.OrganizationID != strconv.FormatInt(row.OrganizationID, 10)) || job.ID != row.ExportID || job.Version != row.Version || job.CreatedAt.UnixMicro() != row.CreatedAt || row.OwnerID == "" || row.TenantID == "" {
 		return exportjobs.DurableJob{}, errors.New("invalid export journal authority")
 	}
-	return exportjobs.DurableJob{Access: searchjobs.AccessScope{TenantID: row.TenantID, OwnerID: row.OwnerID}, Job: job, ArtifactName: row.ArtifactName, ArtifactSHA256: append([]byte(nil), row.ArtifactSHA256...), MetadataBytes: row.MetadataBytes}, nil
+	job.OrganizationID = strconv.FormatInt(row.OrganizationID, 10)
+	return exportjobs.DurableJob{Access: searchjobs.AccessScope{OrganizationID: job.OrganizationID, TenantID: row.TenantID, OwnerID: row.OwnerID}, Job: job, ArtifactName: row.ArtifactName, ArtifactSHA256: append([]byte(nil), row.ArtifactSHA256...), MetadataBytes: row.MetadataBytes}, nil
 }
 
 func (store *Store) Admit(ctx context.Context, access searchjobs.AccessScope, job exportjobs.Job) error {
@@ -92,7 +121,7 @@ func (store *Store) admit(ctx context.Context, access searchjobs.AccessScope, jo
 	if intent != nil && (intent.TenantID != access.TenantID || intent.Route != "/api/search/exports/create") {
 		return requestidempotency.ErrUnavailable
 	}
-	err = store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = pgmeta.Transaction(store.db.WithContext(ctx), func(tx *gorm.DB) error {
 		// Terminal metadata may leave the durable catalog after an additional
 		// seven-day tombstone interval. Its independent receipt remains authoritative
 		// and returns unavailable, never admitting the request again.
@@ -148,10 +177,13 @@ func (store *Store) Update(ctx context.Context, retained exportjobs.DurableJob) 
 	if err != nil {
 		return err
 	}
-	return store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return pgmeta.Transaction(store.db.WithContext(ctx), func(tx *gorm.DB) error {
 		var previous record
-		if err := tx.Where("tenant_id = ? AND owner_id = ? AND export_id = ?", row.TenantID, row.OwnerID, row.ExportID).Take(&previous).Error; err != nil {
+		if err := tx.Where("tenant_id = ? AND owner_id = ? AND export_id = ?", row.TenantID, row.OwnerID, row.ExportID).Where("organization_id = ?", row.OrganizationID).Take(&previous).Error; err != nil {
 			return err
+		}
+		if row.SourceJobID != previous.SourceJobID {
+			return errors.New("export journal source authority is immutable")
 		}
 		if row.Version < previous.Version {
 			return errors.New("export journal update regressed target version")
@@ -178,7 +210,15 @@ func (store *Store) Update(ctx context.Context, retained exportjobs.DurableJob) 
 }
 func (store *Store) Get(ctx context.Context, access searchjobs.AccessScope, id string) (exportjobs.DurableJob, error) {
 	var row record
-	err := store.db.WithContext(ctx).Where("tenant_id = ? AND owner_id = ? AND export_id = ?", access.TenantID, access.OwnerID, id).Take(&row).Error
+	query := store.db.WithContext(ctx).Where("tenant_id = ? AND (owner_id = ? OR ?) AND export_id = ?", access.TenantID, access.OwnerID, access.SiteAdministrator, id)
+	if !access.SiteAdministrator {
+		organization, parseErr := strconv.ParseInt(access.OrganizationID, 10, 64)
+		if parseErr != nil || organization <= 0 {
+			return exportjobs.DurableJob{}, exportjobs.ErrNotFound
+		}
+		query = query.Where("organization_id = ?", organization)
+	}
+	err := query.Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return exportjobs.DurableJob{}, exportjobs.ErrNotFound
 	}
@@ -195,8 +235,7 @@ func (store *Store) Get(ctx context.Context, access searchjobs.AccessScope, id s
 		retained.Job.Artifact = nil
 		// Persist the observed expiration so a later clock rollback or restart
 		// cannot expose an older completed projection again.
-		retained.ArtifactName = ""
-		retained.ArtifactSHA256 = nil
+		// Keep private object cleanup identity until physical reclamation succeeds.
 		if err := store.Update(ctx, retained); err != nil {
 			return exportjobs.DurableJob{}, err
 		}

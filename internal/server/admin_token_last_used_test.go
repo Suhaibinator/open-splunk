@@ -240,7 +240,7 @@ func (administration *mutableTokenAdministration) GetCollectorToken(
 			return cloneAdminToken(record), nil
 		}
 	}
-	return auth.CollectorToken{}, errors.New("token not found")
+	return auth.CollectorToken{OrganizationID: 1, IssuerUserID: 1}, errors.New("token not found")
 }
 
 func (administration *mutableTokenAdministration) ListCollectorTokens(
@@ -261,7 +261,7 @@ func (administration *mutableTokenAdministration) UpdateCollectorToken(
 	uint64,
 	auth.UpdateCollectorTokenRequest,
 ) (auth.CollectorToken, error) {
-	return auth.CollectorToken{}, errors.New("unexpected token update")
+	return auth.CollectorToken{OrganizationID: 1, IssuerUserID: 1}, errors.New("unexpected token update")
 }
 
 func (administration *mutableTokenAdministration) SetCollectorTokenEnabled(
@@ -270,7 +270,7 @@ func (administration *mutableTokenAdministration) SetCollectorTokenEnabled(
 	uint64,
 	bool,
 ) (auth.CollectorToken, error) {
-	return auth.CollectorToken{}, errors.New("unexpected token state update")
+	return auth.CollectorToken{OrganizationID: 1, IssuerUserID: 1}, errors.New("unexpected token state update")
 }
 
 func (administration *mutableTokenAdministration) RevokeCollectorToken(
@@ -278,7 +278,7 @@ func (administration *mutableTokenAdministration) RevokeCollectorToken(
 	string,
 	uint64,
 ) (auth.CollectorToken, error) {
-	return auth.CollectorToken{}, errors.New("unexpected token revocation")
+	return auth.CollectorToken{OrganizationID: 1, IssuerUserID: 1}, errors.New("unexpected token revocation")
 }
 
 func (administration *mutableTokenAdministration) setLastUsedAt(
@@ -322,7 +322,7 @@ func adminLastUsedToken(
 	lastUsedAt time.Time,
 ) auth.CollectorToken {
 	createdAt := testNow.Add(-24 * time.Hour)
-	return auth.CollectorToken{
+	return auth.CollectorToken{OrganizationID: 1, IssuerUserID: 1,
 		ID:                id,
 		Version:           1,
 		Name:              name,
@@ -340,22 +340,22 @@ func newAdminTokenHandler(
 	tokens IngestionTokenAdministration,
 ) *adminIntegrationHandler {
 	t.Helper()
-	browserAuthenticator, err := auth.NewBearerTokenAuthenticator(
+	browserAuthenticator, err := newTestBearerTokenAuthenticator(
 		[]byte(adminIntegrationBearerToken),
 		"default",
-		"single-user",
+		"1030",
 		auth.BrowserRoleAdministrator,
 	)
 	if err != nil {
 		t.Fatalf("auth.NewBearerTokenAuthenticator: %v", err)
 	}
 	raw := newTestHandler(t, Config{
-		SearchJobs:           &fakeSearchJobs{},
-		Indexes:              fakeIndexCatalog{},
-		IngestionTokens:      tokens,
-		WebUI:                testUI(),
-		Now:                  func() time.Time { return testNow },
-		BrowserAuthenticator: browserAuthenticator,
+		SearchJobs:            &fakeSearchJobs{},
+		Indexes:               fakeIndexCatalog{},
+		IngestionTokens:       tokens,
+		WebUI:                 testUI(),
+		Now:                   func() time.Time { return testNow },
+		IdentityAuthenticator: adaptTestBrowserAuthenticator(browserAuthenticator),
 	})
 	return &adminIntegrationHandler{
 		raw:   raw,

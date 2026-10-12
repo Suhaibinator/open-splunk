@@ -669,6 +669,11 @@ test("a persisted launch retry keeps its exact target without rewriting the draf
 
 test("running result tabs show accessible skeletons until demo results are ready", async ({ page }) => {
   await openSeededWorkspace(page);
+  // Keep the running phase fixed while every tab's accessibility contract is
+  // inspected, then advance the demo's own timers to observe completion.
+  const clockStart = new Date();
+  await page.clock.install({ time: clockStart });
+  await page.clock.pauseAt(new Date(clockStart.getTime() + 1_000));
   const editor = page.getByTestId("search-input");
   await editor.fill("index=main | stats count");
   await page.keyboard.press("Control+Enter");
@@ -685,6 +690,7 @@ test("running result tabs show accessible skeletons until demo results are ready
   await page.getByTestId("result-tab-visualization").click();
   await expect(page.getByTestId("result-skeleton-visualization")).toBeVisible();
 
+  await page.clock.runFor(2_000);
   await expect(page.getByTestId("run-search")).toHaveAttribute("aria-label", "Run search");
   await expect(page.getByTestId("result-skeleton-visualization")).toHaveCount(0);
 });

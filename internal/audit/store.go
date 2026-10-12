@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"fortio.org/safecast"
-	"gorm.io/gorm"
-
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"gorm.io/gorm"
 )
 
 // StoreOptions configures audit persistence. An empty CursorKey constructs an
@@ -94,7 +94,7 @@ func validateStartupIntegrity(
 	ctx context.Context,
 	database *gorm.DB,
 ) (returnedErr error) {
-	tx := database.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(database.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return mapStoreError(ctx, "begin audit startup validation", tx.Error)
 	}
@@ -123,7 +123,7 @@ func (store *Store) Append(
 	if err := validateAppendInputs(ctx, store, tenantID, definition); err != nil {
 		return Event{}, err
 	}
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(store.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return Event{}, mapStoreError(ctx, "begin audit append", tx.Error)
 	}

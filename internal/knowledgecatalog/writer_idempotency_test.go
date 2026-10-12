@@ -10,9 +10,10 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
-	"gorm.io/driver/sqlite"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -191,7 +192,7 @@ func TestWriterIdempotencyValidationDistinguishesDigestConflictFromCorruption(t 
 func TestReadIdempotencyRecordUsesBoundedPreflightAndConstantTimeIdentity(t *testing.T) {
 	t.Parallel()
 
-	database, err := gorm.Open(sqlite.Open("file:writer-idempotency-read?mode=memory&cache=shared"), &gorm.Config{})
+	database, err := gorm.Open(postgres.New(postgres.Config{Conn: pgtest.Open(t)}), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open idempotency database: %v", err)
 	}
@@ -207,19 +208,19 @@ func TestReadIdempotencyRecordUsesBoundedPreflightAndConstantTimeIdentity(t *tes
 		route TEXT NOT NULL,
 		client_request_id TEXT NOT NULL,
 		mutation_kind TEXT NOT NULL,
-		request_digest_format_version INTEGER NOT NULL,
-		request_digest BLOB NOT NULL,
-		outcome_format_version INTEGER NOT NULL,
-		outcome_proto BLOB NOT NULL,
-		committed_catalog_revision INTEGER NOT NULL,
-		committed_catalog_state_token BLOB NOT NULL,
+		request_digest_format_version BIGINT NOT NULL,
+		request_digest BYTEA NOT NULL,
+		outcome_format_version BIGINT NOT NULL,
+		outcome_proto BYTEA NOT NULL,
+		committed_catalog_revision BIGINT NOT NULL,
+		committed_catalog_state_token BYTEA NOT NULL,
 		knowledge_object_id TEXT NOT NULL,
-		object_version INTEGER NOT NULL,
-		successful_audit_sequence INTEGER,
-		recovery_audit_sequence INTEGER,
-		created_at_unix_micro INTEGER NOT NULL,
-		retention_anchor_unix_micro INTEGER NOT NULL,
-		retain_until_unix_micro INTEGER NOT NULL,
+		object_version BIGINT NOT NULL,
+		successful_audit_sequence BIGINT,
+		recovery_audit_sequence BIGINT,
+		created_at_unix_micro BIGINT NOT NULL,
+		retention_anchor_unix_micro BIGINT NOT NULL,
+		retain_until_unix_micro BIGINT NOT NULL,
 		PRIMARY KEY (tenant_id, actor_kind, actor_id, route, client_request_id)
 	)`).Error; err != nil {
 		t.Fatalf("create idempotency table: %v", err)
@@ -246,7 +247,7 @@ func TestReadIdempotencyRecordUsesBoundedPreflightAndConstantTimeIdentity(t *tes
 	}
 
 	if err := database.Exec(`UPDATE knowledge_mutation_idempotency
-		SET outcome_proto = zeroblob(?)`, maximumMutationOutcomeBytes+1).Error; err != nil {
+		SET outcome_proto = decode(repeat('00', (?)::int), 'hex')`, maximumMutationOutcomeBytes+1).Error; err != nil {
 		t.Fatalf("widen idempotency outcome: %v", err)
 	}
 	if _, found, err := readIdempotencyRecord(database, &prepared, mutationRouteCreate); !found || !errors.Is(err, ErrCorrupt) {
@@ -257,7 +258,7 @@ func TestReadIdempotencyRecordUsesBoundedPreflightAndConstantTimeIdentity(t *tes
 func TestReplayChecksCurrentAuthorizationAndQuarantineBeforeHistoricalBody(t *testing.T) {
 	t.Parallel()
 
-	database, err := gorm.Open(sqlite.Open("file:writer-idempotency-order?mode=memory&cache=shared"), &gorm.Config{})
+	database, err := gorm.Open(postgres.New(postgres.Config{Conn: pgtest.Open(t)}), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open replay database: %v", err)
 	}
@@ -266,22 +267,32 @@ func TestReplayChecksCurrentAuthorizationAndQuarantineBeforeHistoricalBody(t *te
 		t.Fatalf("read replay SQL database: %v", err)
 	}
 	t.Cleanup(func() { _ = rawDatabase.Close() })
+	if err := database.Exec(`CREATE TABLE app_workspaces (
+		app_id TEXT PRIMARY KEY,
+		organization_id BIGINT NOT NULL CHECK (organization_id > 0)
+	)`).Error; err != nil {
+		t.Fatalf("create replay organization authority: %v", err)
+	}
+	if err := database.Exec(`INSERT INTO app_workspaces(app_id,organization_id) VALUES (?,1)`, idempotencyUnitApp).Error; err != nil {
+		t.Fatalf("insert replay organization authority: %v", err)
+	}
 	if err := database.Exec(`CREATE TABLE knowledge_objects (
+		organization_id BIGINT NOT NULL CHECK (organization_id > 0),
 		tenant_id TEXT NOT NULL,
 		knowledge_object_id TEXT NOT NULL,
-		current_version INTEGER NOT NULL,
+		current_version BIGINT NOT NULL,
 		app_id TEXT NOT NULL,
 		owner_id TEXT NOT NULL,
 		object_type TEXT NOT NULL,
 		name TEXT NOT NULL,
 		sharing_scope TEXT NOT NULL,
 		state TEXT NOT NULL,
-		definition_digest BLOB,
-		created_at_unix_micro INTEGER NOT NULL,
-		updated_at_unix_micro INTEGER NOT NULL,
-		disabled_at_unix_micro INTEGER,
-		quarantined_at_unix_micro INTEGER,
-		deleted_at_unix_micro INTEGER,
+		definition_digest BYTEA,
+		created_at_unix_micro BIGINT NOT NULL,
+		updated_at_unix_micro BIGINT NOT NULL,
+		disabled_at_unix_micro BIGINT,
+		quarantined_at_unix_micro BIGINT,
+		deleted_at_unix_micro BIGINT,
 		quarantine_reason TEXT,
 		PRIMARY KEY (tenant_id, knowledge_object_id)
 	)`).Error; err != nil {
@@ -290,18 +301,18 @@ func TestReplayChecksCurrentAuthorizationAndQuarantineBeforeHistoricalBody(t *te
 	if err := database.Exec(`CREATE TABLE knowledge_object_versions (
 		tenant_id TEXT NOT NULL,
 		knowledge_object_id TEXT NOT NULL,
-		object_version INTEGER NOT NULL,
+		object_version BIGINT NOT NULL,
 		app_id TEXT NOT NULL,
 		owner_id TEXT NOT NULL,
 		object_type TEXT NOT NULL,
 		name TEXT NOT NULL,
 		sharing_scope TEXT NOT NULL,
 		state TEXT NOT NULL,
-		definition_digest BLOB,
-		dependency_count INTEGER NOT NULL,
+		definition_digest BYTEA,
+		dependency_count BIGINT NOT NULL,
 		mutation_kind TEXT NOT NULL,
 		quarantine_reason TEXT,
-		created_at_unix_micro INTEGER NOT NULL,
+		created_at_unix_micro BIGINT NOT NULL,
 		PRIMARY KEY (tenant_id, knowledge_object_id, object_version)
 	)`).Error; err != nil {
 		t.Fatalf("create replay versions: %v", err)
@@ -309,13 +320,13 @@ func TestReplayChecksCurrentAuthorizationAndQuarantineBeforeHistoricalBody(t *te
 
 	now := time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)
 	created := now.Add(-time.Second).UnixMicro()
-	if err := database.Exec(`INSERT INTO knowledge_objects (
+	if err := database.Exec(`INSERT INTO knowledge_objects (organization_id,
 		tenant_id, knowledge_object_id, current_version, app_id, owner_id,
 		object_type, name, sharing_scope, state, definition_digest,
 		created_at_unix_micro, updated_at_unix_micro,
 		disabled_at_unix_micro, quarantined_at_unix_micro,
 		deleted_at_unix_micro, quarantine_reason
-	) VALUES (?, ?, 2, ?, ?, 'field_alias', 'redacted', 'private',
+	) VALUES (1, ?, ?, 2, ?, ?, 'field_alias', 'redacted', 'private',
 		'quarantined', NULL, ?, ?, NULL, ?, NULL, 'root_corruption')`,
 		"tenant-a", "ko_redacted_replay", idempotencyUnitApp, "owner-a",
 		created, now.UnixMicro(), now.UnixMicro(),
@@ -346,13 +357,13 @@ func TestReplayChecksCurrentAuthorizationAndQuarantineBeforeHistoricalBody(t *te
 		t.Fatalf("quarantined replay = %v, want redacted", err)
 	}
 
-	if err := database.Exec(`INSERT INTO knowledge_objects (
+	if err := database.Exec(`INSERT INTO knowledge_objects (organization_id,
 		tenant_id, knowledge_object_id, current_version, app_id, owner_id,
 		object_type, name, sharing_scope, state, definition_digest,
 		created_at_unix_micro, updated_at_unix_micro,
 		disabled_at_unix_micro, quarantined_at_unix_micro,
 		deleted_at_unix_micro, quarantine_reason
-	) VALUES (?, ?, 1, ?, ?, 'field_alias', 'hidden', 'private',
+	) VALUES (1, ?, ?, 1, ?, ?, 'field_alias', 'hidden', 'private',
 		'active', ?, ?, ?, NULL, NULL, NULL, NULL)`,
 		"tenant-a", "ko_hidden_replay", idempotencyUnitApp, "owner-b",
 		bytes.Repeat([]byte{0x55}, persistedKnowledgeDefinitionDigestBytes),
@@ -381,13 +392,13 @@ func TestReplayChecksCurrentAuthorizationAndQuarantineBeforeHistoricalBody(t *te
 		t.Fatalf("hidden replay = %v, want not found", err)
 	}
 
-	if err := database.Exec(`INSERT INTO knowledge_objects (
+	if err := database.Exec(`INSERT INTO knowledge_objects (organization_id,
 		tenant_id, knowledge_object_id, current_version, app_id, owner_id,
 		object_type, name, sharing_scope, state, definition_digest,
 		created_at_unix_micro, updated_at_unix_micro,
 		disabled_at_unix_micro, quarantined_at_unix_micro,
 		deleted_at_unix_micro, quarantine_reason
-	) VALUES (?, ?, 1, ?, ?, 'field_alias', 'wrong-owner-global', 'global',
+	) VALUES (1, ?, ?, 1, ?, ?, 'field_alias', 'wrong-owner-global', 'global',
 		'active', ?, ?, ?, NULL, NULL, NULL, NULL)`,
 		"tenant-a", "ko_wrong_owner_global_replay", idempotencyUnitApp, "owner-b",
 		bytes.Repeat([]byte{0x56}, persistedKnowledgeDefinitionDigestBytes),
@@ -568,7 +579,7 @@ func idempotencyUnitPrepared() preparedMutation {
 		scope: normalizedWriteScope{
 			tenantID:       "tenant-a",
 			ownerID:        "owner-a",
-			writableAppIDs: []string{idempotencyUnitApp},
+			writableAppIDs: []string{idempotencyUnitApp}, organizationID: 1,
 		},
 		actor: audit.Actor{
 			Kind: audit.ActorKindBrowser,

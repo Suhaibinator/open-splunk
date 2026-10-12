@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestListPaginationFiltersTotalsAndCursorAuthentication(t *testing.T) {
@@ -100,8 +100,7 @@ func TestListPaginationFiltersTotalsAndCursorAuthentication(t *testing.T) {
 func TestListCursorSurvivesAppendAndReopenBeforePruning(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	directory := t.TempDir()
-	path := filepath.Join(directory, "control.db")
+	path := pgtest.DSN(t)
 	database, err := control.Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)

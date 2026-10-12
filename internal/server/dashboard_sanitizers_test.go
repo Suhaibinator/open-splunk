@@ -7,7 +7,7 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
-const dashboardSanitizerOwnerID = "owner-dashboard-sanitizer"
+const dashboardSanitizerOwnerID = "1105"
 
 func dashboardSanitizerHandler() *apiHandler {
 	return &apiHandler{ownerID: dashboardSanitizerOwnerID}

@@ -16,7 +16,7 @@ export default function SignInPage() {
         the instance palette; this is the one page that has to ask for it.
       */}
       <InstancePaletteFetch apiBaseUrl={apiBaseUrl} dataMode={dataMode} />
-      <SignInScreen dataMode={dataMode} />
+      <SignInScreen apiBaseUrl={apiBaseUrl} dataMode={dataMode} />
     </>
   );
 }

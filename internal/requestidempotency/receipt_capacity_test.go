@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
@@ -22,13 +24,13 @@ func seedReceiptCapacity(t *testing.T, database *gorm.DB, intent requestidempote
 	t.Helper()
 	err := database.Transaction(func(tx *gorm.DB) error {
 		var trigger string
-		if err := tx.Raw("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'api_mutation_receipt_after_insert'").Scan(&trigger).Error; err != nil {
+		if err := tx.Raw("SELECT pg_get_triggerdef(t.oid) AS sql FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND t.tgname='api_mutation_receipt_after_insert'").Scan(&trigger).Error; err != nil {
 			return err
 		}
 		if trigger == "" {
 			return errors.New("production accounting trigger missing")
 		}
-		if err := tx.Exec("DROP TRIGGER api_mutation_receipt_after_insert").Error; err != nil {
+		if err := tx.Exec("DROP TRIGGER api_mutation_receipt_after_insert ON api_mutation_receipts").Error; err != nil {
 			return err
 		}
 		if err := tx.Exec(`WITH RECURSIVE fixture(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM fixture WHERE n < ?)
@@ -36,10 +38,10 @@ func seedReceiptCapacity(t *testing.T, database *gorm.DB, intent requestidempote
     tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version,
     request_sha256, target_kind, target_id, target_version, audit_sequence,
     created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes)
-   SELECT tenant_id, actor_kind, actor_id, route, printf('%0*d', ?, n), canonical_version,
+   SELECT tenant_id, actor_kind, actor_id, route, lpad(n::text, ?::integer, '0'), canonical_version,
     request_sha256, target_kind, target_id, target_version, audit_sequence,
     created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro,
-    encoded_bytes - length(CAST(client_request_id AS BLOB)) + ?
+    encoded_bytes - length(convert_to((client_request_id)::text,'UTF8')) + ?
    FROM api_mutation_receipts CROSS JOIN fixture
    WHERE tenant_id = ? AND client_request_id = ?`, count, keyWidth, keyWidth, intent.TenantID, intent.ClientRequestID).Error; err != nil {
 			return err
@@ -60,7 +62,7 @@ func seedReceiptCapacity(t *testing.T, database *gorm.DB, intent requestidempote
 func TestReceiptCapacityPreservesReplayAndRollsBackNewMutation(t *testing.T) {
 	for _, boundary := range []string{"count", "encoded-bytes"} {
 		t.Run(boundary, func(t *testing.T) {
-			database, err := control.Open(t.Context(), t.TempDir()+"/control.db")
+			database, err := control.Open(t.Context(), pgtest.DSN(t))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -158,7 +160,7 @@ func TestReceiptCapacityPreservesReplayAndRollsBackNewMutation(t *testing.T) {
 }
 
 func TestActiveReceiptSurvivesLongWorkAndRollbackUntilTerminalFenceEnds(t *testing.T) {
-	database, err := control.Open(t.Context(), t.TempDir()+"/control.db")
+	database, err := control.Open(t.Context(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +206,7 @@ func TestActiveReceiptSurvivesLongWorkAndRollbackUntilTerminalFenceEnds(t *testi
 }
 
 func TestReceiptKeysAreCaseSensitiveAndUnknownFingerprintVersionsStayFenced(t *testing.T) {
-	database, err := control.Open(t.Context(), t.TempDir()+"/control.db")
+	database, err := control.Open(t.Context(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}

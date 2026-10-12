@@ -11,6 +11,7 @@ import (
 	"time"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/auth"
 )
 
 type fakeBootstrapAppCatalog struct {
@@ -349,12 +350,7 @@ func TestBootstrapAppCatalogRejectsCorruptIncompleteAndDuplicateOutput(
 				AppCatalog: &fakeBootstrapAppCatalog{result: test.result},
 				WebUI:      testUI(),
 			})
-			response := postProto(
-				t,
-				handler,
-				"/api/system/bootstrap",
-				&opensplunk.GetSystemBootstrapRequest{},
-			)
+			response := postProtoHeaders(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 			if response.Code != http.StatusInternalServerError ||
 				!strings.Contains(
 					response.Body.String(),
@@ -381,12 +377,7 @@ func TestBootstrapAppCatalogMapsCancellationAndStorageFailure(t *testing.T) {
 			},
 			WebUI: testUI(),
 		})
-		response := postProto(
-			t,
-			handler,
-			"/api/system/bootstrap",
-			&opensplunk.GetSystemBootstrapRequest{},
-		)
+		response := postProtoHeaders(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 		if response.Code != http.StatusServiceUnavailable ||
 			strings.Contains(response.Body.String(), "password") {
 			t.Fatalf(
@@ -404,12 +395,7 @@ func TestBootstrapAppCatalogMapsCancellationAndStorageFailure(t *testing.T) {
 			AppCatalog: &fakeBootstrapAppCatalog{err: context.Canceled},
 			WebUI:      testUI(),
 		})
-		response := postProto(
-			t,
-			handler,
-			"/api/system/bootstrap",
-			&opensplunk.GetSystemBootstrapRequest{},
-		)
+		response := postProtoHeaders(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 		if response.Code != http.StatusRequestTimeout {
 			t.Fatalf(
 				"canceled catalog response = %d, %s",
@@ -439,12 +425,7 @@ func TestBootstrapAppCatalogMapsCancellationAndStorageFailure(t *testing.T) {
 			WebUI:        testUI(),
 			RouteTimeout: time.Millisecond,
 		})
-		response := postProto(
-			t,
-			handler,
-			"/api/system/bootstrap",
-			&opensplunk.GetSystemBootstrapRequest{},
-		)
+		response := postProtoHeaders(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 		if response.Code != http.StatusRequestTimeout {
 			t.Fatalf(
 				"deadline catalog response = %d, %s",
@@ -486,7 +467,7 @@ func TestBootstrapAppCatalogTypedNilAndSourceConflict(t *testing.T) {
 		t.Fatalf("typed-nil catalog disabled static compatibility = %+v", got)
 	}
 
-	_, err := NewHandler(Config{
+	_, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:    &fakeSearchJobs{},
 		Indexes:       fakeIndexCatalog{},
 		SavedSearches: &fakeSavedSearches{},
@@ -506,8 +487,10 @@ func TestBootstrapAppCatalogTypedNilAndSourceConflict(t *testing.T) {
 	}
 }
 
-func TestBootstrapAppCatalogDoesNotRequireAdministratorBearer(t *testing.T) {
-	authenticator := &recordingBrowserAuthenticator{}
+func TestBootstrapAppCatalogAcceptsOrdinaryAuthenticatedUser(t *testing.T) {
+	authenticator := &recordingBrowserAuthenticator{fn: func(context.Context, []byte) (auth.BrowserPrincipal, error) {
+		return browserGatePrincipal(t, "default", "1030", auth.BrowserRoleUser), nil
+	}}
 	catalog := &fakeBootstrapAppCatalog{
 		result: AppCatalogResult{
 			Complete: true,
@@ -521,20 +504,15 @@ func TestBootstrapAppCatalogDoesNotRequireAdministratorBearer(t *testing.T) {
 		},
 	}
 	handler := newTestHandler(t, Config{
-		SearchJobs:           &fakeSearchJobs{},
-		Indexes:              fakeIndexCatalog{},
-		AppAdmin:             &fakeAppAdministration{},
-		AppCatalog:           catalog,
-		BrowserAuthenticator: authenticator,
-		AppCursorKey:         []byte(strings.Repeat("k", 32)),
-		WebUI:                testUI(),
+		SearchJobs:            &fakeSearchJobs{},
+		Indexes:               fakeIndexCatalog{},
+		AppAdmin:              &fakeAppAdministration{},
+		AppCatalog:            catalog,
+		IdentityAuthenticator: adaptTestBrowserAuthenticator(authenticator),
+		AppCursorKey:          []byte(strings.Repeat("k", 32)),
+		WebUI:                 testUI(),
 	})
-	response := postProto(
-		t,
-		handler,
-		"/api/system/bootstrap",
-		&opensplunk.GetSystemBootstrapRequest{},
-	)
+	response := postProtoHeaders(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 	if response.Code != http.StatusOK {
 		t.Fatalf(
 			"ordinary bootstrap status = %d, %s",
@@ -542,7 +520,7 @@ func TestBootstrapAppCatalogDoesNotRequireAdministratorBearer(t *testing.T) {
 			response.Body,
 		)
 	}
-	if calls := authenticator.callCount(); calls != 0 {
+	if calls := authenticator.callCount(); calls != 1 {
 		t.Fatalf("ordinary bootstrap authenticated %d times", calls)
 	}
 }

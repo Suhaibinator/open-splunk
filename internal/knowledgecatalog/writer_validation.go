@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"fortio.org/safecast"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 
@@ -135,7 +136,7 @@ func normalizeValidationScope(scope ValidationScope) (normalizedValidationScope,
 	if err != nil {
 		return normalizedValidationScope{}, err
 	}
-	if read.tenantID != write.tenantID || read.ownerID != write.ownerID {
+	if read.tenantID != write.tenantID || read.ownerID != write.ownerID || read.organizationID != write.organizationID || read.siteAdministrator != write.siteAdministrator {
 		return normalizedValidationScope{}, fmt.Errorf(
 			"%w: knowledge validation read and write scopes disagree",
 			control.ErrInvalidArgument,
@@ -442,7 +443,7 @@ func (writer *Writer) validateInTransaction(
 	request normalizedValidationRequest,
 	authorized **AuthorizedContext,
 ) (result knowledgevalidation.Result, revision uint64, returnedErr error) {
-	tx := writer.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(writer.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return knowledgevalidation.Result{}, 0, writerError(ctx, "begin validation", tx.Error)
 	}

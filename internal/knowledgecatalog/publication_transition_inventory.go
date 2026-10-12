@@ -50,12 +50,13 @@ type publicationTransitionAggregateScalars struct {
 }
 
 type publicationTransitionAppRecord struct {
-	AppID         string `gorm:"column:app_id"`
-	AppIDBytes    int64  `gorm:"column:app_id_bytes"`
-	TenantID      string `gorm:"column:tenant_id"`
-	TenantIDBytes int64  `gorm:"column:tenant_id_bytes"`
-	State         string `gorm:"column:state"`
-	StateBytes    int64  `gorm:"column:state_bytes"`
+	OrganizationID int64  `gorm:"column:organization_id"`
+	AppID          string `gorm:"column:app_id"`
+	AppIDBytes     int64  `gorm:"column:app_id_bytes"`
+	TenantID       string `gorm:"column:tenant_id"`
+	TenantIDBytes  int64  `gorm:"column:tenant_id_bytes"`
+	State          string `gorm:"column:state"`
+	StateBytes     int64  `gorm:"column:state_bytes"`
 }
 
 type publicationTransitionIndexRecord struct {
@@ -81,6 +82,7 @@ func (store *Store) readPublicationActiveTransitionInventory(
 	tenantID string,
 	before publicationTransitionEndpoint,
 	after publicationTransitionEndpoint,
+	organizations ...int64,
 ) (publicationActiveTransitionInventoryRead, error) {
 	if store == nil || !validIdentity(tenantID, maximumTenantIDBytes) {
 		return publicationActiveTransitionInventoryRead{}, fmt.Errorf(
@@ -109,26 +111,43 @@ func (store *Store) readPublicationActiveTransitionInventory(
 	if err != nil {
 		return publicationActiveTransitionInventoryRead{}, err
 	}
+	var organizationID int64
+	if !before.present && !after.present && len(organizations) == 1 && organizations[0] > 0 {
+		organizationID = organizations[0]
+	} else {
+		organizationID, err = publicationTransitionOrganization(tx, tenantID, before, after)
+	}
+	if err != nil {
+		return publicationActiveTransitionInventoryRead{}, err
+	}
+	var scopedActiveCount int64
+	if err := tx.Table("knowledge_objects").Where("tenant_id = ? AND organization_id = ? AND state = ?", tenantID, organizationID, StateActive).Count(&scopedActiveCount).Error; err != nil {
+		return publicationActiveTransitionInventoryRead{}, err
+	}
+	if scopedActiveCount > activeCount {
+		return publicationActiveTransitionInventoryRead{}, fmt.Errorf("%w: organization ACTIVE inventory exceeds physical inventory", ErrCorrupt)
+	}
 	projectionScalars, aggregate, err := readPublicationTransitionProjectionScalars(
 		tx,
 		tenantID,
-		activeCount,
+		scopedActiveCount,
+		organizationID,
 	)
 	if err != nil {
 		return publicationActiveTransitionInventoryRead{}, err
 	}
-	_, activeAppIDs, appRevision, err := readPublicationApps(tx, tenantID)
+	_, activeAppIDs, appRevision, err := readPublicationApps(tx, tenantID, organizationID)
 	if err != nil {
 		return publicationActiveTransitionInventoryRead{}, err
 	}
 	indexNames, indexRevision, indexPhysicalCount, err :=
-		readPublicationTransitionPotentialIndexes(tx)
+		readPublicationTransitionPotentialIndexes(tx, organizationID)
 	if err != nil {
 		return publicationActiveTransitionInventoryRead{}, err
 	}
 
 	projections, err := readProjectionRecordsBounded(
-		publicationTransitionActiveProjectionQuery(tx, tenantID).
+		publicationTransitionActiveProjectionQuery(tx, tenantID, organizationID).
 			Order("projection.knowledge_object_id ASC"),
 		MaximumResolutionCandidates+1,
 		int64(maximumPublicationTransitionProjectionBytes),
@@ -197,7 +216,7 @@ func (store *Store) readPublicationActiveTransitionInventory(
 // publicationTransitionActiveProjectionQuery materializes at most 4,097 exact
 // ACTIVE registry/projection identities before the wider projection joins and
 // payload ordering. The tenant ledger was already checked before this query.
-func publicationTransitionActiveProjectionQuery(tx *gorm.DB, tenantID string) *gorm.DB {
+func publicationTransitionActiveProjectionQuery(tx *gorm.DB, tenantID string, organizations ...int64) *gorm.DB {
 	const exactProjectionJoin = `candidate.tenant_id = active_registry.tenant_id
 		AND candidate.knowledge_object_id = active_registry.knowledge_object_id
 		AND candidate.object_version = active_registry.current_version
@@ -207,18 +226,29 @@ func publicationTransitionActiveProjectionQuery(tx *gorm.DB, tenantID string) *g
 		AND candidate.name = active_registry.name
 		AND candidate.sharing_scope = active_registry.sharing_scope
 		AND candidate.state = active_registry.state`
+	organizationFilter := ""
+	arguments := []any{tenantID}
+	if len(organizations) == 1 {
+		organizationFilter = " AND active_registry.organization_id = ?"
+		arguments = append(arguments, organizations[0])
+	}
 	driver := fmt.Sprintf(`(
 		SELECT candidate.tenant_id, candidate.knowledge_object_id, candidate.object_version
-		FROM knowledge_objects AS active_registry INDEXED BY knowledge_objects_resolution_idx
-		CROSS JOIN knowledge_object_list_projections AS candidate ON %s
-		WHERE active_registry.tenant_id = ? AND active_registry.state = 'active'
+		FROM knowledge_objects AS active_registry
+		JOIN LATERAL (SELECT candidate.* FROM knowledge_object_list_projections AS candidate WHERE %s LIMIT 1) AS candidate ON true
+		WHERE active_registry.tenant_id = ? AND active_registry.state = 'active'%s
 		LIMIT %d
 	) AS publication_active_projection
-	CROSS JOIN knowledge_object_list_projections AS projection`,
+	JOIN LATERAL (SELECT projection.* FROM knowledge_object_list_projections AS projection
+	 WHERE projection.tenant_id = publication_active_projection.tenant_id
+	 AND projection.knowledge_object_id = publication_active_projection.knowledge_object_id
+	 AND projection.object_version = publication_active_projection.object_version
+	 LIMIT 1) AS projection ON true`,
 		exactProjectionJoin,
+		organizationFilter,
 		MaximumResolutionCandidates+1,
 	)
-	return baseProjectionQuery(tx).Table(driver, tenantID).
+	return baseProjectionQuery(tx).Table(driver, arguments...).
 		Where(`publication_active_projection.tenant_id = projection.tenant_id
 			AND publication_active_projection.knowledge_object_id = projection.knowledge_object_id
 			AND publication_active_projection.object_version = projection.object_version`).
@@ -259,7 +289,7 @@ func readPublicationTransitionCatalogFacts(
 		)
 	}
 
-	bounded := tx.Table("knowledge_objects AS object INDEXED BY knowledge_objects_resolution_idx").
+	bounded := tx.Table("knowledge_objects AS object").
 		Select("1").
 		Where("object.tenant_id = ? AND object.state = ?", tenantID, StateActive).
 		Limit(MaximumResolutionCandidates + 1)
@@ -281,6 +311,7 @@ func readPublicationTransitionProjectionScalars(
 	tx *gorm.DB,
 	tenantID string,
 	expectedCount int64,
+	organizations ...int64,
 ) ([]publicationTransitionProjectionScalar, publicationTransitionAggregateScalars, error) {
 	type scalarRecord struct {
 		KnowledgeObjectID       string `gorm:"column:knowledge_object_id"`
@@ -301,13 +332,11 @@ func readPublicationTransitionProjectionScalars(
 		SealCanonicalBytes      int64  `gorm:"column:seal_canonical_selector_bytes"`
 		DependencyCount         int64  `gorm:"column:dependency_count"`
 	}
-	query := tx.Table("knowledge_objects AS object INDEXED BY knowledge_objects_resolution_idx").
-		Joins(`CROSS JOIN knowledge_object_versions AS version
-			ON version.tenant_id = object.tenant_id
+	query := tx.Table("knowledge_objects AS object").
+		Joins(`JOIN knowledge_object_versions AS version ON version.tenant_id = object.tenant_id
 		   AND version.knowledge_object_id = object.knowledge_object_id
 		   AND version.object_version = object.current_version`).
-		Joins(`CROSS JOIN knowledge_object_list_projections AS projection
-			ON projection.tenant_id = object.tenant_id
+		Joins(`JOIN knowledge_object_list_projections AS projection ON projection.tenant_id = object.tenant_id
 		   AND projection.knowledge_object_id = object.knowledge_object_id
 		   AND projection.object_version = object.current_version
 		   AND projection.app_id = object.app_id
@@ -316,12 +345,10 @@ func readPublicationTransitionProjectionScalars(
 		   AND projection.name = object.name
 		   AND projection.sharing_scope = object.sharing_scope
 		   AND projection.state = object.state`).
-		Joins(`CROSS JOIN knowledge_object_list_order_keys AS ordering
-			ON ordering.tenant_id = projection.tenant_id
+		Joins(`JOIN knowledge_object_list_order_keys AS ordering ON ordering.tenant_id = projection.tenant_id
 		   AND ordering.knowledge_object_id = projection.knowledge_object_id
 		   AND ordering.object_version = projection.object_version`).
-		Joins(`CROSS JOIN knowledge_object_list_projection_seals AS seal
-			ON seal.tenant_id = projection.tenant_id
+		Joins(`JOIN knowledge_object_list_projection_seals AS seal ON seal.tenant_id = projection.tenant_id
 		   AND seal.knowledge_object_id = projection.knowledge_object_id
 		   AND seal.object_version = projection.object_version`).
 		Joins(`LEFT JOIN knowledge_definition_blobs AS blob
@@ -329,16 +356,19 @@ func readPublicationTransitionProjectionScalars(
 		   AND blob.definition_digest = version.definition_digest`).
 		Where("object.tenant_id = ? AND object.state = ?", tenantID, StateActive).
 		Order("object.knowledge_object_id ASC")
+	if len(organizations) == 1 {
+		query = query.Where("object.organization_id = ?", organizations[0])
+	}
 	var records []scalarRecord
 	if err := query.Select(fmt.Sprintf(`
-		CASE WHEN length(CAST(object.knowledge_object_id AS BLOB)) BETWEEN 1 AND %[1]d
+		CASE WHEN octet_length(object.knowledge_object_id) BETWEEN 1 AND %[1]d
 			THEN object.knowledge_object_id ELSE '' END AS knowledge_object_id,
-		length(CAST(object.knowledge_object_id AS BLOB)) AS knowledge_object_id_bytes,
+		octet_length(object.knowledge_object_id) AS knowledge_object_id_bytes,
 		coalesce(length(version.definition_digest), -1) AS definition_digest_bytes,
 		coalesce(blob.definition_bytes, -1) AS definition_bytes,
 		coalesce(length(blob.definition_proto), -1) AS definition_proto_bytes,
 		projection.description_present AS description_present,
-		length(CAST(projection.description AS BLOB)) AS description_bytes,
+		octet_length(projection.description) AS description_bytes,
 		projection.index_selector_count AS index_selector_count,
 		projection.host_selector_count AS host_selector_count,
 		projection.source_selector_count AS source_selector_count,
@@ -461,9 +491,9 @@ type publicationAppCatalogRevision struct {
 func readPublicationAppCatalogRevision(tx *gorm.DB, tenantID string) (int64, error) {
 	var revisions []publicationAppCatalogRevision
 	if err := tx.Table("app_catalog_revisions AS authority").Select(fmt.Sprintf(`
-		CASE WHEN length(CAST(authority.tenant_id AS BLOB)) BETWEEN 1 AND %[1]d
+		CASE WHEN octet_length(authority.tenant_id) BETWEEN 1 AND %[1]d
 			THEN authority.tenant_id ELSE '' END AS tenant_id,
-		length(CAST(authority.tenant_id AS BLOB)) AS tenant_id_bytes,
+		octet_length(authority.tenant_id) AS tenant_id_bytes,
 		authority.revision AS revision`, maximumTenantIDBytes)).
 		Where("authority.tenant_id = ?", tenantID).
 		Limit(2).
@@ -483,7 +513,7 @@ func readPublicationAppCatalogRevision(tx *gorm.DB, tenantID string) (int64, err
 
 // readPublicationApps reads the tenant's complete admitted app inventory
 // together with the app-catalog revision that authorizes it.
-func readPublicationApps(tx *gorm.DB, tenantID string) (
+func readPublicationApps(tx *gorm.DB, tenantID string, organizations ...int64) (
 	[]publicationTransitionAppRecord,
 	[]string,
 	int64,
@@ -495,7 +525,11 @@ func readPublicationApps(tx *gorm.DB, tenantID string) (
 	}
 
 	var records []publicationTransitionAppRecord
-	if err := publicationTransitionAppPreflightQuery(tx, tenantID).
+	query := publicationTransitionAppPreflightQuery(tx, tenantID)
+	if len(organizations) == 1 {
+		query = query.Where("app.organization_id = ?", organizations[0])
+	}
+	if err := query.
 		Find(&records).Error; err != nil {
 		return nil, nil, 0, err
 	}
@@ -504,7 +538,7 @@ func readPublicationApps(tx *gorm.DB, tenantID string) (
 	}
 	seen := make(map[string]struct{}, len(records))
 	for _, record := range records {
-		if record.AppIDBytes != int64(len(record.AppID)) || !control.ValidCanonicalAppID(record.AppID) ||
+		if record.OrganizationID <= 0 || record.AppIDBytes != int64(len(record.AppID)) || !control.ValidCanonicalAppID(record.AppID) ||
 			record.TenantID != tenantID || record.TenantIDBytes != int64(len(tenantID)) ||
 			record.StateBytes != int64(len(record.State)) ||
 			(record.State != string(control.AppStateActive) && record.State != string(control.AppStateArchived)) {
@@ -537,17 +571,17 @@ func readPublicationApps(tx *gorm.DB, tenantID string) (
 
 func publicationTransitionAppPreflightQuery(tx *gorm.DB, tenantID string) *gorm.DB {
 	return tx.Table(
-		"app_workspaces AS app INDEXED BY app_workspaces_tenant_display_id_idx",
-	).Select(fmt.Sprintf(`
-		CASE WHEN length(CAST(app.app_id AS BLOB)) BETWEEN 1 AND %[1]d
+		"app_workspaces AS app",
+	).Select(fmt.Sprintf(`app.organization_id,
+		CASE WHEN octet_length(app.app_id) BETWEEN 1 AND %[1]d
 			THEN app.app_id ELSE '' END AS app_id,
-		length(CAST(app.app_id AS BLOB)) AS app_id_bytes,
-		CASE WHEN length(CAST(app.tenant_id AS BLOB)) BETWEEN 1 AND %[2]d
+		octet_length(app.app_id) AS app_id_bytes,
+		CASE WHEN octet_length(app.tenant_id) BETWEEN 1 AND %[2]d
 			THEN app.tenant_id ELSE '' END AS tenant_id,
-		length(CAST(app.tenant_id AS BLOB)) AS tenant_id_bytes,
-		CASE WHEN length(CAST(app.state AS BLOB)) BETWEEN 1 AND %[3]d
+		octet_length(app.tenant_id) AS tenant_id_bytes,
+		CASE WHEN octet_length(app.state) BETWEEN 1 AND %[3]d
 			THEN app.state ELSE '' END AS state,
-		length(CAST(app.state AS BLOB)) AS state_bytes`,
+		octet_length(app.state) AS state_bytes`,
 		maximumAppIDBytes,
 		maximumTenantIDBytes,
 		len(string(control.AppStateArchived)),
@@ -557,6 +591,7 @@ func publicationTransitionAppPreflightQuery(tx *gorm.DB, tenantID string) *gorm.
 
 func readPublicationTransitionPotentialIndexes(
 	tx *gorm.DB,
+	organizations ...int64,
 ) ([]string, int64, uint16, error) {
 	type stateRecord struct {
 		SingletonID   int64 `gorm:"column:singleton_id"`
@@ -638,28 +673,67 @@ func readPublicationTransitionPotentialIndexes(
 		}
 	}
 	physicalCount := safecast.MustConv[uint16](states[0].PhysicalCount)
+	if len(organizations) == 1 {
+		owned, err := publicationOrganizationIndexNames(tx, organizations[0], names)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		names = owned
+	}
 	return slices.Clip(names), states[0].Revision, physicalCount, nil
 }
 
+// The candidate's immutable app owns the semantic namespace even when the
+// actor is a site administrator. Instance-wide ledgers remain separate.
+func publicationTransitionOrganization(tx *gorm.DB, tenantID string, endpoints ...publicationTransitionEndpoint) (int64, error) {
+	var organizationID int64
+	for _, endpoint := range endpoints {
+		if !endpoint.present {
+			continue
+		}
+		var current int64
+		result := tx.Table("app_workspaces").Select("organization_id").Where("tenant_id = ? AND app_id = ?", tenantID, endpoint.winner.object.AppID).Scan(&current)
+		if result.Error != nil {
+			return 0, result.Error
+		}
+		if result.RowsAffected != 1 || current <= 0 || (organizationID != 0 && organizationID != current) {
+			return 0, fmt.Errorf("%w: publication candidate organization authority disagrees", ErrCorrupt)
+		}
+		organizationID = current
+	}
+	if organizationID == 0 {
+		return 0, fmt.Errorf("%w: publication candidate organization authority is missing", control.ErrInvalidArgument)
+	}
+	return organizationID, nil
+}
+
+func publicationOrganizationIndexNames(tx *gorm.DB, organizationID int64, names []string) ([]string, error) {
+	var owned []string
+	if err := tx.Table("indexes AS target").Joins("JOIN os_index_organizations AS ownership ON ownership.index_id = target.index_id").Where("ownership.organization_id = ? AND target.name IN ?", organizationID, names).Order("target.name ASC").Limit(maximumPublicationIndexAtoms+1).Pluck("target.name", &owned).Error; err != nil {
+		return nil, err
+	}
+	return slices.Clip(owned), nil
+}
+
 func publicationTransitionPhysicalIndexQuery(tx *gorm.DB) *gorm.DB {
-	return tx.Table("indexes AS target INDEXED BY indexes_name_id_idx").
+	return tx.Table("indexes AS target").
 		Joins(`LEFT JOIN index_deletion_tombstones AS tombstone
 			ON tombstone.index_id = target.index_id`).
 		Select(fmt.Sprintf(`
-			CASE WHEN length(CAST(target.index_id AS BLOB)) BETWEEN 1 AND %[1]d
+			CASE WHEN octet_length(target.index_id) BETWEEN 1 AND %[1]d
 				THEN target.index_id ELSE '' END AS index_id,
-			length(CAST(target.index_id AS BLOB)) AS index_id_bytes,
-			CASE WHEN length(CAST(target.name AS BLOB)) BETWEEN 1 AND %[2]d
+			octet_length(target.index_id) AS index_id_bytes,
+			CASE WHEN octet_length(target.name) BETWEEN 1 AND %[2]d
 				THEN target.name ELSE '' END AS name,
-			length(CAST(target.name AS BLOB)) AS name_bytes,
+			octet_length(target.name) AS name_bytes,
 			target.version AS version,
-			CASE WHEN length(CAST(target.state AS BLOB)) BETWEEN 1 AND %[3]d
+			CASE WHEN octet_length(target.state) BETWEEN 1 AND %[3]d
 				THEN target.state ELSE '' END AS state,
-			length(CAST(target.state AS BLOB)) AS state_bytes,
+			octet_length(target.state) AS state_bytes,
 			CASE WHEN tombstone.index_id IS NULL THEN 0 ELSE 1 END AS tombstone_present,
-			CASE WHEN length(CAST(tombstone.name AS BLOB)) BETWEEN 1 AND %[2]d
+			CASE WHEN octet_length(tombstone.name) BETWEEN 1 AND %[2]d
 				THEN tombstone.name ELSE '' END AS tombstone_name,
-			coalesce(length(CAST(tombstone.name AS BLOB)), -1) AS tombstone_name_bytes,
+			coalesce(octet_length(tombstone.name), -1) AS tombstone_name_bytes,
 			coalesce(tombstone.deleted_version, -1) AS tombstone_deleted_version`,
 			maximumObjectIDBytes,
 			maximumFilterBytes,

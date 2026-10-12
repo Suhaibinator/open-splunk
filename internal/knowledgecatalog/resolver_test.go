@@ -473,10 +473,10 @@ func TestResolverVisibleLoserCorruptionFailsClosedButHiddenBodyIsNotRead(t *test
 		}}})
 		dropTrigger(t, database, "knowledge_definition_blob_update_is_forbidden")
 		mustExec(t, database, `UPDATE knowledge_definition_blobs
-			SET definition_proto = X'00', definition_bytes = 1
-			WHERE tenant_id = ? AND definition_digest = (
+			SET definition_proto = decode('00','hex'), definition_bytes = 1
+			WHERE tenant_id = $1 AND definition_digest = (
 				SELECT definition_digest FROM knowledge_objects
-				WHERE tenant_id = ? AND knowledge_object_id = 'ko-corrupt-global'
+				WHERE tenant_id = $2 AND knowledge_object_id = 'ko-corrupt-global'
 			)`, testTenant, testTenant)
 
 		if _, err := resolver.Resolve(t.Context(), testResolutionScope("main")); !errors.Is(err, ErrCorrupt) {
@@ -540,10 +540,10 @@ func TestResolverVisibleLoserCorruptionFailsClosedButHiddenBodyIsNotRead(t *test
 		}}})
 		dropTrigger(t, database, "knowledge_definition_blob_update_is_forbidden")
 		mustExec(t, database, `UPDATE knowledge_definition_blobs
-			SET definition_proto = X'00', definition_bytes = 1
-			WHERE tenant_id = ? AND definition_digest = (
+			SET definition_proto = decode('00','hex'), definition_bytes = 1
+			WHERE tenant_id = $1 AND definition_digest = (
 				SELECT definition_digest FROM knowledge_objects
-				WHERE tenant_id = ? AND knowledge_object_id = 'ko-hidden'
+				WHERE tenant_id = $2 AND knowledge_object_id = 'ko-hidden'
 			)`, testTenant, testTenant)
 
 		resolved, err := resolver.Resolve(t.Context(), testResolutionScope("main"))
@@ -572,7 +572,7 @@ func TestResolverRejectsActiveGlobalObjectFromArchivedDefiningApp(t *testing.T) 
 			state = 'archived',
 			updated_at_unix_micro = updated_at_unix_micro + 1,
 			archived_at_unix_micro = updated_at_unix_micro + 1
-		WHERE tenant_id = ? AND app_id = ?`, testTenant, testAppTwo)
+		WHERE tenant_id = $1 AND app_id = $2`, testTenant, testAppTwo)
 
 	var hydratedDefinition bool
 	const callbackName = "test:resolver-archived-global-before-hydration"
@@ -773,7 +773,7 @@ func TestResolveCandidatePrecedenceBoundsWinnersBeforePairwiseWork(t *testing.T)
 		}
 	}
 	scope := normalizedResolutionScope{
-		tenantID: testTenant, principalID: testOwner, appID: testApp, indexes: []string{"main"},
+		tenantID: testTenant, principalID: testOwner, appID: testApp, indexes: []string{"main"}, organizationID: 1,
 	}
 	var charges ResolutionStaticCharges
 	if _, err := resolveCandidatePrecedence(
@@ -885,7 +885,7 @@ func testResolutionScope(indexes ...string) ResolutionScope {
 		TenantID:                   testTenant,
 		PrincipalID:                testOwner,
 		AppID:                      testApp,
-		EffectiveAuthorizedIndexes: indexes,
+		EffectiveAuthorizedIndexes: indexes, OrganizationID: 1,
 	}
 }
 

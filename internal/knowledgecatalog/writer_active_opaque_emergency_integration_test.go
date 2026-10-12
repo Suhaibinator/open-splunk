@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
@@ -245,7 +248,7 @@ func seedWriterActiveOpaquePublication(
 	// ACTIVE publication committed by a newer binary. This older Writer must not
 	// create or enable an opaque body; it may only preserve the publication while
 	// performing an emergency disable or delete.
-	tx, err := database.SQLDB().BeginTx(t.Context(), nil)
+	tx, err := pgmeta.BeginSQL(t.Context(), database.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin newer-binary opaque publication fixture: %v", err)
 	}
@@ -270,11 +273,11 @@ func seedWriterActiveOpaquePublication(
 	if !typeOK || !scopeOK {
 		t.Fatal("opaque publication fixture has unsupported scalar identity")
 	}
-	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (
+	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (organization_id,
 		tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro,
 		disabled_at_unix_micro, quarantined_at_unix_micro, deleted_at_unix_micro, quarantine_reason
-	) VALUES (?, ?, 1, ?, ?, ?, ?, ?, 'active', ?, ?, ?, NULL, NULL, NULL, NULL)`,
+	) VALUES (1, $1, $2, 1, $3, $4, $5, $6, $7, 'active', $8, $9, $10, NULL, NULL, NULL, NULL)`,
 		testTenant,
 		objectID,
 		fixture.metadata.AppID,
@@ -323,7 +326,7 @@ func newWriterOpaqueEmergencyHarness(
 	return writer, actorContext, WriteScope{
 		TenantID:       testTenant,
 		OwnerID:        testOwner,
-		WritableAppIDs: []string{testApp},
+		WritableAppIDs: []string{testApp}, OrganizationID: 1,
 	}
 }
 
@@ -350,7 +353,7 @@ func assertWriterOpaqueImmutableVersions(
 		JOIN knowledge_definition_blobs AS blob
 		  ON blob.tenant_id = version.tenant_id
 		 AND blob.definition_digest = version.definition_digest
-		WHERE version.tenant_id = ? AND version.knowledge_object_id = ?
+		WHERE version.tenant_id = $1 AND version.knowledge_object_id = $2
 		ORDER BY version.object_version`, testTenant, objectID)
 	if err != nil {
 		t.Fatalf("read opaque immutable versions: %v", err)
@@ -405,7 +408,7 @@ func assertWriterOpaqueImmutableVersions(
 		SELECT source_object_version, ordinal, target_kind, target_object_id,
 		       target_object_version, dependency_role
 		FROM knowledge_object_dependencies
-		WHERE tenant_id = ? AND source_object_id = ?
+		WHERE tenant_id = $1 AND source_object_id = $2
 		ORDER BY source_object_version, ordinal`, testTenant, objectID)
 	if err != nil {
 		t.Fatalf("read opaque immutable dependencies: %v", err)
@@ -454,7 +457,7 @@ func assertWriterOpaqueImmutableVersions(
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT count(*), coalesce(sum(CASE WHEN dependency_count = 1 THEN 1 ELSE 0 END), 0)
 		FROM knowledge_object_dependency_seals
-		WHERE tenant_id = ? AND knowledge_object_id = ?`, testTenant, objectID).Scan(
+		WHERE tenant_id = $1 AND knowledge_object_id = $2`, testTenant, objectID).Scan(
 		&sealCount,
 		&exactSeals,
 	); err != nil {
@@ -576,8 +579,8 @@ func readWriterOpaqueProjection(
 		  ON seal.tenant_id = projection.tenant_id
 		 AND seal.knowledge_object_id = projection.knowledge_object_id
 		 AND seal.object_version = projection.object_version
-		WHERE projection.tenant_id = ? AND projection.knowledge_object_id = ?
-		  AND projection.object_version = ?`, testTenant, objectID, version).Scan(
+		WHERE projection.tenant_id = $1 AND projection.knowledge_object_id = $2
+		  AND projection.object_version = $3`, testTenant, objectID, version).Scan(
 		&result.state,
 		&result.signature.appID,
 		&result.signature.ownerID,
@@ -618,7 +621,7 @@ func readWriterOpaqueSelectors(
 	rows, err := database.SQLDB().QueryContext(t.Context(), `
 		SELECT dimension, ordinal, match_kind, value
 		FROM knowledge_object_list_selector_patterns
-		WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = ?
+		WHERE tenant_id = $1 AND knowledge_object_id = $2 AND object_version = $3
 		ORDER BY dimension, ordinal`, testTenant, objectID, version)
 	if err != nil {
 		t.Fatalf("read opaque selectors v%d: %v", version, err)
@@ -667,7 +670,7 @@ func assertWriterOpaqueOnlyCurrentProjection(
 	} {
 		var count, current int64
 		if err := database.SQLDB().QueryRowContext(
-			t.Context(), authority.statement, currentVersion, testTenant, objectID,
+			t.Context(), pgtest.Parameters(authority.statement), currentVersion, testTenant, objectID,
 		).Scan(
 			&count,
 			&current,
@@ -680,9 +683,9 @@ func assertWriterOpaqueOnlyCurrentProjection(
 	}
 	var selectors, currentSelectors int64
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
-		SELECT count(*), coalesce(sum(CASE WHEN object_version = ? THEN 1 ELSE 0 END), 0)
+		SELECT count(*), coalesce(sum(CASE WHEN object_version = $1 THEN 1 ELSE 0 END), 0)
 		FROM knowledge_object_list_selector_patterns
-		WHERE tenant_id = ? AND knowledge_object_id = ?`, currentVersion, testTenant, objectID).Scan(
+		WHERE tenant_id = $2 AND knowledge_object_id = $3`, currentVersion, testTenant, objectID).Scan(
 		&selectors,
 		&currentSelectors,
 	); err != nil {
@@ -726,8 +729,8 @@ func assertWriterOpaqueCompactReceipt(
 		JOIN audit_events AS event
 		  ON event.tenant_id = receipt.tenant_id
 		 AND event.sequence = receipt.successful_audit_sequence
-		WHERE receipt.tenant_id = ? AND receipt.actor_kind = ? AND receipt.actor_id = ?
-		  AND receipt.route = ? AND receipt.client_request_id = ?`,
+		WHERE receipt.tenant_id = $1 AND receipt.actor_kind = $2 AND receipt.actor_id = $3
+		  AND receipt.route = $4 AND receipt.client_request_id = $5`,
 		testTenant,
 		audit.ActorKindBrowser,
 		"writer-opaque-administrator",
@@ -818,14 +821,14 @@ func readWriterOpaqueReplaySnapshot(
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT tenant.catalog_revision, head.state_token, tenant.version_count,
 		       (SELECT count(*) FROM knowledge_object_versions
-		        WHERE tenant_id = tenant.tenant_id AND knowledge_object_id = ?),
+		        WHERE tenant_id = tenant.tenant_id AND knowledge_object_id = $1),
 		       (SELECT count(*) FROM audit_events WHERE tenant_id = tenant.tenant_id),
 		       tenant.idempotency_count
 		FROM knowledge_catalog_tenants AS tenant
 		JOIN knowledge_catalog_revision_heads AS head
 		  ON head.tenant_id = tenant.tenant_id
 		 AND head.catalog_revision = tenant.catalog_revision
-		WHERE tenant.tenant_id = ?`, objectID, testTenant).Scan(
+		WHERE tenant.tenant_id = $2`, objectID, testTenant).Scan(
 		&result.catalogRevision,
 		&token,
 		&result.versionCount,

@@ -31,7 +31,7 @@ func TestRuntimeCollectorLifecyclePersistsHeartbeatAndFencesDisabledBatch(
 	t *testing.T,
 ) {
 	ctx := context.Background()
-	database, err := control.Open(
+	database, err := openTestControl(t,
 		ctx,
 		filepath.Join(t.TempDir(), "collector-fleet-runtime.db"),
 	)
@@ -69,7 +69,7 @@ func TestRuntimeCollectorLifecyclePersistsHeartbeatAndFencesDisabledBatch(
 	}
 	issued, err := tokens.CreateCollectorToken(
 		ctx,
-		auth.CreateCollectorTokenRequest{
+		auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 			Name:              "runtime fleet collector",
 			AllowedIndexNames: []string{"main"},
 			BoundCollectorID:  collectorID,
@@ -393,7 +393,7 @@ func TestRuntimeCollectorLifecycleDisconnectsActiveLeaseOnGoodbye(
 	t *testing.T,
 ) {
 	ctx := context.Background()
-	database, err := control.Open(
+	database, err := openTestControl(t,
 		ctx,
 		filepath.Join(t.TempDir(), "collector-fleet-cleanup.db"),
 	)
@@ -430,7 +430,7 @@ func TestRuntimeCollectorLifecycleDisconnectsActiveLeaseOnGoodbye(
 	}
 	issued, err := tokens.CreateCollectorToken(
 		ctx,
-		auth.CreateCollectorTokenRequest{
+		auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 			Name:              "runtime cleanup collector",
 			AllowedIndexNames: []string{"main"},
 			BoundCollectorID:  collectorID,
@@ -654,7 +654,7 @@ func TestRuntimeCollectorForcedStopDrainsHeartbeatBeforeDisconnect(
 	t *testing.T,
 ) {
 	ctx := context.Background()
-	database, err := control.Open(
+	database, err := openTestControl(t,
 		ctx,
 		filepath.Join(t.TempDir(), "collector-fleet-forced-stop.db"),
 	)
@@ -691,7 +691,7 @@ func TestRuntimeCollectorForcedStopDrainsHeartbeatBeforeDisconnect(
 	}
 	issued, err := tokens.CreateCollectorToken(
 		ctx,
-		auth.CreateCollectorTokenRequest{
+		auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 			Name:              "forced stop collector",
 			AllowedIndexNames: []string{"main"},
 			BoundCollectorID:  collectorID,

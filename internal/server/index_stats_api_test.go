@@ -155,7 +155,7 @@ func TestIndexStatisticsConfigurationIsPairedAndRequiresAdministration(
 			SearchJobs:                 &fakeSearchJobs{},
 			Indexes:                    fakeIndexCatalog{},
 			SavedSearches:              &fakeSavedSearches{},
-			BrowserAuthenticator:       authenticator,
+			IdentityAuthenticator:      adaptTestBrowserAuthenticator(authenticator),
 			WebUI:                      testUI(),
 			TenantID:                   browserGateTenantID,
 			OwnerID:                    browserGateOwnerID,
@@ -219,9 +219,9 @@ func TestIndexStatisticsConfigurationIsPairedAndRequiresAdministration(
 				config.IndexAdmin = administration
 				config.IndexStatistics = statistics
 				config.IndexStatisticsSnapshotter = snapshotter
-				config.BrowserAuthenticator = nil
+				config.IdentityAuthenticator = adaptTestBrowserAuthenticator(nil)
 			},
-			needle: "administrative services require browser authentication",
+			needle: "user identity and resource authorization are required",
 		},
 	}
 	for _, test := range tests {
@@ -229,7 +229,11 @@ func TestIndexStatisticsConfigurationIsPairedAndRequiresAdministration(
 			t.Parallel()
 			config := base()
 			test.edit(&config)
-			if _, err := NewHandler(config); err == nil ||
+			construct := newAuthenticatedTestHandler
+			if test.name == "statistics without browser authentication" {
+				construct = NewHandler
+			}
+			if _, err := construct(config); err == nil ||
 				!strings.Contains(err.Error(), test.needle) {
 				t.Fatalf("NewHandler error = %v, want containing %q", err, test.needle)
 			}
@@ -253,13 +257,13 @@ func TestIndexStatisticsRouteRegistrationTracksCompleteDependencies(
 		Indexes:                    administration,
 		IndexAdmin:                 administration,
 		SavedSearches:              &fakeSavedSearches{},
-		BrowserAuthenticator:       authenticator,
+		IdentityAuthenticator:      adaptTestBrowserAuthenticator(authenticator),
 		WebUI:                      testUI(),
 		TenantID:                   browserGateTenantID,
 		OwnerID:                    browserGateOwnerID,
 		AdministrativeAllowedHosts: []string{"example.com"},
 	}
-	withoutStatistics, err := NewHandler(config)
+	withoutStatistics, err := newAuthenticatedTestHandler(config)
 	if err != nil {
 		t.Fatalf("NewHandler without index statistics: %v", err)
 	}
@@ -280,7 +284,7 @@ func TestIndexStatisticsRouteRegistrationTracksCompleteDependencies(
 
 	config.IndexStatistics = &recordingIndexStatistics{}
 	config.IndexStatisticsSnapshotter = &recordingIndexStatisticsSnapshotter{}
-	withStatistics, err := NewHandler(config)
+	withStatistics, err := newAuthenticatedTestHandler(config)
 	if err != nil {
 		t.Fatalf("NewHandler with index statistics: %v", err)
 	}
@@ -340,7 +344,8 @@ func TestIndexStatisticsRouteAuthenticatesBeforeReadingOrDoingWork(
 			role:          auth.BrowserRoleUser,
 			tenantID:      browserGateTenantID,
 			authorization: "Bearer " + adminIntegrationBearerToken,
-			wantStatus:    http.StatusForbidden,
+			// Viewers may search; content type is rejected before index decoding.
+			wantStatus: http.StatusUnsupportedMediaType,
 		},
 		{
 			name:          "other tenant administrator",
@@ -1058,18 +1063,18 @@ func newIndexStatisticsTestHandler(
 	administration IndexAdministration,
 	statistics IndexStatistics,
 	snapshotter IndexStatisticsSnapshotter,
-	authenticator auth.BrowserAuthenticator,
+	authenticator fixtureBrowserAuthenticator,
 	now func() time.Time,
 ) *Handler {
 	t.Helper()
-	handler, err := NewHandler(Config{
+	handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:                 &fakeSearchJobs{},
 		Indexes:                    indexes,
 		IndexAdmin:                 administration,
 		IndexStatistics:            statistics,
 		IndexStatisticsSnapshotter: snapshotter,
 		SavedSearches:              &fakeSavedSearches{},
-		BrowserAuthenticator:       authenticator,
+		IdentityAuthenticator:      adaptTestBrowserAuthenticator(authenticator),
 		WebUI:                      testUI(),
 		TenantID:                   browserGateTenantID,
 		OwnerID:                    browserGateOwnerID,
@@ -1086,9 +1091,9 @@ func indexStatisticsAuthenticator(
 	t *testing.T,
 	tenantID string,
 	role auth.BrowserRole,
-) auth.BrowserAuthenticator {
+) fixtureBrowserAuthenticator {
 	t.Helper()
-	authenticator, err := auth.NewBearerTokenAuthenticator(
+	authenticator, err := newTestBearerTokenAuthenticator(
 		[]byte(adminIntegrationBearerToken),
 		tenantID,
 		browserGateOwnerID,
@@ -1115,7 +1120,7 @@ func postAuthenticatedIndexStatistics(
 
 func openIndexStatisticsControlDB(t *testing.T) *control.DB {
 	t.Helper()
-	database, err := control.Open(
+	database, err := openTestControl(t,
 		context.Background(),
 		t.TempDir()+"/control.sqlite",
 	)

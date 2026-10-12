@@ -1,0 +1,1108 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+import "google/protobuf/timestamp.proto";
+import "attachment.proto";
+import "user.proto";
+import "inference.proto";
+import "inference_routing.proto";
+
+// --- Enums ---
+
+enum ChannelType {
+  CHANNEL_TYPE_UNSPECIFIED = 0;
+  CHANNEL_TYPE_DIRECT = 1;      // 1:1 channel
+  CHANNEL_TYPE_GROUP = 2;       // group channel
+}
+
+enum ChannelRole {
+  CHANNEL_ROLE_UNSPECIFIED = 0;
+  CHANNEL_ROLE_MEMBER = 1;      // Regular member
+  CHANNEL_ROLE_ADMIN = 2;       // Admin (can manage participants)
+  CHANNEL_ROLE_OWNER = 3;       // Owner (highest channel participant role)
+}
+
+enum MessageContentType {
+  MESSAGE_CONTENT_TYPE_UNSPECIFIED = 0;
+  MESSAGE_CONTENT_TYPE_TEXT = 1;        // Plain text
+  MESSAGE_CONTENT_TYPE_MARKDOWN = 2;    // Markdown formatted text
+}
+
+enum MessageStreamState {
+  MESSAGE_STREAM_STATE_UNSPECIFIED = 0;
+  MESSAGE_STREAM_STATE_STREAMING = 1;
+  MESSAGE_STREAM_STATE_COMPLETE = 2;
+  MESSAGE_STREAM_STATE_FAILED = 3;
+}
+
+// MessageKind discriminates ordinary chat messages from the richer agentic
+// transcript rows (tool calls/results, system events, compaction, agent notes).
+// Stored message kinds must be specified.
+enum MessageKind {
+  MESSAGE_KIND_UNSPECIFIED = 0;        // invalid for stored messages
+  MESSAGE_KIND_STANDARD = 1;
+  MESSAGE_KIND_SYSTEM_EVENT = 2;       // join/leave/rename/etc. — human-visible lifecycle
+  MESSAGE_KIND_TOOL_CALL = 3;          // assistant-initiated tool invocation
+  MESSAGE_KIND_TOOL_RESULT = 4;        // result of a tool invocation
+  MESSAGE_KIND_COMPACTION_SUMMARY = 5; // context checkpoint
+  MESSAGE_KIND_AGENT_NOTE = 6;         // LLM-only scratchpad / injected instruction
+  MESSAGE_KIND_PROVIDER_STATE = 7;     // opaque provider continuation state; internal-only
+}
+
+// MessageRole is the explicit LLM role stored by the writer.
+enum MessageRole {
+  MESSAGE_ROLE_UNSPECIFIED = 0;
+  MESSAGE_ROLE_USER = 1;
+  MESSAGE_ROLE_ASSISTANT = 2;
+  MESSAGE_ROLE_SYSTEM = 3;
+  MESSAGE_ROLE_TOOL = 4;
+}
+
+// ToolCallApprovalStatus tracks the human-in-the-loop approval lifecycle of a
+// consequential TOOL_CALL. UNSPECIFIED is treated as NOT_REQUIRED.
+enum ToolCallApprovalStatus {
+  TOOL_CALL_APPROVAL_STATUS_UNSPECIFIED = 0; // treated as NOT_REQUIRED
+  TOOL_CALL_APPROVAL_STATUS_NOT_REQUIRED = 1;
+  TOOL_CALL_APPROVAL_STATUS_PENDING = 2;
+  TOOL_CALL_APPROVAL_STATUS_APPROVED = 3;
+  TOOL_CALL_APPROVAL_STATUS_DENIED = 4;
+  TOOL_CALL_APPROVAL_STATUS_EXPIRED = 5;     // timed out waiting; treated as denied
+}
+
+// ToolCallExecutionState is the durable execution state machine for an
+// approval-gated / claimable TOOL_CALL row (see Decision 6). The approved
+// TOOL_CALL row itself is the durable work queue, so these states drive
+// worker claim/lease/retry behavior, not just observability.
+enum ToolCallExecutionState {
+  TOOL_CALL_EXECUTION_STATE_UNSPECIFIED = 0;
+  TOOL_CALL_EXECUTION_STATE_WAITING_FOR_APPROVAL = 1; // approval_status=PENDING
+  TOOL_CALL_EXECUTION_STATE_PENDING_EXECUTION = 2;    // approved/not-required and ready to claim
+  TOOL_CALL_EXECUTION_STATE_EXECUTING = 3;            // claimed by a worker/dispatcher lease
+  TOOL_CALL_EXECUTION_STATE_EXECUTED = 4;             // paired TOOL_RESULT persisted
+  TOOL_CALL_EXECUTION_STATE_EXECUTION_FAILED = 5;     // terminal/manual intervention after retry policy
+}
+
+// ChatAgentRunStatus is the run-level lifecycle state for one logical agent
+// turn/resume chain (see Decision 1 / Decision 6). WAITING_FOR_APPROVAL is
+// never terminal; COMPLETED/FAILED/CANCELLED/MODEL_STEP_LIMIT_EXCEEDED set completed_at.
+enum ChatAgentRunStatus {
+  CHAT_AGENT_RUN_STATUS_UNSPECIFIED = 0;
+  CHAT_AGENT_RUN_STATUS_RUNNING = 1;
+  CHAT_AGENT_RUN_STATUS_WAITING_FOR_APPROVAL = 2;
+  CHAT_AGENT_RUN_STATUS_COMPLETED = 3;
+  CHAT_AGENT_RUN_STATUS_FAILED = 4;
+  CHAT_AGENT_RUN_STATUS_CANCELLED = 5;
+  CHAT_AGENT_RUN_STATUS_RETRYABLE = 6;
+  CHAT_AGENT_RUN_STATUS_MODEL_STEP_LIMIT_EXCEEDED = 7;
+}
+
+// ChatAgentRunStatusReason qualifies a run status with the structured cause go-common could
+// establish. It accompanies terminal statuses and RETRYABLE, and is also used as the
+// drive-retry reason while a RUNNING run waits out a backoff. UNSPECIFIED means no cause was
+// established: COMPLETED + UNSPECIFIED is an ordinary completion, and any other status with
+// UNSPECIFIED must be presented as "execution stopped" without inventing a cause.
+enum ChatAgentRunStatusReason {
+  CHAT_AGENT_RUN_STATUS_REASON_UNSPECIFIED = 0;
+  CHAT_AGENT_RUN_STATUS_REASON_APPROVAL_NOT_GRANTED = 1;      // a required approval was denied or expired
+  CHAT_AGENT_RUN_STATUS_REASON_CANCELLED_BY_APPLICATION = 2;  // application control-plane cancel
+  CHAT_AGENT_RUN_STATUS_REASON_PARENT_WORKFLOW_TERMINATED = 3; // owning workflow ended/retired the run
+  CHAT_AGENT_RUN_STATUS_REASON_BUDGET_ACTIVE_DURATION = 4;
+  CHAT_AGENT_RUN_STATUS_REASON_BUDGET_GENERATIONS = 5;
+  CHAT_AGENT_RUN_STATUS_REASON_BUDGET_TOOL_CALLS = 6;
+  CHAT_AGENT_RUN_STATUS_REASON_MODEL_STEP_LIMIT = 7;
+  CHAT_AGENT_RUN_STATUS_REASON_TOOL_EXECUTION_FAILED = 8;
+  CHAT_AGENT_RUN_STATUS_REASON_CONTEXT_LIMIT = 9;
+  CHAT_AGENT_RUN_STATUS_REASON_COMPACTION_FAILED = 10;
+  CHAT_AGENT_RUN_STATUS_REASON_PROVIDER_REJECTED = 11;        // non-retryable provider/model error
+  CHAT_AGENT_RUN_STATUS_REASON_PROVIDER_TIMEOUT = 12;
+  CHAT_AGENT_RUN_STATUS_REASON_PROVIDER_UNAVAILABLE = 13;     // retryable provider failure (5xx, rate limit, network)
+  CHAT_AGENT_RUN_STATUS_REASON_INCOMPLETE_STEP = 14;          // crash left an unsealed model step
+  CHAT_AGENT_RUN_STATUS_REASON_INTERNAL = 15;
+  CHAT_AGENT_RUN_STATUS_REASON_STOPPED_BY_USER = 16;          // a person stopped the run from the chat
+  CHAT_AGENT_RUN_STATUS_REASON_INFERENCE_BLOCKED = 17;        // RETRYABLE: routing policy blocked the session's pinned model; the session's inference_blocked_reason says why
+}
+
+// ChatAgentInputMode decides what happens to human input sent to an agent session while one of its
+// runs is active (RUNNING, WAITING_FOR_APPROVAL or RETRYABLE) or the session is suspended. Input
+// sent to an idle session starts a run in every mode. UNSPECIFIED is never stored: an agent
+// default of UNSPECIFIED resolves to IMMEDIATE.
+enum ChatAgentInputMode {
+  CHAT_AGENT_INPUT_MODE_UNSPECIFIED = 0;
+  CHAT_AGENT_INPUT_MODE_IMMEDIATE = 1; // admitted into the active run at its next step
+  CHAT_AGENT_INPUT_MODE_QUEUE = 2;     // waits for the run to end, then all waiting input starts one run
+  CHAT_AGENT_INPUT_MODE_BLOCKED = 3;   // rejected while a run is active or the session is suspended
+}
+
+// DelegationWakeState is the durable outcome of a delegated child run's parent wake, stored on the
+// run. Values are database data; do not renumber them.
+enum DelegationWakeState {
+  DELEGATION_WAKE_STATE_UNSPECIFIED = 0;             // no wake settled: not a delegated child run, still active, or skipped by a guard
+  DELEGATION_WAKE_STATE_RUN_CREATED = 1;             // the ending minted a parent run
+  DELEGATION_WAKE_STATE_COALESCED = 2;               // the parent had an active run, so the wake was recorded on its pending fields
+  DELEGATION_WAKE_STATE_SUPERSEDED_BY_FOLLOW_UP = 3; // the child still owed answers to steering, so a child follow-up run reports instead
+  DELEGATION_WAKE_STATE_DEFERRED_TO_GROUP = 4;       // WITH_SIBLINGS and another live group member was nonterminal; the group's last ending wakes
+}
+
+// DelegationCreation is who may create the delegated children of a delegating agent type. It is
+// registration configuration; UNSPECIFIED is rejected.
+enum DelegationCreation {
+  DELEGATION_CREATION_UNSPECIFIED = 0;
+  DELEGATION_CREATION_APP_ONLY = 1;      // only the application, through the Go API
+  DELEGATION_CREATION_AGENT_ONLY = 2;    // only the parent agent, through spawn_subagent
+  DELEGATION_CREATION_APP_AND_AGENT = 3; // both
+}
+
+// DelegationCreationOrigin records which path created an agent session: a delegated child's
+// creator, or a fork clone. UNSPECIFIED marks an ordinary session, or one created before the origin
+// was recorded.
+enum DelegationCreationOrigin {
+  DELEGATION_CREATION_ORIGIN_UNSPECIFIED = 0;
+  DELEGATION_CREATION_ORIGIN_APP = 1;   // the application created it
+  DELEGATION_CREATION_ORIGIN_AGENT = 2; // the parent agent spawned it
+  DELEGATION_CREATION_ORIGIN_FORK = 3;  // a channel fork cloned it from the source channel's session
+}
+
+// ChatForkWhoMayFork is who may fork a channel. Values are database data; do not renumber them.
+enum ChatForkWhoMayFork {
+  CHAT_FORK_WHO_MAY_FORK_UNSPECIFIED = 0;  // forking is disabled
+  CHAT_FORK_WHO_MAY_FORK_ANY_READER = 1;   // anyone who may read the channel: participants, org readers, site admins; not readers admitted only by public read
+  CHAT_FORK_WHO_MAY_FORK_PARTICIPANTS = 2; // participants who may write to the channel
+  CHAT_FORK_WHO_MAY_FORK_ADMINS = 3;       // channel admins and owners
+}
+
+// ChatForkMemberPool is whom a forker may add to the fork. The forker is always its OWNER. Values
+// are database data; do not renumber them.
+enum ChatForkMemberPool {
+  CHAT_FORK_MEMBER_POOL_UNSPECIFIED = 0;         // the forker only
+  CHAT_FORK_MEMBER_POOL_SOURCE_PARTICIPANTS = 1; // current participants of the source channel
+  CHAT_FORK_MEMBER_POOL_ANYONE = 2;              // anyone CreateChannel would accept
+}
+
+// ChatForkCarryOver is whether a fork keeps a group of source channel settings. Values are
+// database data; do not renumber them.
+enum ChatForkCarryOver {
+  CHAT_FORK_CARRY_OVER_UNSPECIFIED = 0;    // always dropped
+  CHAT_FORK_CARRY_OVER_ALWAYS_KEEP = 1;    // always kept
+  CHAT_FORK_CARRY_OVER_FORKER_CHOOSES = 2; // kept when the fork request asks for it
+}
+
+// WakePolicy decides when a delegated child's ending or report wakes its parent. Agent spawns
+// leave it UNSPECIFIED, which means IMMEDIATE.
+enum WakePolicy {
+  WAKE_POLICY_UNSPECIFIED = 0;
+  WAKE_POLICY_IMMEDIATE = 1;     // every ending or report wakes the parent
+  WAKE_POLICY_WITH_SIBLINGS = 2; // the parent wakes once no other live member of the wake group is nonterminal
+  WAKE_POLICY_NEVER = 3;         // the parent is never woken; the application resumes it
+}
+
+// ChatAgentMessageReceiptKind is what a delegation message receipt records.
+enum ChatAgentMessageReceiptKind {
+  CHAT_AGENT_MESSAGE_RECEIPT_KIND_UNSPECIFIED = 0;
+  CHAT_AGENT_MESSAGE_RECEIPT_KIND_CHILD_MESSAGE = 1; // a parent's message to a delegated child
+  CHAT_AGENT_MESSAGE_RECEIPT_KIND_PARENT_RESUME = 2; // an application's resume of the parent itself
+}
+
+// GraphOutcome is how one drive of an owner-driven delegation graph ended.
+enum GraphOutcome {
+  GRAPH_OUTCOME_UNSPECIFIED = 0;
+  GRAPH_OUTCOME_COMPLETED = 1;     // the root's result is ready
+  GRAPH_OUTCOME_STALLED = 2;       // nothing is drivable now or later and no result exists
+  GRAPH_OUTCOME_OUT_OF_BUDGET = 3; // a graph budget pool limit is used up
+  GRAPH_OUTCOME_PARKED = 4;        // nothing is drivable until an external event arrives
+  GRAPH_OUTCOME_CLAIM_LOST = 5;    // the caller lost its claim; drives were suspended
+}
+
+// GraphParkReason is an external event a parked delegation graph waits for.
+enum GraphParkReason {
+  GRAPH_PARK_REASON_UNSPECIFIED = 0;
+  GRAPH_PARK_REASON_APPROVAL = 1;          // only approval-waiting runs remain
+  GRAPH_PARK_REASON_INFERENCE_BLOCKED = 2; // a session is inference-blocked with deferred wakes or undrivable runs
+}
+
+// GraphEventKind is the kind of event that advanced a delegation graph root's resume revision.
+enum GraphEventKind {
+  GRAPH_EVENT_KIND_UNSPECIFIED = 0;
+  GRAPH_EVENT_KIND_APPROVAL = 1;           // an approval was resolved or expired
+  GRAPH_EVENT_KIND_INFERENCE_RETARGET = 2; // a retarget cleared an inference block of a session with work
+  GRAPH_EVENT_KIND_PARENT_RESUME = 3;      // the application resumed the parent (ResumeParent)
+  GRAPH_EVENT_KIND_WAKE_GROUP_RELEASED = 4; // archiving a wake group's last working member woke the root
+}
+
+// GraphBudgetReason is the graph budget pool limit that was used up.
+enum GraphBudgetReason {
+  GRAPH_BUDGET_REASON_UNSPECIFIED = 0;
+  GRAPH_BUDGET_REASON_GENERATIONS = 1;
+  GRAPH_BUDGET_REASON_TOOL_CALLS = 2;
+  GRAPH_BUDGET_REASON_ACTIVE_DURATION = 3;
+}
+
+// ChatAgentSessionActivity is what an agent session is doing as far as its composer is concerned.
+// It is derived at read time from the session and its newest run and never persisted.
+enum ChatAgentSessionActivity {
+  CHAT_AGENT_SESSION_ACTIVITY_UNSPECIFIED = 0;
+  CHAT_AGENT_SESSION_ACTIVITY_IDLE = 1;                 // no active run; a send starts one
+  CHAT_AGENT_SESSION_ACTIVITY_RUNNING = 2;
+  CHAT_AGENT_SESSION_ACTIVITY_WAITING_FOR_APPROVAL = 3;
+  CHAT_AGENT_SESSION_ACTIVITY_RETRYING = 4;             // the active run is RETRYABLE
+  CHAT_AGENT_SESSION_ACTIVITY_SUSPENDED = 5;            // stopped by a person; nothing starts until Resume
+}
+
+// ChatAgentInputReceiptState tells the sender what happened to a send that reached an agent session.
+// It is distinct from the message's transport and read statuses.
+enum ChatAgentInputReceiptState {
+  CHAT_AGENT_INPUT_RECEIPT_STATE_UNSPECIFIED = 0;
+  CHAT_AGENT_INPUT_RECEIPT_STATE_RUN_STARTED = 1; // the message started a run on its own
+  CHAT_AGENT_INPUT_RECEIPT_STATE_PENDING = 2;     // queued for the active run (IMMEDIATE) or its end (QUEUE)
+  CHAT_AGENT_INPUT_RECEIPT_STATE_HELD = 3;        // queued while the session is suspended
+  CHAT_AGENT_INPUT_RECEIPT_STATE_ADMITTED = 4;    // the send's queued input was delivered into a run as the message
+}
+
+// AgentRunActivity is what a non-terminal run is observably doing. It is never persisted:
+// the status read derives the durable subset (EXECUTING_TOOL, WAITING_TO_RETRY,
+// WAITING_FOR_APPROVAL) and the runtime reports the rest through ephemeral
+// CHAT_EVENT_TYPE_AGENT_RUN_STATE events. UNSPECIFIED means "no finer detail is known";
+// clients show the lifecycle status alone rather than guessing.
+enum AgentRunActivity {
+  AGENT_RUN_ACTIVITY_UNSPECIFIED = 0;
+  AGENT_RUN_ACTIVITY_WAITING_FOR_MODEL = 1;
+  AGENT_RUN_ACTIVITY_EXECUTING_TOOL = 2;
+  AGENT_RUN_ACTIVITY_WAITING_TO_RETRY = 3;
+  AGENT_RUN_ACTIVITY_WAITING_FOR_APPROVAL = 4;
+}
+
+// InferenceCallPurpose records why a single model/provider invocation happened
+// (see Decision 2.5). Used for compaction/agent-only accounting views.
+enum InferenceCallPurpose {
+  INFERENCE_CALL_PURPOSE_UNSPECIFIED = 0;
+  INFERENCE_CALL_PURPOSE_ASSISTANT_TURN = 1; // model call that directly produced an assistant-visible turn
+  INFERENCE_CALL_PURPOSE_TOOL_LOOP = 2;      // intermediate model call that produced tool requests or resumed after tool results
+  INFERENCE_CALL_PURPOSE_COMPACTION = 3;     // model call that produced a COMPACTION_SUMMARY
+  INFERENCE_CALL_PURPOSE_RETRY = 4;          // retry after a transient/provider failure
+  INFERENCE_CALL_PURPOSE_FALLBACK = 5;       // fallback model/provider call after primary failure
+  INFERENCE_CALL_PURPOSE_MANUAL = 6;         // app-supplied accounting record that does not fit the above
+}
+
+// MessageModelPayloadType discriminates which structured payload is serialized
+// into Message.model_payload (mirrors MessageEmbed.embed_type for embed_data).
+enum MessageModelPayloadType {
+  MESSAGE_MODEL_PAYLOAD_TYPE_UNSPECIFIED = 0;
+  MESSAGE_MODEL_PAYLOAD_TYPE_TOOL_CALL = 1;
+  MESSAGE_MODEL_PAYLOAD_TYPE_TOOL_RESULT = 2;
+  MESSAGE_MODEL_PAYLOAD_TYPE_COMPACTION = 3;
+  MESSAGE_MODEL_PAYLOAD_TYPE_PROVIDER_STATE = 4;
+  MESSAGE_MODEL_PAYLOAD_TYPE_CONTEXT_EVENT = 5;
+}
+
+// ChatEventType identifies realtime chat events. Durable transitions publish after
+// commit; typing, streaming activity, and compaction indicators are ephemeral.
+enum ChatEventType {
+  CHAT_EVENT_TYPE_UNSPECIFIED = 0;
+
+  // Channels
+  CHAT_EVENT_TYPE_CHANNEL_CREATED = 1;
+  CHAT_EVENT_TYPE_CHANNEL_UPDATED = 2;
+  CHAT_EVENT_TYPE_CHANNEL_DELETED = 3;
+  // Personal preferences changed; participant payload, sent only to its owner.
+  CHAT_EVENT_TYPE_PARTICIPANT_PREFERENCES_UPDATED = 4;
+
+  // Messages
+  CHAT_EVENT_TYPE_MESSAGE_SENT = 10;
+  CHAT_EVENT_TYPE_MESSAGE_EDITED = 11;
+  CHAT_EVENT_TYPE_MESSAGE_DELETED = 12;
+  CHAT_EVENT_TYPE_MESSAGE_ATTACHMENTS_READY = 13;
+  CHAT_EVENT_TYPE_MESSAGE_STREAM_STARTED = 14;
+  CHAT_EVENT_TYPE_MESSAGE_STREAM_DELTA = 15;
+  CHAT_EVENT_TYPE_MESSAGE_STREAM_FINISHED = 16;
+  CHAT_EVENT_TYPE_MESSAGE_STREAM_FAILED = 17;
+  // An inference call was recorded: cumulative channel/session totals, plus the
+  // linked message's summary when there is one.
+  CHAT_EVENT_TYPE_INFERENCE_USAGE_UPDATED = 18;
+
+  // Reactions
+  CHAT_EVENT_TYPE_REACTION_ADDED = 20;
+  CHAT_EVENT_TYPE_REACTION_REMOVED = 21;
+
+  // Ephemeral indicators
+  CHAT_EVENT_TYPE_TYPING = 30;
+
+  // Tool approval (server -> client). Fanned out when a TOOL_CALL transitions
+  // PENDING -> APPROVED/DENIED/EXPIRED so all sessions update the approval card
+  // live. This is the realtime approval-state event, not a tool-execution request.
+  CHAT_EVENT_TYPE_TOOL_CALL_RESOLUTION = 40;
+
+  // Ephemeral: an agent run started or stopped summarizing its context. Never persisted and
+  // never replayed; a client that misses the stop clears the indicator on its own timeout.
+  CHAT_EVENT_TYPE_CONTEXT_COMPACTION = 50;
+
+  // An agent run changed lifecycle status (published after commit) or observable activity
+  // (ephemeral, never persisted or replayed). A hint only: the agent-run status read is
+  // authoritative, and a client expires live activity on its own timeout.
+  CHAT_EVENT_TYPE_AGENT_RUN_STATE = 51;
+
+  // An agent session's interaction state changed after commit: input was enqueued, admitted or
+  // withdrawn, a session run ended, the session was stopped, resumed or archived, or its
+  // interaction policy changed. An invalidation only: the payload names the session, and the
+  // client re-reads its interaction, which depends on the viewer.
+  CHAT_EVENT_TYPE_AGENT_SESSION_INTERACTION = 52;
+}
+
+// ChatChannelPublicRead is how far beyond its participants a channel can be read. Levels are
+// ordered, so a check reads `level >= SIGNED_IN`. Public readers are read-only, never become
+// participants, and never see the channel in ListChannels. A public channel is addressed by its
+// plain ID, so ANYONE channels can be found by enumerating IDs: public means discoverable.
+enum ChatChannelPublicRead {
+  CHAT_CHANNEL_PUBLIC_READ_UNSPECIFIED = 0; // off: participants (and org/admin readers) only
+  CHAT_CHANNEL_PUBLIC_READ_SIGNED_IN = 1;   // any signed-in user with the ID, with realtime
+  CHAT_CHANNEL_PUBLIC_READ_ANYONE = 2;      // also logged-out visitors, over REST only
+}
+
+// --- Attributes ---
+
+message Channel {
+  // Ordinary unread notifications only; tool approval notifications remain independent.
+  bool unread_notifications_enabled = 32;
+  uint64 id = 1;
+  string name = 2;                  // Optional name (for group chats)
+  string description = 3;           // Optional description
+  uint64 avatar_attachment_id = 4;  // Optional avatar image attachment ID
+  string avatar_url = 5;            // Computed URL for the avatar
+  ChannelType channel_type = 6;
+  bool is_archived = 7;
+  uint64 created_by_user_id = 8;
+  google.protobuf.Timestamp last_message_at = 9;
+  string last_message_preview = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+  google.protobuf.Timestamp deleted_at = 13;
+
+  // Per-channel feature flags
+  bool support_replies = 14;
+  bool support_threads = 15;
+  bool support_message_edits = 16;
+  bool support_message_deletes = 17;
+  bool support_message_reactions = 18;
+  bool allow_multiple_reactions_per_user = 19;
+  bool support_embeds = 20;
+  bool support_attachments = 21;
+  bool allow_native_embeds = 22;
+  bool allow_custom_embeds = 23;
+  // Readers see token usage: badges, usage routes and realtime usage events.
+  bool support_inference_usage = 37;
+
+  // Optional per-channel context metadata (e.g., tenancy or domain-specific scope).
+  optional uint64 context_id = 24;
+  optional string context_display_name = 25;
+  optional uint64 context_entity_id = 26;
+  // Who beyond participants may read the channel. Takes effect only while the server's
+  // enable_public_chat_read flag is on.
+  ChatChannelPublicRead public_read = 33;
+  reserved 27;
+  reserved "support_markdown";
+
+  // NOTE: per-channel token totals are intentionally NOT columns here.
+  // Inference accounting lives in the ChatInferenceCall ledger and the
+  // denormalized ChatInferenceTotals per-channel cache (Decision 2.5).
+  // 28-31 previously held total_input/output/thoughts/cached_content_tokens.
+  reserved 28, 29, 30, 31;
+  reserved "total_input_tokens", "total_output_tokens",
+           "total_thoughts_tokens", "total_cached_content_tokens";
+
+  // Fork rules, set at creation and immutable afterwards; a fork copies them from its source.
+  ChannelForkRules fork_rules = 34;
+  // Provenance of a fork: the source channel and the message it was forked at. Unset on channels
+  // that are not forks. The source may since have been deleted or become unreadable to the viewer.
+  optional uint64 forked_from_channel_id = 35;
+  optional uint64 fork_point_message_id = 36;
+}
+
+// ChannelForkRules controls forking of a channel. The zero value disables forking.
+message ChannelForkRules {
+  ChatForkWhoMayFork who_may_fork = 1;
+  ChatForkMemberPool member_pool = 2;
+  // Whether the fork keeps the source's organization access (organization and minimum read role).
+  ChatForkCarryOver org_access = 3;
+  // Whether the fork keeps the source's context fields (context_id, context_display_name,
+  // context_entity_id).
+  ChatForkCarryOver context = 4;
+}
+
+// Personal interruption preference; inbox entries and unread counts remain visible.
+enum ChannelNotificationMode {
+  CHANNEL_NOTIFICATION_MODE_UNSPECIFIED = 0;
+  CHANNEL_NOTIFICATION_MODE_ALL_MESSAGES = 1;
+  CHANNEL_NOTIFICATION_MODE_MENTIONS_ONLY = 2;
+  CHANNEL_NOTIFICATION_MODE_MUTED = 3;
+}
+
+message ChannelParticipant {
+  uint64 channel_id = 1;
+  uint64 user_id = 2;
+  ChannelRole role = 3;
+  reserved 4;
+  reserved "is_muted";
+  bool is_pinned = 5;
+  uint64 last_read_message_id = 6;
+  google.protobuf.Timestamp joined_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  google.protobuf.Timestamp left_at = 9; // If set, user has left the channel
+  
+  // Expanded user data (for responses)
+  PublicUser user = 10;
+  ChannelNotificationMode notification_mode = 11;
+}
+
+message Message {
+  uint64 id = 1;
+  uint64 channel_id = 2;
+  uint64 sender_id = 3;
+  string content = 4;
+  MessageContentType content_type = 5;
+  uint64 parent_message_id = 6;     // Thread root ID (0 = main timeline)
+  bool is_edited = 7;
+  google.protobuf.Timestamp edited_at = 8;
+  string original_content = 9;      // Original content if edited (optional/internal)
+  
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+  google.protobuf.Timestamp deleted_at = 12;
+  
+  // Expanded sender data
+  PublicUser sender = 13;
+  
+  // Collections
+  repeated MessageEmbed embeds = 14;
+  repeated uint64 attachment_ids = 18;
+  repeated UploadedAttachment attachments = 19;
+  repeated MessageReaction reactions = 15;
+  repeated MessageMention mentions = 17;
+
+  // Reply reference (Discord-style "replying to...") (0 = none).
+  // Must refer to a message in the same channel; service layer enforces thread/timeline constraints.
+  uint64 reply_to_message_id = 16;
+
+  // Number of thread replies to this message (0 = no replies/no thread).
+  // Computed at query time when threads are enabled.
+  uint32 reply_count = 20;
+
+  // Explicit streaming lifecycle for bot/LLM-authored messages.
+  MessageStreamState stream_state = 21;
+
+  // --- Agentic transcript fields ---
+
+  // Discriminates standard chat from tool calls/results, system events,
+  // compaction summaries, and agent notes. Stored values must be specified.
+  MessageKind kind = 22;
+
+  // Explicit LLM role assigned by the message writer.
+  MessageRole role = 23;
+
+  // Visibility flags use `optional` so an explicit false is distinguishable
+  // from "unset" (per-kind defaults are applied server-side only when unset).
+  optional bool exclude_from_ai_context = 24; // never enters LLM context
+  optional bool hidden_from_users = 25;       // never shown to regular users (filtered server-side)
+
+  // References ChatAgentRun.id — the go-common-owned durable run row for one
+  // logical agent turn/run. Groups every transcript row produced by that run
+  // (assistant text + TOOL_CALL/TOOL_RESULT rows) without relying on
+  // sender+ID adjacency. Optional for messages produced outside an agent run.
+  optional uint64 agent_run_id = 26;
+
+  // Reconstruction boundary inside one run: assistant text/tool calls from one
+  // model step plus the matching tool results share a step index; the next
+  // model response increments it (Decision 1). Indexed with agent_run_id.
+  optional uint32 agent_step_index = 39;
+
+  // Denormalized pairing key for TOOL_CALL/TOOL_RESULT rows. Must match the
+  // payload's tool_call_id; exists so DB constraints/lookups never deserialize
+  // protobuf bytes (Decision 1 / Decision 2). Nullable string (unset on others).
+  optional string tool_call_id = 40;
+
+  // Structured payload serialized as bytes + a type discriminator, mirroring
+  // MessageEmbed.embed_data. Holds a MessageModelPayload (tool call/result/compaction).
+  bytes model_payload = 27;
+  MessageModelPayloadType payload_type = 28;
+
+  // NOTE: per-message inference metadata (usage, model_id, finish/stop reason)
+  // is intentionally NOT stored on Message. It lives in the ChatInferenceCall
+  // ledger and is read back as a derived MessageInferenceSummary (Decision 2.5).
+  // 29-31 previously held usage/model_id/stop_reason.
+  reserved 29, 30, 31;
+  reserved "usage", "model_id", "stop_reason";
+
+  // --- Tool-call approval state (authoritative columns; see Decision 6) ---
+  ToolCallApprovalStatus approval_status = 32;
+  uint64 triggering_user_id = 33;     // run's human triggering actor, eligible for approval
+  uint64 resolved_by_user_id = 34;
+  google.protobuf.Timestamp resolved_at = 35;
+  string resolution_reason = 36;
+  google.protobuf.Timestamp approval_expires_at = 37;
+
+  // --- Tool-call execution state (operational columns; the approved TOOL_CALL
+  // row is the durable work queue — see Decision 6). Not model payload. ---
+  ToolCallExecutionState execution_state = 38;
+  uint32 execution_attempt_count = 41;
+  string execution_lease_owner = 42;
+  google.protobuf.Timestamp execution_lease_expires_at = 43;
+  google.protobuf.Timestamp execution_started_at = 44;
+  google.protobuf.Timestamp executed_at = 45;
+  string last_execution_error = 46; // capped operational error text
+
+  // Thread reply that also appears on the channel's main timeline (Slack-style
+  // "also send to channel"). One row serves both views, so parent_message_id
+  // still names the thread root for navigation. Set only at send time.
+  bool broadcast_to_channel = 47;
+
+  // Control subtype of an AGENT_NOTE row ("note", "app_resume", ...); empty on other kinds.
+  // Clients render subtypes they know (app_resume is an application message) and show any
+  // other note as reasoning.
+  string agent_note_subtype = 48;
+}
+
+// --- Agentic transcript payloads ---
+
+// MessageModelPayload is the structured body serialized into Message.model_payload.
+message MessageModelPayload {
+  oneof payload {
+    ToolCallPayload tool_call = 1;
+    ToolResultPayload tool_result = 2;
+    CompactionPayload compaction = 3;
+    ProviderStatePayload provider_state = 4;
+    ContextEventPayload context_event = 5;
+  }
+}
+
+enum ContextEventKind {
+  CONTEXT_EVENT_KIND_UNSPECIFIED = 0;
+  // History was omitted without a summary (budget_trim, or the truncate failure policy).
+  CONTEXT_EVENT_KIND_TRUNCATED = 1;
+  // Summarization failed and generation stopped without discarding history.
+  CONTEXT_EVENT_KIND_COMPACTION_FAILED = 2;
+}
+
+// ContextEventPayload types a context-management SYSTEM_EVENT so clients can localize and style
+// it. The row's content stays a complete English sentence for clients that ignore the payload.
+message ContextEventPayload {
+  ContextEventKind kind = 1;
+  uint32 omitted_message_count = 2;
+  uint64 estimated_before_tokens = 3;
+  uint64 estimated_after_tokens = 4;
+}
+
+// ProviderStatePayload is a reference-only integrity envelope for opaque
+// provider continuation state. The provider bytes live in an internal
+// attachment and are never serialized into the transcript row or public wire
+// payload. One hidden PROVIDER_STATE row belongs to one agent run + model step.
+message ProviderStatePayload {
+  InferenceAPI api = 12;
+  string provider_model_id = 13;
+  string destination_fingerprint = 14;
+  reserved 1;
+  reserved "provider";
+  string provider_id = 15;
+  string format = 2;
+  uint32 version = 3;
+  string response_id = 4;
+  uint64 attachment_id = 5;
+  string content_sha256 = 6;
+  uint64 size_bytes = 7;
+  string visible_projection_sha256 = 8;
+  string tool_manifest_sha256 = 9;
+}
+
+message ToolCallPayload {
+  string tool_call_id = 1;   // non-empty, step-unique internal Genkit Ref; pairs with ToolResultPayload
+  string tool_name = 2;
+  string arguments_json = 3; // JSON-encoded arguments (provider-portable)
+  // Optional display-only renderer hint (server-authoritative, from
+  // AgentToolDefinition.RendererKey). Lets the UI resolve a TranscriptRenderer
+  // by renderer_key. Empty = none. NOT used for DB constraints, security, or
+  // context reconstruction (Decision 0 / Decision 8).
+  string renderer_key = 4;
+  // Opaque Vertex/Gemini thought signature that must be echoed with the
+  // function call on continuation. Stored for model replay only.
+  bytes thought_signature = 5;
+  // Exact provider FunctionCall.id received with the model response. Presence
+  // is significant; tool_call_id remains the non-empty internal pairing key.
+  optional string provider_call_id = 6;
+  RejectedToolArguments rejected_arguments = 7;
+  // NOTE: approval state is NOT stored here — it lives in authoritative,
+  // queryable columns on the message row (see Message.approval_status etc).
+}
+
+// A completed, identified call rejected before any application execution.
+// raw_arguments is opaque text: duplicate keys and invalid JSON must survive audit/replay.
+message RejectedToolArguments {
+  string tool_name = 1;
+  string provider_tool_name = 2;
+  string call_id = 3;
+  string item_id = 4;
+  uint32 output_index = 5;
+  string raw_arguments = 6;
+  string diagnostic = 7;
+}
+
+message ToolResultPayload {
+  string tool_call_id = 1;   // must equal Message.tool_call_id and an existing TOOL_CALL in the same run
+  string content_json = 2;   // JSON-encoded result (genkit ToolResponse.Output)
+  bool is_error = 3;
+  // Genkit ToolResponse.Content is []*Part and may include text, JSON/data, or
+  // media (e.g. a tool returning an image). content_json remains the simple
+  // default result path; content_parts preserves multipart results for
+  // provider round-trips. Empty for plain text/JSON results (Decision 2).
+  repeated MessagePart content_parts = 4;
+  // Optional display-only renderer hint (server-authoritative, from
+  // AgentToolDefinition.RendererKey); same semantics as ToolCallPayload. Empty
+  // = none. NOT used for DB constraints, security, or reconstruction.
+  string renderer_key = 5;
+}
+
+// MessagePart mirrors the genkit Part model for multipart tool results so the
+// transcript survives provider round-trips (Decision 2). Validators size-cap
+// inline_data and DataPart.data; large media should prefer url/attachment_id.
+message MessagePart {
+  oneof part {
+    TextPart text = 1;
+    MediaPart media = 2;
+    DataPart data = 3;
+  }
+}
+
+message TextPart {
+  string text = 1;
+}
+
+message MediaPart {
+  string content_type = 1; // e.g. image/png, audio/mpeg, video/mp4
+  string name = 2;         // optional display/file name
+  oneof source {
+    string url = 3;           // preferred for persisted media/attachments
+    bytes inline_data = 4;    // size-capped; only for small payloads
+    string attachment_id = 5; // existing uploaded attachment reference when available
+  }
+  string detail = 6;       // provider image detail hint (e.g. auto, low, high, original)
+  // Persisted byte size for attachment_id sources. Required when attachment_id is set so
+  // context reconstruction can drop old atomic tool groups before reading/presigning blobs.
+  // Zero for url and inline_data sources.
+  uint64 size_bytes = 7;
+}
+
+message DataPart {
+  string content_type = 1; // usually application/json
+  bytes data = 2;          // serialized payload, size-capped
+}
+
+message CompactionPayload {
+  uint64 covers_through_message_id = 1; // watermark: summary covers messages with id <= this
+  uint32 summarized_message_count = 2;
+  // The model call that produced the summary is recorded in ChatInferenceCall
+  // with purpose=COMPACTION and message_id pointing at this compaction message;
+  // usage is NOT stored here (Decision 2 / Decision 2.5). 3 was summarization_usage.
+  reserved 3;
+  reserved "summarization_usage";
+  uint64 estimated_before_tokens = 4;
+  uint64 estimated_after_tokens = 5;
+  string trigger_reason = 6;
+  // A prior main-model call's measured input, not a measurement of the new checkpoint.
+  uint64 observed_input_tokens = 7;
+  string observed_inference_call_id = 8;
+  // Protected context copied verbatim when its original row falls behind the watermark.
+  uint64 retained_user_message_id = 9;
+  string retained_user_content = 10;
+  uint64 workflow_state_message_id = 11;
+  string workflow_state = 12;
+
+}
+
+message MessageEmbed {
+  uint64 id = 1;
+  uint64 message_id = 2;
+  uint32 embed_type = 3;  // 1-999 (Native), 1000+ (Custom/App-specific); 0 is invalid
+  bytes embed_data = 4;   // Protobuf serialized data specific to embed_type
+  string fallback_text = 5;
+  uint32 position = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message MessageReaction {
+  uint64 message_id = 1;
+  uint64 user_id = 2;
+  string emoji = 3;
+  google.protobuf.Timestamp created_at = 4;
+  
+  // Expanded user data
+  PublicUser user = 5;
+}
+
+message MessageMention {
+  uint64 message_id = 1;
+  uint64 user_id = 2;
+  google.protobuf.Timestamp created_at = 3;
+
+  // Expanded user data
+  PublicUser user = 4;
+}
+
+// --- Edit History ---
+
+message ChatMessageEditHistoryEntry {
+  uint64 id = 1;
+  uint64 message_id = 2;
+  uint32 version_number = 3;
+  uint64 edited_by_user_id = 4;
+  google.protobuf.Timestamp version_started_at = 5;
+  google.protobuf.Timestamp version_ended_at = 6;
+  string content = 7;
+  MessageContentType content_type = 8;
+  repeated MessageEmbed embeds = 9;
+  repeated uint64 attachment_ids = 10;
+  repeated uint64 mention_user_ids = 11;
+  google.protobuf.Timestamp created_at = 12;
+
+  // Expanded editor data
+  PublicUser edited_by_user = 13;
+}
+
+// --- Native Embed Data Types ---
+
+message ImageEmbedData {
+  uint64 attachment_id = 1;
+  string url = 2;
+  string alt_text = 3;
+  optional int32 width = 4;
+  optional int32 height = 5;
+  optional string thumbnail_url = 6;
+  // Storage visibility of attachment_id: whether url/thumbnail_url are stable
+  // and cacheable or presigned and expiring. Unset selects private visibility.
+  optional AttachmentVisibility visibility = 7;
+}
+
+// --- Agent run & inference accounting read models (Decision 1 / Decision 2.5) ---
+
+// ChatAgentRun is the go-common-owned durable run row for one logical agent
+// turn/resume chain. Its id is the value stored as Message.agent_run_id and
+// ChatInferenceCall.agent_run_id (Decision 1). agent_session_id /
+// agent_session_config_version pin the per-chat config snapshot used by the run.
+//
+// Full ChatAgentSession/config snapshots stay in persistence/service models;
+// AgentSessionSummary and AgentSessionInteraction expose narrower public projections.
+message ChatAgentRun {
+  optional uint64 requested_inference_model_id = 20;
+  optional InferenceAPI requested_inference_api = 21;
+  optional uint64 execution_inference_model_id = 22;
+  optional InferenceAPI execution_inference_api = 23;
+  optional string execution_provider_id = 24;
+  optional string execution_provider_model_id = 25;
+
+  uint64 id = 1;
+  uint64 channel_id = 2;
+  uint64 parent_message_id = 3;              // thread scope; 0 = main timeline
+  optional uint64 agent_session_id = 4;      // set for first-class agent sessions
+  optional uint64 agent_session_config_version = 5; // captured at run start; required when agent_session_id is set
+  uint64 bot_user_id = 6;
+  optional uint64 triggering_user_id = 7;    // human actor whose message/event caused the run
+  optional uint64 triggering_message_id = 8; // persisted trigger message/event, when present
+  ChatAgentRunStatus status = 9;
+  optional string external_run_id = 10;      // app-owned correlation ID (not an FK)
+  optional string genkit_trace_id = 11;
+  optional string genkit_session_id = 12;
+  optional string genkit_request_id = 13;
+  bytes metadata_json = 14;                  // small sanitized operational metadata only
+  google.protobuf.Timestamp started_at = 15;
+  google.protobuf.Timestamp completed_at = 16; // set on terminal statuses, including model-step limit
+  google.protobuf.Timestamp created_at = 17;
+  google.protobuf.Timestamp updated_at = 18;
+  optional int64 organization_id = 19;        // immutable owning-org snapshot; absent when no organization owns the run
+}
+
+// AgentRunStatusSnapshot is the viewer-safe status read model for one agent run. It is
+// deliberately narrower than ChatAgentRun: no trace ids, metadata, lease owner, or budgets.
+message AgentRunStatusSnapshot {
+  uint64 agent_run_id = 1;
+  uint64 channel_id = 2;
+  uint64 parent_message_id = 3;               // thread scope; 0 = main timeline
+  ChatAgentRunStatus status = 4;
+  ChatAgentRunStatusReason status_reason = 5;
+  // Application-supplied identifier-like code recorded with a cancellation; empty otherwise.
+  string status_reason_code = 6;
+  google.protobuf.Timestamp started_at = 7;
+  google.protobuf.Timestamp completed_at = 8; // set on terminal statuses only
+  // Set only while a drivable run waits out a backoff (deadline still in the future).
+  google.protobuf.Timestamp retry_not_before = 9;
+  ChatAgentRunStatusReason retry_reason = 10;
+  // True while a worker holds a live drive or tool-execution lease. Supervision is not progress: a supervised
+  // run may be waiting on a provider.
+  bool supervised = 11;
+  // Durably derivable activity only; UNSPECIFIED when no finer detail is known.
+  AgentRunActivity activity = 12;
+  google.protobuf.Timestamp activity_started_at = 13;
+  // TOOL_CALL message behind the activity; omitted when that row is hidden from users.
+  optional uint64 activity_message_id = 14;
+  // Newest transcript write for the run. Set for non-terminal runs only.
+  google.protobuf.Timestamp last_progress_at = 15;
+}
+
+// ThreadAgentRunStatus groups the runs of one thread location, newest first.
+message ThreadAgentRunStatus {
+  uint64 parent_message_id = 1;
+  AgentRunStatusSnapshot latest = 2;           // absent when the location has no run
+  repeated AgentRunStatusSnapshot earlier = 3; // older runs, newest first, bounded by history_limit
+  // True when the location holds a delegated child session (one with a parent agent session).
+  // Always false for the main timeline and for ordinary thread agents.
+  bool delegated = 4;
+  // How the location's agent session takes input right now. Absent when the location has no
+  // agent session; present even when it has no run.
+  AgentSessionInteraction interaction = 5;
+}
+
+// AgentSessionInteraction is the viewer-specific composer state of one agent session: its
+// effective input policy, what it is doing, and what the viewer may do about it.
+message AgentSessionInteraction {
+  uint64 agent_session_id = 1;
+  ChatAgentInputMode input_mode = 2;          // effective mode of the run in flight, else of the session
+  bool allow_user_stop = 3;                   // the same policy's user-Stop opt-in
+  ChatAgentSessionActivity activity = 4;
+  uint32 pending_input_count = 5;             // input waiting for admission (or held while suspended)
+  optional uint64 suspended_by_user_id = 6;   // set only while SUSPENDED
+  google.protobuf.Timestamp suspended_at = 7; // set only while SUSPENDED
+  bool viewer_can_stop = 8;
+  bool viewer_can_resume = 9;
+  // False when people's messages never reach the agent as input: a workflow-owned agent, a
+  // session that is not live, or one whose automatic runs are disabled. Its messages are ordinary
+  // transcript whatever input_mode and activity say, so a composer sends them as usual.
+  // viewer_can_stop and viewer_can_resume still say whether Stop and Resume apply (never for a
+  // workflow-owned agent, whose owner drives every run).
+  bool accepts_input = 10;
+}
+
+// AgentInputReceipt is the outcome of one send for one agent session it targeted. A thread reply
+// broadcast to the channel may target two sessions and so carry two receipts.
+message AgentInputReceipt {
+  uint64 agent_session_id = 1;
+  ChatAgentInputReceiptState state = 2;
+  // The run that received the message: the run it started (RUN_STARTED) or the run its queued
+  // input was delivered into (ADMITTED). Absent while the input is queued.
+  optional uint64 agent_run_id = 3;
+}
+
+// AgentQueuedInput is a person's input waiting in an agent session's queue because the session
+// was busy or suspended when it was sent. It is not a message: it appears in no transcript, model
+// context, unread count or notification. When the agent receives it, the server writes the chat
+// message (a new id, at the bottom of the conversation, announced by MESSAGE_SENT) and the input
+// leaves the queue. Everyone who can read the conversation sees its whole queue.
+message AgentQueuedInput {
+  uint64 id = 1;                   // queue order; not a message id
+  uint64 agent_session_id = 2;
+  uint64 channel_id = 3;
+  uint64 parent_message_id = 4;    // the session's location: thread root, 0 = main timeline
+  uint64 sender_id = 5;
+  PublicUser sender = 6;
+  string content = 7;              // message markup, mention tokens included, as sent or last edited
+  MessageContentType content_type = 8;
+  uint64 reply_to_message_id = 9;  // reply reference (0 = none)
+  repeated uint64 attachment_ids = 10;
+  repeated UploadedAttachment attachments = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+  // What the viewer may do with it, only while they take part in the channel and it is not
+  // archived: edit it when they sent it, and remove it when they sent it or administer the channel,
+  // each unless the application's Authorize callback denies it.
+  bool viewer_can_edit = 14;
+  bool viewer_can_remove = 15;
+  // Embeds the input carries. They are not editable here: an edit keeps them, so it may leave the
+  // text empty while there are any.
+  uint32 embed_count = 16;
+}
+
+// ChatAgentSessionStatus is the lifecycle state of an agent session. A delegated child stays
+// ACTIVE after its run completes so people can keep talking to it in its thread.
+enum ChatAgentSessionStatus {
+  CHAT_AGENT_SESSION_STATUS_UNSPECIFIED = 0;
+  CHAT_AGENT_SESSION_STATUS_ACTIVE = 1;
+  CHAT_AGENT_SESSION_STATUS_ARCHIVED = 2;
+}
+
+// AgentSessionSummary is the read-only identity of one agent session bound to a channel
+// location. Delegated child sessions carry the parent link; run state is read separately
+// through GetAgentRunStatus.
+message AgentSessionSummary {
+  uint64 agent_session_id = 1;
+  uint64 channel_id = 2;
+  uint64 parent_message_id = 3;               // thread root; 0 is the main timeline
+  string agent_type = 4;
+  string agent_display_name = 5;              // registry display name, falling back to agent_type
+  uint64 bot_user_id = 6;
+  ChatAgentSessionStatus status = 7;
+  optional uint64 parent_agent_session_id = 8; // set only on delegated child sessions
+  optional uint64 spawned_by_agent_run_id = 9; // the parent run whose spawn created the child
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+
+  // Read-only execution diagnostics, exposed through the same channel read gate.
+  // Identity values are absent for legacy sessions awaiting their first inference pin.
+  optional uint64 execution_inference_model_id = 12;
+  optional InferenceAPI execution_inference_api = 13;
+  optional string execution_provider_id = 14;
+  optional string execution_provider_model_id = 15;
+  InferenceSelectionSource selection_source = 16;
+  uint64 inference_pin_version = 17;
+  // A blocked session retains its lifecycle status and pinned identity.
+  InferenceBlockReason inference_blocked_reason = 18;
+  google.protobuf.Timestamp inference_blocked_at = 19;
+  // Application operation captured with the pin; 0 for an unpinned legacy session.
+  int32 inference_operation = 20;
+  // Work organization that owns the session and whose inference policy governs it.
+  uint64 organization_id = 21;
+  // Application re-target gate of the session's operation; UNSPECIFIED (treated
+  // as NEVER) when the agent type or inference routing is not registered.
+  InferenceSessionRetarget inference_session_retarget = 22;
+}
+
+// ChatInferenceCall is the append-only source of truth for per-model-call usage
+// and finish metadata. One row == one model/provider invocation (Decision 2.5).
+message ChatInferenceCall {
+  uint64 id = 1;
+  uint64 channel_id = 2;
+  optional uint64 message_id = 3;            // assistant/compaction message most directly associated
+  optional uint64 agent_run_id = 4;          // references ChatAgentRun
+  optional uint32 agent_step_index = 5;      // transcript step this invocation attempted/produced
+  string call_id = 6;                        // idempotency/correlation key
+  uint32 call_index = 7;                     // monotonic invocation order within agent_run_id
+  InferenceCallPurpose purpose = 8;
+  reserved 9;
+  reserved "provider";
+  string provider_id = 38;
+  string provider_model_id = 10;             // normalized provider model ID
+  optional uint64 inference_model_id = 11;   // link to go-common's configured inference model row
+  string finish_reason = 12;                 // genkit FinishReason; empty if failed before response
+  string finish_message = 13;                // capped provider/genkit detail
+  int64 latency_ms = 14;
+
+  // Usage dimensions (int64 to allow channel/session aggregation; provider
+  // values for a single call are smaller). 0 default when not supplied.
+  int64 input_tokens = 15;
+  int64 output_tokens = 16;
+  int64 total_tokens = 17;
+  int64 thoughts_tokens = 18;
+  int64 cached_content_tokens = 19;
+  int64 input_characters = 20;
+  int64 output_characters = 21;
+  int64 input_images = 22;
+  int64 output_images = 23;
+  int64 input_videos = 24;
+  int64 output_videos = 25;
+  int64 input_audio_files = 26;
+  int64 output_audio_files = 27;
+
+  bytes custom_usage_json = 28;              // serialized GenerationUsage.Custom (preserve float values)
+  optional string genkit_span_id = 29;       // per-call trace span correlation, when available
+  bytes metadata_json = 30;                  // small sanitized operational metadata only
+  google.protobuf.Timestamp created_at = 31;
+
+  // Durable agent-run attribution copied from ChatAgentRun / ChatAgentSession
+  // when the call is produced by the first-class agent runtime. Empty for
+  // manual/non-agent generation paths.
+  optional uint64 agent_session_id = 32;
+  optional uint64 agent_session_config_version = 33;
+  string agent_type = 34;
+  optional uint64 triggering_user_id = 35;
+  optional uint64 actor_user_id = 36;
+  optional int64 organization_id = 37;        // charged organization; absent for uncharged or global generation
+}
+
+// ChatInferenceTotals is the denormalized per-channel aggregate cache rebuildable
+// from ChatInferenceCall. It is not the source of truth (Decision 2.5).
+message ChatInferenceTotals {
+  uint64 channel_id = 1;
+  int64 call_count = 2;
+  int64 input_tokens_total = 3;
+  int64 output_tokens_total = 4;
+  int64 total_tokens_total = 5;
+  int64 thoughts_tokens_total = 6;
+  int64 cached_content_tokens_total = 7;
+  int64 input_characters_total = 8;
+  int64 output_characters_total = 9;
+  int64 input_images_total = 10;
+  int64 output_images_total = 11;
+  int64 input_videos_total = 12;
+  int64 output_videos_total = 13;
+  int64 input_audio_files_total = 14;
+  int64 output_audio_files_total = 15;
+  google.protobuf.Timestamp updated_at = 16;
+}
+
+// AgentSessionUsage is a derived read model: totals scoped to an agent session
+// (its channel) plus optional breakdowns by run, purpose, provider, and model.
+message AgentSessionUsage {
+  uint64 agent_session_id = 1;
+  uint64 channel_id = 2;
+  ChatInferenceTotals totals = 3;            // session/channel-scoped aggregate
+  repeated AgentSessionUsageBreakdown by_run = 4;
+  repeated AgentSessionUsageBreakdown by_purpose = 5;
+  repeated AgentSessionUsageBreakdown by_provider = 6;
+  repeated AgentSessionUsageBreakdown by_model = 7;
+  // by_session is filled only when includes_children is true: the parent first, then each
+  // delegated child by session id.
+  repeated AgentSessionUsageBreakdown by_session = 8;
+  // includes_children reports that totals and breakdowns cover the session and its delegated
+  // children. It is false for a child session even when children were requested.
+  bool includes_children = 9;
+}
+
+// AgentSessionUsageBreakdown is one dimensional slice of session usage. Its
+// axis chooses the key fields: run ID, purpose, provider ID, provider/model IDs,
+// or session ID plus agent type. A model/session axis can therefore have two key fields.
+message AgentSessionUsageBreakdown {
+  optional uint64 agent_run_id = 1;
+  optional InferenceCallPurpose purpose = 2;
+  reserved 3;
+  reserved "provider";
+  optional string provider_id = 11;
+  optional string provider_model_id = 4;
+  int64 call_count = 5;
+  int64 input_tokens = 6;
+  int64 output_tokens = 7;
+  int64 total_tokens = 8;
+  int64 thoughts_tokens = 9;
+  int64 cached_content_tokens = 10;
+  optional uint64 agent_session_id = 12; // by_session axis
+  optional string agent_type = 13;       // by_session axis: the session's agent type
+}
+
+// MessageInferenceSummary is derived usage for one assistant/compaction message,
+// aggregated from linked ChatInferenceCall rows. It is NOT stored on Message
+// (Decision 2.5). Empty/zero when no ledger rows exist for the message.
+message MessageInferenceSummary {
+  uint64 message_id = 1;
+  uint64 channel_id = 2;
+  int64 call_count = 3;
+  int64 input_tokens = 4;
+  int64 output_tokens = 5;
+  int64 total_tokens = 6;
+  int64 thoughts_tokens = 7;
+  int64 cached_content_tokens = 8;
+  // Last-call descriptive metadata for badge display (most recent linked call).
+  reserved 9;
+  reserved "provider";
+  string provider_id = 13;
+  string provider_model_id = 10;
+  string finish_reason = 11;
+  int64 latency_ms = 12;
+}
+
+// ChatInferenceUsageUpdate is the CHAT_EVENT_TYPE_INFERENCE_USAGE_UPDATED payload, read after
+// the ledger write commits. Totals are cumulative, so a client keeps the copy with the higher
+// call_count when frames arrive out of order.
+message ChatInferenceUsageUpdate {
+  uint64 channel_id = 1;
+  // Always set.
+  ChatInferenceTotals channel_totals = 2;
+  // 0 when the call belongs to no agent session.
+  uint64 agent_session_id = 3;
+  // That session alone, never a delegation rollup; unset when agent_session_id is 0.
+  ChatInferenceTotals session_totals = 4;
+  // The linked message's cumulative summary; unset for calls no visible message records.
+  MessageInferenceSummary message_summary = 5;
+}

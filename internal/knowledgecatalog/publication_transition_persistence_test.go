@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"gorm.io/gorm"
@@ -329,7 +332,7 @@ func publicationTransitionPersistenceTestTransaction(
 	database *control.DB,
 ) *gorm.DB {
 	t.Helper()
-	tx := database.GORMDB().Begin()
+	tx := pgmeta.Begin(database.GORMDB())
 	if tx.Error != nil {
 		t.Fatalf("begin publication persistence test transaction: %v", tx.Error)
 	}
@@ -486,11 +489,11 @@ func seedPublicationTransitionHistoricalOnlyTarget(
 		t.Fatalf("open historical-only target connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(t.Context(), connection); err != nil {
 		t.Fatalf("disable historical-only target foreign keys: %v", err)
 	}
 	defer func() {
-		if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
+		if _, err := pgtest.RestoreForeignKeys(t.Context(), connection); err != nil {
 			t.Errorf("restore historical-only target foreign keys: %v", err)
 		}
 	}()
@@ -499,10 +502,10 @@ func seedPublicationTransitionHistoricalOnlyTarget(
 		app_id, owner_id, object_type, name, sharing_scope, state,
 		definition_digest, dependency_count, mutation_kind,
 		quarantine_reason, created_at_unix_micro
-	) SELECT ?, ?, 1, app_id, owner_id, object_type, ?, sharing_scope, 'active',
+	) SELECT $1, $2, 1, app_id, owner_id, object_type, $3, sharing_scope, 'active',
 		definition_digest, 0, 'create', NULL, 30
 	FROM knowledge_object_versions
-	WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = ?`,
+	WHERE tenant_id = $4 AND knowledge_object_id = $5 AND object_version = $6`,
 		testTenant,
 		objectID,
 		"publication-persistence-historical",

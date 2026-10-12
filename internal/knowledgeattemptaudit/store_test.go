@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -12,13 +11,15 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 var testTime = time.Date(2026, time.August, 6, 19, 20, 21, 987654321, time.FixedZone("fixture", -7*60*60))
 
 func openTestDatabase(t *testing.T) *control.DB {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "control.db")
+	path := pgtest.DSN(t)
 	database, err := control.Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("control.Open: %v", err)
@@ -286,7 +287,7 @@ func TestTransactionRollbackCancellationAndForeignHandle(t *testing.T) {
 	admin := actorContext(t, audit.ActorRoleAdministrator, "administrator")
 	definition := adminDefinition(ActionPreview, ReasonResourceLimit, 0)
 
-	tx := database.GORMDB().WithContext(admin).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(admin))
 	if tx.Error != nil {
 		t.Fatal(tx.Error)
 	}
@@ -315,7 +316,7 @@ func TestTransactionRollbackCancellationAndForeignHandle(t *testing.T) {
 	}
 
 	foreign := openTestDatabase(t)
-	foreignTx := foreign.GORMDB().WithContext(admin).Begin()
+	foreignTx := pgmeta.Begin(foreign.GORMDB().WithContext(admin))
 	if foreignTx.Error != nil {
 		t.Fatal(foreignTx.Error)
 	}
@@ -415,7 +416,7 @@ func TestAppendRejectsMalformedNewestWithoutMutation(t *testing.T) {
 }
 
 func TestAppendAfterDatabaseCloseFailsClosed(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "control.db")
+	path := pgtest.DSN(t)
 	database, err := control.Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
@@ -451,29 +452,23 @@ func corruptEventForAppendTest(
 		t.Fatal(err)
 	}
 	defer func() {
-		if _, err := conn.ExecContext(
-			context.Background(),
-			`PRAGMA ignore_check_constraints = OFF`,
-		); err != nil {
+		if _, err := pgtest.Checks(context.Background(), conn, true); err != nil {
 			t.Errorf("restore check constraints: %v", err)
 		}
 		if err := conn.Close(); err != nil {
 			t.Errorf("close corruption connection: %v", err)
 		}
 	}()
-	if _, err := conn.ExecContext(
-		context.Background(),
-		`PRAGMA ignore_check_constraints = ON`,
-	); err != nil {
+	if _, err := pgtest.Checks(context.Background(), conn, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := conn.ExecContext(
 		context.Background(),
-		`DROP TRIGGER knowledge_attempt_audit_event_update_is_forbidden`,
+		`DROP TRIGGER knowledge_attempt_audit_event_update_is_forbidden ON knowledge_attempt_audit_events`,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.ExecContext(context.Background(), statement, arguments...); err != nil {
+	if _, err := conn.ExecContext(context.Background(), pgtest.Parameters(statement), arguments...); err != nil {
 		t.Fatalf("corrupt retained event: %v", err)
 	}
 }

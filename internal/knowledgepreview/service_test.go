@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,9 +15,11 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport/knowledgecompat"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
@@ -73,7 +74,7 @@ func newPreviewFixtureForSearch(
 ) previewFixture {
 	t.Helper()
 	ctx := context.Background()
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.db"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +84,7 @@ func newPreviewFixtureForSearch(
 	}); err != nil {
 		t.Fatal(err)
 	}
+	knowledgecompat.BindIndexes(t, database.GORMDB(), 1, "main")
 	cursorKey := []byte("knowledge-preview-test-cursor-key-at-least-32-bytes")
 	apps, err := control.NewAppCatalog(database, control.AppCatalogOptions{
 		CursorKey:   cursorKey,
@@ -93,7 +95,7 @@ func newPreviewFixtureForSearch(
 	}
 	if _, err := apps.CreateApp(
 		ctx,
-		control.AppAccessScope{TenantID: previewTestTenant},
+		control.AppAccessScope{OrganizationID: 1, TenantID: previewTestTenant},
 		control.AppDefinition{Slug: "preview", DisplayName: "Preview"},
 	); err != nil {
 		t.Fatal(err)
@@ -160,7 +162,7 @@ func newPreviewFixtureForSearch(
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := manager.Create(ctx, searchjobs.CreateRequest{
+	created, err := manager.Create(ctx, searchjobs.CreateRequest{OrganizationID: "1",
 		SPL:               search,
 		OwnerID:           previewTestOwner,
 		TenantID:          previewTestTenant,
@@ -172,7 +174,7 @@ func newPreviewFixtureForSearch(
 	if err != nil {
 		t.Fatal(err)
 	}
-	access := searchjobs.AccessScope{TenantID: previewTestTenant, OwnerID: previewTestOwner}
+	access := searchjobs.AccessScope{OrganizationID: "1", TenantID: previewTestTenant, OwnerID: previewTestOwner}
 	waitForCompletedPreviewJob(t, manager, access, created.ID)
 	return previewFixture{
 		database: database,
@@ -180,11 +182,11 @@ func newPreviewFixtureForSearch(
 		manager:  manager,
 		access:   access,
 		scope: knowledgecatalog.ValidationScope{
-			Read: knowledgecatalog.ReadScope{
+			Read: knowledgecatalog.ReadScope{OrganizationID: 1,
 				TenantID: previewTestTenant, OwnerID: previewTestOwner,
 				ReadableAppIDs: []string{previewTestApp},
 			},
-			Write: knowledgecatalog.WriteScope{
+			Write: knowledgecatalog.WriteScope{OrganizationID: 1,
 				TenantID: previewTestTenant, OwnerID: previewTestOwner,
 				WritableAppIDs: []string{previewTestApp},
 			},

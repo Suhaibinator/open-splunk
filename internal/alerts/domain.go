@@ -151,6 +151,7 @@ type SecretGeneration struct {
 }
 
 type Alert struct {
+	OrganizationID     string
 	ID                 string
 	OwnerID            string
 	Version            uint64
@@ -169,6 +170,7 @@ type Alert struct {
 }
 
 type RunSnapshot struct {
+	OrganizationID        string
 	AlertID               string
 	AlertRunID            string
 	AlertVersion          uint64
@@ -225,6 +227,7 @@ type Repository interface {
 // AlertSummary is the only list projection. It deliberately cannot carry
 // endpoint or signing-secret ciphertext into API presentation code.
 type AlertSummary struct {
+	OrganizationID   string
 	ID               string
 	OwnerID          string
 	Version          uint64
@@ -262,6 +265,7 @@ type AuthorizeDeliveryRecord struct {
 }
 
 type CreateRecord struct {
+	OrganizationID     string
 	ID                 string
 	OwnerID            string
 	ClientRequestID    string

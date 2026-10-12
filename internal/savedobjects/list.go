@@ -14,6 +14,7 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/resourcepolicy"
 )
 
 const (
@@ -22,6 +23,9 @@ const (
 )
 
 type normalizedListRequest struct {
+	policyFingerprint   string
+	organizationID      string
+	siteAdministrator   bool
 	ownerID             string
 	pageSize            uint32
 	pageToken           string
@@ -33,7 +37,7 @@ type normalizedListRequest struct {
 	sortDirection       opensplunk.SortDirection
 }
 
-// List returns an owner-scoped keyset page. Text filtering follows SQLite's
+// List returns an owner-scoped keyset page. Text filtering follows PostgreSQL's
 // built-in lower(), which is case-insensitive for ASCII and exact-case for
 // non-ASCII text. Pages are not snapshot-isolated across separate calls.
 func (store *Store) List(ctx context.Context, scope AccessScope, request ListRequest) (ListResult, error) {
@@ -41,6 +45,10 @@ func (store *Store) List(ctx context.Context, scope AccessScope, request ListReq
 		return ListResult{}, err
 	}
 	normalized, err := normalizeListRequest(scope, request)
+	if err != nil {
+		return ListResult{}, err
+	}
+	normalized.policyFingerprint, err = resourcepolicy.Fingerprint(ctx)
 	if err != nil {
 		return ListResult{}, err
 	}
@@ -168,20 +176,23 @@ func normalizeListRequest(scope AccessScope, request ListRequest) (normalizedLis
 		return normalizedListRequest{}, fmt.Errorf("%w: sort direction is invalid", control.ErrInvalidArgument)
 	}
 	return normalizedListRequest{
-		ownerID: ownerID, pageSize: pageSize, pageToken: request.PageToken,
+		organizationID: scope.OrganizationID, siteAdministrator: scope.SiteAdministrator, ownerID: ownerID, pageSize: pageSize, pageToken: request.PageToken,
 		includeTotal: request.IncludeTotal, appIDFilter: appID, textFilter: text,
 		sharingScopeFilters: sharingScopes, sortBy: sortBy, sortDirection: direction,
 	}, nil
 }
 
 type filterFingerprint struct {
-	Version       int     `json:"v"`
-	OwnerID       string  `json:"o"`
-	AppID         *string `json:"a"`
-	Text          *string `json:"t"`
-	SharingScopes []int32 `json:"h"`
-	SortBy        int32   `json:"s"`
-	Direction     int32   `json:"d"`
+	Policy            string  `json:"policy"`
+	OrganizationID    string  `json:"org"`
+	SiteAdministrator bool    `json:"admin"`
+	Version           int     `json:"v"`
+	OwnerID           string  `json:"o"`
+	AppID             *string `json:"a"`
+	Text              *string `json:"t"`
+	SharingScopes     []int32 `json:"h"`
+	SortBy            int32   `json:"s"`
+	Direction         int32   `json:"d"`
 }
 
 func listFilterHash(request normalizedListRequest) (string, error) {
@@ -190,7 +201,7 @@ func listFilterHash(request normalizedListRequest) (string, error) {
 		sharingScopes[index] = int32(scope)
 	}
 	payload, err := json.Marshal(filterFingerprint{
-		Version: savedSearchCursorVersion, OwnerID: request.ownerID, AppID: request.appIDFilter,
+		Policy: request.policyFingerprint, OrganizationID: request.organizationID, SiteAdministrator: request.siteAdministrator, Version: savedSearchCursorVersion, OwnerID: request.ownerID, AppID: request.appIDFilter,
 		Text: request.textFilter, SharingScopes: sharingScopes,
 		SortBy: int32(request.sortBy), Direction: int32(request.sortDirection),
 	})
@@ -205,12 +216,12 @@ func applySavedSearchListFilters(
 	query *gorm.DB,
 	request normalizedListRequest,
 ) *gorm.DB {
-	query = query.Where("owner_id = ?", request.ownerID)
+	query = scopeQuery(query, AccessScope{OrganizationID: request.organizationID, SiteAdministrator: request.siteAdministrator}, request.ownerID, true)
 	if request.appIDFilter != nil {
 		query = query.Where("app_id = ?", *request.appIDFilter)
 	}
 	if request.textFilter != nil {
-		query = query.Where("instr(lower(name), lower(?)) > 0", *request.textFilter)
+		query = query.Where("strpos(lower(name), lower(?)) > 0", *request.textFilter)
 	}
 	if len(request.sharingScopeFilters) != 0 {
 		sharingScopes := make([]int64, len(request.sharingScopeFilters))

@@ -128,7 +128,12 @@ func TestRenderedWorkspaceComposePublication(t *testing.T) {
 					command.Env = []string{
 						"PATH=" + os.Getenv("PATH"),
 						"OPEN_SPLUNK_DEPLOY_SERVER_IMAGE=open-splunk-test:local",
-						"OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN=test-administrator-token",
+						"OPEN_SPLUNK_POSTGRES_PASSWORD=test-postgres-password",
+						"OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_ID=test-google-client",
+						"OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_SECRET=test-google-secret",
+						"OPEN_SPLUNK_SERVER_PUBLIC_BASE_URL=http://localhost:8080",
+						"OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY=test-minio-secret",
+						"OPEN_SPLUNK_DEPLOY_MINIO_IMAGE=minio-test:local",
 						"OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD=test-clickhouse-password",
 						"OPEN_SPLUNK_SERVER_HTTP_ALLOWED_HOSTS=localhost,127.0.0.1",
 					}

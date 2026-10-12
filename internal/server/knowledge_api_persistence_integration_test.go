@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,9 +22,11 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 )
 
 var knowledgePersistenceCursorKey = bytes.Repeat([]byte{0x6b}, 32)
@@ -45,7 +48,7 @@ func newKnowledgePersistenceHarness(
 ) *knowledgePersistenceHarness {
 	t.Helper()
 
-	database, err := control.Open(
+	database, err := openTestControl(t,
 		t.Context(),
 		filepath.Join(t.TempDir(), "knowledge-http.sqlite"),
 	)
@@ -72,7 +75,7 @@ func newKnowledgePersistenceHarness(
 	latest := "now"
 	if _, err := appCatalog.CreateApp(
 		t.Context(),
-		control.AppAccessScope{TenantID: knowledgeBoundaryTenantID},
+		control.AppAccessScope{OrganizationID: 1, TenantID: knowledgeBoundaryTenantID},
 		control.AppDefinition{
 			Slug:        "knowledge-http-persistence",
 			DisplayName: "Knowledge HTTP Persistence",
@@ -174,6 +177,9 @@ func knowledgePersistenceCount(
 ) int64 {
 	t.Helper()
 	var count int64
+	for parameter := 1; strings.Contains(query, "?"); parameter++ {
+		query = strings.Replace(query, "?", fmt.Sprintf("$%d", parameter), 1)
+	}
 	if err := database.SQLDB().QueryRowContext(
 		t.Context(), query, arguments...,
 	).Scan(&count); err != nil {
@@ -214,7 +220,7 @@ func readKnowledgePersistenceCatalogAuthority(
 		  ON head.tenant_id = tenant.tenant_id
 		JOIN knowledge_projection_tenant_ledgers AS projection
 		  ON projection.tenant_id = tenant.tenant_id
-		WHERE tenant.tenant_id = ?`,
+		WHERE tenant.tenant_id = $1`,
 		knowledgeBoundaryTenantID,
 	).Scan(
 		&authority.catalogRevision,
@@ -362,7 +368,7 @@ func TestKnowledgeHTTPRealPersistenceLifecycleAndExactReplay(t *testing.T) {
 	if err := harness.database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT catalog_revision, identity_count, version_count,
 		       idempotency_count, active_object_count
-		FROM knowledge_catalog_tenants WHERE tenant_id = ?`,
+		FROM knowledge_catalog_tenants WHERE tenant_id = $1`,
 		knowledgeBoundaryTenantID,
 	).Scan(&revision, &identities, &versions, &receipts, &active); err != nil {
 		t.Fatalf("read catalog ledger: %v", err)
@@ -387,7 +393,7 @@ func TestKnowledgeHTTPRealPersistenceLifecycleAndExactReplay(t *testing.T) {
 		       successful_audit_sequence, recovery_audit_sequence,
 		       committed_catalog_state_token
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND actor_kind = 'browser' AND actor_id = ?
+		WHERE tenant_id = $1 AND actor_kind = 'browser' AND actor_id = $2
 		ORDER BY committed_catalog_revision`,
 		knowledgeBoundaryTenantID,
 		knowledgeBoundaryOwnerID,
@@ -444,7 +450,7 @@ func TestKnowledgeHTTPRealPersistenceLifecycleAndExactReplay(t *testing.T) {
 	}
 	auditRows, err := harness.database.SQLDB().QueryContext(t.Context(), `
 		SELECT sequence, action, target_version FROM audit_events
-		WHERE tenant_id = ? AND target_kind = 'knowledge_object'
+		WHERE tenant_id = $1 AND target_kind = 'knowledge_object'
 		ORDER BY sequence`, knowledgeBoundaryTenantID)
 	if err != nil {
 		t.Fatalf("read mutation audit: %v", err)
@@ -507,7 +513,7 @@ func TestKnowledgeHTTPRealStaleVersionJournalsCurrentAuthorizedContext(t *testin
 	if err := harness.database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT sequence, action, reason, app_id, knowledge_object_id,
 		       object_type, object_version, sharing_scope
-		FROM knowledge_attempt_audit_events WHERE tenant_id = ?`,
+		FROM knowledge_attempt_audit_events WHERE tenant_id = $1`,
 		knowledgeBoundaryTenantID,
 	).Scan(
 		&sequence,
@@ -569,9 +575,9 @@ func TestKnowledgeHTTPMissingHiddenAndRedactedAreIndistinguishable(t *testing.T)
 	hiddenDefinition.Name = "hidden-persistence-secret-name"
 	hidden, err := harness.writer.Create(
 		actorContext,
-		knowledgecatalog.WriteScope{
+		knowledgecatalog.WriteScope{OrganizationID: 1,
 			TenantID:       knowledgeBoundaryTenantID,
-			OwnerID:        "hidden-persistence-owner",
+			OwnerID:        "1005",
 			WritableAppIDs: []string{knowledgeHTTPAppID},
 		},
 		&opensplunk.CreateKnowledgeObjectRequest{
@@ -584,13 +590,33 @@ func TestKnowledgeHTTPMissingHiddenAndRedactedAreIndistinguishable(t *testing.T)
 		t.Fatalf("seed hidden object: %v", err)
 	}
 	hiddenID := hidden.GetKnowledgeObject().GetKnowledgeObjectId()
+	ordinaryHandler, ordinaryHTTP := newKnowledgeHTTPHandler(t, auth.BrowserRoleUser, harness.catalog, harness.writer, harness.apps, harness.attempts)
+	ordinaryHandler.authorization = testsupport.AuthorizationFixtureRole(authorization.AdminRole, knowledgeBoundaryTenantID)
 
-	missing := knowledgeHTTPPost(t, harness.http, knowledgeObjectsGetPath, &opensplunk.GetKnowledgeObjectRequest{
+	missing := knowledgeHTTPPost(t, ordinaryHTTP, knowledgeObjectsGetPath, &opensplunk.GetKnowledgeObjectRequest{
 		KnowledgeObjectId: "ko-missing-persistence-secret",
 	})
-	hiddenResponse := knowledgeHTTPPost(t, harness.http, knowledgeObjectsGetPath, &opensplunk.GetKnowledgeObjectRequest{
+	hiddenResponse := knowledgeHTTPPost(t, ordinaryHTTP, knowledgeObjectsGetPath, &opensplunk.GetKnowledgeObjectRequest{
 		KnowledgeObjectId: hiddenID,
 	})
+	siteResponse := knowledgeHTTPPost(t, harness.http, knowledgeObjectsGetPath, &opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: hiddenID})
+	if siteResponse.Code != http.StatusOK {
+		t.Fatalf("site administrator private read status=%d body=%q", siteResponse.Code, siteResponse.Body.String())
+	}
+	siteDefinition := proto.Clone(hiddenDefinition).(*opensplunk.KnowledgeObjectDefinition)
+	siteDefinition.Name = "site-updated-private-object"
+	siteUpdate := knowledgeHTTPPost(t, harness.http, knowledgeObjectsUpdatePath, &opensplunk.UpdateKnowledgeObjectRequest{
+		KnowledgeObjectId: hiddenID, ExpectedVersion: hidden.GetKnowledgeObject().GetVersion(),
+		Definition: siteDefinition, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"name"}}, ClientRequestId: "site-private-update-0001",
+	})
+	if siteUpdate.Code != http.StatusOK {
+		t.Fatalf("site administrator private update status=%d body=%q", siteUpdate.Code, siteUpdate.Body.String())
+	}
+	var updated opensplunk.UpdateKnowledgeObjectResponse
+	unmarshalResponse(t, siteUpdate, &updated)
+	if updated.GetKnowledgeObject().GetOwnerId() != hidden.GetKnowledgeObject().GetOwnerId() {
+		t.Fatal("site administrator changed the immutable private owner")
+	}
 
 	_, redactedHTTP := newKnowledgeHTTPHandler(
 		t,
@@ -629,7 +655,7 @@ func TestKnowledgeHTTPMissingHiddenAndRedactedAreIndistinguishable(t *testing.T)
 	rows, err := harness.database.SQLDB().QueryContext(t.Context(), `
 		SELECT action, reason, app_id, knowledge_object_id
 		FROM knowledge_attempt_audit_events
-		WHERE tenant_id = ? ORDER BY sequence`, knowledgeBoundaryTenantID)
+		WHERE tenant_id = $1 ORDER BY sequence`, knowledgeBoundaryTenantID)
 	if err != nil {
 		t.Fatalf("read nondisclosure attempts: %v", err)
 	}
@@ -714,7 +740,7 @@ func TestKnowledgeHTTPSuccessAuditFailureRollsBackAndJournalsRejection(t *testin
 		"knowledge_mutation_idempotency",
 		"audit_events",
 	} {
-		query := "SELECT count(*) FROM " + table + " WHERE tenant_id = ?"
+		query := "SELECT count(*) FROM " + table + " WHERE tenant_id = $1"
 		if count := knowledgePersistenceCount(t, harness.database, query, knowledgeBoundaryTenantID); count != 0 {
 			t.Fatalf("rolled-back %s rows=%d", table, count)
 		}
@@ -728,7 +754,7 @@ func TestKnowledgeHTTPSuccessAuditFailureRollsBackAndJournalsRejection(t *testin
 	var objectID sql.NullString
 	if err := harness.database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT sequence, action, reason, app_id, knowledge_object_id
-		FROM knowledge_attempt_audit_events WHERE tenant_id = ?`,
+		FROM knowledge_attempt_audit_events WHERE tenant_id = $1`,
 		knowledgeBoundaryTenantID,
 	).Scan(&sequence, &action, &reason, &appID, &objectID); err != nil {
 		t.Fatalf("read audit-failure attempt: %v", err)

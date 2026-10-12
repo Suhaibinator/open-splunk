@@ -84,17 +84,14 @@ func TestIntegrationLifecycleDisableMarkerSurvivesDisabledChangesBackupAndConcur
 	assertIntegrationLifecycleRows(t, database, "ko-disabled-chronology", wants)
 	sourceRows := readIntegrationLifecycleRows(t, database, "ko-disabled-chronology")
 
-	backupPath := filepath.Join(t.TempDir(), "lifecycle-chronology.sqlite")
+	backupPath := filepath.Join(t.TempDir(), "lifecycle-chronology.pgdump")
 	backupContext, cancelBackup := context.WithTimeout(context.Background(), 10*time.Second)
 	err := database.BackupTo(backupContext, backupPath)
 	cancelBackup()
 	if err != nil {
 		t.Fatalf("BackupTo(lifecycle chronology): %v", err)
 	}
-	restored, err := control.OpenReadOnly(context.Background(), backupPath)
-	if err != nil {
-		t.Fatalf("control.OpenReadOnly(lifecycle backup): %v", err)
-	}
+	restored := restoreCatalogSnapshot(t, database, backupPath, true)
 	t.Cleanup(func() {
 		if err := restored.Close(); err != nil {
 			t.Errorf("close lifecycle backup: %v", err)
@@ -828,7 +825,7 @@ func readIntegrationLifecycleRows(
 		SELECT object_version, state, disabled_at_unix_micro,
 		       quarantined_at_unix_micro, deleted_at_unix_micro, quarantine_reason
 		FROM knowledge_object_version_lifecycle
-		WHERE tenant_id = ? AND knowledge_object_id = ?
+		WHERE tenant_id = $1 AND knowledge_object_id = $2
 		ORDER BY object_version
 	`, testTenant, objectID)
 	if err != nil {
@@ -883,8 +880,8 @@ func corruptIntegrationLifecycleVersionTimestamp(
 	defer closeIntegrationCorruptionConnection(t, connection)
 	result, err := connection.ExecContext(context.Background(), `
 		UPDATE knowledge_object_versions
-		SET created_at_unix_micro = ?
-		WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = ?
+		SET created_at_unix_micro = $1
+		WHERE tenant_id = $2 AND knowledge_object_id = $3 AND object_version = $4
 	`, timestamp, testTenant, objectID, version)
 	if err != nil {
 		t.Fatalf("corrupt lifecycle version timestamp: %v", err)
@@ -907,7 +904,7 @@ func corruptIntegrationPriorVersionToDeleted(
 	versionResult, err := connection.ExecContext(context.Background(), `
 		UPDATE knowledge_object_versions
 		SET state = 'deleted', mutation_kind = 'delete', quarantine_reason = NULL
-		WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = ?
+		WHERE tenant_id = $1 AND knowledge_object_id = $2 AND object_version = $3
 	`, testTenant, objectID, version)
 	if err != nil {
 		t.Fatalf("corrupt prior version to deleted: %v", err)
@@ -916,9 +913,9 @@ func corruptIntegrationPriorVersionToDeleted(
 	lifecycleResult, err := connection.ExecContext(context.Background(), `
 		UPDATE knowledge_object_version_lifecycle
 		SET state = 'deleted', disabled_at_unix_micro = NULL,
-		    quarantined_at_unix_micro = NULL, deleted_at_unix_micro = ?,
+		    quarantined_at_unix_micro = NULL, deleted_at_unix_micro = $1,
 		    quarantine_reason = NULL
-		WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = ?
+		WHERE tenant_id = $2 AND knowledge_object_id = $3 AND object_version = $4
 	`, deletedAt, testTenant, objectID, version)
 	if err != nil {
 		t.Fatalf("corrupt prior lifecycle to deleted: %v", err)
@@ -939,8 +936,8 @@ func corruptIntegrationVersionMutation(
 	defer closeIntegrationCorruptionConnection(t, connection)
 	result, err := connection.ExecContext(context.Background(), `
 		UPDATE knowledge_object_versions
-		SET mutation_kind = ?
-		WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = ?
+		SET mutation_kind = $1
+		WHERE tenant_id = $2 AND knowledge_object_id = $3 AND object_version = $4
 	`, mutation, testTenant, objectID, version)
 	if err != nil {
 		t.Fatalf("corrupt version mutation: %v", err)
@@ -962,8 +959,8 @@ func corruptIntegrationCurrentDisableMarkers(
 	defer closeIntegrationCorruptionConnection(t, connection)
 	registryResult, err := connection.ExecContext(context.Background(), `
 		UPDATE knowledge_objects
-		SET disabled_at_unix_micro = ?
-		WHERE tenant_id = ? AND knowledge_object_id = ? AND current_version = ?
+		SET disabled_at_unix_micro = $1
+		WHERE tenant_id = $2 AND knowledge_object_id = $3 AND current_version = $4
 	`, marker, testTenant, objectID, version)
 	if err != nil {
 		t.Fatalf("corrupt registry disable marker: %v", err)
@@ -971,8 +968,8 @@ func corruptIntegrationCurrentDisableMarkers(
 	assertIntegrationRowsAffected(t, registryResult, "corrupt registry disable marker")
 	lifecycleResult, err := connection.ExecContext(context.Background(), `
 		UPDATE knowledge_object_version_lifecycle
-		SET disabled_at_unix_micro = ?
-		WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = ?
+		SET disabled_at_unix_micro = $1
+		WHERE tenant_id = $2 AND knowledge_object_id = $3 AND object_version = $4
 	`, marker, testTenant, objectID, version)
 	if err != nil {
 		t.Fatalf("corrupt lifecycle disable marker: %v", err)
@@ -1012,13 +1009,13 @@ func corruptIntegrationLifecycleRow(
 	case integrationLifecycleMissing:
 		result, err = connection.ExecContext(context.Background(), `
 			DELETE FROM knowledge_object_version_lifecycle
-			WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = ?
+			WHERE tenant_id = $1 AND knowledge_object_id = $2 AND object_version = $3
 		`, testTenant, objectID, version)
 	case integrationLifecycleMalformed:
 		result, err = connection.ExecContext(context.Background(), `
 			UPDATE knowledge_object_version_lifecycle
-			SET deleted_at_unix_micro = 19, quarantine_reason = ?
-			WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = ?
+			SET deleted_at_unix_micro = 19, quarantine_reason = $1
+			WHERE tenant_id = $2 AND knowledge_object_id = $3 AND object_version = $4
 		`, integrationMalformedLifecycleSentinel, testTenant, objectID, version)
 	case integrationLifecycleVersionMismatch:
 		result, err = connection.ExecContext(context.Background(), `
@@ -1026,13 +1023,13 @@ func corruptIntegrationLifecycleRow(
 			SET state = 'active', disabled_at_unix_micro = NULL,
 			    quarantined_at_unix_micro = NULL, deleted_at_unix_micro = NULL,
 			    quarantine_reason = NULL
-			WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = ?
+			WHERE tenant_id = $1 AND knowledge_object_id = $2 AND object_version = $3
 		`, testTenant, objectID, version)
 	case integrationLifecycleRegistryMismatch:
 		result, err = connection.ExecContext(context.Background(), `
 			UPDATE knowledge_objects
 			SET disabled_at_unix_micro = created_at_unix_micro
-			WHERE tenant_id = ? AND knowledge_object_id = ?
+			WHERE tenant_id = $1 AND knowledge_object_id = $2
 		`, testTenant, objectID)
 	default:
 		t.Fatalf("unknown lifecycle corruption %d", corruption)

@@ -109,7 +109,7 @@ func TestCreateSearchHistoryRerunRejectsMalformedSourceShapes(t *testing.T) {
 				AppCatalog:    activeHistoryRerunAppCatalog(),
 				SearchHistory: history,
 				WebUI:         testUI(),
-				OwnerID:       "owner-1",
+				OwnerID:       "1009",
 				TenantID:      "tenant-1",
 			})
 
@@ -183,7 +183,7 @@ func TestCreateSearchHistoryRerunRejectsRequestOptionsBeforeLookup(t *testing.T)
 				AppCatalog:    activeHistoryRerunAppCatalog(),
 				SearchHistory: history,
 				WebUI:         testUI(),
-				OwnerID:       "owner-1",
+				OwnerID:       "1009",
 				TenantID:      "tenant-1",
 			})
 			request := historyRerunRequest("history-original")
@@ -220,7 +220,7 @@ func TestCreateSearchHistoryRerunWithoutHistoryServiceIsUnsupported(t *testing.T
 		Indexes:    activeHistoryRerunIndexCatalog("main"),
 		AppCatalog: activeHistoryRerunAppCatalog(),
 		WebUI:      testUI(),
-		OwnerID:    "owner-1",
+		OwnerID:    "1009",
 		TenantID:   "tenant-1",
 	})
 
@@ -322,7 +322,7 @@ func TestCreateSearchHistoryRerunAuthorizesLegacyAndStaticApps(t *testing.T) {
 				SearchHistory: history,
 				WebUI:         testUI(),
 				Bootstrap:     test.bootstrap,
-				OwnerID:       "owner-1",
+				OwnerID:       "1009",
 				TenantID:      "tenant-1",
 			})
 
@@ -435,7 +435,7 @@ func TestCreateSearchHistoryRerunMapsLiveAppCatalogFailures(t *testing.T) {
 				AppCatalog:    test.catalog,
 				SearchHistory: history,
 				WebUI:         testUI(),
-				OwnerID:       "owner-1",
+				OwnerID:       "1009",
 				TenantID:      "tenant-1",
 			})
 
@@ -569,7 +569,7 @@ func TestCreateSearchHistoryRerunRejectsMalformedTrustedDefinition(t *testing.T)
 				AppCatalog:    apps,
 				SearchHistory: history,
 				WebUI:         testUI(),
-				OwnerID:       "owner-1",
+				OwnerID:       "1009",
 				TenantID:      "tenant-1",
 			})
 
@@ -648,7 +648,7 @@ func TestCreateSearchHistoryRerunMapsIndexCatalogFailures(t *testing.T) {
 				AppCatalog:    activeHistoryRerunAppCatalog(),
 				SearchHistory: history,
 				WebUI:         testUI(),
-				OwnerID:       "owner-1",
+				OwnerID:       "1009",
 				TenantID:      "tenant-1",
 			})
 
@@ -704,7 +704,7 @@ func TestCreateSearchHistoryRerunMapsJobAdmissionCancellation(t *testing.T) {
 				AppCatalog:    activeHistoryRerunAppCatalog(),
 				SearchHistory: history,
 				WebUI:         testUI(),
-				OwnerID:       "owner-1",
+				OwnerID:       "1009",
 				TenantID:      "tenant-1",
 			})
 
@@ -761,7 +761,7 @@ func TestCreateSearchHistoryRerunResolvesNamedZoneDayIntentAtFreshAdmission(t *t
 		AppCatalog:    activeHistoryRerunAppCatalog(),
 		SearchHistory: history,
 		WebUI:         testUI(),
-		OwnerID:       "owner-1",
+		OwnerID:       "1009",
 		TenantID:      "tenant-1",
 		Now:           func() time.Time { return admissionTime },
 	})
@@ -825,7 +825,7 @@ func TestCreateSearchHistoryRerunRejectsTimeIntentThatExpiredAgainstFreshClock(t
 		AppCatalog:    activeHistoryRerunAppCatalog(),
 		SearchHistory: history,
 		WebUI:         testUI(),
-		OwnerID:       "owner-1",
+		OwnerID:       "1009",
 		TenantID:      "tenant-1",
 		Now: func() time.Time {
 			return time.Date(2026, time.July, 24, 18, 30, 0, 0, time.UTC)

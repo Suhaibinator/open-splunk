@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 const testCollectorID = "123e4567-e89b-12d3-a456-426614174000"
@@ -39,7 +40,7 @@ func TestCreateCollectorTokenRequiresCanonicalCollectorBinding(t *testing.T) {
 		issued, createErr := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 			Name:              fmt.Sprintf("valid-%d", position),
 			AllowedIndexNames: []string{index.Definition.Name},
-			BoundCollectorID:  collectorID,
+			BoundCollectorID:  collectorID, OrganizationID: 1, IssuerUserID: 42,
 		})
 		if createErr != nil {
 			t.Fatalf("CreateCollectorToken(%q): %v", collectorID, createErr)
@@ -74,7 +75,7 @@ func TestCreateCollectorTokenRequiresCanonicalCollectorBinding(t *testing.T) {
 		_, createErr := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 			Name:              fmt.Sprintf("invalid-%d", position),
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  collectorID,
+			BoundCollectorID:  collectorID, OrganizationID: 1, IssuerUserID: 42,
 		})
 		if !errors.Is(createErr, control.ErrInvalidArgument) {
 			t.Fatalf(
@@ -90,7 +91,7 @@ func TestCreateCollectorTokenRequiresCanonicalCollectorBinding(t *testing.T) {
 	duplicate, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "rotation token",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(rotation): %v", err)
@@ -277,7 +278,7 @@ func TestCollectorBindingSurvivesDatabaseReopen(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "control.sqlite")
+	path := pgtest.DSN(t)
 	key := []byte("0123456789abcdef0123456789abcdef")
 	db, err := control.Open(ctx, path)
 	if err != nil {
@@ -358,15 +359,15 @@ func TestCollectorBindingCorruptionFailsSafeDomainProjection(t *testing.T) {
 		t.Fatalf("acquire corruption connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(ctx, connection, false); err != nil {
 		t.Fatalf("disable checks for corruption fixture: %v", err)
 	}
 	if _, err := connection.ExecContext(ctx, `
 		INSERT INTO ingestion_tokens (
-			ingestion_token_id, version, name, description, token_prefix,
+			organization_id, issuer_user_id, ingestion_token_id, version, name, description, token_prefix,
 			token_digest, state, created_at_unix_micro, updated_at_unix_micro,
 			bound_collector_id
-		) VALUES (?, 1, 'corrupt', '', 'ost_corrupt', ?, 'active', ?, ?, ?)`,
+		) VALUES (1, 42, $1, 1, 'corrupt', '', 'ost_corrupt', $2, 'active', $3, $4, $5)`,
 		tokenID,
 		store.digest(plaintext),
 		now.UnixMicro(),
@@ -377,13 +378,13 @@ func TestCollectorBindingCorruptionFailsSafeDomainProjection(t *testing.T) {
 	}
 	if _, err := connection.ExecContext(ctx, `
 		INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
-		VALUES (?, ?)`,
+		VALUES ($1, $2)`,
 		tokenID,
 		index.ID,
 	); err != nil {
 		t.Fatalf("insert corrupt token scope: %v", err)
 	}
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`); err != nil {
+	if _, err := pgtest.Checks(ctx, connection, true); err != nil {
 		t.Fatalf("restore checks after corruption fixture: %v", err)
 	}
 
@@ -415,14 +416,11 @@ func seedUnboundCollectorToken(
 	ctx := context.Background()
 	var requiredTriggerSQL string
 	if err := db.SQLDB().QueryRowContext(ctx, `
-		SELECT sql
-		FROM sqlite_schema
-		WHERE type = 'trigger'
-		  AND name = 'ingestion_token_collector_binding_is_required'`).
+		SELECT pg_get_triggerdef(t.oid) AS sql FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND t.tgname='ingestion_token_collector_binding_is_required'`).
 		Scan(&requiredTriggerSQL); err != nil {
 		t.Fatalf("read collector-binding insert trigger: %v", err)
 	}
-	tx, err := db.SQLDB().BeginTx(ctx, nil)
+	tx, err := pgmeta.BeginSQL(ctx, db.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin legacy token fixture: %v", err)
 	}
@@ -433,14 +431,14 @@ func seedUnboundCollectorToken(
 		}
 	}()
 	if _, err := tx.ExecContext(ctx, `
-		DROP TRIGGER ingestion_token_collector_binding_is_required`); err != nil {
+		DROP TRIGGER ingestion_token_collector_binding_is_required ON ingestion_tokens`); err != nil {
 		t.Fatalf("temporarily remove collector-binding insert trigger: %v", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO ingestion_tokens (
-			ingestion_token_id, version, name, description, token_prefix,
+			organization_id, issuer_user_id, ingestion_token_id, version, name, description, token_prefix,
 			token_digest, state, created_at_unix_micro, updated_at_unix_micro
-		) VALUES (?, 1, 'legacy', '', 'ost_legacy', ?, 'active', ?, ?)`,
+		) VALUES (1, 42, $1, 1, 'legacy', '', 'ost_legacy', $2, 'active', $3, $4)`,
 		tokenID,
 		store.digest(plaintext),
 		createdAt.UnixMicro(),
@@ -450,7 +448,7 @@ func seedUnboundCollectorToken(
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
-		VALUES (?, ?)`,
+		VALUES ($1, $2)`,
 		tokenID,
 		indexID,
 	); err != nil {

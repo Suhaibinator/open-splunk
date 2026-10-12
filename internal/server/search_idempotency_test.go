@@ -46,7 +46,7 @@ func TestSearchAdmissionRaceReturnsCurrentReplay(t *testing.T) {
 			current.Version = 9
 			jobs := &racingReceiptSearchJobs{current: current}
 			handler := &apiHandler{
-				jobs: jobs, ownerID: "owner-1", tenantID: "tenant-1",
+				jobs: jobs, ownerID: "1009", tenantID: "tenant-1",
 				now:     func() time.Time { return testNow },
 				indexes: fakeIndexCatalog{indexes: []control.Index{{State: control.IndexStateActive, Definition: control.IndexDefinition{Name: "main", SearchEnabled: true}}}},
 			}
@@ -59,7 +59,7 @@ func TestSearchAdmissionRaceReturnsCurrentReplay(t *testing.T) {
 			input.ClientRequestId = new("logical-search-request")
 			// A dynamic default/source may have changed since the racing winner accepted.
 			input.Definition.AppId = new("resolved-app")
-			response, err := handler.createSearchJob(newAPIRequest(exportReceiptContext(t)), input)
+			response, err := handler.createSearchJob(newAPIRequest(exportReceiptContext(t, 1009)), input)
 			if err != nil || !response.GetReplayed() || response.GetSearchJob().GetSearchJobId() != current.ID || response.GetSearchJob().GetStateVersion() != current.Version || response.GetSearchJob().GetDefinition().GetAppId() != current.AppID {
 				t.Fatalf("racing replay = %v, %v", response, err)
 			}

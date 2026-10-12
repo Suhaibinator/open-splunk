@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"fortio.org/safecast"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
@@ -92,7 +93,7 @@ func (writer *Writer) PrepareQuarantine(
 		return nil, err
 	}
 
-	tx := writer.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(writer.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return nil, writerError(ctx, "begin quarantine preparation", tx.Error)
 	}
@@ -189,7 +190,7 @@ func (writer *Writer) Quarantine(
 	replayOutcomeUnknown = true
 	request = prepared.quarantineRequest
 
-	tx := writer.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(writer.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return nil, writerError(ctx, "begin quarantine", tx.Error)
 	}
@@ -397,9 +398,11 @@ func (writer *Writer) scanQuarantineAuthority(
 		return quarantineAuthority{}, control.ErrNotFound
 	}
 	readScope, err := normalizeScope(ReadScope{
-		TenantID:       scope.tenantID,
-		OwnerID:        scope.ownerID,
-		ReadableAppIDs: slices.Clone(scope.writableAppIDs),
+		TenantID:          scope.tenantID,
+		OrganizationID:    scope.organizationID,
+		SiteAdministrator: scope.siteAdministrator,
+		OwnerID:           scope.ownerID,
+		ReadableAppIDs:    slices.Clone(scope.writableAppIDs),
 	})
 	if err != nil {
 		return quarantineAuthority{}, err

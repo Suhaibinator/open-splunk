@@ -12,6 +12,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func admitAuthorizationFixture(
@@ -354,7 +356,7 @@ func TestAuthorizeLeaseDefersOnlyMutableIndexAuthorityAfterExactLeaseCheck(t *te
 			mutate: func(t *testing.T, ctx context.Context, fixture *admissionFixture) {
 				if _, err := fixture.database.SQLDB().ExecContext(ctx, `
 					UPDATE indexes
-					SET retention_nanoseconds = ?
+					SET retention_nanoseconds = $1
 					WHERE name = 'main'`, int64(8_000_000_000*time.Second)); err != nil {
 					t.Fatalf("corrupt retention: %v", err)
 				}
@@ -471,9 +473,8 @@ func TestAuthorizeLeaseFailsClosedOnCorruptDurableLease(t *testing.T) {
 		t.Fatalf("SQLDB().Conn(): %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(
-		ctx,
-		`PRAGMA ignore_check_constraints = ON`,
+	if _, err := pgtest.Checks(
+		ctx, connection, false,
 	); err != nil {
 		t.Fatalf("enable corrupt fixture: %v", err)
 	}
@@ -481,15 +482,14 @@ func TestAuthorizeLeaseFailsClosedOnCorruptDurableLease(t *testing.T) {
 		ctx,
 		`UPDATE collector_runtime
 		 SET active_instance_id = ''
-		 WHERE tenant_id = ? AND collector_id = ?`,
+		 WHERE tenant_id = $1 AND collector_id = $2`,
 		admitted.Lease.TenantID,
 		admitted.Lease.CollectorID,
 	); err != nil {
 		t.Fatalf("corrupt durable lease: %v", err)
 	}
-	if _, err := connection.ExecContext(
-		ctx,
-		`PRAGMA ignore_check_constraints = OFF`,
+	if _, err := pgtest.Checks(
+		ctx, connection, true,
 	); err != nil {
 		t.Fatalf("disable corrupt fixture: %v", err)
 	}
@@ -523,7 +523,7 @@ func TestAuthorizeLeaseUsesCommitOrdering(t *testing.T) {
 		"stream-1",
 	)
 
-	writer := fixture.database.GORMDB().WithContext(ctx).Begin()
+	writer := pgmeta.Begin(fixture.database.GORMDB().WithContext(ctx))
 	if writer.Error != nil {
 		t.Fatalf("begin writer: %v", writer.Error)
 	}
@@ -598,7 +598,7 @@ func TestAuthorizationHelpersShareOneUnfracturedSnapshot(t *testing.T) {
 		"stream-1",
 	)
 
-	reader := fixture.database.GORMDB().WithContext(ctx).Begin(
+	reader := pgmeta.Begin(fixture.database.GORMDB().WithContext(ctx),
 		&sql.TxOptions{ReadOnly: true},
 	)
 	if reader.Error != nil {
@@ -620,7 +620,7 @@ func TestAuthorizationHelpersShareOneUnfracturedSnapshot(t *testing.T) {
 		t.Fatalf("RevalidateCollectorInTransaction(): %v", err)
 	}
 
-	writer := fixture.database.GORMDB().WithContext(ctx).Begin()
+	writer := pgmeta.Begin(fixture.database.GORMDB().WithContext(ctx))
 	if writer.Error != nil {
 		t.Fatalf("begin state-change writer: %v", writer.Error)
 	}

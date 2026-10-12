@@ -57,7 +57,7 @@ func TestRecordRejectsUnknownFieldsAtEveryTreeDepth(t *testing.T) {
 			_, store := openTestStore(t, Options{})
 			entry := sample()
 			target(entry).SetUnknown(futureHistoryField())
-			if _, err := store.Record(context.Background(), AccessScope{
+			if _, err := store.Record(context.Background(), AccessScope{OrganizationID: "1",
 				TenantID: "tenant", OwnerID: "owner",
 			}, entry); !errors.Is(err, control.ErrInvalidArgument) {
 				t.Fatalf("Record() error = %v, want ErrInvalidArgument", err)
@@ -67,7 +67,7 @@ func TestRecordRejectsUnknownFieldsAtEveryTreeDepth(t *testing.T) {
 
 	t.Run("clean control entry is accepted", func(t *testing.T) {
 		_, store := openTestStore(t, Options{})
-		if _, err := store.Record(context.Background(), AccessScope{
+		if _, err := store.Record(context.Background(), AccessScope{OrganizationID: "1",
 			TenantID: "tenant", OwnerID: "owner",
 		}, sample()); err != nil {
 			t.Fatalf("Record() on a clean entry error = %v", err)
@@ -81,7 +81,7 @@ func TestRecordRejectsUnknownFieldsAtEveryTreeDepth(t *testing.T) {
 func TestRecordSeparatesTypedNilFromUnknownFields(t *testing.T) {
 	_, store := openTestStore(t, Options{})
 	ctx := context.Background()
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	created := time.Now().UTC().Add(-time.Minute)
 
 	typedNilDefinition := historyEntry(
@@ -118,7 +118,7 @@ func TestRecordRejectsUnknownFieldsInsideRepeatedKnowledgeObjects(t *testing.T) 
 	objects := entry.KnowledgeSnapshot.Objects
 	objects[len(objects)-1].ProtoReflect().SetUnknown(futureHistoryField())
 
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	if _, err := store.Record(context.Background(), scope, entry); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Record() error = %v, want ErrInvalidArgument", err)
 	}

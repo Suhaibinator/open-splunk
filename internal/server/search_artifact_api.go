@@ -8,6 +8,7 @@ import (
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/cursorcodec"
 	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -38,7 +39,7 @@ func (handler *apiHandler) registerSearchArtifactRoutes(group *apiRouteGroup, sm
 }
 
 func (handler *apiHandler) getSearchJobSettings(request *http.Request, input *opensplunk.GetSearchJobSettingsRequest) (*opensplunk.GetSearchJobSettingsResponse, error) {
-	record, err := handler.searchArtifacts.Get(request.Context(), handler.accessScope(), input.GetSearchJobId(), searchartifacts.AccessRefresh)
+	record, err := handler.searchArtifacts.Get(request.Context(), handler.accessScope(request.Context()), input.GetSearchJobId(), searchartifacts.AccessRefresh)
 	if err != nil {
 		return nil, mapSearchArtifactError(err)
 	}
@@ -50,7 +51,7 @@ func (handler *apiHandler) getSearchJobSettings(request *http.Request, input *op
 }
 
 func (handler *apiHandler) updateSearchJobSettings(request *http.Request, input *opensplunk.UpdateSearchJobSettingsRequest) (*opensplunk.UpdateSearchJobSettingsResponse, error) {
-	record, err := handler.searchArtifacts.UpdateSettingsExpected(request.Context(), handler.accessScope(), input.GetSearchJobId(), retainedSettings(input.GetVisibility()), input.GetExpectedStateVersion())
+	record, err := handler.searchArtifacts.UpdateSettingsExpected(request.Context(), handler.accessScope(request.Context()), input.GetSearchJobId(), retainedSettings(input.GetVisibility()), input.GetExpectedStateVersion())
 	if err != nil {
 		return nil, mapSearchArtifactError(err)
 	}
@@ -62,7 +63,7 @@ func (handler *apiHandler) updateSearchJobSettings(request *http.Request, input 
 }
 
 func (handler *apiHandler) shareSearchJob(request *http.Request, input *opensplunk.ShareSearchJobRequest) (*opensplunk.ShareSearchJobResponse, error) {
-	record, err := handler.searchArtifacts.ShareExpected(request.Context(), handler.accessScope(), input.GetSearchJobId(), input.GetExpectedStateVersion())
+	record, err := handler.searchArtifacts.ShareExpected(request.Context(), handler.accessScope(request.Context()), input.GetSearchJobId(), input.GetExpectedStateVersion())
 	if err != nil {
 		return nil, mapSearchArtifactError(err)
 	}
@@ -154,7 +155,7 @@ func (handler *apiHandler) durableResultPage(ctx context.Context, id string, lim
 	if limit == 0 {
 		limit = min(defaultDurableResultPageSize, int(handler.maximumPageSize))
 	}
-	lease, err := handler.searchArtifacts.Acquire(ctx, handler.accessScope(), id)
+	lease, err := handler.searchArtifacts.Acquire(ctx, handler.accessScope(ctx), id)
 	if err != nil {
 		return searchjobs.ResultPage{}, searchjobs.Job{}, mapSearchArtifactError(err)
 	}
@@ -208,7 +209,7 @@ func (handler *apiHandler) durableResultPage(ctx context.Context, id string, lim
 			return searchjobs.ResultPage{}, searchjobs.Job{}, err
 		}
 	}
-	record, err := handler.searchArtifacts.Get(ctx, handler.accessScope(), id, searchartifacts.AccessInspect)
+	record, err := handler.searchArtifacts.Get(ctx, handler.accessScope(ctx), id, searchartifacts.AccessInspect)
 	if err != nil {
 		return searchjobs.ResultPage{}, searchjobs.Job{}, mapSearchArtifactError(err)
 	}
@@ -217,6 +218,8 @@ func (handler *apiHandler) durableResultPage(ctx context.Context, id string, lim
 
 func mapSearchArtifactError(err error) error {
 	switch {
+	case errors.Is(err, authorization.ErrUnauthorized), errors.Is(err, authorization.ErrForbidden), errors.Is(err, authorization.ErrUnassigned):
+		return mapAuthorizationError(err)
 	case errors.Is(err, searchartifacts.ErrNotFound):
 		return router.NewHTTPError(http.StatusNotFound, "search job not found")
 	case errors.Is(err, searchartifacts.ErrExpired):

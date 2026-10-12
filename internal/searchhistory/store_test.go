@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"path/filepath"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	"slices"
 	"strings"
 	"testing"
@@ -27,7 +29,7 @@ var testStoreClock = func() time.Time {
 
 func openTestStore(t *testing.T, options Options) (*control.DB, *Store) {
 	t.Helper()
-	database, err := control.Open(context.Background(), filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := control.Open(context.Background(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("control.Open() error = %v", err)
 	}
@@ -116,7 +118,7 @@ func TestNewValidatesOptionsAndClonesCursorKey(t *testing.T) {
 func TestRecordGetIsImmutableDeterministicScopedAndDetached(t *testing.T) {
 	database, store := openTestStore(t, Options{})
 	ctx := context.Background()
-	scope := AccessScope{TenantID: " tenant ", OwnerID: " owner "}
+	scope := AccessScope{OrganizationID: "1", TenantID: " tenant ", OwnerID: " owner "}
 	created := time.Date(2026, time.July, 22, 12, 0, 0, 123_456_789, time.UTC)
 	input := historyEntry("job-1", " index=main | head 10 ", " search ", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
 	recorded, err := store.Record(ctx, scope, input)
@@ -131,7 +133,7 @@ func TestRecordGetIsImmutableDeterministicScopedAndDetached(t *testing.T) {
 	}
 	input.Definition.Spl = "mutated input"
 	recorded.Definition.Spl = "mutated output"
-	got, err := store.Get(ctx, AccessScope{TenantID: "tenant", OwnerID: "owner"}, "job-1")
+	got, err := store.Get(ctx, AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}, "job-1")
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -146,17 +148,17 @@ func TestRecordGetIsImmutableDeterministicScopedAndDetached(t *testing.T) {
 	digest := sha256.Sum256(encoded)
 	var stored []byte
 	var checksum []byte
-	if err := database.SQLDB().QueryRowContext(ctx, `SELECT entry_proto, entry_sha256 FROM search_history WHERE search_job_id = ?`, "job-1").Scan(&stored, &checksum); err != nil {
+	if err := database.SQLDB().QueryRowContext(ctx, `SELECT entry_proto, entry_sha256 FROM search_history WHERE search_job_id = $1`, "job-1").Scan(&stored, &checksum); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(stored, encoded) || !slices.Equal(checksum, digest[:]) {
 		t.Fatal("history entry was not stored deterministically with its checksum")
 	}
 
-	if _, err := store.Get(ctx, AccessScope{TenantID: "tenant", OwnerID: "other"}, "job-1"); !errors.Is(err, control.ErrNotFound) {
+	if _, err := store.Get(ctx, AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "other"}, "job-1"); !errors.Is(err, control.ErrNotFound) {
 		t.Fatalf("cross-owner Get() error = %v, want ErrNotFound", err)
 	}
-	if _, err := store.Get(ctx, AccessScope{TenantID: "other", OwnerID: "owner"}, "job-1"); !errors.Is(err, control.ErrNotFound) {
+	if _, err := store.Get(ctx, AccessScope{OrganizationID: "1", TenantID: "other", OwnerID: "owner"}, "job-1"); !errors.Is(err, control.ErrNotFound) {
 		t.Fatalf("cross-tenant Get() error = %v, want ErrNotFound", err)
 	}
 
@@ -170,7 +172,7 @@ func TestRecordGetIsImmutableDeterministicScopedAndDetached(t *testing.T) {
 	if _, err := store.Record(ctx, scope, changed); !errors.Is(err, control.ErrVersionConflict) {
 		t.Fatalf("changed Record() error = %v, want ErrVersionConflict", err)
 	}
-	if _, err := store.Record(ctx, AccessScope{TenantID: "tenant", OwnerID: "other"}, got); !errors.Is(err, control.ErrAlreadyExists) {
+	if _, err := store.Record(ctx, AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "other"}, got); !errors.Is(err, control.ErrAlreadyExists) {
 		t.Fatalf("cross-owner Record() error = %v, want ErrAlreadyExists", err)
 	}
 }
@@ -214,7 +216,7 @@ func TestRecordValidationRejectsUnsafeOrIncompleteEntries(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			entry := proto.Clone(valid).(*opensplunk.SearchHistoryEntry)
 			test.mutate(entry)
-			if _, err := store.Record(context.Background(), AccessScope{TenantID: "tenant", OwnerID: "owner"}, entry); !errors.Is(err, control.ErrInvalidArgument) {
+			if _, err := store.Record(context.Background(), AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}, entry); !errors.Is(err, control.ErrInvalidArgument) {
 				t.Fatalf("Record() error = %v, want ErrInvalidArgument", err)
 			}
 		})
@@ -226,7 +228,7 @@ func TestRecordValidationRejectsUnsafeOrIncompleteEntries(t *testing.T) {
 
 func TestRecordRejectsUnknownProtobufFieldsRecursively(t *testing.T) {
 	_, store := openTestStore(t, Options{})
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	for name, mutate := range map[string]func(*opensplunk.SearchHistoryEntry){
 		"root": func(entry *opensplunk.SearchHistoryEntry) {
 			entry.ProtoReflect().SetUnknown([]byte{0xa0, 0x06, 0x01})
@@ -250,7 +252,7 @@ func TestIdleOwnerHistoryIsPrunedOnRead(t *testing.T) {
 	database, store := openTestStore(t, Options{
 		Clock: func() time.Time { return now }, MaximumAge: time.Hour,
 	})
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	if _, err := store.Record(context.Background(), scope, historyEntry(
 		"idle", "  index=main | head 1\n", "search",
 		opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, now,
@@ -287,7 +289,7 @@ func TestIdleOwnerHistoryIsPrunedOnRead(t *testing.T) {
 func TestListKeysetPaginationFiltersSortsAndBindsCursor(t *testing.T) {
 	_, store := openTestStore(t, Options{})
 	ctx := context.Background()
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	base := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
 	entries := []*opensplunk.SearchHistoryEntry{
 		historyEntry("job-a", "index=main error", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, base),
@@ -306,7 +308,7 @@ func TestListKeysetPaginationFiltersSortsAndBindsCursor(t *testing.T) {
 			t.Fatalf("Record(%s) error = %v", entry.SearchJobId, err)
 		}
 	}
-	if _, err := store.Record(ctx, AccessScope{TenantID: "tenant", OwnerID: "other"}, historyEntry("job-other", "error", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, base)); err != nil {
+	if _, err := store.Record(ctx, AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "other"}, historyEntry("job-other", "error", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, base)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -364,7 +366,7 @@ func TestListKeysetPaginationFiltersSortsAndBindsCursor(t *testing.T) {
 	if _, err := store.List(ctx, scope, ListRequest{PageSize: 1, PageToken: *first.NextPageToken, AppIDFilter: &app}); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("cursor replay with changed filter error = %v, want ErrInvalidArgument", err)
 	}
-	if _, err := store.List(ctx, AccessScope{TenantID: "tenant", OwnerID: "other"}, ListRequest{PageSize: 1, PageToken: *first.NextPageToken}); !errors.Is(err, control.ErrInvalidArgument) {
+	if _, err := store.List(ctx, AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "other"}, ListRequest{PageSize: 1, PageToken: *first.NextPageToken}); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("cross-owner cursor replay error = %v, want ErrInvalidArgument", err)
 	}
 	if _, err := store.List(ctx, scope, ListRequest{PageSize: maximumPageSize + 1}); !errors.Is(err, control.ErrInvalidArgument) {
@@ -374,22 +376,22 @@ func TestListKeysetPaginationFiltersSortsAndBindsCursor(t *testing.T) {
 
 func TestListFilterQueriesUseCompositeIndexes(t *testing.T) {
 	database, _ := openTestStore(t, Options{})
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	tests := map[string]struct {
 		request   ListRequest
 		wantIndex string
 	}{
 		"created": {
 			request:   ListRequest{},
-			wantIndex: "search_history_owner_created_idx",
+			wantIndex: "search_history_organization_created",
 		},
 		"app": {
 			request:   ListRequest{AppIDFilter: new("search")},
-			wantIndex: "search_history_owner_app_created_idx",
+			wantIndex: "search_history_organization_app",
 		},
 		"saved": {
 			request:   ListRequest{SavedSearchIDFilter: new("saved-1")},
-			wantIndex: "search_history_owner_saved_created_idx",
+			wantIndex: "search_history_organization_saved",
 		},
 	}
 	for name, test := range tests {
@@ -412,12 +414,10 @@ func TestListFilterQueriesUseCompositeIndexes(t *testing.T) {
 				ID     int
 				Parent int
 				Unused int
-				Detail string
+				Detail string `gorm:"column:QUERY PLAN"`
 			}
 			var plans []queryPlanRow
-			explain := database.GORMDB().WithContext(context.Background()).
-				Raw("EXPLAIN QUERY PLAN "+query.Statement.SQL.String(), query.Statement.Vars...).
-				Scan(&plans)
+			explain := nativeHistoryExplain(t, database.GORMDB(), "EXPLAIN (COSTS OFF) "+query.Statement.SQL.String(), query.Statement.Vars...).Scan(&plans)
 			if explain.Error != nil {
 				t.Fatal(explain.Error)
 			}
@@ -440,7 +440,7 @@ func TestDeleteClearPruneAndCorruptionDetection(t *testing.T) {
 		MaximumEntriesPerOwner: 2,
 	})
 	ctx := context.Background()
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	for index, created := range []time.Time{now.Add(-3 * time.Hour), now.Add(-90 * time.Minute), now.Add(-30 * time.Minute), now} {
 		id := fmt.Sprintf("job-%d", index)
 		if _, err := store.Record(ctx, scope, historyEntry(id, "index=main", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)); err != nil {
@@ -460,7 +460,7 @@ func TestDeleteClearPruneAndCorruptionDetection(t *testing.T) {
 	if err := store.Delete(ctx, scope, "job-2"); !errors.Is(err, control.ErrNotFound) {
 		t.Fatalf("Delete(missing) error = %v, want ErrNotFound", err)
 	}
-	if err := store.Delete(ctx, AccessScope{TenantID: "tenant", OwnerID: "other"}, "job-3"); !errors.Is(err, control.ErrNotFound) {
+	if err := store.Delete(ctx, AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "other"}, "job-3"); !errors.Is(err, control.ErrNotFound) {
 		t.Fatalf("cross-owner Delete() error = %v, want ErrNotFound", err)
 	}
 
@@ -478,7 +478,7 @@ func TestDeleteClearPruneAndCorruptionDetection(t *testing.T) {
 		t.Fatalf("Clear() = (%d,%v), want (1,nil)", deleted, err)
 	}
 
-	if _, err := database.SQLDB().ExecContext(ctx, `UPDATE search_history SET entry_proto = X'00' WHERE search_job_id = 'clear-b'`); err != nil {
+	if _, err := database.SQLDB().ExecContext(ctx, `UPDATE search_history SET entry_proto = decode('00','hex') WHERE search_job_id = 'clear-b'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Get(ctx, scope, "clear-b"); err == nil || errors.Is(err, control.ErrInvalidArgument) {
@@ -492,4 +492,17 @@ func entryIDs(entries []*opensplunk.SearchHistoryEntry) []string {
 		ids[index] = entry.SearchJobId
 	}
 	return ids
+}
+
+func nativeHistoryExplain(t *testing.T, db *gorm.DB, query string, args ...any) *gorm.DB {
+	t.Helper()
+	tx := db.Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	t.Cleanup(func() { _ = tx.Rollback().Error })
+	if err := tx.Exec("SET LOCAL enable_seqscan = off").Error; err != nil {
+		t.Fatal(err)
+	}
+	return tx.Raw(query, args...)
 }

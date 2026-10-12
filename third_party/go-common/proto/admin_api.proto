@@ -1,0 +1,947 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+import "user.proto";
+import "pagination.proto";
+import "attachment.proto";
+import "organization.proto";
+import "careers.proto";
+import "chat.proto";
+import "authentication.proto";
+import "inference.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+
+// --- User Management Messages ---
+
+enum AdminListUsersSortBy {
+  ADMIN_LIST_USERS_SORT_BY_UNSPECIFIED = 0;
+  ADMIN_LIST_USERS_SORT_BY_EMAIL = 1;
+  ADMIN_LIST_USERS_SORT_BY_USERNAME = 2;
+  ADMIN_LIST_USERS_SORT_BY_USER_TYPE = 3;
+  ADMIN_LIST_USERS_SORT_BY_CREATED_AT = 4;
+  ADMIN_LIST_USERS_SORT_BY_UPDATED_AT = 5;
+  ADMIN_LIST_USERS_SORT_BY_LAST_LOGIN = 6;
+}
+
+// Request to list users with filtering and pagination
+message AdminListUsersRequest {
+  PaginationRequest pagination = 1;
+  string search = 2;              // Search by email, username, name, or exact numeric user ID
+  UserType user_type_filter = 3;  // Filter by user type
+  optional bool banned_filter = 4; // Filter by banned status (null = all, true = banned only, false = active only)
+  SortRequest sort = 5;           // Sort parameters
+  FilterRequest filter = 6;       // Common filter parameters
+  AdminListUsersSortBy sort_by = 7;
+  optional bool email_verified_filter = 8; // Filter by effective email-verification status
+  optional bool is_bot_filter = 9;         // Filter bot (true) vs human (false) accounts
+}
+
+// Detailed user information for admin view
+message AdminUserDetails {
+  User user = 1;
+  google.protobuf.Timestamp created_at = 2;
+  google.protobuf.Timestamp updated_at = 3;
+  google.protobuf.Timestamp last_login = 4;
+  uint32 total_logins = 5;
+  uint32 active_sessions = 6;
+  repeated string auth_methods = 7;  // ["password", "google", "github"]
+  uint64 total_attachments = 8;
+  uint64 storage_used_bytes = 9;
+  bool email_verified = 10;
+  bool invitation_pending = 11; // Invitation issued for current email; password setup incomplete
+}
+
+// Response for listing users with pagination
+message AdminListUsersResponse {
+  repeated AdminUserDetails users = 1;
+  PaginationResponse pagination = 2;
+}
+
+// Request to get a specific user's details
+message AdminGetUserRequest {
+  uint64 user_id = 1;
+}
+
+// Response with user details
+message AdminGetUserResponse {
+  AdminUserDetails user = 1;
+}
+
+// Request to ban/unban a user
+message AdminBanUserRequest {
+  uint64 user_id = 1;
+  bool banned = 2;          // true to ban, false to unban
+  string reason = 3;        // Reason for ban/unban
+}
+
+// Response for ban/unban operation
+message AdminBanUserResponse {
+}
+
+// Request to change a user's type/role
+message AdminChangeUserTypeRequest {
+  uint64 user_id = 1;
+  UserType new_user_type = 2;
+  string reason = 3;        // Reason for change
+}
+
+// Response for user type change
+message AdminChangeUserTypeResponse {
+}
+
+// Request to change a user's username.
+// This operation should be audit logged with both actor and target user context.
+message AdminChangeUsernameRequest {
+  uint64 user_id = 1;
+  string new_username = 2;
+  string reason = 3;        // Reason for username change
+}
+
+// Response for username change
+message AdminChangeUsernameResponse {
+}
+
+// Username change audit entry for admin history views.
+message AdminUsernameChangeHistoryEntry {
+  uint64 id = 1;
+  uint64 target_user_id = 2;
+  string old_username = 3;
+  string new_username = 4;
+  optional uint64 actor_user_id = 5;  // Null for system-initiated changes
+  string reason = 6;                   // Plain-text reason (includes actor kind)
+  google.protobuf.Timestamp created_at = 7;
+  User target_user = 8;                // Embedded target user with attribute filtering
+  User actor_user = 9;                 // Embedded actor user with attribute filtering
+}
+
+// Request to list username change audit history with filtering and pagination.
+enum AdminListUsernameChangeHistorySortBy {
+  ADMIN_LIST_USERNAME_CHANGE_HISTORY_SORT_BY_UNSPECIFIED = 0;
+  ADMIN_LIST_USERNAME_CHANGE_HISTORY_SORT_BY_CREATED_AT = 1;
+  ADMIN_LIST_USERNAME_CHANGE_HISTORY_SORT_BY_TARGET_USER_ID = 2;
+  ADMIN_LIST_USERNAME_CHANGE_HISTORY_SORT_BY_ACTOR_USER_ID = 3;
+  ADMIN_LIST_USERNAME_CHANGE_HISTORY_SORT_BY_OLD_USERNAME = 4;
+  ADMIN_LIST_USERNAME_CHANGE_HISTORY_SORT_BY_NEW_USERNAME = 5;
+}
+
+message AdminListUsernameChangeHistoryRequest {
+  PaginationRequest pagination = 1;
+  optional uint64 target_user_id_filter = 2;
+  optional uint64 actor_user_id_filter = 3;
+  string username_filter = 4;              // Match old/new username
+  google.protobuf.Timestamp from_time = 5; // Inclusive lower bound
+  google.protobuf.Timestamp to_time = 6;   // Inclusive upper bound
+  SortRequest sort = 7;                    // Default: created_at desc
+  FilterRequest filter = 8;                // Common filter parameters
+  AdminListUsernameChangeHistorySortBy sort_by = 9;
+}
+
+// Response for listing username change audit history.
+message AdminListUsernameChangeHistoryResponse {
+  repeated AdminUsernameChangeHistoryEntry entries = 1;
+  PaginationResponse pagination = 2;
+}
+
+// Request to delete a user account
+message AdminDeleteUserRequest {
+  uint64 user_id = 1;
+  bool delete_attachments = 2;  // Whether to delete user's files
+  string reason = 3;           // Reason for deletion
+}
+
+// Response for user deletion
+message AdminDeleteUserResponse {
+}
+
+// Request to revoke all user sessions
+message AdminRevokeUserSessionsRequest {
+  uint64 user_id = 1;
+  string reason = 2;
+}
+
+// Response for session revocation
+message AdminRevokeUserSessionsResponse {
+  uint32 sessions_revoked = 2;
+}
+
+// Request to create a presigned POST upload for a user's new profile picture
+message AdminCreateUserProfilePictureUploadURLRequest {
+  uint64 user_id = 1;
+  string filename = 2;
+  optional string content_type = 3;
+}
+
+// Response for profile picture upload URL creation
+message AdminCreateUserProfilePictureUploadURLResponse {
+  string upload_url = 1;
+  map<string, string> form_data = 2;
+  uint64 attachment_id = 3;
+  google.protobuf.Timestamp expiry = 4;
+}
+
+// Request to clear a user's profile picture
+message AdminClearUserProfilePictureRequest {
+  uint64 user_id = 1;
+}
+
+// Response for clearing user profile picture
+message AdminClearUserProfilePictureResponse {
+}
+
+// Human account authentication setup chosen by an administrator.
+enum AdminUserAccessMode {
+  ADMIN_USER_ACCESS_MODE_UNSPECIFIED = 0; // Defaults to OAuth only
+  ADMIN_USER_ACCESS_MODE_OAUTH_ONLY = 1;
+  ADMIN_USER_ACCESS_MODE_INVITATION = 2;
+  ADMIN_USER_ACCESS_MODE_PASSWORD = 3;
+}
+
+message AdminCreateUserRequest {
+  string email = 1;
+  string username = 2;
+  string first_name = 3;
+  string last_name = 4;
+  UserType user_type = 5;
+  optional string reason = 6;
+  bool is_bot = 7;
+  AdminUserAccessMode access_mode = 8;
+  optional string password = 9;
+  optional string frontend_origin = 10;
+}
+message AdminCreateUserResponse { AdminUserDetails user = 1; }
+message AdminResendUserInvitationRequest {
+  uint64 user_id = 1;
+  optional string frontend_origin = 2;
+}
+message AdminResendUserInvitationResponse {}
+
+// --- Contact Message Management ---
+
+// Contact message details for admin view
+message AdminContactMessage {
+  uint64 id = 1;
+  uint64 user_id = 2;      // Optional - null if submitted by non-user
+  string name = 3;
+  string email = 4;
+  string subject = 5;
+  string message = 6;
+  string ip_address = 7;
+  string user_agent = 8;
+  string status = 9;       // "pending", "reviewed", "responded", "spam"
+  string admin_notes = 10;
+  string reference_id = 11; // Trace ID for tracking
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+// Request to list contact messages with filtering and pagination
+enum AdminListContactMessagesSortBy {
+  ADMIN_LIST_CONTACT_MESSAGES_SORT_BY_UNSPECIFIED = 0;
+  ADMIN_LIST_CONTACT_MESSAGES_SORT_BY_EMAIL = 1;
+  ADMIN_LIST_CONTACT_MESSAGES_SORT_BY_CREATED_AT = 2;
+}
+
+message AdminListContactMessagesRequest {
+  PaginationRequest pagination = 1;
+  string status_filter = 2;    // Filter by status
+  string email_filter = 3;     // Filter by email
+  SortRequest sort = 4;        // Sort parameters
+  FilterRequest filter = 5;    // Common filter parameters
+  AdminListContactMessagesSortBy sort_by = 6;
+}
+
+// Response for listing contact messages with pagination
+message AdminListContactMessagesResponse {
+  repeated AdminContactMessage messages = 1;
+  PaginationResponse pagination = 2;
+}
+
+// Request to get a specific contact message
+message AdminGetContactMessageRequest {
+  uint64 message_id = 1;
+}
+
+// Response with contact message details
+message AdminGetContactMessageResponse {
+  AdminContactMessage message = 1;
+}
+
+// Request to get a contact message by reference ID
+message AdminGetContactMessageByReferenceIDRequest {
+  string reference_id = 1;
+}
+
+// Response with contact message details (reuses existing response)
+message AdminGetContactMessageByReferenceIDResponse {
+  AdminContactMessage message = 1;
+}
+
+// --- Careers Management ---
+
+enum AdminListCareerJobPostingsSortBy {
+  ADMIN_LIST_CAREER_JOB_POSTINGS_SORT_BY_UNSPECIFIED = 0;
+  ADMIN_LIST_CAREER_JOB_POSTINGS_SORT_BY_TITLE = 1;
+  ADMIN_LIST_CAREER_JOB_POSTINGS_SORT_BY_TEAM = 2;
+  ADMIN_LIST_CAREER_JOB_POSTINGS_SORT_BY_LOCATION_LABEL = 3;
+  ADMIN_LIST_CAREER_JOB_POSTINGS_SORT_BY_STATUS = 4;
+  ADMIN_LIST_CAREER_JOB_POSTINGS_SORT_BY_PUBLISHED_AT = 5;
+  ADMIN_LIST_CAREER_JOB_POSTINGS_SORT_BY_CLOSES_AT = 6;
+  ADMIN_LIST_CAREER_JOB_POSTINGS_SORT_BY_CREATED_AT = 7;
+  ADMIN_LIST_CAREER_JOB_POSTINGS_SORT_BY_UPDATED_AT = 8;
+}
+
+// Request to list job postings in the admin careers interface.
+message AdminListCareerJobPostingsRequest {
+  PaginationRequest pagination = 1;
+  CareerJobPostingStatus status_filter = 2;
+  string team_filter = 3;
+  string location_filter = 4;
+  SortRequest sort = 5;
+  FilterRequest filter = 6;
+  AdminListCareerJobPostingsSortBy sort_by = 7;
+}
+
+// Response for listing job postings in admin.
+message AdminListCareerJobPostingsResponse {
+  repeated CareerJobPosting jobs = 1;
+  PaginationResponse pagination = 2;
+}
+
+// Request to fetch a specific job posting by id in admin.
+message AdminGetCareerJobPostingRequest {
+  uint64 job_posting_id = 1;
+}
+
+// Response containing a specific admin job posting.
+message AdminGetCareerJobPostingResponse {
+  CareerJobPosting job = 1;
+}
+
+// Request to create a new job posting.
+message AdminCreateCareerJobPostingRequest {
+  string slug = 1;
+  string title = 2;
+  string team = 3;
+  string location_label = 4;
+  CareerWorkplaceMode workplace_mode = 5;
+  CareerEmploymentType employment_type = 6;
+  string summary = 7;
+  string description = 8;
+  google.protobuf.Timestamp closes_at = 9;
+}
+
+// Response for creating a job posting.
+message AdminCreateCareerJobPostingResponse {
+  CareerJobPosting job = 1;
+}
+
+// Request to update mutable job posting content.
+message AdminUpdateCareerJobPostingRequest {
+  uint64 job_posting_id = 1;
+  string slug = 2;
+  string title = 3;
+  string team = 4;
+  string location_label = 5;
+  CareerWorkplaceMode workplace_mode = 6;
+  CareerEmploymentType employment_type = 7;
+  string summary = 8;
+  string description = 9;
+  google.protobuf.Timestamp closes_at = 10;
+}
+
+// Response for updating a job posting.
+message AdminUpdateCareerJobPostingResponse {
+  CareerJobPosting job = 1;
+}
+
+// Request to transition a posting between lifecycle states.
+message AdminTransitionCareerJobPostingStatusRequest {
+  uint64 job_posting_id = 1;
+  CareerJobPostingStatus status = 2;
+}
+
+// Response for posting status transitions.
+message AdminTransitionCareerJobPostingStatusResponse {
+  CareerJobPosting job = 1;
+}
+
+// Admin view of an application, including the resume download URL.
+message AdminCareerApplication {
+  CareerApplication application = 1;
+  string resume_download_url = 2;
+}
+
+// Request to list applications in the admin careers interface.
+enum AdminListCareerApplicationsSortBy {
+  ADMIN_LIST_CAREER_APPLICATIONS_SORT_BY_UNSPECIFIED = 0;
+  ADMIN_LIST_CAREER_APPLICATIONS_SORT_BY_REFERENCE_ID = 1;
+  ADMIN_LIST_CAREER_APPLICATIONS_SORT_BY_EMAIL = 2;
+  ADMIN_LIST_CAREER_APPLICATIONS_SORT_BY_STATUS = 3;
+  ADMIN_LIST_CAREER_APPLICATIONS_SORT_BY_JOB_POSTING_ID = 4;
+  ADMIN_LIST_CAREER_APPLICATIONS_SORT_BY_JOB_TITLE_SNAPSHOT = 5;
+  ADMIN_LIST_CAREER_APPLICATIONS_SORT_BY_CREATED_AT = 6;
+  ADMIN_LIST_CAREER_APPLICATIONS_SORT_BY_UPDATED_AT = 7;
+}
+
+message AdminListCareerApplicationsRequest {
+  PaginationRequest pagination = 1;
+  optional uint64 job_posting_id_filter = 2;
+  CareerApplicationStatus status_filter = 3;
+  string email_filter = 4;
+  string reference_id_filter = 5;
+  SortRequest sort = 6;
+  FilterRequest filter = 7;
+  AdminListCareerApplicationsSortBy sort_by = 8;
+}
+
+// Response for listing career applications.
+message AdminListCareerApplicationsResponse {
+  repeated AdminCareerApplication applications = 1;
+  PaginationResponse pagination = 2;
+}
+
+// Request to fetch a specific application by id.
+message AdminGetCareerApplicationRequest {
+  uint64 application_id = 1;
+}
+
+// Response containing a specific application.
+message AdminGetCareerApplicationResponse {
+  AdminCareerApplication application = 1;
+}
+
+// Request to fetch a specific application by reference id.
+message AdminGetCareerApplicationByReferenceIDRequest {
+  string reference_id = 1;
+}
+
+// Response containing an application fetched by reference id.
+message AdminGetCareerApplicationByReferenceIDResponse {
+  AdminCareerApplication application = 1;
+}
+
+// Request to update application review status and notes.
+message AdminUpdateCareerApplicationStatusRequest {
+  uint64 application_id = 1;
+  CareerApplicationStatus status = 2;
+  string admin_notes = 3;
+}
+
+// Response for application status updates.
+message AdminUpdateCareerApplicationStatusResponse {
+  AdminCareerApplication application = 1;
+}
+
+// --- Attachment Management ---
+
+// Attachment details for admin view
+message AdminAttachmentDetails {
+  uint64 id = 1;
+  string user_id = 2;
+  string original_filename = 3;
+  string content_type = 4;
+  uint64 size_bytes = 5;
+  int64 upload_status = 6;    // Numeric UploadStatus: 0 pending_upload, 1 pending_processing, 2 processing, 3 vetted, 4 rejected
+  string file_hash = 7;
+  string validation_details = 8;
+  google.protobuf.Timestamp upload_time = 9;
+  google.protobuf.Timestamp processing_start_time = 10;
+  google.protobuf.Timestamp processing_end_time = 11;
+  google.protobuf.Timestamp created_at = 12;
+  string temporary_object_name = 13;
+  string final_object_name = 14;
+  string download_url = 15;    // Stable public URL or expiring private presigned URL, according to visibility
+  User user = 16;              // Permission-filtered attachment owner details for admin display
+  // Storage visibility: which bucket final_object_name lives in, and whether
+  // download_url is stable/anonymous or presigned. Unset == private.
+  optional AttachmentVisibility visibility = 17;
+}
+
+// Request to list attachments with filtering and pagination
+enum AdminListAttachmentsSortBy {
+  ADMIN_LIST_ATTACHMENTS_SORT_BY_UNSPECIFIED = 0;
+  ADMIN_LIST_ATTACHMENTS_SORT_BY_SIZE = 1;
+  ADMIN_LIST_ATTACHMENTS_SORT_BY_CONTENT_TYPE = 2;
+  ADMIN_LIST_ATTACHMENTS_SORT_BY_UPLOAD_STATUS = 3;
+  ADMIN_LIST_ATTACHMENTS_SORT_BY_CREATED_AT = 4;
+}
+
+message AdminListAttachmentsRequest {
+  PaginationRequest pagination = 1;
+  optional uint64 user_id_filter = 2;
+  string status_filter = 3;
+  string content_type_filter = 4;
+  uint64 min_size_bytes = 5;
+  uint64 max_size_bytes = 6;
+  SortRequest sort = 7;        // Sort parameters
+  FilterRequest filter = 8;    // Common filter parameters
+  AdminListAttachmentsSortBy sort_by = 9;
+}
+
+// Response for listing attachments with pagination
+message AdminListAttachmentsResponse {
+  repeated AdminAttachmentDetails attachments = 1;
+  PaginationResponse pagination = 2;
+}
+
+// --- Chat Channel Management ---
+
+// Channel details for admin views.
+message AdminChannelDetails {
+  Channel channel = 1;
+  uint64 active_participant_count = 2;
+  User created_by_user = 3;    // Permission-filtered channel creator details for admin display
+}
+
+// Request to list chat channels with filtering and pagination.
+enum AdminListChatChannelsSortBy {
+  ADMIN_LIST_CHAT_CHANNELS_SORT_BY_UNSPECIFIED = 0;
+  ADMIN_LIST_CHAT_CHANNELS_SORT_BY_ID = 1;
+  ADMIN_LIST_CHAT_CHANNELS_SORT_BY_NAME = 2;
+  ADMIN_LIST_CHAT_CHANNELS_SORT_BY_CREATED_AT = 3;
+  ADMIN_LIST_CHAT_CHANNELS_SORT_BY_UPDATED_AT = 4;
+  ADMIN_LIST_CHAT_CHANNELS_SORT_BY_LAST_MESSAGE_AT = 5;
+  ADMIN_LIST_CHAT_CHANNELS_SORT_BY_CHANNEL_TYPE = 6;
+  ADMIN_LIST_CHAT_CHANNELS_SORT_BY_CREATED_BY_USER_ID = 7;
+}
+
+message AdminListChatChannelsRequest {
+  PaginationRequest pagination = 1;
+  string search = 2;                 // Search by name/description/ID (implementation-defined)
+  ChannelType channel_type_filter = 3;
+  bool include_archived = 4;
+  bool include_deleted = 5;
+  SortRequest sort = 6;
+  optional uint64 channel_id_filter = 7;
+  optional uint64 created_by_user_id_filter = 8;
+  optional uint64 participant_user_id_filter = 9; // Filter by participant user ID
+  AdminListChatChannelsSortBy sort_by = 10;
+}
+
+// Response for listing chat channels.
+message AdminListChatChannelsResponse {
+  repeated AdminChannelDetails channels = 1;
+  PaginationResponse pagination = 2;
+}
+
+// Request to get a specific chat channel.
+message AdminGetChatChannelRequest {
+  uint64 channel_id = 1;
+  bool include_deleted = 2;
+}
+
+// Response with channel details.
+message AdminGetChatChannelResponse {
+  AdminChannelDetails channel = 1;
+}
+
+// Request to update a chat channel (admin).
+message AdminUpdateChatChannelRequest {
+  uint64 channel_id = 1;
+
+  optional string name = 2;
+  optional string description = 3;
+  optional uint64 avatar_attachment_id = 4;
+  optional bool is_archived = 5;
+
+  // Per-channel feature flags
+  optional bool support_replies = 10;
+  optional bool support_threads = 11;
+  optional bool support_message_edits = 12;
+  optional bool support_message_deletes = 13;
+  optional bool support_message_reactions = 14;
+  optional bool allow_multiple_reactions_per_user = 15;
+  optional bool support_embeds = 16;
+  optional bool support_attachments = 17;
+  optional bool allow_native_embeds = 18;
+  optional bool allow_custom_embeds = 19;
+  optional bool support_inference_usage = 24;
+
+  // Optional per-channel context metadata updates.
+  optional uint64 context_id = 20;
+  optional string context_display_name = 21;
+  optional bool clear_context = 22;
+  optional uint64 context_entity_id = 23;
+}
+
+// Response for channel updates.
+message AdminUpdateChatChannelResponse {
+  AdminChannelDetails channel = 1;
+}
+
+// Request to delete (soft-delete) a chat channel.
+message AdminDeleteChatChannelRequest {
+  uint64 channel_id = 1;
+  string reason = 2;
+}
+
+// Response for channel deletion.
+message AdminDeleteChatChannelResponse {}
+
+// Request to list chat channel participants.
+message AdminListChatChannelParticipantsRequest {
+  uint64 channel_id = 1;
+  PaginationRequest pagination = 2;
+  bool include_left = 3;
+}
+
+// Response for listing channel participants.
+message AdminListChatChannelParticipantsResponse {
+  repeated ChannelParticipant participants = 1;
+  PaginationResponse pagination = 2;
+}
+
+// Request to add participants to a chat channel (admin).
+message AdminAddChatChannelParticipantsRequest {
+  uint64 channel_id = 1;
+  repeated uint64 user_ids = 2;
+  optional string reason = 3;
+}
+
+// Response for adding participants.
+message AdminAddChatChannelParticipantsResponse {
+  repeated ChannelParticipant added_participants = 1;
+}
+
+// Request to remove a participant from a chat channel (admin).
+message AdminRemoveChatChannelParticipantRequest {
+  uint64 channel_id = 1;
+  uint64 user_id = 2;
+  optional string reason = 3;
+}
+
+// Response for removing a participant.
+message AdminRemoveChatChannelParticipantResponse {}
+
+// Request to update a participant role (admin).
+message AdminUpdateChatChannelParticipantRoleRequest {
+  uint64 channel_id = 1;
+  uint64 user_id = 2;
+  ChannelRole role = 3;
+  optional string reason = 4;
+}
+
+// Response for participant role update.
+message AdminUpdateChatChannelParticipantRoleResponse {
+  ChannelParticipant participant = 1;
+}
+
+// Response with attachment details
+message AdminGetAttachmentResponse {
+  AdminAttachmentDetails attachment = 1;
+}
+
+// Request to update attachment status
+message AdminUpdateAttachmentStatusRequest {
+  uint64 attachment_id = 1;
+  string status = 2;           // "vetted" or "rejected"
+  string validation_details = 3;
+}
+
+// Response for attachment status update
+message AdminUpdateAttachmentStatusResponse {
+}
+
+// Request to delete an attachment
+message AdminDeleteAttachmentRequest {
+  uint64 attachment_id = 1;
+  bool delete_files = 2;       // Whether to delete actual files from storage
+  string reason = 3;
+}
+
+// Response for attachment deletion
+message AdminDeleteAttachmentResponse {
+}
+
+// --- Analytics Messages ---
+
+// Request for user analytics
+message AdminUserAnalyticsRequest {
+  FilterRequest filter = 1;    // Date range and other filters
+  string group_by = 2;         // "day", "week", "month"
+}
+
+// Analytics data structures
+message UserRegistrationStats {
+  google.protobuf.Timestamp date = 1;
+  uint64 new_registrations = 2;
+  uint64 email_registrations = 3;
+  uint64 oauth_registrations = 4;
+}
+
+message UserActivityStats {
+  google.protobuf.Timestamp date = 1;
+  uint64 active_users = 2;
+  uint64 total_logins = 3;
+  uint64 unique_logins = 4;
+}
+
+message UserTypeDistribution {
+  map<string, uint64> user_type_counts = 1;  // UserType enum name -> count
+}
+
+// Response for user analytics
+message AdminUserAnalyticsResponse {
+  repeated UserRegistrationStats registration_stats = 1;
+  repeated UserActivityStats activity_stats = 2;
+  UserTypeDistribution user_type_distribution = 3;
+  string group_by = 4;         // Effective bucket granularity after server normalization
+}
+
+// Request for storage analytics
+message AdminStorageAnalyticsRequest {
+  FilterRequest filter = 1;    // Date range and other filters
+  string group_by = 2;         // Optional "day", "week", or "month"; server may coarsen
+}
+
+message StorageByUserType {
+  UserType user_type = 1;
+  uint64 total_bytes = 2;
+  uint64 attachment_count = 3;
+}
+
+message StorageByContentType {
+  string content_type = 1;
+  uint64 total_bytes = 2;
+  uint64 attachment_count = 3;
+}
+
+message StorageGrowthStats {
+  google.protobuf.Timestamp date = 1;
+  uint64 total_bytes = 2;
+  uint64 new_bytes = 3;
+  uint64 new_attachments = 4;
+}
+
+// Response for storage analytics
+message AdminStorageAnalyticsResponse {
+  uint64 total_storage_bytes = 1;
+  uint64 total_attachments = 2;
+  repeated StorageByUserType storage_by_user_type = 3;
+  repeated StorageByContentType storage_by_content_type = 4; // Top 50 by bytes
+  repeated StorageGrowthStats growth_stats = 5;
+  string group_by = 6;         // Effective bucket granularity after server normalization
+  bool storage_by_content_type_truncated = 7;
+  uint32 storage_by_content_type_limit = 8;
+}
+
+// --- Authentication & Token Management ---
+
+// Session token details for admin view
+message AdminSessionToken {
+  string token_id = 1;
+  string user_id = 2;
+  TokenType token_type = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  google.protobuf.Timestamp last_used_at = 6;
+  string ip_address = 7;
+  string user_agent = 8;
+  User user = 10;              // Permission-filtered user details for admin display
+  TokenStatus status = 11;     // Calculated lifecycle status for admin display/filtering
+}
+
+// Request to list authentication tokens
+enum AdminListTokensSortBy {
+  ADMIN_LIST_TOKENS_SORT_BY_UNSPECIFIED = 0;
+  ADMIN_LIST_TOKENS_SORT_BY_ISSUED_AT = 1;
+  ADMIN_LIST_TOKENS_SORT_BY_EXPIRES_AT = 2;
+  ADMIN_LIST_TOKENS_SORT_BY_LAST_USED_AT = 3;
+  ADMIN_LIST_TOKENS_SORT_BY_USER_ID = 4;
+  ADMIN_LIST_TOKENS_SORT_BY_TOKEN_TYPE = 5;
+}
+
+message AdminListTokensRequest {
+  reserved 4;
+  reserved "active_only";
+  PaginationRequest pagination = 1;
+  optional uint64 user_id_filter = 2;
+  TokenType token_type_filter = 3;
+  SortRequest sort = 5;        // Sort parameters
+  TokenStatus status_filter = 6;
+  FilterRequest filter = 7;    // from_date/to_date apply to issued_at; search is metadata search
+  string raw_token_filter = 8; // Exact token lookup for incident response; never echoed back to clients
+  AdminListTokensSortBy sort_by = 9;
+}
+
+// Response for listing tokens with pagination
+message AdminListTokensResponse {
+  repeated AdminSessionToken tokens = 1;
+  PaginationResponse pagination = 2;
+}
+
+// --- Inference Provider Registry ---
+
+// AdminInferenceProvider exposes configured provider capabilities without credentials.
+message AdminInferenceProvider {
+  string id = 1;
+  string display_name = 2;
+  InferenceAPI default_api = 3;
+  repeated InferenceAPI supported_apis = 4;
+}
+
+message ListAdminInferenceProvidersRequest {}
+
+message ListAdminInferenceProvidersResponse {
+  repeated AdminInferenceProvider providers = 1;
+}
+
+// --- Inference Model Catalog Management ---
+
+// AdminInferenceModel wraps one supported-model catalog row for admin views.
+message AdminInferenceModel {
+  InferenceModel inference_model = 1;
+}
+
+message ListAdminInferenceModelsRequest {
+  PaginationRequest pagination = 1;
+}
+
+message ListAdminInferenceModelsResponse {
+  repeated AdminInferenceModel inference_models = 1;
+  PaginationResponse pagination = 2;
+}
+
+message CreateAdminInferenceModelRequest {
+  reserved 1;
+  reserved "provider";
+  string provider_id = 5;
+  string provider_model_id = 2;
+  string display_name = 3;
+  optional bool active = 4;
+}
+
+message CreateAdminInferenceModelResponse {
+  AdminInferenceModel inference_model = 1;
+}
+
+message UpdateAdminInferenceModelRequest {
+  uint64 inference_model_id = 1;
+  reserved 2;
+  reserved "provider";
+  string provider_id = 7;
+  string provider_model_id = 3;
+  string display_name = 4;
+  bool active = 5;
+  google.protobuf.FieldMask update_mask = 6;
+}
+
+message UpdateAdminInferenceModelResponse {
+  AdminInferenceModel inference_model = 1;
+}
+
+message DeleteAdminInferenceModelRequest {
+  uint64 inference_model_id = 1;
+}
+
+message DeleteAdminInferenceModelResponse {}
+
+// --- System Information ---
+
+// Request for system stats (no pagination needed)
+message AdminSystemStatsRequest {
+  // No parameters needed
+}
+
+// Database-backed account, contact, attachment, and session statistics
+message AdminSystemStatsResponse {
+  uint64 total_users = 1;
+  uint64 active_users_last_30_days = 2;
+  uint64 total_contact_messages = 3;
+  uint64 pending_contact_messages = 4;
+  uint64 total_attachments = 5;
+  uint64 total_storage_bytes = 6;
+  uint64 active_sessions = 7;
+  google.protobuf.Timestamp system_start_time = 8;
+}
+
+// --- Organization Management ---
+
+// Request to directly add a user to an organization (bypasses invitation system)
+// This is admin-only and does not require user consent
+message AdminAddUserToOrganizationRequest {
+  int64 organization_id = 1;
+  uint64 user_id = 2;
+  OrganizationRole role = 3;
+  optional string reason = 4;  // Admin reason for adding user without consent
+}
+
+// Response for admin user addition to organization
+message AdminAddUserToOrganizationResponse {
+  OrganizationUser organization_user = 1;
+}
+
+// Request to directly add a user to an organization by email or username.
+// This is admin-only and bypasses organization type capability gates.
+message AdminAddUserToOrganizationByIdentifierRequest {
+  int64 organization_id = 1;
+  UserIdentifierType identifier_type = 2;
+  string identifier = 3;
+  OrganizationRole role = 4;
+}
+
+// Response for admin direct add by identifier.
+message AdminAddUserToOrganizationByIdentifierResponse {
+  bool user_added = 1;
+  bool auto_add_pending = 2;
+  optional OrganizationUser organization_user = 3;
+  optional OrganizationInvitation auto_add_entry = 4;
+}
+
+// Request to update a user's organization role with admin privilege.
+message AdminUpdateUserRoleInOrganizationRequest {
+  int64 organization_id = 1;
+  uint64 user_id = 2;
+  OrganizationRole role = 3;
+}
+
+// Response for admin role update.
+message AdminUpdateUserRoleInOrganizationResponse {
+  OrganizationUser organization_user = 1;
+}
+
+// Request to get a user's organization membership details with admin privilege.
+message AdminGetOrganizationMemberRequest {
+  int64 organization_id = 1;
+  uint64 user_id = 2;
+}
+
+// Response for admin organization member detail.
+message AdminGetOrganizationMemberResponse {
+  OrganizationMemberDetails member_details = 1;
+}
+
+// Request for admins to create an organization email domain mapping
+message AdminCreateOrganizationEmailDomainRequest {
+  int64 organization_id = 1;
+  string domain = 2;
+}
+
+// Response containing the newly created organization email domain
+message AdminCreateOrganizationEmailDomainResponse {
+  OrganizationEmailDomain email_domain = 1;
+}
+
+// Request for admins to delete an organization email domain mapping
+message AdminDeleteOrganizationEmailDomainRequest {
+  uint64 organization_email_domain_id = 1;
+}
+
+// Response for admin email domain deletion
+message AdminDeleteOrganizationEmailDomainResponse {}
+
+// Request to list organization email domains for a specific organization
+message AdminListOrganizationEmailDomainsRequest {
+  int64 organization_id = 1;
+  PaginationRequest pagination = 2;
+}
+
+// Response containing organization email domains for admin view
+message AdminListOrganizationEmailDomainsResponse {
+  repeated OrganizationEmailDomain email_domains = 1;
+  PaginationResponse pagination = 2;
+}

@@ -97,11 +97,18 @@ func TestNormalizedIDIndexesMigrationIsAdditiveAndMetadataOnly(t *testing.T) {
 
 func TestSimpleExternalClickHouseComposeContract(t *testing.T) {
 	compose := readFile(t, filepath.Join("..", "..", "deploy", "docker-compose.yaml"))
-	if services := composeServiceNames(compose); !slices.Equal(services, []string{"server"}) {
-		t.Fatalf("default Compose services = %v, want only server", services)
+	if services := composeServiceNames(compose); !slices.Equal(services, []string{"server", "postgres", "minio"}) {
+		t.Fatalf("default Compose services = %v, want server, postgres and minio", services)
 	}
 	for _, fragment := range []string{
-		"OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN:",
+		"OPEN_SPLUNK_SERVER_POSTGRES_DSN:",
+		"OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_ID:",
+		"OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_SECRET:",
+		"OPEN_SPLUNK_SERVER_PUBLIC_BASE_URL:",
+		"OPEN_SPLUNK_SERVER_MINIO_ENDPOINT: minio:9000",
+		"OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY:",
+		"postgres-data:",
+		"minio-data:",
 		"OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD:",
 		"${OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS:-per-clickhouse:9000}",
 		"${OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME:-clickhouse}",
@@ -114,6 +121,7 @@ func TestSimpleExternalClickHouseComposeContract(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
+		"OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN:",
 		"clickhouse-migrator:",
 		"server-bootstrap:",
 		"deployment-backup:",
@@ -154,7 +162,7 @@ func composeServiceNames(compose string) []string {
 	return services
 }
 
-func TestGenerateDevelopmentEnvironmentUsesSinglePlaintextCredential(t *testing.T) {
+func TestGenerateDevelopmentEnvironmentUsesNativeCredentialsAndSingleClickHouseAccount(t *testing.T) {
 	outputPath := filepath.Join(t.TempDir(), ".env.development")
 	generator := filepath.Join("..", "..", "deploy", "generate-env.sh")
 	command := exec.CommandContext(t.Context(), generator, "--development", outputPath)
@@ -178,14 +186,21 @@ func TestGenerateDevelopmentEnvironmentUsesSinglePlaintextCredential(t *testing.
 		"OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS=127.0.0.1:19000",
 		"OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME=clickhouse",
 		"OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD=",
-		"OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN=",
+		"OPEN_SPLUNK_POSTGRES_PASSWORD=",
+		"OPEN_SPLUNK_SERVER_POSTGRES_DSN=postgres://open_splunk:",
+		"OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY=",
+		"OPEN_SPLUNK_SERVER_MINIO_ENDPOINT=127.0.0.1:",
+		"OPEN_SPLUNK_SERVER_MINIO_USE_TLS=false",
+		"OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_ID=",
+		"OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_SECRET=",
+		"OPEN_SPLUNK_SERVER_PUBLIC_BASE_URL=http://localhost:18080",
 		"OPEN_SPLUNK_DEPLOY_HTTP_PORT=18080",
 	} {
 		if !strings.Contains(contents, name) {
 			t.Errorf("development environment is missing %q", name)
 		}
 	}
-	for _, forbidden := range []string{"TLS", "MIGRATION_PASSWORD", "RUNTIME_PASSWORD", "DELETION_PASSWORD"} {
+	for _, forbidden := range []string{"OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN=", "OPEN_SPLUNK_SERVER_CLICKHOUSE_TLS_ENABLED=", "MIGRATION_PASSWORD", "RUNTIME_PASSWORD", "DELETION_PASSWORD"} {
 		if strings.Contains(contents, forbidden) {
 			t.Errorf("development environment retained obsolete setting %q", forbidden)
 		}

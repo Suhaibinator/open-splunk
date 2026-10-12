@@ -101,7 +101,7 @@ func TestIntegrationBackupPreservesCommittedCatalogAndRejectedReadAuditSnapshot(
 		t.Fatalf("committed definition authorities = %d, want 2", len(committedDefinitionAuthorities))
 	}
 
-	backupPath := filepath.Join(t.TempDir(), "catalog-backup.sqlite")
+	backupPath := filepath.Join(t.TempDir(), "catalog-backup.pgdump")
 	backupContext, cancelBackup := context.WithTimeout(context.Background(), 10*time.Second)
 	err = database.BackupTo(backupContext, backupPath)
 	cancelBackup()
@@ -120,10 +120,7 @@ func TestIntegrationBackupPreservesCommittedCatalogAndRejectedReadAuditSnapshot(
 		t.Fatalf("Get(source after commit) = %#v, %v", sourceCurrent, err)
 	}
 
-	restored, err := control.OpenReadOnly(context.Background(), backupPath)
-	if err != nil {
-		t.Fatalf("control.OpenReadOnly(backup): %v", err)
-	}
+	restored := restoreCatalogSnapshot(t, database, backupPath, true)
 	t.Cleanup(func() {
 		if err := restored.Close(); err != nil {
 			t.Errorf("close restored database: %v", err)
@@ -156,28 +153,13 @@ func TestIntegrationBackupPreservesCommittedCatalogAndRejectedReadAuditSnapshot(
 		t.Fatalf("restored continuation = %#v", restoredSecond)
 	}
 
-	var integrity string
-	if err := restored.SQLDB().QueryRowContext(context.Background(), `PRAGMA integrity_check`).Scan(&integrity); err != nil {
-		t.Fatalf("restored integrity_check: %v", err)
-	}
-	if integrity != "ok" {
-		t.Fatalf("restored integrity_check = %q", integrity)
-	}
-	foreignKeys, err := restored.SQLDB().QueryContext(context.Background(), `PRAGMA foreign_key_check`)
-	if err != nil {
-		t.Fatalf("restored foreign_key_check: %v", err)
-	}
-	if foreignKeys.Next() {
-		_ = foreignKeys.Close()
-		t.Fatal("restored database has a foreign-key violation")
-	}
-	if err := foreignKeys.Close(); err != nil {
-		t.Fatalf("close foreign_key_check: %v", err)
+	if err := restored.VerifyIntegrity(t.Context()); err != nil {
+		t.Fatalf("native restored integrity: %v", err)
 	}
 
 	rows, err := restored.SQLDB().QueryContext(context.Background(), `SELECT sequence, action, reason,
 		coalesce(knowledge_object_id, '') FROM knowledge_attempt_audit_events
-		WHERE tenant_id = ? ORDER BY sequence`, testTenant)
+		WHERE tenant_id = $1 ORDER BY sequence`, testTenant)
 	if err != nil {
 		t.Fatalf("read restored rejected attempts: %v", err)
 	}
@@ -227,7 +209,7 @@ func readBackupDefinitionAuthorities(t *testing.T, database *control.DB) []backu
 		JOIN knowledge_definition_blobs AS blob
 		  ON blob.tenant_id = version.tenant_id
 		 AND blob.definition_digest = version.definition_digest
-		WHERE version.tenant_id = ?
+		WHERE version.tenant_id = $1
 		ORDER BY version.knowledge_object_id, version.object_version`, testTenant)
 	if err != nil {
 		t.Fatalf("read backup definition authorities: %v", err)

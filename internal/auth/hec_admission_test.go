@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 )
 
 func TestRevalidateHECAdmissionInTransactionRequiresExactCurrentAuthority(t *testing.T) {
@@ -42,7 +43,7 @@ func TestRevalidateHECAdmissionInTransactionRequiresExactCurrentAuthority(t *tes
 				if _, err := db.SQLDB().ExecContext(ctx, `
 					UPDATE ingestion_tokens
 					SET version = version + 1
-					WHERE ingestion_token_id = ?`, authority.TokenID); err != nil {
+					WHERE ingestion_token_id = $1`, authority.TokenID); err != nil {
 					t.Fatalf("advance HEC token version: %v", err)
 				}
 			},
@@ -63,7 +64,7 @@ func TestRevalidateHECAdmissionInTransactionRequiresExactCurrentAuthority(t *tes
 				if _, err := db.SQLDB().ExecContext(ctx, `
 					UPDATE ingestion_tokens
 					SET state = 'disabled'
-					WHERE ingestion_token_id = ?`, authority.TokenID); err != nil {
+					WHERE ingestion_token_id = $1`, authority.TokenID); err != nil {
 					t.Fatalf("disable HEC token: %v", err)
 				}
 			},
@@ -83,8 +84,8 @@ func TestRevalidateHECAdmissionInTransactionRequiresExactCurrentAuthority(t *tes
 				t.Helper()
 				if _, err := db.SQLDB().ExecContext(ctx, `
 					UPDATE ingestion_tokens
-					SET expires_at_unix_micro = ?
-					WHERE ingestion_token_id = ?`,
+					SET expires_at_unix_micro = $1
+					WHERE ingestion_token_id = $2`,
 					checkedAt.UnixMicro(),
 					authority.TokenID,
 				); err != nil {
@@ -122,7 +123,7 @@ func TestRevalidateHECAdmissionInTransactionRequiresExactCurrentAuthority(t *tes
 				t.Helper()
 				if _, err := db.SQLDB().ExecContext(ctx, `
 					DELETE FROM ingestion_token_indexes
-					WHERE ingestion_token_id = ? AND index_id = ?`,
+					WHERE ingestion_token_id = $1 AND index_id = $2`,
 					authority.TokenID,
 					main.ID,
 				); err != nil {
@@ -212,7 +213,7 @@ func TestRevalidateHECAdmissionInTransactionRequiresExactCurrentAuthority(t *tes
 				AllowedIndexNames: []string{"main", "audit"},
 				HECProfile: HECTokenProfile{
 					IndexerAcknowledgment: true,
-				},
+				}, OrganizationID: 1, IssuerUserID: 42,
 			})
 			if err != nil {
 				t.Fatalf("CreateCollectorToken(HEC): %v", err)
@@ -241,8 +242,9 @@ func TestRevalidateHECAdmissionInTransactionRequiresExactCurrentAuthority(t *tes
 				test.mutate(t, ctx, db, main, audit, &authority, checkedAt)
 			}
 
-			tx, err := db.SQLDB().BeginTx(
-				ctx,
+			tx, err := pgmeta.BeginSQL(
+				ctx, db.SQLDB(),
+
 				&sql.TxOptions{Isolation: sql.LevelSerializable},
 			)
 			if err != nil {
@@ -273,7 +275,7 @@ func TestRevalidateHECAdmissionInTransactionRejectsMalformedSnapshots(t *testing
 
 	ctx := context.Background()
 	db := openControlDB(t)
-	tx, err := db.SQLDB().BeginTx(ctx, nil)
+	tx, err := pgmeta.BeginSQL(ctx, db.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin HEC admission transaction: %v", err)
 	}

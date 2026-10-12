@@ -9,6 +9,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/Suhaibinator/open-splunk/internal/audit"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 )
 
@@ -26,23 +27,11 @@ func (handler *apiHandler) mutationIntent(
 		return nil, nil
 	}
 	actor, ok := audit.ActorFromContext(ctx)
-	actorKind, actorID := string(actor.Kind), actor.ID
-	if !ok || !actor.Valid() {
-		if !requestidempotency.AllowsPublicActor(route) {
-			return nil, internalError()
-		}
-		// These routes already authorize the configured single-user namespace.
-		// Record that public authority honestly without inventing authentication.
-		actorKind, actorID = requestidempotency.ActorKindPublic, handler.ownerID
+	scope, scoped := authorization.FromContext(ctx)
+	if !ok || !actor.Valid() || !scoped || actor.ID != scope.Subject.OwnerID() {
+		return nil, mapAuthorizationError(authorization.ErrUnauthorized)
 	}
-	intent, err := requestidempotency.NewIntent(
-		handler.tenantID,
-		actorKind,
-		actorID,
-		route,
-		*clientRequestID,
-		canonical,
-	)
+	intent, err := requestidempotency.NewScopedIntent(handler.tenantID, string(actor.Kind), actor.ID, route, *clientRequestID, scope.OrganizationID, canonical)
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}

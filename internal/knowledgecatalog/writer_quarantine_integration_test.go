@@ -19,13 +19,13 @@ func TestWriterQuarantinePublishesBodylessTerminalVersionAndRedactsReplay(t *tes
 	// decode or repair the suspect retained forensic body.
 	if _, err := harness.database.SQLDB().ExecContext(
 		t.Context(),
-		`DROP TRIGGER knowledge_definition_blob_update_is_forbidden`,
+		`DROP TRIGGER knowledge_definition_blob_update_is_forbidden ON knowledge_definition_blobs`,
 	); err != nil {
 		t.Fatalf("drop definition blob immutability trigger in recovery fixture: %v", err)
 	}
 	if _, err := harness.database.SQLDB().ExecContext(
 		t.Context(),
-		`UPDATE knowledge_definition_blobs SET definition_proto = zeroblob(definition_bytes) WHERE tenant_id = ?`,
+		`UPDATE knowledge_definition_blobs SET definition_proto = decode(repeat('00', (definition_bytes)::int), 'hex') WHERE tenant_id = $1`,
 		writerTestTenant,
 	); err != nil {
 		t.Fatalf("corrupt retained definition body in recovery fixture: %v", err)
@@ -90,7 +90,7 @@ func TestWriterQuarantinePublishesBodylessTerminalVersionAndRedactsReplay(t *tes
 	var recoveryCount int64
 	if err := harness.database.SQLDB().QueryRowContext(
 		t.Context(),
-		`SELECT count(*) FROM knowledge_recovery_audit WHERE tenant_id = ? AND knowledge_object_id = ?`,
+		`SELECT count(*) FROM knowledge_recovery_audit WHERE tenant_id = $1 AND knowledge_object_id = $2`,
 		writerTestTenant,
 		root.GetKnowledgeObjectId(),
 	).Scan(&recoveryCount); err != nil {
@@ -156,13 +156,17 @@ func TestWriterQuarantineRejectsTamperedRecoveryToken(t *testing.T) {
 
 func TestWriterQuarantineCascadesActiveDependentsBeforeRoot(t *testing.T) {
 	harness := newWriterBlackboxHarness(t)
-	if _, err := harness.database.CreateIndex(t.Context(), control.IndexDefinition{
+	index, err := harness.database.CreateIndex(t.Context(), control.IndexDefinition{
 		Name:             "main",
 		DisplayName:      "main",
 		IngestionEnabled: true,
 		SearchEnabled:    true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("control.DB.CreateIndex(main): %v", err)
+	}
+	if err := harness.database.GORMDB().Exec("INSERT INTO os_index_organizations(index_id,organization_id) VALUES (?,1)", index.ID).Error; err != nil {
+		t.Fatalf("bind fixture main index to organization: %v", err)
 	}
 	selector := func() *opensplunk.KnowledgeSelector {
 		return &opensplunk.KnowledgeSelector{

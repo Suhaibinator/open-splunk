@@ -370,7 +370,7 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 	t.Parallel()
 
 	scopes := knowledgeScopes{
-		write: knowledgecatalog.WriteScope{
+		write: knowledgecatalog.WriteScope{OrganizationID: 1,
 			TenantID:       knowledgeBoundaryTenantID,
 			OwnerID:        knowledgeBoundaryOwnerID,
 			WritableAppIDs: []string{knowledgeHTTPAppID},

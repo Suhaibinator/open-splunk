@@ -2,6 +2,7 @@ package collectorfleet
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"slices"
@@ -38,7 +39,7 @@ func normalizeClaim(request ClaimRequest) (normalizedClaim, error) {
 
 // PrepareClaim validates and copies every untrusted collector/server claim
 // field except the credential-derived authorized-index snapshot. It performs
-// the potentially large Hello normalization before SQLite takes its global
+// the potentially large Hello normalization before PostgreSQL takes its global
 // writer lock.
 //
 // ClaimRequest.Hello.AuthorizedIndexes is deliberately ignored. The exact
@@ -176,6 +177,25 @@ func normalizeScope(scope Scope) (Scope, error) {
 	}
 	if err := validateText("tenant ID", scope.TenantID, maximumTenantIDBytes, false); err != nil {
 		return Scope{}, err
+	}
+	if scope.IndexAccess != "" {
+		if len(scope.IndexAccess) > 4<<20 || len(scope.AccessIdentity) == 0 || len(scope.AccessIdentity) > 255 {
+			return Scope{}, invalid("collector access scope is invalid")
+		}
+		var names []string
+		if json.Unmarshal([]byte(scope.IndexAccess), &names) != nil || names == nil || len(names) > control.MaximumPhysicalIndexRecords {
+			return Scope{}, invalid("collector access index policy is invalid")
+		}
+		for index, name := range names {
+			canonical, err := control.NormalizeIndexName(name)
+			if err != nil || canonical != name || (index > 0 && names[index-1] >= name) {
+				return Scope{}, invalid("collector access index policy is invalid")
+			}
+		}
+		encoded, _ := json.Marshal(names)
+		if string(encoded) != scope.IndexAccess {
+			return Scope{}, invalid("collector access index policy is not canonical")
+		}
 	}
 	return scope, nil
 }

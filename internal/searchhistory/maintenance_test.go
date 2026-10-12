@@ -30,11 +30,11 @@ func TestPruneMaintenanceBatchPrunesExpiredTerminalRowsAcrossScopes(t *testing.T
 		id      string
 		created time.Time
 	}{
-		{scope: AccessScope{TenantID: "tenant-a", OwnerID: "owner-a"}, id: "expired-a-a", created: expiredAt},
-		{scope: AccessScope{TenantID: "tenant-a", OwnerID: "owner-b"}, id: "expired-a-b", created: expiredAt},
-		{scope: AccessScope{TenantID: "tenant-b", OwnerID: "owner-a"}, id: "expired-b-a", created: expiredAt},
-		{scope: AccessScope{TenantID: "tenant-c", OwnerID: "owner-c"}, id: "at-cutoff", created: cutoffAt},
-		{scope: AccessScope{TenantID: "tenant-d", OwnerID: "owner-d"}, id: "fresh", created: freshAt},
+		{scope: AccessScope{OrganizationID: "1", TenantID: "tenant-a", OwnerID: "owner-a"}, id: "expired-a-a", created: expiredAt},
+		{scope: AccessScope{OrganizationID: "1", TenantID: "tenant-a", OwnerID: "owner-b"}, id: "expired-a-b", created: expiredAt},
+		{scope: AccessScope{OrganizationID: "1", TenantID: "tenant-b", OwnerID: "owner-a"}, id: "expired-b-a", created: expiredAt},
+		{scope: AccessScope{OrganizationID: "1", TenantID: "tenant-c", OwnerID: "owner-c"}, id: "at-cutoff", created: cutoffAt},
+		{scope: AccessScope{OrganizationID: "1", TenantID: "tenant-d", OwnerID: "owner-d"}, id: "fresh", created: freshAt},
 	} {
 		if _, err := store.Record(
 			ctx,
@@ -50,7 +50,7 @@ func TestPruneMaintenanceBatchPrunesExpiredTerminalRowsAcrossScopes(t *testing.T
 			t.Fatalf("Record(%s) error = %v", fixture.id, err)
 		}
 	}
-	pendingScope := AccessScope{TenantID: "tenant-pending", OwnerID: "owner-pending"}
+	pendingScope := AccessScope{OrganizationID: "1", TenantID: "tenant-pending", OwnerID: "owner-pending"}
 	if _, err := store.BeginAttempt(
 		ctx,
 		pendingScope,
@@ -140,7 +140,7 @@ func TestPruneMaintenanceBatchHardBoundsEveryDeleteTransaction(t *testing.T) {
 		MaximumAge: time.Hour,
 	})
 	ctx := context.Background()
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	for index := range 5 {
 		id := fmt.Sprintf("expired-%d", index)
 		if _, err := store.Record(
@@ -210,7 +210,7 @@ func TestPruneMaintenanceBatchShrinksIdlePriorScopeToNewCountLimit(t *testing.T)
 		MaximumEntriesPerOwner: 5,
 	})
 	ctx := context.Background()
-	priorScope := AccessScope{TenantID: "prior-tenant", OwnerID: "prior-owner"}
+	priorScope := AccessScope{OrganizationID: "1", TenantID: "prior-tenant", OwnerID: "prior-owner"}
 	for index := range 5 {
 		id := fmt.Sprintf("prior-%d", index)
 		created := now.Add(time.Duration(index-5) * time.Minute)
@@ -284,9 +284,9 @@ func TestPruneMaintenanceBatchContinuesOrderedCountScanAcrossScopes(t *testing.T
 	})
 	ctx := context.Background()
 	scopes := []AccessScope{
-		{TenantID: "tenant-a", OwnerID: "owner-a"},
-		{TenantID: "tenant-a", OwnerID: "owner-b"},
-		{TenantID: "tenant-b", OwnerID: "owner-a"},
+		{OrganizationID: "1", TenantID: "tenant-a", OwnerID: "owner-a"},
+		{OrganizationID: "1", TenantID: "tenant-a", OwnerID: "owner-b"},
+		{OrganizationID: "1", TenantID: "tenant-b", OwnerID: "owner-a"},
 	}
 	for scopeIndex, scope := range scopes {
 		for rowIndex := range 3 {
@@ -354,7 +354,7 @@ func TestPruneMaintenanceBatchInterleavesAgeWithCountContinuation(t *testing.T) 
 		MaximumEntriesPerOwner: 6,
 	})
 	ctx := context.Background()
-	countScope := AccessScope{TenantID: "tenant-a", OwnerID: "owner"}
+	countScope := AccessScope{OrganizationID: "1", TenantID: "tenant-a", OwnerID: "owner"}
 	for index := range 5 {
 		id := fmt.Sprintf("count-backlog-%d", index)
 		if _, err := oldStore.Record(
@@ -371,7 +371,7 @@ func TestPruneMaintenanceBatchInterleavesAgeWithCountContinuation(t *testing.T) 
 			t.Fatalf("Record(%s) error = %v", id, err)
 		}
 	}
-	expiredScope := AccessScope{TenantID: "tenant-z", OwnerID: "owner"}
+	expiredScope := AccessScope{OrganizationID: "1", TenantID: "tenant-z", OwnerID: "owner"}
 	if _, err := oldStore.Record(
 		ctx,
 		expiredScope,
@@ -441,11 +441,11 @@ func TestSearchHistoryGlobalCreatedIndexSupportsMaintenanceSelection(t *testing.
 		ID     int
 		Parent int
 		Unused int
-		Detail string
+		Detail string `gorm:"column:QUERY PLAN"`
 	}
 	var plans []queryPlanRow
-	result := database.GORMDB().WithContext(context.Background()).Raw(`
-		EXPLAIN QUERY PLAN
+	result := nativeHistoryExplain(t, database.GORMDB(), `
+		EXPLAIN (COSTS OFF)
 		SELECT search_job_id
 		FROM search_history
 		WHERE created_at_unix_micro < ?
@@ -469,8 +469,8 @@ func TestSearchHistoryGlobalCreatedIndexSupportsMaintenanceSelection(t *testing.
 	}
 
 	plans = nil
-	result = database.GORMDB().WithContext(context.Background()).Raw(`
-		EXPLAIN QUERY PLAN
+	result = nativeHistoryExplain(t, database.GORMDB(), `
+		EXPLAIN (COSTS OFF)
 		SELECT tenant_id, owner_id
 		FROM search_history_owner_counts
 		WHERE terminal_count > ?
@@ -488,9 +488,9 @@ func TestSearchHistoryGlobalCreatedIndexSupportsMaintenanceSelection(t *testing.
 	joined := strings.Join(details, "\n")
 	if !strings.Contains(
 		joined,
-		"sqlite_autoindex_search_history_owner_counts_1",
+		"search_history_owner_counts_pkey",
 	) ||
-		strings.Contains(joined, "USE TEMP B-TREE") {
+		strings.Contains(joined, "Sort") {
 		t.Fatalf(
 			"count-maintenance query plan = %v, want the owner-count primary key without temporary sort",
 			details,
@@ -498,8 +498,8 @@ func TestSearchHistoryGlobalCreatedIndexSupportsMaintenanceSelection(t *testing.
 	}
 
 	plans = nil
-	result = database.GORMDB().WithContext(context.Background()).Raw(`
-		EXPLAIN QUERY PLAN
+	result = nativeHistoryExplain(t, database.GORMDB(), `
+		EXPLAIN (COSTS OFF)
 		SELECT search_job_id
 		FROM search_history
 		WHERE tenant_id = ? AND owner_id = ?
@@ -518,7 +518,7 @@ func TestSearchHistoryGlobalCreatedIndexSupportsMaintenanceSelection(t *testing.
 	}
 	joined = strings.Join(details, "\n")
 	if !strings.Contains(joined, "search_history_owner_created_idx") ||
-		strings.Contains(joined, "USE TEMP B-TREE") {
+		strings.Contains(joined, "Sort") {
 		t.Fatalf(
 			"oldest-overflow query plan = %v, want owner-created index without temporary sort",
 			details,
@@ -536,7 +536,7 @@ func TestScopedPruneCommitsBoundedProgressBeforeLaterBatchFailure(t *testing.T) 
 		MaximumEntriesPerOwner: 1_000,
 	})
 	ctx := context.Background()
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	total := retentionPruneBatchSize + 44
 	for index := range total {
 		id := fmt.Sprintf("expired-%03d", index)
@@ -556,12 +556,7 @@ func TestScopedPruneCommitsBoundedProgressBeforeLaterBatchFailure(t *testing.T) 
 	}
 	now = now.Add(2 * time.Hour)
 	if _, err := database.SQLDB().ExecContext(ctx, `
-		CREATE TRIGGER fail_late_search_history_delete
-		BEFORE DELETE ON search_history
-		WHEN OLD.search_job_id = 'expired-299'
-		BEGIN
-			SELECT RAISE(ABORT, 'injected late prune failure');
-		END
+		CREATE FUNCTION fail_late_search_history_delete_function() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING MESSAGE = 'injected late prune failure'; RETURN NEW; END $$; CREATE TRIGGER fail_late_search_history_delete BEFORE DELETE ON search_history FOR EACH ROW WHEN (OLD.search_job_id = 'expired-299') EXECUTE FUNCTION fail_late_search_history_delete_function()
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -586,7 +581,7 @@ func TestScopedPruneCommitsBoundedProgressBeforeLaterBatchFailure(t *testing.T) 
 
 	if _, err := database.SQLDB().ExecContext(
 		ctx,
-		`DROP TRIGGER fail_late_search_history_delete`,
+		`DROP TRIGGER fail_late_search_history_delete ON search_history`,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -646,7 +641,7 @@ func maintenanceOwnerTerminalCount(
 		context.Background(),
 		`SELECT terminal_count
 		 FROM search_history_owner_counts
-		 WHERE tenant_id = ? AND owner_id = ?`,
+		 WHERE tenant_id = $1 AND owner_id = $2`,
 		scope.TenantID,
 		scope.OwnerID,
 	).Scan(&count); err != nil {

@@ -5,8 +5,6 @@ package integration_test
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -50,20 +48,20 @@ func postProto(t *testing.T, ctx context.Context, client *http.Client, url strin
 	return body
 }
 
-func postAdministratorProto(
+func postGoogleUserProto(
 	t *testing.T,
 	ctx context.Context,
 	client *http.Client,
 	url string,
-	bearerToken string,
+	googleSession string,
 	input, output proto.Message,
 ) []byte {
 	t.Helper()
-	body, err := postProtoRequestWithBearer(
+	body, err := postProtoRequestWithSession(
 		ctx,
 		client,
 		url,
-		bearerToken,
+		googleSession,
 		input,
 		output,
 	)
@@ -79,21 +77,21 @@ func postProtoRequest(
 	url string,
 	input, output proto.Message,
 ) ([]byte, error) {
-	return postProtoRequestWithBearer(ctx, client, url, "", input, output)
+	return postProtoRequestWithSession(ctx, client, url, "", input, output)
 }
 
-func postProtoRequestWithBearer(
+func postProtoRequestWithSession(
 	ctx context.Context,
 	client *http.Client,
 	url string,
-	bearerToken string,
+	googleSession string,
 	input, output proto.Message,
 ) ([]byte, error) {
-	response, err := performProtoRequestWithBearer(
+	response, err := performProtoRequestWithSession(
 		ctx,
 		client,
 		url,
-		bearerToken,
+		googleSession,
 		input,
 	)
 	if err != nil {
@@ -126,11 +124,11 @@ type protoHTTPResponse struct {
 	body        []byte
 }
 
-func performProtoRequestWithBearer(
+func performProtoRequestWithSession(
 	ctx context.Context,
 	client *http.Client,
 	url string,
-	bearerToken string,
+	googleSession string,
 	input proto.Message,
 ) (protoHTTPResponse, error) {
 	payload, err := proto.Marshal(input)
@@ -150,8 +148,8 @@ func performProtoRequestWithBearer(
 		)
 	}
 	request.Header.Set("Content-Type", "application/x-protobuf")
-	if bearerToken != "" {
-		request.Header.Set("Authorization", "Bearer "+bearerToken)
+	if googleSession != "" {
+		applyGoogleSession(request, googleSession)
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -178,7 +176,7 @@ func createBackendIndex(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 	name string,
 	displayName string,
 ) *opensplunk.Index {
@@ -188,7 +186,7 @@ func createBackendIndex(
 		ctx,
 		client,
 		baseURL,
-		administratorToken,
+		googleSession,
 		name,
 		displayName,
 		24*time.Hour,
@@ -200,19 +198,19 @@ func createBackendIndexWithRetention(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 	name string,
 	displayName string,
 	retention time.Duration,
 ) *opensplunk.Index {
 	t.Helper()
 	var created opensplunk.CreateIndexResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/indexes/create",
-		administratorToken,
+		googleSession,
 		&opensplunk.CreateIndexRequest{
 			Definition: &opensplunk.IndexDefinition{
 				Name:            name,
@@ -235,26 +233,6 @@ func createBackendIndexWithRetention(
 		t.Fatalf("created index %q = %+v", name, index)
 	}
 	return index
-}
-
-func provisionAdministratorToken(
-	t *testing.T,
-	directory string,
-) (string, string) {
-	t.Helper()
-
-	random := make([]byte, 32)
-	if _, err := rand.Read(random); err != nil {
-		t.Fatalf("generate administrator token: %v", err)
-	}
-	token := base64.RawURLEncoding.EncodeToString(random)
-	clear(random)
-
-	path := filepath.Join(directory, "administrator.token")
-	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
-		t.Fatalf("write administrator token fixture: %v", err)
-	}
-	return path, token
 }
 
 func TestRedactForFailure(t *testing.T) {
@@ -599,6 +577,7 @@ var backendFrontendStageDirectories = []string{
 	"proto",
 	"public",
 	"scripts",
+	"third_party",
 }
 
 func buildBackendFrontend(t *testing.T, ctx context.Context, repository string) string {
@@ -1099,7 +1078,7 @@ func runBrowserVerticalSpec(
 	for name, value := range config.environment {
 		environment = environmentWithValue(environment, name, value)
 	}
-	command.Env = environment
+	command.Env = nativeBrowserEnvironment(environment, config.environment["OPEN_SPLUNK_E2E_BASE_URL"])
 	logs, truncated, runErr := runCommandWithBoundedOutput(command, maximumHarnessOutputBytes)
 	if runErr != nil {
 		diagnostics := ""
@@ -1259,6 +1238,7 @@ func startProcess(t *testing.T, directory string, arguments []string, environmen
 	if len(arguments) == 0 {
 		t.Fatal("process command is required")
 	}
+	arguments, environment = nativeProcessEnvironment(t, arguments, environment)
 	logs := &lockedBuffer{maximum: maximumHarnessOutputBytes}
 	command := exec.CommandContext(t.Context(), arguments[0], arguments[1:]...)
 	command.Dir = directory

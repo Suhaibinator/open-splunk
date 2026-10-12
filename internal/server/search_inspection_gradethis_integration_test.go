@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -20,8 +19,8 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
-	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchinspection"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -108,9 +107,9 @@ func TestSearchInspectionRouteGradeThisAgainstClickHouse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlDB, err := control.Open(
+	controlDB, err := openTestControl(t,
 		ctx,
-		filepath.Join(t.TempDir(), "visibility.sqlite"),
+		pgtest.DSN(t),
 	)
 	if err != nil {
 		_ = storeConnection.Close()
@@ -124,7 +123,7 @@ func TestSearchInspectionRouteGradeThisAgainstClickHouse(t *testing.T) {
 			)
 		}
 	})
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		_ = storeConnection.Close()
 		t.Fatal(err)
@@ -158,7 +157,7 @@ func TestSearchInspectionRouteGradeThisAgainstClickHouse(t *testing.T) {
 
 	const (
 		tenantID = "tenant"
-		ownerID  = "owner"
+		ownerID  = "1008"
 	)
 	stored, err := gradethiscorpus.StoreCanonical(ctx, store, tenantID)
 	if err != nil {
@@ -286,7 +285,7 @@ func TestSearchInspectionRouteGradeThisAgainstClickHouse(t *testing.T) {
 			len(corpus),
 		),
 	}
-	browserAuthenticator, err := auth.NewBearerTokenAuthenticator(
+	browserAuthenticator, err := newTestBearerTokenAuthenticator(
 		[]byte(gradeThisInspectionRouteBearerToken),
 		tenantID,
 		ownerID,
@@ -296,13 +295,13 @@ func TestSearchInspectionRouteGradeThisAgainstClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := newTestHandler(t, Config{
-		SearchJobs:           manager,
-		SearchInspections:    recordingService,
-		Indexes:              fakeIndexCatalog{},
-		BrowserAuthenticator: browserAuthenticator,
-		WebUI:                testUI(),
-		TenantID:             tenantID,
-		OwnerID:              ownerID,
+		SearchJobs:            manager,
+		SearchInspections:     recordingService,
+		Indexes:               fakeIndexCatalog{},
+		IdentityAuthenticator: adaptTestBrowserAuthenticator(browserAuthenticator),
+		WebUI:                 testUI(),
+		TenantID:              tenantID,
+		OwnerID:               ownerID,
 	})
 
 	queryIDs := make(map[string]struct{}, len(corpus))
@@ -313,7 +312,7 @@ func TestSearchInspectionRouteGradeThisAgainstClickHouse(t *testing.T) {
 		}
 		created, createErr := manager.Create(
 			ctx,
-			searchjobs.CreateRequest{
+			searchjobs.CreateRequest{OrganizationID: "1",
 				SPL:      source,
 				OwnerID:  ownerID,
 				TenantID: tenantID,

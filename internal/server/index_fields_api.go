@@ -57,7 +57,7 @@ func (handler *apiHandler) listIndexFields(
 
 	result, err := handler.indexFields.ListIndexFields(
 		request.Context(),
-		handler.accessScope(),
+		handler.accessScope(request.Context()),
 		analysisRequest,
 	)
 	if err := mapIndexFieldsCallError(request.Context(), err); err != nil {

@@ -18,19 +18,35 @@ services:
       OPEN_SPLUNK_SERVER_HTTP_LISTEN_ADDRESS: 0.0.0.0:8080
       OPEN_SPLUNK_SERVER_HTTP_ALLOWED_HOSTS: "${OPEN_SPLUNK_SERVER_HTTP_ALLOWED_HOSTS:-localhost,127.0.0.1}"
       OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO: "${OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO:-false}"
-      OPEN_SPLUNK_SERVER_CONTROL_DATABASE_FILE: /var/lib/open-splunk/state/private/open-splunk.db
       OPEN_SPLUNK_SERVER_MASTER_KEY_FILE: /var/lib/open-splunk/state/private/master.key
       OPEN_SPLUNK_SERVER_LOCK_FILE: /var/lib/open-splunk/lock/private/open-splunk-server-open_splunk.server.lock
       OPEN_SPLUNK_SERVER_EXPORT_ARTIFACT_DIRECTORY: /var/lib/open-splunk/exports/private
       OPEN_SPLUNK_SERVER_ALERT_PUBLIC_BASE_URL: "${OPEN_SPLUNK_SERVER_ALERT_PUBLIC_BASE_URL:-}"
       OPEN_SPLUNK_SERVER_ALERT_PRIVATE_WEBHOOK_HOSTS: "${OPEN_SPLUNK_SERVER_ALERT_PRIVATE_WEBHOOK_HOSTS:-}"
-      OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN: "${OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN:?set OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN}"
+      OPEN_SPLUNK_SERVER_POSTGRES_DSN: "postgres://open_splunk:${OPEN_SPLUNK_POSTGRES_PASSWORD:?set OPEN_SPLUNK_POSTGRES_PASSWORD}@postgres:5432/open_splunk?sslmode=disable"
+      OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_ID: "${OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_ID:?set OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_ID}"
+      OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_SECRET: "${OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_SECRET:?set OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_SECRET}"
+      OPEN_SPLUNK_SERVER_PUBLIC_BASE_URL: "${OPEN_SPLUNK_SERVER_PUBLIC_BASE_URL:?set the browser origin}"
+      OPEN_SPLUNK_SERVER_MINIO_ENDPOINT: minio:9000
+      OPEN_SPLUNK_SERVER_MINIO_ACCESS_KEY: "${OPEN_SPLUNK_SERVER_MINIO_ACCESS_KEY:-open-splunk}"
+      OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY: "${OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY:?set OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY}"
+      OPEN_SPLUNK_SERVER_MINIO_BUCKET: "${OPEN_SPLUNK_SERVER_MINIO_BUCKET:-open-splunk-artifacts}"
+      OPEN_SPLUNK_SERVER_MINIO_USE_TLS: "false"
+      OPEN_SPLUNK_SERVER_SEARCH_CAPTURE_MAXIMUM_ROWS: "${OPEN_SPLUNK_SERVER_SEARCH_CAPTURE_MAXIMUM_ROWS:-100000}"
+      OPEN_SPLUNK_SERVER_SEARCH_CAPTURE_MAXIMUM_BYTES: "${OPEN_SPLUNK_SERVER_SEARCH_CAPTURE_MAXIMUM_BYTES:-268435456}"
+      OPEN_SPLUNK_SERVER_SEARCH_RETENTION_ORGANIZATION_BYTES: "${OPEN_SPLUNK_SERVER_SEARCH_RETENTION_ORGANIZATION_BYTES:-4294967296}"
+      OPEN_SPLUNK_SERVER_SEARCH_RETENTION_GLOBAL_BYTES: "${OPEN_SPLUNK_SERVER_SEARCH_RETENTION_GLOBAL_BYTES:-17179869184}"
       OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS: "${OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS:-per-clickhouse:9000}"
       OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME: "${OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME:-clickhouse}"
       OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD: "${OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD:?set OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD}"
       OPEN_SPLUNK_SERVER_HEC_ENABLED: "${OPEN_SPLUNK_SERVER_HEC_ENABLED:-false}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
     ports:
-      # Workspace APIs trust the caller. Remote access needs an authenticated proxy.
+      # Google sessions authenticate browser APIs. Terminate HTTPS at ingress.
       - target: 8080
         published: "${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}"
         host_ip: 127.0.0.1
@@ -57,7 +73,38 @@ services:
     stop_grace_period: 60s
     pids_limit: 512
 
+  postgres:
+    image: "${OPEN_SPLUNK_DEPLOY_POSTGRES_IMAGE:-postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873}"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: open_splunk
+      POSTGRES_USER: open_splunk
+      POSTGRES_PASSWORD: "${OPEN_SPLUNK_POSTGRES_PASSWORD:?set OPEN_SPLUNK_POSTGRES_PASSWORD}"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    networks:
+      - per-obs-network
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U open_splunk -d open_splunk"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: "${OPEN_SPLUNK_DEPLOY_MINIO_IMAGE:?set an exact approved MinIO server image}"
+    restart: unless-stopped
+    command: [server, /data]
+    environment:
+      MINIO_ROOT_USER: "${OPEN_SPLUNK_SERVER_MINIO_ACCESS_KEY:-open-splunk}"
+      MINIO_ROOT_PASSWORD: "${OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY:?set OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY}"
+    volumes:
+      - minio-data:/data
+    networks:
+      - per-obs-network
+
 volumes:
+  postgres-data:
+  minio-data:
   server-state:
   server-lock:
   server-exports:

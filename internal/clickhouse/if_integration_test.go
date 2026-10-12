@@ -9,7 +9,6 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 

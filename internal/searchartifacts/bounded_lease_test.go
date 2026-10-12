@@ -159,7 +159,7 @@ func TestNextBoundedRefusesMalformedFrameBeforeDecoderAndReleasesDecodeFailure(t
 	}
 	digest := sha256.Sum256(payload)
 	if _, err := database.SQLDB().ExecContext(ctx, `
-		UPDATE durable_search_jobs SET artifact_sha256 = ? WHERE id = ?`, digest[:], job.ID); err != nil {
+		UPDATE durable_search_jobs SET artifact_sha256 = $1 WHERE id = $2`, digest[:], job.ID); err != nil {
 		t.Fatal(err)
 	}
 	store.mu.Lock()
@@ -243,8 +243,8 @@ func TestAcquireBoundedLegacyReservesWholeArtifactAndReleasesMetadataFailure(t *
 	digest := sha256.Sum256(payload)
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE durable_search_jobs
-		SET state = ?, artifact_name = ?, artifact_sha256 = ?, artifact_size_bytes = ?
-		WHERE id = ?`, StateCompleted, name, digest[:], len(payload), job.ID); err != nil {
+		SET state = $1, artifact_name = $2, artifact_sha256 = $3, artifact_size_bytes = $4
+		WHERE id = $5`, StateCompleted, name, digest[:], len(payload), job.ID); err != nil {
 		t.Fatal(err)
 	}
 	store = openTestStore(t, database.SQLDB(), directory, clock, DefaultMaximumBytes)
@@ -280,7 +280,7 @@ func TestAcquireBoundedLegacyReservesWholeArtifactAndReleasesMetadataFailure(t *
 	}
 	digest = sha256.Sum256(malformed)
 	if _, err := database.SQLDB().ExecContext(ctx, `
-		UPDATE durable_search_jobs SET artifact_sha256 = ?, artifact_size_bytes = ? WHERE id = ?`,
+		UPDATE durable_search_jobs SET artifact_sha256 = $1, artifact_size_bytes = $2 WHERE id = $3`,
 		digest[:], len(malformed), job.ID); err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,106 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+import "google/protobuf/timestamp.proto";
+
+// RealtimeEvent is the server-to-client envelope for every realtime frame.
+//
+// go-common never enumerates application payload types: `payload` carries an
+// application-defined proto message serialized by the publisher, which keeps
+// application event schemas in application repositories. Chat's payload message
+// (ChatWebSocketEvent) lives in go-common only because chat is a go-common feature.
+//
+// There is deliberately no `sequence` field. Per-topic monotonic sequencing would
+// require an authority that an arbitrary multi-producer topic does not have; chat's
+// stream dedupe is scoped per (channel, message) inside its own payload.
+// Applications needing versions or sequences carry them in their payload message,
+// where they can define the authority.
+message RealtimeEvent {
+  // Topic the event was published on. Two special values:
+  //  - "user": the recipient's own user topic. It is recipient-relative so that one
+  //    envelope marshal can be shared by every recipient of a user-topic fan-out.
+  //  - "realtime.control": control frames (CommandResult).
+  string topic = 1;
+
+  // Namespaced event type, e.g. "chat.message_sent". The bundled clients log (never silently
+  // skip) frames whose event type they do not recognize.
+  string event_type = 2;
+
+  // When the event occurred (server time).
+  google.protobuf.Timestamp occurred_at = 3;
+
+  // Serialized app-defined proto message. This is the firewall between go-common's
+  // transport and application event schemas.
+  bytes payload = 4;
+}
+
+// RealtimeCommand is the client-to-server envelope for every realtime frame.
+//
+// Subscribe and unsubscribe are handled by the hub itself; every other type is
+// dispatched to a registered command handler.
+message RealtimeCommand {
+  // Command type, e.g. "subscribe", "unsubscribe", "chat.typing".
+  string type = 1;
+
+  // Client-generated request ID used to correlate acks and errors (optional).
+  string request_id = 2;
+
+  // Command-type-specific serialized proto payload.
+  bytes payload = 3;
+}
+
+// RealtimeSubscribeCommand is the payload of a "subscribe" RealtimeCommand.
+//
+// Clients never subscribe to the reserved "user.*" and "realtime.*" namespaces:
+// the connection's own user topic is subscribed automatically at registration and
+// anyone else's is forbidden, so reserved-namespace topics are rejected with
+// "reserved_topic".
+message RealtimeSubscribeCommand {
+  // Topics to subscribe to. Batches are bounded server-side and fail per topic.
+  repeated string topics = 1;
+}
+
+// RealtimeUnsubscribeCommand is the payload of an "unsubscribe" RealtimeCommand.
+message RealtimeUnsubscribeCommand {
+  // Topics to unsubscribe from.
+  repeated string topics = 1;
+}
+
+// CommandResult reports the outcome of a subscribe or unsubscribe command. It is
+// delivered as a RealtimeEvent on topic "realtime.control" with event_type
+// "realtime.command_result", enqueued before any event for a newly subscribed topic.
+//
+// Results are always explicit: a failed subscribe is reported per topic, never
+// silently dropped, because the client batches topics from independent consumers
+// into a single command and each consumer needs its own outcome.
+message CommandResult {
+  // request_id copied from the originating RealtimeCommand.
+  string request_id = 1;
+
+  // Whether every topic in the command succeeded.
+  bool ok = 2;
+
+  // Per-topic outcome.
+  repeated TopicResult topics = 3;
+}
+
+// TopicResult is the outcome of one topic within a CommandResult.
+message TopicResult {
+  // Topic this result refers to.
+  string topic = 1;
+
+  // Whether the operation succeeded for this topic.
+  bool ok = 2;
+
+  // Failure reason when ok is false: "unauthorized_topic" | "unknown_namespace" |
+  // "invalid_topic" | "subscription_limit" | "reserved_topic" | "authorizer_timeout".
+  //
+  // "authorizer_timeout" is deliberately distinct from "unauthorized_topic": the
+  // authorizer never reached a decision (the command's shared auth budget expired),
+  // so it says nothing about this user's access and the client may retry rather than
+  // treating the topic as forbidden.
+  string error_code = 3;
+}

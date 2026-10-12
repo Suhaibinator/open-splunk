@@ -8,6 +8,7 @@ import {
   type SearchWebSocketProtocolError,
   SearchWebSocketProtocolErrorCode,
 } from "@/gen/ts/open_splunk/search_ws";
+import { currentOrganizationId } from "./identity-session";
 
 export const DEFAULT_SEARCH_WEBSOCKET_PATH = "/api/search/ws";
 
@@ -288,10 +289,6 @@ function assertUint64Sequence(sequence: bigint): void {
 }
 
 export function resolveSearchWebSocketUrl(path: string, baseUrl?: string): string {
-  if (/^wss?:\/\//i.test(path)) {
-    return path;
-  }
-
   let url: URL;
   if (/^[a-z][a-z\d+.-]*:\/\//i.test(path)) {
     url = new URL(path);
@@ -318,6 +315,8 @@ export function resolveSearchWebSocketUrl(path: string, baseUrl?: string): strin
   } else if (url.protocol !== "ws:" && url.protocol !== "wss:") {
     throw new TypeError(`Unsupported Search WebSocket URL protocol: ${url.protocol}`);
   }
+  const organizationId = currentOrganizationId();
+  if (organizationId !== null) url.searchParams.set("organization_id", organizationId.toString());
   return url.toString();
 }
 

@@ -1,0 +1,206 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+import "attachment.proto";
+import "pagination.proto";
+import "google/protobuf/timestamp.proto";
+
+// CareerWorkplaceMode describes where the role is performed.
+enum CareerWorkplaceMode {
+  CAREER_WORKPLACE_MODE_UNSPECIFIED = 0;
+  CAREER_WORKPLACE_MODE_ONSITE = 1;
+  CAREER_WORKPLACE_MODE_HYBRID = 2;
+  CAREER_WORKPLACE_MODE_REMOTE = 3;
+}
+
+// CareerEmploymentType describes the engagement type for a role.
+enum CareerEmploymentType {
+  CAREER_EMPLOYMENT_TYPE_UNSPECIFIED = 0;
+  CAREER_EMPLOYMENT_TYPE_FULL_TIME = 1;
+  CAREER_EMPLOYMENT_TYPE_PART_TIME = 2;
+  CAREER_EMPLOYMENT_TYPE_CONTRACT = 3;
+  CAREER_EMPLOYMENT_TYPE_INTERNSHIP = 4;
+}
+
+// CareerJobPostingStatus controls job visibility and application eligibility.
+enum CareerJobPostingStatus {
+  CAREER_JOB_POSTING_STATUS_UNSPECIFIED = 0;
+  CAREER_JOB_POSTING_STATUS_DRAFT = 1;
+  CAREER_JOB_POSTING_STATUS_PUBLISHED = 2;
+  CAREER_JOB_POSTING_STATUS_CLOSED = 3;
+  CAREER_JOB_POSTING_STATUS_ARCHIVED = 4;
+}
+
+// CareerApplicationStatus tracks internal review state for a submitted application.
+enum CareerApplicationStatus {
+  CAREER_APPLICATION_STATUS_UNSPECIFIED = 0;
+  CAREER_APPLICATION_STATUS_SUBMITTED = 1;
+  CAREER_APPLICATION_STATUS_REVIEWING = 2;
+  CAREER_APPLICATION_STATUS_INTERVIEWING = 3;
+  CAREER_APPLICATION_STATUS_OFFERED = 4;
+  CAREER_APPLICATION_STATUS_HIRED = 5;
+  CAREER_APPLICATION_STATUS_REJECTED = 6;
+  CAREER_APPLICATION_STATUS_WITHDRAWN = 7;
+  // Created by applicant but resume is not yet fully uploaded/vetted.
+  CAREER_APPLICATION_STATUS_PENDING_RESUME_UPLOAD = 8;
+}
+
+// CareerJobPosting is the canonical model for public and admin job posting views.
+message CareerJobPosting {
+  uint64 id = 1;
+  string slug = 2;
+  string title = 3;
+  string team = 4;
+  string location_label = 5;
+  CareerWorkplaceMode workplace_mode = 6;
+  CareerEmploymentType employment_type = 7;
+  string summary = 8;
+  string description = 9;
+  CareerJobPostingStatus status = 10;
+  google.protobuf.Timestamp published_at = 11;
+  google.protobuf.Timestamp closes_at = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+// CareerApplication is the full stored application model used for internal/admin flows.
+message CareerApplication {
+  uint64 id = 1;
+  string reference_id = 2;
+  uint64 job_posting_id = 3;
+  string job_title_snapshot = 4;
+  string applicant_name = 5;
+  string email = 6;
+  string phone = 7;
+  string location_label = 8;
+  string linkedin_url = 9;
+  string portfolio_url = 10;
+  string cover_letter = 11;
+  uint64 resume_attachment_id = 12;
+  CareerApplicationStatus status = 13;
+  string admin_notes = 14;
+  google.protobuf.Timestamp created_at = 15;
+  google.protobuf.Timestamp updated_at = 16;
+  // Owner account for authenticated applicant self-service.
+  uint64 applicant_user_id = 17;
+}
+
+// ApplicantCareerApplication is the applicant-facing self-service application model.
+message ApplicantCareerApplication {
+  reserved 14;
+  reserved "admin_notes";
+
+  uint64 id = 1;
+  string reference_id = 2;
+  uint64 job_posting_id = 3;
+  string job_title_snapshot = 4;
+  string applicant_name = 5;
+  string email = 6;
+  string phone = 7;
+  string location_label = 8;
+  string linkedin_url = 9;
+  string portfolio_url = 10;
+  string cover_letter = 11;
+  uint64 resume_attachment_id = 12;
+  CareerApplicationStatus status = 13;
+  google.protobuf.Timestamp created_at = 15;
+  google.protobuf.Timestamp updated_at = 16;
+  // Owner account for authenticated applicant self-service.
+  uint64 applicant_user_id = 17;
+}
+
+// Request to list publicly visible career job postings.
+enum ListCareerJobPostingsSortBy {
+  LIST_CAREER_JOB_POSTINGS_SORT_BY_UNSPECIFIED = 0;
+  LIST_CAREER_JOB_POSTINGS_SORT_BY_TITLE = 1;
+  LIST_CAREER_JOB_POSTINGS_SORT_BY_TEAM = 2;
+  LIST_CAREER_JOB_POSTINGS_SORT_BY_LOCATION_LABEL = 3;
+  LIST_CAREER_JOB_POSTINGS_SORT_BY_PUBLISHED_AT = 4;
+  LIST_CAREER_JOB_POSTINGS_SORT_BY_CLOSES_AT = 5;
+  LIST_CAREER_JOB_POSTINGS_SORT_BY_CREATED_AT = 6;
+  LIST_CAREER_JOB_POSTINGS_SORT_BY_UPDATED_AT = 7;
+  LIST_CAREER_JOB_POSTINGS_SORT_BY_EMPLOYMENT_TYPE = 8;
+  LIST_CAREER_JOB_POSTINGS_SORT_BY_WORKPLACE_MODE = 9;
+}
+
+message ListCareerJobPostingsRequest {
+  reserved 2, 3, 7;
+  reserved "team_filter", "location_filter", "filter";
+  PaginationRequest pagination = 1;
+  CareerWorkplaceMode workplace_mode_filter = 4;
+  CareerEmploymentType employment_type_filter = 5;
+  SortRequest sort = 6;
+  ListCareerJobPostingsSortBy sort_by = 8;
+}
+
+// Response for listing public career job postings.
+message ListCareerJobPostingsResponse {
+  repeated CareerJobPosting jobs = 1;
+  PaginationResponse pagination = 2;
+}
+
+// Request to fetch a career job posting by slug.
+message GetCareerJobPostingBySlugRequest {
+  string slug = 1;
+}
+
+// Response containing a public job posting.
+message GetCareerJobPostingBySlugResponse {
+  CareerJobPosting job = 1;
+}
+
+// Request to create an authenticated career application and receive resume upload instructions.
+message CreateCareerApplicationRequest {
+  string job_slug = 1;
+  string applicant_name = 2;
+  string email = 3;
+  string phone = 4;
+  string location_label = 5;
+  string linkedin_url = 6;
+  string portfolio_url = 7;
+  string cover_letter = 8;
+  // Single resume metadata for generating the upload target.
+  AttachmentMetadata resume_attachment = 9;
+}
+
+// Response containing created application data and resume upload instructions.
+message CreateCareerApplicationResponse {
+  string reference_id = 1;
+  ApplicantCareerApplication application = 2;
+  AttachmentUploadInfo resume_upload = 3;
+}
+
+// Request to list authenticated user's own applications.
+message ListMyCareerApplicationsRequest {
+  PaginationRequest pagination = 1;
+  CareerApplicationStatus status_filter = 2;
+}
+
+// Response containing authenticated user's own applications.
+message ListMyCareerApplicationsResponse {
+  repeated ApplicantCareerApplication applications = 1;
+  PaginationResponse pagination = 2;
+}
+
+// Request to get one authenticated user's application by reference.
+message GetMyCareerApplicationByReferenceIDRequest {
+  string reference_id = 1;
+}
+
+// Response containing one authenticated user's application by reference.
+message GetMyCareerApplicationByReferenceIDResponse {
+  ApplicantCareerApplication application = 1;
+}
+
+// Request to withdraw one authenticated user's application by reference.
+message WithdrawMyCareerApplicationRequest {
+  string reference_id = 1;
+}
+
+// Response after withdrawing one authenticated user's application.
+message WithdrawMyCareerApplicationResponse {
+  ApplicantCareerApplication application = 1;
+}

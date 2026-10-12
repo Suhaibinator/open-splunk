@@ -9,12 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"hash"
-	"path/filepath"
 	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"google.golang.org/protobuf/proto"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
@@ -49,7 +50,7 @@ type writerBlackboxHarness struct {
 func newWriterBlackboxHarness(t *testing.T, initialize ...func(*control.DB)) *writerBlackboxHarness {
 	t.Helper()
 
-	database, err := control.Open(t.Context(), filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := control.Open(t.Context(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
 	}
@@ -61,6 +62,10 @@ func newWriterBlackboxHarness(t *testing.T, initialize ...func(*control.DB)) *wr
 
 	for _, initializeDatabase := range initialize {
 		initializeDatabase(database)
+	}
+
+	if err := database.GORMDB().Exec(`CREATE TABLE os_index_organizations (index_id TEXT PRIMARY KEY REFERENCES indexes(index_id), organization_id BIGINT NOT NULL CHECK (organization_id > 0))`).Error; err != nil {
+		t.Fatalf("create native index ownership fixture: %v", err)
 	}
 
 	var appClock atomic.Int64
@@ -83,7 +88,7 @@ func newWriterBlackboxHarness(t *testing.T, initialize ...func(*control.DB)) *wr
 		t.Fatalf("control.NewAppCatalog(): %v", err)
 	}
 	for _, slug := range []string{"writer-blackbox-one", "writer-blackbox-two"} {
-		if _, err := apps.CreateApp(t.Context(), control.AppAccessScope{TenantID: writerTestTenant}, control.AppDefinition{
+		if _, err := apps.CreateApp(t.Context(), control.AppAccessScope{TenantID: writerTestTenant, OrganizationID: 1}, control.AppDefinition{
 			Slug:        slug,
 			DisplayName: slug,
 			DefaultTimeRange: &control.AppTimeRange{
@@ -110,12 +115,12 @@ func newWriterBlackboxHarness(t *testing.T, initialize ...func(*control.DB)) *wr
 		writeScope: knowledgecatalog.WriteScope{
 			TenantID:       writerTestTenant,
 			OwnerID:        writerTestOwner,
-			WritableAppIDs: []string{writerTestApp, writerTestAppTwo},
+			WritableAppIDs: []string{writerTestApp, writerTestAppTwo}, OrganizationID: 1,
 		},
 		readScope: knowledgecatalog.ReadScope{
 			TenantID:       writerTestTenant,
 			OwnerID:        writerTestOwner,
-			ReadableAppIDs: []string{writerTestApp, writerTestAppTwo},
+			ReadableAppIDs: []string{writerTestApp, writerTestAppTwo}, OrganizationID: 1,
 		},
 	}
 	actorCtx, err := audit.WithActor(t.Context(), audit.Actor{
@@ -248,7 +253,7 @@ var writerAuthorityTableCounts = []struct {
 
 func readWriterAuthoritySnapshot(t *testing.T, database *control.DB) writerAuthoritySnapshot {
 	t.Helper()
-	tx, err := database.SQLDB().BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
+	tx, err := pgmeta.BeginSQL(t.Context(), database.SQLDB(), &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		t.Fatalf("begin writer authority snapshot: %v", err)
 	}
@@ -265,7 +270,7 @@ func readWriterAuthoritySnapshot(t *testing.T, database *control.DB) writerAutho
 		JOIN knowledge_catalog_revision_heads AS head
 		  ON head.tenant_id = tenant.tenant_id
 		 AND head.catalog_revision = tenant.catalog_revision
-		WHERE tenant.tenant_id = ?`, writerTestTenant).Scan(
+		WHERE tenant.tenant_id = $1`, writerTestTenant).Scan(
 		&snapshot.CatalogRevision,
 		&token,
 		&snapshot.IdentityCount,
@@ -283,13 +288,13 @@ func readWriterAuthoritySnapshot(t *testing.T, database *control.DB) writerAutho
 	if err := tx.QueryRowContext(t.Context(), `
 		SELECT projection_bytes
 		FROM knowledge_projection_tenant_ledgers
-		WHERE tenant_id = ?`, writerTestTenant).Scan(&snapshot.ProjectionBytes); err != nil {
+		WHERE tenant_id = $1`, writerTestTenant).Scan(&snapshot.ProjectionBytes); err != nil {
 		t.Fatalf("read writer projection ledger: %v", err)
 	}
 	if err := tx.QueryRowContext(t.Context(), `
 		SELECT next_sequence, event_count
 		FROM audit_tenant_state
-		WHERE tenant_id = ?`, writerTestTenant).Scan(
+		WHERE tenant_id = $1`, writerTestTenant).Scan(
 		&snapshot.AuditNextSequence,
 		&snapshot.AuditEventCount,
 	); err != nil {
@@ -299,7 +304,7 @@ func readWriterAuthoritySnapshot(t *testing.T, database *control.DB) writerAutho
 	snapshot.TableCounts = make(map[string]int64, len(writerAuthorityTableCounts))
 	for _, table := range writerAuthorityTableCounts {
 		var count int64
-		if err := tx.QueryRowContext(t.Context(), table.statement, writerTestTenant).Scan(&count); err != nil {
+		if err := tx.QueryRowContext(t.Context(), pgtest.Parameters(table.statement), writerTestTenant).Scan(&count); err != nil {
 			t.Fatalf("count %s: %v", table.name, err)
 		}
 		snapshot.TableCounts[table.name] = count
@@ -323,24 +328,7 @@ func assertWriterAuthoritySnapshotsEqual(
 
 func assertWriterCatalogIntegrity(t *testing.T, database *control.DB) {
 	t.Helper()
-	var integrity string
-	if err := database.SQLDB().QueryRowContext(t.Context(), `PRAGMA integrity_check`).Scan(&integrity); err != nil {
-		t.Fatalf("PRAGMA integrity_check: %v", err)
-	}
-	if integrity != "ok" {
-		t.Fatalf("PRAGMA integrity_check = %q, want ok", integrity)
-	}
-	rows, err := database.SQLDB().QueryContext(t.Context(), `PRAGMA foreign_key_check`)
-	if err != nil {
-		t.Fatalf("PRAGMA foreign_key_check: %v", err)
-	}
-	defer rows.Close()
-	if rows.Next() {
-		t.Fatal("PRAGMA foreign_key_check reported a violation")
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate PRAGMA foreign_key_check: %v", err)
-	}
+	pgtest.AssertIntegrity(t, database.SQLDB())
 }
 
 func readCompactWriterOutcome(
@@ -354,8 +342,8 @@ func readCompactWriterOutcome(
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT outcome_proto
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
-		  AND route = ? AND client_request_id = ?`,
+		WHERE tenant_id = $1 AND actor_kind = $2 AND actor_id = $3
+		  AND route = $4 AND client_request_id = $5`,
 		writerTestTenant,
 		string(audit.ActorKindBrowser),
 		"writer-blackbox-administrator",
@@ -416,8 +404,8 @@ func readWriterIdempotencyReceipt(
 		       knowledge_object_id, object_version,
 		       successful_audit_sequence, recovery_audit_sequence
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
-		  AND route = ? AND client_request_id = ?`,
+		WHERE tenant_id = $1 AND actor_kind = $2 AND actor_id = $3
+		  AND route = $4 AND client_request_id = $5`,
 		writerTestTenant,
 		string(actorKind),
 		actorID,
@@ -474,6 +462,15 @@ func writerExpectedRequestDigest(
 	writerDigestFrame(hasher, encoded)
 	var result [sha256.Size]byte
 	copy(result[:], hasher.Sum(nil))
+	// Bind the request to the same independently specified organization and
+	// site authority as the native blackbox fixture. Browser actor identity is
+	// already partitioned by the idempotency primary key.
+	scoped := sha256.New()
+	writerDigestFrame(scoped, result[:])
+	var authority [9]byte
+	binary.BigEndian.PutUint64(authority[:8], 1)
+	writerDigestFrame(scoped, authority[:])
+	copy(result[:], scoped.Sum(nil))
 	return result
 }
 

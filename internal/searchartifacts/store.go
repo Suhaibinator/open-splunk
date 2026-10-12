@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 
 	"fortio.org/safecast"
 	"github.com/Suhaibinator/open-splunk/internal/featureops"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -39,6 +41,8 @@ const (
 // Store is a concurrency-safe durable result repository. The database remains
 // caller-owned. One process exclusively owns Directory until Close.
 type Store struct {
+	blobs              BlobStore
+	captureOptions     CaptureOptions
 	db                 *sql.DB
 	directory          *privatefs.Directory
 	lock               *os.File
@@ -102,6 +106,8 @@ func New(ctx context.Context, config Config) (*Store, error) {
 		return nil, fmt.Errorf("open search artifact store: generate list cursor key: %w", err)
 	}
 	store := &Store{
+		blobs:              resolved.Blobs,
+		captureOptions:     resolved.CaptureOptions,
 		db:                 resolved.DB,
 		directory:          directory,
 		lock:               lock,
@@ -122,6 +128,10 @@ func New(ctx context.Context, config Config) (*Store, error) {
 		ctx:                workerContext,
 		cancel:             cancel,
 	}
+	if err := store.ReconcileCaptures(ctx); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	if err := store.Reconcile(ctx); err != nil {
 		_ = store.Close()
 		return nil, fmt.Errorf("open search artifact store: %w", err)
@@ -139,6 +149,10 @@ func (store *Store) Admit(ctx context.Context, job searchjobs.Job) (returnedErr 
 		!utf8.ValidString(job.ID) || job.State != searchjobs.StateQueued {
 		return ErrInvalid
 	}
+	organization, orgErr := strconv.ParseInt(job.OrganizationID, 10, 64)
+	if orgErr != nil || organization <= 0 || strconv.FormatInt(organization, 10) != job.OrganizationID {
+		return ErrInvalid
+	}
 	defer func() {
 		store.observe(featureops.OperationAdmission, operationOutcome(returnedErr), 1, 0)
 	}()
@@ -151,7 +165,7 @@ func (store *Store) Admit(ctx context.Context, job searchjobs.Job) (returnedErr 
 	if store.closed {
 		return ErrClosed
 	}
-	tx, err := store.db.BeginTx(ctx, nil)
+	tx, err := pgmeta.BeginSQL(ctx, store.db, nil)
 	if err != nil {
 		return err
 	}
@@ -179,11 +193,11 @@ func (store *Store) Admit(ctx context.Context, job searchjobs.Job) (returnedErr 
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO durable_search_jobs (
 			id, tenant_id, owner_id, state, visibility, retention_class,
-			lifetime_ns, job_payload, artifact_size_bytes, created_at_us, version
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+			lifetime_ns, job_payload, artifact_size_bytes, created_at_us, version,organization_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10,$11)`,
 		job.ID, job.TenantID, job.OwnerID, StateQueued, VisibilityPrivate,
 		retentionClass, int64(lifetime), payload,
-		toUnixMicro(job.CreatedAt), checkedVersion(job.Version),
+		toUnixMicro(job.CreatedAt), checkedVersion(job.Version), organization,
 	)
 	if err != nil {
 		return err
@@ -228,16 +242,16 @@ func (store *Store) Finalize(ctx context.Context, job searchjobs.Job) error {
 	result, err := store.db.ExecContext(ctx, `
 		UPDATE durable_search_jobs
 		SET state = CASE
-				WHEN artifact_name IS NOT NULL AND ? = ? THEN state
-				ELSE ?
+				WHEN artifact_name IS NOT NULL AND $1::bigint = $2::bigint THEN state
+				ELSE $3
 			END,
-			lifetime_ns = ?, job_payload = ?, started_at_us = ?,
-			finished_at_us = ?, expires_at_us = ?, version = ?
-		WHERE id = ? AND tenant_id = ? AND owner_id = ?`,
+			lifetime_ns = $4, job_payload = $5, started_at_us = $6,
+			finished_at_us = $7, expires_at_us = $8, version = $9
+		WHERE id = $10 AND tenant_id = $11 AND owner_id = $12 AND organization_id::text = $13`,
 		terminalState, StateCompleted, persistedState,
 		int64(lifetime), payload, nullableUnixMicro(job.StartedAt),
 		nullableUnixMicro(job.FinishedAt), nullableUnixMicro(job.ExpiresAt),
-		checkedVersion(job.Version), job.ID, job.TenantID, job.OwnerID,
+		checkedVersion(job.Version), job.ID, job.TenantID, job.OwnerID, job.OrganizationID,
 	)
 	if err != nil {
 		return err
@@ -380,8 +394,8 @@ func (store *Store) PersistResults(
 	}
 	result, err := store.db.ExecContext(ctx, `
 		UPDATE durable_search_jobs
-		SET state = ?, artifact_name = ?, artifact_sha256 = ?, artifact_size_bytes = ?
-		WHERE id = ? AND tenant_id = ? AND owner_id = ? AND artifact_name IS NULL`,
+		SET state = $1, artifact_name = $2, artifact_sha256 = $3, artifact_size_bytes = $4
+		WHERE id = $5 AND tenant_id = $6 AND owner_id = $7 AND artifact_name IS NULL`,
 		StateCompleted, fileName, digest, reserved, jobID, access.TenantID, access.OwnerID,
 	)
 	if err != nil {
@@ -428,8 +442,32 @@ func (store *Store) Get(
 	mode AccessMode,
 ) (Record, error) {
 	if ctx == nil || !validIdentity(access, jobID) ||
-		(mode != AccessInspect && mode != AccessRefresh && mode != AccessLaunch) {
+		(mode != AccessInspect && mode != AccessRefresh && mode != AccessLaunch && mode != AccessAuthorization) {
 		return Record{}, ErrInvalid
+	}
+	store.mu.Lock()
+	if store.closed {
+		store.mu.Unlock()
+		return Record{}, ErrClosed
+	}
+	readMode := mode
+	if store.captureOptions.Authorize != nil {
+		// Check current source access before any retention refresh or tombstone.
+		readMode = AccessAuthorization
+	}
+	record, err := store.getLocked(ctx, access, jobID, readMode)
+	store.mu.Unlock()
+	if err != nil {
+		return Record{}, err
+	}
+	if store.captureOptions.Authorize == nil {
+		return record, nil
+	}
+	if err := store.captureOptions.Authorize(ctx, record.Job); err != nil {
+		return Record{}, err
+	}
+	if mode == AccessAuthorization {
+		return record, nil
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -497,6 +535,9 @@ func (store *Store) acquire(
 	jobID string,
 	reserve func(uint64) (func(), bool),
 ) (ResultLease, error) {
+	if store.blobs != nil {
+		return store.acquireCapture(ctx, access, jobID, reserve)
+	}
 	if ctx == nil || !validIdentity(access, jobID) {
 		return nil, ErrInvalid
 	}
@@ -533,8 +574,8 @@ func (store *Store) acquire(
 	expires := now.Add(record.Lifetime)
 	result, err := store.db.ExecContext(ctx, `
 		UPDATE durable_search_jobs
-		SET last_accessed_at_us = ?, expires_at_us = ?
-		WHERE id = ? AND state = ? AND expires_at_us > ?`,
+		SET last_accessed_at_us = $1, expires_at_us = $2
+		WHERE id = $3 AND state = $4 AND expires_at_us > $5`,
 		toUnixMicro(now), toUnixMicro(expires), jobID, StateCompleted, toUnixMicro(now))
 	if err != nil {
 		_ = file.Close()
@@ -688,6 +729,9 @@ func (store *Store) updateSettings(
 	defer func() {
 		store.observe(operation, operationOutcome(returnedErr), 1, 0)
 	}()
+	if _, err := store.Get(ctx, access, jobID, AccessInspect); err != nil {
+		return Record{}, err
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.closed {
@@ -697,17 +741,17 @@ func (store *Store) updateSettings(
 	expires := now.Add(settings.Lifetime)
 	query := `
 		UPDATE durable_search_jobs
-		SET visibility = ?, retention_class = ?, lifetime_ns = ?,
-			last_accessed_at_us = ?, expires_at_us = ?, version = version + 1
-		WHERE id = ? AND tenant_id = ? AND owner_id = ? AND state = ?
-			AND artifact_name IS NOT NULL AND expires_at_us > ?`
+		SET visibility = $1, retention_class = $2, lifetime_ns = $3,
+			last_accessed_at_us = $4, expires_at_us = $5, version = version + 1
+		WHERE id = $6 AND tenant_id = $7 AND (owner_id = $8 OR $11) AND state = $9
+			AND artifact_name IS NOT NULL AND expires_at_us > $10`
 	arguments := []any{
 		settings.Visibility, settings.RetentionClass, int64(settings.Lifetime),
 		toUnixMicro(now), toUnixMicro(expires), jobID, access.TenantID,
-		access.OwnerID, StateCompleted, toUnixMicro(now),
+		access.OwnerID, StateCompleted, toUnixMicro(now), access.SiteAdministrator,
 	}
 	if expectedVersion != 0 {
-		query += " AND version = ?"
+		query += " AND version = $12"
 		arguments = append(arguments, checkedVersion(expectedVersion))
 	}
 	result, err := store.db.ExecContext(ctx, query, arguments...)
@@ -798,8 +842,8 @@ func (store *Store) recordLocked(
 			artifact_name, artifact_sha256, artifact_size_bytes,
 			last_accessed_at_us, expires_at_us, version
 		FROM durable_search_jobs
-		WHERE id = ? AND tenant_id = ? AND (owner_id = ? OR visibility = ?)`,
-		jobID, access.TenantID, access.OwnerID, VisibilityEveryone,
+		WHERE id = $1 AND tenant_id = $2 AND (owner_id = $3 OR visibility = $4 OR $5)`,
+		jobID, access.TenantID, access.OwnerID, VisibilityEveryone, access.SiteAdministrator,
 	)
 	var columns artifactRecordColumns
 	if err := row.Scan(columns.scanTargets()...); err != nil {
@@ -813,7 +857,13 @@ func (store *Store) recordLocked(
 	if err != nil {
 		return Record{}, "", nil, err
 	}
+	if !access.SiteAdministrator && access.OrganizationID != "" && record.Job.OrganizationID != access.OrganizationID {
+		return Record{}, "", nil, ErrNotFound
+	}
 	if record.State == StateExpired {
+		if mode == AccessAuthorization {
+			return record, "", nil, nil
+		}
 		if columns.state != StateExpired {
 			if err := store.expireLocked(ctx, jobID, now); err != nil {
 				return Record{}, "", nil, err
@@ -829,8 +879,8 @@ func (store *Store) recordLocked(
 		expires := now.Add(record.Lifetime)
 		if _, err := store.db.ExecContext(ctx, `
 			UPDATE durable_search_jobs
-			SET last_accessed_at_us = ?, expires_at_us = ?
-			WHERE id = ? AND state <> ?`,
+			SET last_accessed_at_us = $1, expires_at_us = $2
+			WHERE id = $3 AND state <> $4`,
 			toUnixMicro(now), toUnixMicro(expires), jobID, StateExpired); err != nil {
 			return Record{}, "", nil, err
 		}
@@ -913,8 +963,8 @@ func jobStateFromArtifactState(state State) searchjobs.State {
 func (store *Store) expireLocked(ctx context.Context, jobID string, now time.Time) error {
 	_, err := store.db.ExecContext(ctx, `
 		UPDATE durable_search_jobs
-		SET state = ?, tombstoned_at_us = ?
-		WHERE id = ? AND state <> ?`,
+		SET state = $1, tombstoned_at_us = $2
+		WHERE id = $3 AND state <> $4`,
 		StateExpired, toUnixMicro(now), jobID, StateExpired,
 	)
 	return err
@@ -1098,3 +1148,14 @@ func requireChanged(result sql.Result) error {
 }
 
 func (store *Store) nowUTC() time.Time { return store.clock().Round(0).UTC() }
+
+// AuthorizationJob returns immutable source metadata without refreshing or
+// requiring the source result TTL. Downloads have their own retention and
+// still revalidate the current user's membership and index grants.
+func (store *Store) AuthorizationJob(ctx context.Context, access searchjobs.AccessScope, id string) (searchjobs.Job, error) {
+	record, err := store.Get(ctx, access, id, AccessAuthorization)
+	if err != nil {
+		return searchjobs.Job{}, err
+	}
+	return record.Job, nil
+}

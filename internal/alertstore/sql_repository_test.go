@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"path/filepath"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -17,7 +19,7 @@ import (
 
 func TestAdvanceScheduleHonorsCancellation(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(nativeAlertContext(context.Background()))
 	cancel()
 	scheduled := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
 	if _, _, _, _, err := advanceSchedule(ctx, validDefinition(), scheduled, scheduled.AddDate(10, 0, 0)); !errors.Is(err, context.Canceled) {
@@ -34,7 +36,7 @@ func TestAdvanceScheduleCoalescesAtLatestOccurrenceAcrossDST(t *testing.T) {
 	now := time.Date(2026, time.March, 8, 16, 30, 0, 0, time.UTC)
 
 	claimed, next, period, missed, err := advanceSchedule(
-		context.Background(), definition, firstDue, now,
+		nativeAlertContext(context.Background()), definition, firstDue, now,
 	)
 	if err != nil {
 		t.Fatalf("advanceSchedule() error = %v", err)
@@ -56,8 +58,8 @@ func TestSQLRepositoryLifecycleClaimAndDeliveryAuthorization(t *testing.T) {
 	defer database.Close()
 	service := newSQLService(t, repository, now)
 
-	issued, err := service.Create(context.Background(), alerts.CreateInput{
-		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify",
+	issued, err := service.Create(nativeAlertContext(context.Background()), alerts.CreateInput{
+		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -65,7 +67,7 @@ func TestSQLRepositoryLifecycleClaimAndDeliveryAuthorization(t *testing.T) {
 	if issued.Alert.State != alerts.AlertDisabled || issued.PlaintextSecret == "" {
 		t.Fatalf("issued alert = %#v", issued)
 	}
-	summaries, err := repository.List(context.Background(), "owner-1", 10)
+	summaries, err := repository.List(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", 10)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -73,16 +75,16 @@ func TestSQLRepositoryLifecycleClaimAndDeliveryAuthorization(t *testing.T) {
 		t.Fatalf("redacted summaries = %#v", summaries)
 	}
 
-	enabled, err := service.SetEnabled(context.Background(), "owner-1", issued.Alert.ID, issued.Alert.Version, true)
+	enabled, err := service.SetEnabled(nativeAlertContext(context.Background()), alerts.AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, issued.Alert.ID, issued.Alert.Version, true)
 	if err != nil {
 		t.Fatalf("SetEnabled() error = %v", err)
 	}
-	summaries, err = repository.List(context.Background(), "owner-1", 10)
+	summaries, err = repository.List(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", 10)
 	if err != nil || summaries[0].NextRunAt == nil {
 		t.Fatalf("enabled List() = %#v, %v", summaries, err)
 	}
 	firstDue := *summaries[0].NextRunAt
-	claimed, err := repository.ClaimDue(context.Background(), firstDue, 10)
+	claimed, err := repository.ClaimDue(nativeAlertContext(context.Background()), firstDue, 10)
 	if err != nil {
 		t.Fatalf("ClaimDue() error = %v", err)
 	}
@@ -95,37 +97,37 @@ func TestSQLRepositoryLifecycleClaimAndDeliveryAuthorization(t *testing.T) {
 
 	// Leaving the first run active makes the following due occurrence a
 	// persisted overlap rather than a second active run.
-	summaries, _ = repository.List(context.Background(), "owner-1", 10)
+	summaries, _ = repository.List(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", 10)
 	secondDue := *summaries[0].NextRunAt
-	secondClaim, err := repository.ClaimDue(context.Background(), secondDue, 10)
+	secondClaim, err := repository.ClaimDue(nativeAlertContext(context.Background()), secondDue, 10)
 	if err != nil {
 		t.Fatalf("second ClaimDue() error = %v", err)
 	}
 	if len(secondClaim) != 0 {
 		t.Fatalf("second ClaimDue() returned active work: %#v", secondClaim)
 	}
-	runs, err := repository.ListRuns(context.Background(), "owner-1", issued.Alert.ID, 10)
+	runs, err := repository.ListRuns(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID, 10)
 	if err != nil || len(runs) != 2 || runs[0].Outcome != alerts.RunOverlapSkipped {
 		t.Fatalf("ListRuns() = %#v, %v", runs, err)
 	}
 
 	old := claimed[0]
 	old.SecretGeneration.Generation++
-	authorization, err := repository.AuthorizeDelivery(context.Background(), alerts.AuthorizeDeliveryRecord{
+	authorization, err := repository.AuthorizeDelivery(nativeAlertContext(context.Background()), alerts.AuthorizeDeliveryRecord{
 		AlertID: old.AlertID, AlertRunID: old.AlertRunID, OwnerID: old.OwnerID,
 		DeliveryID: "delivery-old", SecretGeneration: old.SecretGeneration.Generation, AuthorizedAt: now,
 	})
 	if err != nil || authorization != alerts.DeliverySecretRotated {
 		t.Fatalf("old authorization = %q, %v", authorization, err)
 	}
-	authorization, err = repository.AuthorizeDelivery(context.Background(), alerts.AuthorizeDeliveryRecord{
+	authorization, err = repository.AuthorizeDelivery(nativeAlertContext(context.Background()), alerts.AuthorizeDeliveryRecord{
 		AlertID: claimed[0].AlertID, AlertRunID: claimed[0].AlertRunID, OwnerID: claimed[0].OwnerID,
 		DeliveryID: "delivery-1", SecretGeneration: claimed[0].SecretGeneration.Generation, AuthorizedAt: now,
 	})
 	if err != nil || authorization != alerts.DeliveryAuthorized {
 		t.Fatalf("authorization = %q, %v", authorization, err)
 	}
-	authorization, err = repository.AuthorizeDelivery(context.Background(), alerts.AuthorizeDeliveryRecord{
+	authorization, err = repository.AuthorizeDelivery(nativeAlertContext(context.Background()), alerts.AuthorizeDeliveryRecord{
 		AlertID: claimed[0].AlertID, AlertRunID: claimed[0].AlertRunID, OwnerID: claimed[0].OwnerID,
 		DeliveryID: "delivery-2", SecretGeneration: claimed[0].SecretGeneration.Generation, AuthorizedAt: now,
 	})
@@ -133,31 +135,31 @@ func TestSQLRepositoryLifecycleClaimAndDeliveryAuthorization(t *testing.T) {
 		t.Fatalf("repeated authorization = %q, %v", authorization, err)
 	}
 
-	if err := service.Delete(context.Background(), "owner-1", issued.Alert.ID, enabled.Version); !errors.Is(err, alerts.ErrActiveRun) {
+	if err := service.Delete(nativeAlertContext(context.Background()), alerts.AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, issued.Alert.ID, enabled.Version); !errors.Is(err, alerts.ErrActiveRun) {
 		t.Fatalf("Delete(active) error = %v", err)
 	}
-	if err := repository.AttachSearchJob(context.Background(), claimed[0].AlertID, claimed[0].AlertRunID, "job-1", firstDue.Add(50*time.Minute)); err != nil {
+	if err := repository.AttachSearchJob(nativeAlertContext(context.Background()), claimed[0].AlertID, claimed[0].AlertRunID, "job-1", firstDue.Add(50*time.Minute)); err != nil {
 		t.Fatalf("AttachSearchJob() error = %v", err)
 	}
-	if err := repository.AttachSearchJob(context.Background(), claimed[0].AlertID, claimed[0].AlertRunID, "job-1", firstDue.Add(50*time.Minute)); err != nil {
+	if err := repository.AttachSearchJob(nativeAlertContext(context.Background()), claimed[0].AlertID, claimed[0].AlertRunID, "job-1", firstDue.Add(50*time.Minute)); err != nil {
 		t.Fatalf("AttachSearchJob(idempotent retry) error = %v", err)
 	}
 	completed := alerts.RunSummary{
 		AlertID: claimed[0].AlertID, AlertRunID: claimed[0].AlertRunID,
 		Outcome: alerts.RunDelivered, FinishedAt: firstDue.Add(time.Minute), Delivery: alerts.DeliveryResult{Category: alerts.DeliverySucceeded},
 	}
-	if err := repository.CompleteRun(context.Background(), completed); err != nil {
+	if err := repository.CompleteRun(nativeAlertContext(context.Background()), completed); err != nil {
 		t.Fatalf("CompleteRun() error = %v", err)
 	}
-	if err := repository.CompleteRun(context.Background(), completed); err != nil {
+	if err := repository.CompleteRun(nativeAlertContext(context.Background()), completed); err != nil {
 		t.Fatalf("CompleteRun(idempotent retry) error = %v", err)
 	}
 	conflicting := completed
 	conflicting.Outcome = alerts.RunDeliveryFailed
-	if err := repository.CompleteRun(context.Background(), conflicting); !errors.Is(err, alerts.ErrVersionConflict) {
+	if err := repository.CompleteRun(nativeAlertContext(context.Background()), conflicting); !errors.Is(err, alerts.ErrVersionConflict) {
 		t.Fatalf("CompleteRun(conflicting retry) error = %v, want alerts.ErrVersionConflict", err)
 	}
-	if err := service.Delete(context.Background(), "owner-1", issued.Alert.ID, enabled.Version); err != nil {
+	if err := service.Delete(nativeAlertContext(context.Background()), alerts.AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, issued.Alert.ID, enabled.Version); err != nil {
 		t.Fatalf("Delete(idle) error = %v", err)
 	}
 }
@@ -169,9 +171,9 @@ func TestSQLRepositoryCreateRetrySurvivesServiceRestartWithoutReissuingSecret(t 
 	defer database.Close()
 	input := alerts.CreateInput{
 		OwnerID: "owner-1", ClientRequestID: "alert-create-request-0001",
-		Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify",
+		Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	}
-	committed, err := newSQLService(t, repository, now).Create(context.Background(), input)
+	committed, err := newSQLService(t, repository, now).Create(nativeAlertContext(context.Background()), input)
 	if err != nil {
 		t.Fatalf("first Create() error = %v", err)
 	}
@@ -197,7 +199,7 @@ func TestSQLRepositoryCreateRetrySurvivesServiceRestartWithoutReissuingSecret(t 
 	if err != nil {
 		t.Fatalf("alerts.NewService(restarted) error = %v", err)
 	}
-	replayed, err := restartedService.Create(context.Background(), input)
+	replayed, err := restartedService.Create(nativeAlertContext(context.Background()), input)
 	if err != nil {
 		t.Fatalf("replayed Create() error = %v", err)
 	}
@@ -207,15 +209,15 @@ func TestSQLRepositoryCreateRetrySurvivesServiceRestartWithoutReissuingSecret(t 
 	changed := input
 	changed.Definition = validDefinition()
 	changed.Definition.Description = "different retry"
-	if _, err := restartedService.Create(context.Background(), changed); !errors.Is(err, alerts.ErrIdempotencyConflict) {
+	if _, err := restartedService.Create(nativeAlertContext(context.Background()), changed); !errors.Is(err, alerts.ErrIdempotencyConflict) {
 		t.Fatalf("changed Create() error = %v, want alerts.ErrIdempotencyConflict", err)
 	}
 	var count int
 	var fingerprintBytes int
-	if err := database.SQLDB().QueryRowContext(context.Background(), `
+	if err := database.SQLDB().QueryRowContext(nativeAlertContext(context.Background()), `
 		SELECT count(*), length(create_request_sha256)
 		FROM alerts
-		WHERE tenant_id = ? AND owner_id = ? AND client_request_id = ?`,
+		WHERE tenant_id = $1 AND owner_id = $2 AND client_request_id = $3 GROUP BY create_request_sha256`,
 		"tenant-1", "owner-1", input.ClientRequestID,
 	).Scan(&count, &fingerprintBytes); err != nil {
 		t.Fatalf("inspect durable alert create receipt: %v", err)
@@ -223,7 +225,7 @@ func TestSQLRepositoryCreateRetrySurvivesServiceRestartWithoutReissuingSecret(t 
 	if count != 1 || fingerprintBytes != 32 {
 		t.Fatalf("durable create receipt = count %d fingerprint bytes %d", count, fingerprintBytes)
 	}
-	summary, err := restartedRepository.GetSummary(context.Background(), "owner-1", committed.Alert.ID)
+	summary, err := restartedRepository.GetSummary(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", committed.Alert.ID)
 	if err != nil || summary.ID != committed.Alert.ID || summary.WebhookHostname != "hooks.example.com" {
 		t.Fatalf("redacted replay summary = %#v, %v", summary, err)
 	}
@@ -239,20 +241,20 @@ func TestSQLRepositoryClaimsEmptyRetentionDefaultsAcrossDST(t *testing.T) {
 	definition.Timezone = "America/Los_Angeles"
 	definition.DispatchTTL = ""
 	definition.WebhookTTL = ""
-	issued, err := newSQLService(t, repository, now).Create(context.Background(), alerts.CreateInput{
-		OwnerID: "owner-1", Definition: definition, WebhookURL: "https://hooks.example.com/notify",
+	issued, err := newSQLService(t, repository, now).Create(nativeAlertContext(context.Background()), alerts.CreateInput{
+		OwnerID: "owner-1", Definition: definition, WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if _, err := newSQLService(t, repository, now).SetEnabled(context.Background(), "owner-1", issued.Alert.ID, issued.Alert.Version, true); err != nil {
+	if _, err := newSQLService(t, repository, now).SetEnabled(nativeAlertContext(context.Background()), alerts.AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, issued.Alert.ID, issued.Alert.Version, true); err != nil {
 		t.Fatalf("SetEnabled() error = %v", err)
 	}
-	summary, err := repository.GetSummary(context.Background(), "owner-1", issued.Alert.ID)
+	summary, err := repository.GetSummary(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID)
 	if err != nil || summary.NextRunAt == nil {
 		t.Fatalf("GetSummary() = %#v, %v", summary, err)
 	}
-	claimed, err := repository.ClaimDue(context.Background(), *summary.NextRunAt, 1)
+	claimed, err := repository.ClaimDue(nativeAlertContext(context.Background()), *summary.NextRunAt, 1)
 	if err != nil {
 		t.Fatalf("ClaimDue() error = %v", err)
 	}
@@ -284,20 +286,20 @@ func TestSQLRepositoryCoalescedClaimSnapshotsLatestDSTOccurrenceAndRetention(t *
 	definition.DispatchTTL = ""
 	definition.WebhookTTL = ""
 	service := newSQLService(t, repository, configuredAt)
-	issued, err := service.Create(context.Background(), alerts.CreateInput{
-		OwnerID: "owner-1", Definition: definition, WebhookURL: "https://hooks.example.com/notify",
+	issued, err := service.Create(nativeAlertContext(context.Background()), alerts.CreateInput{
+		OwnerID: "owner-1", Definition: definition, WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	if _, err := service.SetEnabled(
-		context.Background(), "owner-1", issued.Alert.ID, issued.Alert.Version, true,
+		nativeAlertContext(context.Background()), alerts.AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, issued.Alert.ID, issued.Alert.Version, true,
 	); err != nil {
 		t.Fatalf("SetEnabled() error = %v", err)
 	}
 
 	claimAt := time.Date(2026, time.March, 8, 16, 30, 0, 0, time.UTC)
-	claimed, err := repository.ClaimDue(context.Background(), claimAt, 1)
+	claimed, err := repository.ClaimDue(nativeAlertContext(context.Background()), claimAt, 1)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("ClaimDue() = %#v, %v", claimed, err)
 	}
@@ -311,7 +313,7 @@ func TestSQLRepositoryCoalescedClaimSnapshotsLatestDSTOccurrenceAndRetention(t *
 		snapshot.TriggeredRetention != 240*time.Hour {
 		t.Fatalf("coalesced claim = %#v", snapshot)
 	}
-	runs, err := repository.ListRuns(context.Background(), "owner-1", issued.Alert.ID, 1)
+	runs, err := repository.ListRuns(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID, 1)
 	if err != nil || len(runs) != 1 || !runs[0].ScheduledAt.Equal(wantScheduled) {
 		t.Fatalf("coalesced run history = %#v, %v", runs, err)
 	}
@@ -322,32 +324,28 @@ func TestSQLRepositoryClaimDueRollsBackStaleDefinitionSnapshot(t *testing.T) {
 	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
 	repository, database := openSQLRepository(t, now)
 	defer database.Close()
-	issued, err := newSQLService(t, repository, now).Create(context.Background(), alerts.CreateInput{
-		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify",
+	issued, err := newSQLService(t, repository, now).Create(nativeAlertContext(context.Background()), alerts.CreateInput{
+		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if _, err := newSQLService(t, repository, now).SetEnabled(context.Background(), "owner-1", issued.Alert.ID, issued.Alert.Version, true); err != nil {
+	if _, err := newSQLService(t, repository, now).SetEnabled(nativeAlertContext(context.Background()), alerts.AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, issued.Alert.ID, issued.Alert.Version, true); err != nil {
 		t.Fatalf("SetEnabled() error = %v", err)
 	}
-	summary, err := repository.GetSummary(context.Background(), "owner-1", issued.Alert.ID)
+	summary, err := repository.GetSummary(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID)
 	if err != nil || summary.NextRunAt == nil {
 		t.Fatalf("GetSummary() = %#v, %v", summary, err)
 	}
-	if _, err := database.SQLDB().ExecContext(context.Background(), `
-		CREATE TRIGGER alert_test_stale_claim
-		BEFORE INSERT ON alert_runs
-		BEGIN
-			UPDATE alerts SET version = version + 1 WHERE alert_id = NEW.alert_id;
-		END`); err != nil {
+	if _, err := database.SQLDB().ExecContext(nativeAlertContext(context.Background()), `
+		CREATE FUNCTION alert_test_stale_claim_function() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN UPDATE alerts SET version = version + 1 WHERE alert_id = NEW.alert_id; RETURN NEW; END $$; CREATE TRIGGER alert_test_stale_claim BEFORE INSERT ON alert_runs FOR EACH ROW EXECUTE FUNCTION alert_test_stale_claim_function()`); err != nil {
 		t.Fatalf("create stale-claim trigger: %v", err)
 	}
-	if _, err := repository.ClaimDue(context.Background(), *summary.NextRunAt, 1); !errors.Is(err, alerts.ErrVersionConflict) {
+	if _, err := repository.ClaimDue(nativeAlertContext(context.Background()), *summary.NextRunAt, 1); !errors.Is(err, alerts.ErrVersionConflict) {
 		t.Fatalf("ClaimDue() error = %v, want version conflict", err)
 	}
 	var runs int
-	if err := database.SQLDB().QueryRowContext(context.Background(), "SELECT count(*) FROM alert_runs WHERE alert_id = ?", issued.Alert.ID).Scan(&runs); err != nil {
+	if err := database.SQLDB().QueryRowContext(nativeAlertContext(context.Background()), "SELECT count(*) FROM alert_runs WHERE alert_id = $1", issued.Alert.ID).Scan(&runs); err != nil {
 		t.Fatalf("count rolled-back runs: %v", err)
 	}
 	if runs != 0 {
@@ -367,24 +365,24 @@ func TestSQLRepositoryInterruptsUnfinishedRuns(t *testing.T) {
 	repository, database := openSQLRepository(t, now)
 	defer database.Close()
 	service := newSQLService(t, repository, now)
-	issued, err := service.Create(context.Background(), alerts.CreateInput{
-		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify",
+	issued, err := service.Create(nativeAlertContext(context.Background()), alerts.CreateInput{
+		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if _, err := service.SetEnabled(context.Background(), "owner-1", issued.Alert.ID, issued.Alert.Version, true); err != nil {
+	if _, err := service.SetEnabled(nativeAlertContext(context.Background()), alerts.AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, issued.Alert.ID, issued.Alert.Version, true); err != nil {
 		t.Fatalf("SetEnabled() error = %v", err)
 	}
-	summaries, _ := repository.List(context.Background(), "owner-1", 1)
-	if _, err := repository.ClaimDue(context.Background(), *summaries[0].NextRunAt, 1); err != nil {
+	summaries, _ := repository.List(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", 1)
+	if _, err := repository.ClaimDue(nativeAlertContext(context.Background()), *summaries[0].NextRunAt, 1); err != nil {
 		t.Fatalf("ClaimDue() error = %v", err)
 	}
-	interrupted, err := repository.InterruptUnfinished(context.Background(), summaries[0].NextRunAt.Add(time.Minute))
+	interrupted, err := repository.InterruptUnfinished(nativeAlertContext(context.Background()), summaries[0].NextRunAt.Add(time.Minute))
 	if err != nil || interrupted != 1 {
 		t.Fatalf("InterruptUnfinished() = %d, %v", interrupted, err)
 	}
-	runs, err := repository.ListRuns(context.Background(), "owner-1", issued.Alert.ID, 10)
+	runs, err := repository.ListRuns(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID, 10)
 	if err != nil || len(runs) != 1 || runs[0].Outcome != alerts.RunInterrupted {
 		t.Fatalf("interrupted runs = %#v, %v", runs, err)
 	}
@@ -396,56 +394,56 @@ func TestSQLRepositorySummaryTracksOutcomeEvaluationAndDeliveryIndependently(t *
 	repository, database := openSQLRepository(t, now)
 	defer database.Close()
 	service := newSQLService(t, repository, now)
-	issued, err := service.Create(context.Background(), alerts.CreateInput{
-		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify",
+	issued, err := service.Create(nativeAlertContext(context.Background()), alerts.CreateInput{
+		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if _, err := service.SetEnabled(context.Background(), "owner-1", issued.Alert.ID, issued.Alert.Version, true); err != nil {
+	if _, err := service.SetEnabled(nativeAlertContext(context.Background()), alerts.AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, issued.Alert.ID, issued.Alert.Version, true); err != nil {
 		t.Fatalf("SetEnabled() error = %v", err)
 	}
-	summary, _ := repository.GetSummary(context.Background(), "owner-1", issued.Alert.ID)
+	summary, _ := repository.GetSummary(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID)
 	firstDue := *summary.NextRunAt
-	first, err := repository.ClaimDue(context.Background(), firstDue, 1)
+	first, err := repository.ClaimDue(nativeAlertContext(context.Background()), firstDue, 1)
 	if err != nil || len(first) != 1 {
 		t.Fatalf("first ClaimDue() = %#v, %v", first, err)
 	}
-	summary, _ = repository.GetSummary(context.Background(), "owner-1", issued.Alert.ID)
+	summary, _ = repository.GetSummary(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID)
 	secondDue := *summary.NextRunAt
-	if _, err := repository.ClaimDue(context.Background(), secondDue, 1); err != nil {
+	if _, err := repository.ClaimDue(nativeAlertContext(context.Background()), secondDue, 1); err != nil {
 		t.Fatalf("overlap ClaimDue() error = %v", err)
 	}
 	deliveredAt := secondDue.Add(time.Minute)
-	if err := repository.CompleteRun(context.Background(), alerts.RunSummary{
+	if err := repository.CompleteRun(nativeAlertContext(context.Background()), alerts.RunSummary{
 		AlertID: first[0].AlertID, AlertRunID: first[0].AlertRunID, Outcome: alerts.RunDelivered,
 		Evaluation: alerts.EvaluationTrue, FinishedAt: deliveredAt,
 		Delivery: alerts.DeliveryResult{Category: alerts.DeliverySucceeded, Delivered: true, AttemptedAt: deliveredAt},
 	}); err != nil {
 		t.Fatalf("CompleteRun(delivered) error = %v", err)
 	}
-	summary, err = repository.GetSummary(context.Background(), "owner-1", issued.Alert.ID)
+	summary, err = repository.GetSummary(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID)
 	if err != nil || summary.LastOutcome != alerts.RunOverlapSkipped || summary.LastEvaluatedAt == nil || !summary.LastEvaluatedAt.Equal(deliveredAt) || summary.LastDeliveredAt == nil || !summary.LastDeliveredAt.Equal(deliveredAt) {
 		t.Fatalf("summary after older delivery = %#v, %v", summary, err)
 	}
 
 	thirdDue := *summary.NextRunAt
-	third, err := repository.ClaimDue(context.Background(), thirdDue, 1)
+	third, err := repository.ClaimDue(nativeAlertContext(context.Background()), thirdDue, 1)
 	if err != nil || len(third) != 1 {
 		t.Fatalf("third ClaimDue() = %#v, %v", third, err)
 	}
-	summary, _ = repository.GetSummary(context.Background(), "owner-1", issued.Alert.ID)
+	summary, _ = repository.GetSummary(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID)
 	if summary.LastOutcome != alerts.RunSearching || summary.LastEvaluatedAt == nil || !summary.LastEvaluatedAt.Equal(deliveredAt) || summary.LastDeliveredAt == nil || !summary.LastDeliveredAt.Equal(deliveredAt) {
 		t.Fatalf("running summary erased historical timestamps: %#v", summary)
 	}
 	evaluatedAt := thirdDue.Add(time.Minute)
-	if err := repository.CompleteRun(context.Background(), alerts.RunSummary{
+	if err := repository.CompleteRun(nativeAlertContext(context.Background()), alerts.RunSummary{
 		AlertID: third[0].AlertID, AlertRunID: third[0].AlertRunID, Outcome: alerts.RunNotTriggered,
 		Evaluation: alerts.EvaluationFalse, FinishedAt: evaluatedAt,
 	}); err != nil {
 		t.Fatalf("CompleteRun(not triggered) error = %v", err)
 	}
-	summary, err = repository.GetSummary(context.Background(), "owner-1", issued.Alert.ID)
+	summary, err = repository.GetSummary(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID)
 	if err != nil || summary.LastOutcome != alerts.RunNotTriggered || summary.LastEvaluatedAt == nil || !summary.LastEvaluatedAt.Equal(evaluatedAt) || summary.LastDeliveredAt == nil || !summary.LastDeliveredAt.Equal(deliveredAt) {
 		t.Fatalf("independent terminal summary = %#v, %v", summary, err)
 	}
@@ -457,32 +455,32 @@ func TestSQLRepositoryClaimRunNowDoesNotAdvanceScheduleAndRecordsOverlap(t *test
 	repository, database := openSQLRepository(t, now)
 	defer database.Close()
 	service := newSQLService(t, repository, now)
-	issued, err := service.Create(context.Background(), alerts.CreateInput{
-		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify",
+	issued, err := service.Create(nativeAlertContext(context.Background()), alerts.CreateInput{
+		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if _, err := service.SetEnabled(context.Background(), "owner-1", issued.Alert.ID, issued.Alert.Version, true); err != nil {
+	if _, err := service.SetEnabled(nativeAlertContext(context.Background()), alerts.AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, issued.Alert.ID, issued.Alert.Version, true); err != nil {
 		t.Fatalf("SetEnabled() error = %v", err)
 	}
-	before, err := repository.GetSummary(context.Background(), "owner-1", issued.Alert.ID)
+	before, err := repository.GetSummary(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID)
 	if err != nil || before.NextRunAt == nil {
 		t.Fatalf("GetSummary() = %#v, %v", before, err)
 	}
-	first, active, err := repository.ClaimRunNow(context.Background(), "owner-1", issued.Alert.ID, now)
+	first, active, err := repository.ClaimRunNow(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID, now)
 	if err != nil || !active || first.TenantID != "tenant-1" || first.DispatchRetention != 10*time.Minute || first.TriggeredRetention != 50*time.Minute {
 		t.Fatalf("first ClaimRunNow() = %#v, %t, %v", first, active, err)
 	}
-	after, err := repository.GetSummary(context.Background(), "owner-1", issued.Alert.ID)
+	after, err := repository.GetSummary(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID)
 	if err != nil || after.NextRunAt == nil || !after.NextRunAt.Equal(*before.NextRunAt) {
 		t.Fatalf("run now moved schedule: before=%v after=%v error=%v", before.NextRunAt, after.NextRunAt, err)
 	}
-	second, active, err := repository.ClaimRunNow(context.Background(), "owner-1", issued.Alert.ID, now.Add(time.Microsecond))
+	second, active, err := repository.ClaimRunNow(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID, now.Add(time.Microsecond))
 	if err != nil || active || second.AlertRunID == first.AlertRunID {
 		t.Fatalf("overlap ClaimRunNow() = %#v, %t, %v", second, active, err)
 	}
-	runs, err := repository.ListRuns(context.Background(), "owner-1", issued.Alert.ID, 10)
+	runs, err := repository.ListRuns(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID, 10)
 	if err != nil || len(runs) != 2 || runs[0].Outcome != alerts.RunOverlapSkipped {
 		t.Fatalf("ListRuns() = %#v, %v", runs, err)
 	}
@@ -494,34 +492,34 @@ func TestSQLRepositoryScheduledOccurrenceCanFollowRunNowAtSameTimestamp(t *testi
 	repository, database := openSQLRepository(t, now)
 	defer database.Close()
 	service := newSQLService(t, repository, now)
-	issued, err := service.Create(context.Background(), alerts.CreateInput{
-		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify",
+	issued, err := service.Create(nativeAlertContext(context.Background()), alerts.CreateInput{
+		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if _, err := service.SetEnabled(context.Background(), "owner-1", issued.Alert.ID, issued.Alert.Version, true); err != nil {
+	if _, err := service.SetEnabled(nativeAlertContext(context.Background()), alerts.AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, issued.Alert.ID, issued.Alert.Version, true); err != nil {
 		t.Fatalf("SetEnabled() error = %v", err)
 	}
-	summary, err := repository.GetSummary(context.Background(), "owner-1", issued.Alert.ID)
+	summary, err := repository.GetSummary(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID)
 	if err != nil || summary.NextRunAt == nil {
 		t.Fatalf("GetSummary() = %#v, %v", summary, err)
 	}
-	manual, active, err := repository.ClaimRunNow(context.Background(), "owner-1", issued.Alert.ID, *summary.NextRunAt)
+	manual, active, err := repository.ClaimRunNow(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID, *summary.NextRunAt)
 	if err != nil || !active {
 		t.Fatalf("ClaimRunNow() = %#v, %t, %v", manual, active, err)
 	}
-	if err := repository.CompleteRun(context.Background(), alerts.RunSummary{
+	if err := repository.CompleteRun(nativeAlertContext(context.Background()), alerts.RunSummary{
 		AlertID: manual.AlertID, AlertRunID: manual.AlertRunID, Outcome: alerts.RunNotTriggered,
 		Evaluation: alerts.EvaluationFalse, FinishedAt: *summary.NextRunAt,
 	}); err != nil {
 		t.Fatalf("CompleteRun(run now) error = %v", err)
 	}
-	claimed, err := repository.ClaimDue(context.Background(), *summary.NextRunAt, 1)
+	claimed, err := repository.ClaimDue(nativeAlertContext(context.Background()), *summary.NextRunAt, 1)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("ClaimDue(exact timestamp) = %#v, %v", claimed, err)
 	}
-	updated, err := repository.GetSummary(context.Background(), "owner-1", issued.Alert.ID)
+	updated, err := repository.GetSummary(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", issued.Alert.ID)
 	if err != nil || updated.NextRunAt == nil || !updated.NextRunAt.After(*summary.NextRunAt) {
 		t.Fatalf("advanced alert = %#v, %v", updated, err)
 	}
@@ -533,17 +531,17 @@ func TestSQLRepositoryAuthorizesOneConcurrentDelivery(t *testing.T) {
 	repository, database := openSQLRepository(t, now)
 	defer database.Close()
 	service := newSQLService(t, repository, now)
-	issued, err := service.Create(context.Background(), alerts.CreateInput{
-		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify",
+	issued, err := service.Create(nativeAlertContext(context.Background()), alerts.CreateInput{
+		OwnerID: "owner-1", Definition: validDefinition(), WebhookURL: "https://hooks.example.com/notify", OrganizationID: "1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if _, err := service.SetEnabled(context.Background(), "owner-1", issued.Alert.ID, issued.Alert.Version, true); err != nil {
+	if _, err := service.SetEnabled(nativeAlertContext(context.Background()), alerts.AccessScope{OwnerID: "owner-1", OrganizationID: "1"}, issued.Alert.ID, issued.Alert.Version, true); err != nil {
 		t.Fatalf("SetEnabled() error = %v", err)
 	}
-	summaries, _ := repository.List(context.Background(), "owner-1", 1)
-	claimed, err := repository.ClaimDue(context.Background(), *summaries[0].NextRunAt, 1)
+	summaries, _ := repository.List(nativeAlertContext(nativeAlertContext(context.Background())), "owner-1", 1)
+	claimed, err := repository.ClaimDue(nativeAlertContext(context.Background()), *summaries[0].NextRunAt, 1)
 	if err != nil {
 		t.Fatalf("ClaimDue() error = %v", err)
 	}
@@ -556,7 +554,7 @@ func TestSQLRepositoryAuthorizesOneConcurrentDelivery(t *testing.T) {
 		waitGroup.Add(1)
 		go func(index int) {
 			defer waitGroup.Done()
-			authorization, authorizeErr := repository.AuthorizeDelivery(context.Background(), alerts.AuthorizeDeliveryRecord{
+			authorization, authorizeErr := repository.AuthorizeDelivery(nativeAlertContext(context.Background()), alerts.AuthorizeDeliveryRecord{
 				AlertID: claimed[0].AlertID, AlertRunID: claimed[0].AlertRunID, OwnerID: claimed[0].OwnerID,
 				DeliveryID: fmt.Sprintf("delivery-%d", index), SecretGeneration: claimed[0].SecretGeneration.Generation,
 				AuthorizedAt: now,
@@ -595,7 +593,7 @@ func TestSQLRepositoryEnforcesCapacityAndRunHistoryBounds(t *testing.T) {
 	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
 	repository, database := openSQLRepository(t, now)
 	defer database.Close()
-	ctx := context.Background()
+	ctx := nativeAlertContext(context.Background())
 	for index := range alerts.MaximumAlertsPerOwner {
 		record := validCreateRecord(fmt.Sprintf("alert-%d", index), fmt.Sprintf("alert %d", index), now)
 		if _, err := repository.Create(ctx, record); err != nil {
@@ -614,7 +612,7 @@ func TestSQLRepositoryEnforcesCapacityAndRunHistoryBounds(t *testing.T) {
 			t.Fatalf("RecordOverlap(%d) error = %v", index, err)
 		}
 	}
-	runs, err := repository.ListRuns(ctx, "owner-1", "alert-0", alerts.MaximumRunHistory)
+	runs, err := repository.ListRuns(nativeAlertContext(ctx), "owner-1", "alert-0", alerts.MaximumRunHistory)
 	if err != nil || len(runs) != alerts.MaximumRunHistory {
 		t.Fatalf("bounded ListRuns() length = %d, error = %v", len(runs), err)
 	}
@@ -635,23 +633,32 @@ func TestSQLRepositoryAlertNamesAreUniqueWithinTenant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLRepository(tenant-2) error = %v", err)
 	}
-	if _, err := first.Create(context.Background(), validCreateRecord("alert-tenant-1", "same name", now)); err != nil {
+	if _, err := first.Create(nativeAlertContext(context.Background()), validCreateRecord("alert-tenant-1", "same name", now)); err != nil {
 		t.Fatalf("Create(tenant-1) error = %v", err)
 	}
-	if _, err := second.Create(context.Background(), validCreateRecord("alert-tenant-2", "same name", now)); err != nil {
+	seedAlertApp(t, database, "tenant-2", 1, testAlertSecondAppID)
+	secondRecord := validCreateRecord("alert-tenant-2", "same name", now)
+	secondRecord.Definition.Application = testAlertSecondAppID
+	if _, err := second.Create(nativeAlertContext(context.Background()), secondRecord); err != nil {
 		t.Fatalf("Create(tenant-2) error = %v", err)
 	}
-	if _, err := second.Create(context.Background(), validCreateRecord("alert-tenant-2-duplicate", "same name", now)); !errors.Is(err, alerts.ErrAlreadyExists) {
+	secondRecord.ID = "alert-tenant-2-duplicate"
+	if _, err := second.Create(nativeAlertContext(context.Background()), secondRecord); !errors.Is(err, alerts.ErrAlreadyExists) {
 		t.Fatalf("Create(tenant-2 duplicate) error = %v", err)
 	}
 }
 
+const testAlertAppID = "app_000000000000000000000A"
+const testAlertSecondAppID = "app_000000000000000000001A"
+
 func openSQLRepository(t *testing.T, now time.Time) (*SQLRepository, *control.DB) {
 	t.Helper()
-	database, err := control.Open(context.Background(), filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := control.Open(nativeAlertContext(context.Background()), pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("control.Open() error = %v", err)
 	}
+	t.Cleanup(func() { _ = database.Close() })
+	seedAlertApp(t, database, "tenant-1", 1, testAlertAppID)
 	var sequence atomic.Uint64
 	repository, err := NewSQLRepository(database, SQLRepositoryOptions{
 		TenantID: "tenant-1", Clock: func() time.Time { return now },
@@ -690,15 +697,65 @@ func validCreateRecord(id, name string, now time.Time) alerts.CreateRecord {
 		Endpoint: alerts.EncryptedValue{Nonce: make([]byte, 12), Ciphertext: make([]byte, 17)}, EndpointGeneration: 1,
 		WebhookHostname:  "hooks.example.com",
 		SecretGeneration: alerts.SecretGeneration{Generation: 1, Encrypted: alerts.EncryptedValue{Nonce: make([]byte, 12), Ciphertext: make([]byte, 48)}, CreatedAt: now},
-		CreatedAt:        now,
+		CreatedAt:        now, OrganizationID: "1",
 	}
 }
 
 func validDefinition() alerts.Definition {
 	return alerts.Definition{
-		Name: "errors", Application: "search", SPL: "search index=main error", IndexScope: []string{"main"},
+		Name: "errors", Application: testAlertAppID, SPL: "search index=main error", IndexScope: []string{"main"},
 		Earliest: "-5m", Latest: "now", Cron: "*/5 * * * *", Timezone: "UTC",
 		Condition:  alerts.Condition{Operator: alerts.ConditionGreaterThan, Threshold: 0},
 		SampleRows: 5, DispatchTTL: "2p", WebhookTTL: "10p",
 	}
+}
+
+func TestRuntimeOwnerEnumerationIncludesEveryEnabledOwner(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	repository, _ := openSQLRepository(t, now)
+	for _, owner := range []string{"alice", "bob", "disabled"} {
+		record := validCreateRecord("alert-"+owner, "name-"+owner, now)
+		record.OwnerID = owner
+		if owner != "disabled" {
+			record.State = alerts.AlertDisabled
+		}
+		if _, err := repository.Create(t.Context(), record); err != nil {
+			t.Fatal(err)
+		}
+		if owner != "disabled" {
+			ctx, err := alerts.WithAccessScope(t.Context(), alerts.AccessScope{OwnerID: owner, OrganizationID: "1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repository.SetState(ctx, alerts.SetStateRecord{ID: record.ID, OwnerID: owner, ExpectedVersion: 1, State: alerts.AlertEnabled, UpdatedAt: now}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	owners, err := repository.ListRuntimeOwners(t.Context(), "", 1)
+	if err != nil || len(owners) != 1 || owners[0] != "alice" {
+		t.Fatalf("first owner page: %v %v", owners, err)
+	}
+	owners, err = repository.ListRuntimeOwners(t.Context(), "alice", 256)
+	if err != nil || len(owners) != 1 || owners[0] != "bob" {
+		t.Fatalf("remaining enabled owners: %v %v", owners, err)
+	}
+}
+
+func seedAlertApp(t *testing.T, database *control.DB, tenant string, organization int64, id string) {
+	t.Helper()
+	apps, err := control.NewAppCatalog(database, control.AppCatalogOptions{CursorKey: make([]byte, 32), IDGenerator: func() (string, error) { return id, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := apps.CreateApp(t.Context(), control.AppAccessScope{TenantID: tenant, OrganizationID: organization}, control.AppDefinition{Slug: "search", DisplayName: "Search"}); err != nil {
+		t.Fatal(err)
+	}
+}
+func nativeAlertContext(ctx context.Context) context.Context {
+	scoped, err := alerts.WithAccessScope(ctx, alerts.AccessScope{OwnerID: "owner-1", OrganizationID: "1"})
+	if err != nil {
+		panic(err)
+	}
+	return scoped
 }

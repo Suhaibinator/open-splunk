@@ -2,7 +2,6 @@ package searchsnapshot
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
@@ -56,7 +56,7 @@ func (statsWildcardReplaySnapshotter) VisibilityCutoff(context.Context) (uint64,
 
 func TestBuildExecutionPlanRejectsChangedKnowledgeForRetainedStatsWildcardInventory(t *testing.T) {
 	ctx := context.Background()
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.db"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
 	}
@@ -78,7 +78,7 @@ func TestBuildExecutionPlanRejectsChangedKnowledgeForRetainedStatsWildcardInvent
 	}
 	if _, err := appCatalog.CreateApp(
 		ctx,
-		control.AppAccessScope{TenantID: tenantID},
+		control.AppAccessScope{OrganizationID: 1, TenantID: tenantID},
 		control.AppDefinition{Slug: "stats-replay", DisplayName: "Stats Replay"},
 	); err != nil {
 		t.Fatalf("CreateApp(): %v", err)
@@ -111,7 +111,7 @@ func TestBuildExecutionPlanRejectsChangedKnowledgeForRetainedStatsWildcardInvent
 	if err != nil {
 		t.Fatalf("searchtime.NewAbsoluteRange(): %v", err)
 	}
-	created, err := manager.Create(ctx, searchjobs.CreateRequest{
+	created, err := manager.Create(ctx, searchjobs.CreateRequest{OrganizationID: "1",
 		SPL:               `index=main | stats sum(*)`,
 		OwnerID:           ownerID,
 		TenantID:          tenantID,
@@ -123,7 +123,7 @@ func TestBuildExecutionPlanRejectsChangedKnowledgeForRetainedStatsWildcardInvent
 	if err != nil {
 		t.Fatalf("Manager.Create(): %v", err)
 	}
-	access := searchjobs.AccessScope{TenantID: tenantID, OwnerID: ownerID}
+	access := searchjobs.AccessScope{OrganizationID: "1", TenantID: tenantID, OwnerID: ownerID}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		job, getErr := manager.GetFor(access, created.ID)

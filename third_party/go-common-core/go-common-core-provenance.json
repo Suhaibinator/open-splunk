@@ -1,0 +1,9 @@
+{
+  "package": "@suhaibinator/go-common-core",
+  "version": "1.0.0",
+  "source": "https://github.com/Suhaibinator/go-common",
+  "sourceRevision": "8945bf3e72492542d0fafd28631cc235c92aba73",
+  "declaredLicense": "ISC",
+  "compiler": "Node16",
+  "archiveSha256": "72cf858a2b1f0f3f1c219125512287c972a8870c85ab30b5a7b54d85b7fd4397"
+}

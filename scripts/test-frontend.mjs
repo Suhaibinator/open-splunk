@@ -13,6 +13,7 @@ const scriptTests = [
   "help-content.test.mjs",
   "help-security.test.mjs",
   "ci-workflow-policy.test.mjs",
+  "start-ci-native-services.test.mjs",
   "compile-protos.test.mjs",
   "byte-formatting.test.mjs",
   "style-invariants.test.mjs",
@@ -27,6 +28,8 @@ const scriptTests = [
   "build-oci.test.mjs",
 ];
 const testFiles = [
+  path.join("lib", "api", "identity-client.test.ts"),
+  path.join("lib", "search", "native-export-download.test.ts"),
   path.join("app", "_components", "product-shell-help.mount.test.tsx"),
   path.join("app", "help", "help-data.test.tsx"),
   path.join("app", "help", "help-document-security.test.tsx"),
@@ -126,7 +129,7 @@ const testFiles = [
   path.join("lib", "api", "cursor-pages.test.ts"),
   path.join("lib", "api", "open-splunk-client-routes.test.ts"),
   path.join("lib", "api", "well-formed-text.test.ts"),
-  path.join("lib", "api", "administrator-session.test.ts"),
+  path.join("lib", "api", "identity-session.test.ts"),
   path.join("lib", "api", "hec-operations-route.test.ts"),
   path.join("lib", "api", "app-catalog.test.ts"),
   path.join("lib", "api", "protobuf-contracts.test.ts"),

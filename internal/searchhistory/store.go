@@ -12,6 +12,7 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
+	"github.com/Suhaibinator/open-splunk/internal/resourcepolicy"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
@@ -79,10 +80,10 @@ func (store *Store) Get(ctx context.Context, scope AccessScope, searchJobID stri
 		return nil, errors.New("get search history: clock returned an invalid timestamp")
 	}
 	var record historyRecord
-	query := store.orm.WithContext(ctx).
+	query := resourcepolicy.Filter(applyHistoryScope(store.orm.WithContext(ctx), scope), "search_history").
 		Where(
-			"search_job_id = ? AND tenant_id = ? AND owner_id = ? AND created_at_unix_micro >= ?",
-			searchJobID, scope.TenantID, scope.OwnerID, now.Add(-store.maximumAge).UnixMicro(),
+			"search_job_id = ? AND created_at_unix_micro >= ?",
+			searchJobID, now.Add(-store.maximumAge).UnixMicro(),
 		).
 		Take(&record)
 	if errors.Is(query.Error, gorm.ErrRecordNotFound) {
@@ -101,7 +102,7 @@ func (store *Store) Get(ctx context.Context, scope AccessScope, searchJobID stri
 // Prune applies both age and row-count retention for one owner immediately.
 // Each transaction deletes only a fixed-size batch so other control-plane
 // writers can make progress between batches. Read paths apply a non-mutating
-// retention predicate instead of acquiring a SQLite write lock.
+// retention predicate instead of acquiring a PostgreSQL write lock.
 func (store *Store) Prune(ctx context.Context, scope AccessScope) (deleted int64, returnedErr error) {
 	if err := validateContext(ctx); err != nil {
 		return 0, err
@@ -144,8 +145,8 @@ func (store *Store) Delete(ctx context.Context, scope AccessScope, searchJobID s
 	if err := validateText("search job ID", searchJobID, maximumSearchJobIDBytes, false); err != nil {
 		return err
 	}
-	result := store.orm.WithContext(ctx).
-		Where("search_job_id = ? AND tenant_id = ? AND owner_id = ?", searchJobID, scope.TenantID, scope.OwnerID).
+	result := applyHistoryScope(store.orm.WithContext(ctx), scope).
+		Where("search_job_id = ?", searchJobID).
 		Delete(&historyRecord{})
 	if result.Error != nil {
 		return mapContextError(ctx, "delete search-history entry", result.Error)
@@ -180,14 +181,14 @@ func (store *Store) Clear(ctx context.Context, scope AccessScope, filter Filter)
 }
 
 func historyEntryFromRecord(record historyRecord) (*opensplunk.SearchHistoryEntry, error) {
-	if _, err := normalizeScope(AccessScope{TenantID: record.TenantID, OwnerID: record.OwnerID}); err != nil {
+	if _, err := persistedScope(record.TenantID, record.OwnerID, record.OrganizationID); err != nil {
 		return nil, persistedDataError("persisted search-history scope is invalid", err)
 	}
 	entry, indexed, err := decodeEntry(record.EntryProto, record.EntrySHA256)
 	if err != nil {
 		return nil, err
 	}
-	if indexed.jobID != record.SearchJobID || indexed.appID != record.AppID || indexed.savedSearchID != record.SavedSearchID ||
+	if !resourcepolicy.MatchesSourceNames(record.SourceIndexNames, indexed.sourceIndexNames) || indexed.jobID != record.SearchJobID || indexed.appID != record.AppID || indexed.savedSearchID != record.SavedSearchID ||
 		indexed.state != record.FinalState || indexed.searchText != record.SearchText ||
 		indexed.createdAt != record.CreatedAtUnixMicro || indexed.finishedAt != record.FinishedAtUnixMicro ||
 		indexed.duration != record.DurationNanoseconds || indexed.matchedEvents != record.MatchedEvents {

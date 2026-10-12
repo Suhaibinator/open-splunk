@@ -12,7 +12,6 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	internalclickhouse "github.com/Suhaibinator/open-splunk/internal/clickhouse"
-	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
@@ -37,7 +36,7 @@ func TestScheduledReportExecutionAgainstClickHouse(t *testing.T) {
 
 	clock := &scheduledExecutionClock{now: time.Date(2026, time.August, 8, 12, 0, 30, 0, time.UTC)}
 	root := t.TempDir()
-	database, err := control.Open(ctx, filepath.Join(root, "control.db"))
+	database, err := openTestControl(t, ctx, filepath.Join(root, "control.db"))
 	if err != nil {
 		t.Fatalf("open scheduled execution control database: %v", err)
 	}
@@ -140,7 +139,7 @@ func TestScheduledReportExecutionAgainstClickHouse(t *testing.T) {
 	if err := runJournal.Bind(service); err != nil {
 		t.Fatalf("bind scheduled-report journal: %v", err)
 	}
-	schedule, err := service.Configure(ctx, runtimeKnowledgeTestOwner, runtimeKnowledgeTestTenant, saved.GetSavedSearchId(), 0, scheduledreports.Configuration{
+	schedule, err := service.Configure(ctx, scheduledreports.AccessScope{OwnerID: runtimeKnowledgeTestOwner}, runtimeKnowledgeTestTenant, saved.GetSavedSearchId(), 0, scheduledreports.Configuration{
 		Cron: "* * * * *", Timezone: "UTC", Enabled: true,
 	})
 	if err != nil {
@@ -283,7 +282,7 @@ func completedScheduledExecution(
 	access := searchjobs.AccessScope{TenantID: runtimeKnowledgeTestTenant, OwnerID: runtimeKnowledgeTestOwner}
 	job, jobErr := manager.GetFor(access, "job-scheduled-clickhouse")
 	artifact, artifactErr := artifacts.Get(ctx, access, "job-scheduled-clickhouse", searchartifacts.AccessInspect)
-	runs, runsErr := service.ListRuns(ctx, runtimeKnowledgeTestOwner, savedSearchID, 1)
+	runs, runsErr := service.ListRuns(ctx, scheduledreports.AccessScope{OwnerID: runtimeKnowledgeTestOwner}, savedSearchID, 1)
 	if jobErr != nil || !job.State.Terminal() || artifactErr != nil || !artifact.ArtifactPresent ||
 		runsErr != nil || len(runs) != 1 || runs[0].Outcome != scheduledreports.RunOutcomeSucceeded {
 		t.Fatalf("scheduled execution did not settle: job=%#v jobErr=%v artifact=%#v artifactErr=%v runs=%#v runsErr=%v", job, jobErr, artifact, artifactErr, runs, runsErr)

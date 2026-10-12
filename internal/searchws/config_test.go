@@ -449,12 +449,15 @@ func TestNormalizeConfigDurationBoundsAndPingPongRelationship(t *testing.T) {
 
 func TestNormalizeConfigDefensivelyClonesAccessIdentities(t *testing.T) {
 	config := validSearchWebSocketConfig()
+	config.Access.OrganizationID = "7"
+	config.Access.SiteAdministrator = true
 	normalized := mustNormalizeSearchWebSocketConfig(t, config)
 	if normalized.access != config.Access {
 		t.Fatalf("normalized access = %+v, want %+v", normalized.access, config.Access)
 	}
 	if unsafe.StringData(normalized.access.TenantID) == unsafe.StringData(config.Access.TenantID) ||
-		unsafe.StringData(normalized.access.OwnerID) == unsafe.StringData(config.Access.OwnerID) {
+		unsafe.StringData(normalized.access.OwnerID) == unsafe.StringData(config.Access.OwnerID) ||
+		unsafe.StringData(normalized.access.OrganizationID) == unsafe.StringData(config.Access.OrganizationID) {
 		t.Fatal("normalized access identities share caller-owned backing storage")
 	}
 }

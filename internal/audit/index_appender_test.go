@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 )
 
 func TestIndexMutationAppenderRequiresExplicitSuccessfulActor(t *testing.T) {
@@ -33,7 +34,7 @@ func TestIndexMutationAppenderRequiresExplicitSuccessfulActor(t *testing.T) {
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			tx := database.GORMDB().WithContext(testCase.ctx).Begin()
+			tx := pgmeta.Begin(database.GORMDB().WithContext(testCase.ctx))
 			if tx.Error != nil {
 				t.Fatalf("begin: %v", tx.Error)
 			}
@@ -82,7 +83,7 @@ func TestIndexMutationAppenderMapsAllControlActions(t *testing.T) {
 		{control.IndexMutationAuditActionDeleteData, ActionIndexDeleteData, 6},
 	}
 	for _, testCase := range tests {
-		tx := database.GORMDB().WithContext(ctx).Begin()
+		tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 		if tx.Error != nil {
 			t.Fatalf("begin %s: %v", testCase.controlAction, tx.Error)
 		}
@@ -120,7 +121,7 @@ func TestIndexMutationAppenderMapsAllControlActions(t *testing.T) {
 		}
 	}
 
-	tx := database.GORMDB().WithContext(ctx).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 	if tx.Error != nil {
 		t.Fatalf("begin unknown action: %v", tx.Error)
 	}

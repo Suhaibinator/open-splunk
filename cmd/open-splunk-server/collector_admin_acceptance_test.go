@@ -51,9 +51,9 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 
 	administratorToken := bytes.Repeat(
 		[]byte("a"),
-		auth.MinimumBrowserBearerTokenBytes,
+		runtimeSessionCredentialBytes,
 	)
-	authenticator, err := auth.NewBearerTokenAuthenticator(
+	authenticator, err := newRuntimeSessionAuthenticator(
 		administratorToken,
 		tenantID,
 		ownerID,
@@ -63,7 +63,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	firstDatabase, err := control.Open(ctx, databasePath)
+	firstDatabase, err := openTestControl(t, ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	}
 	issued, err := tokenStore.CreateCollectorToken(
 		ctx,
-		auth.CreateCollectorTokenRequest{
+		auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 			Name:              "collector administration acceptance",
 			AllowedIndexNames: []string{"main"},
 			BoundCollectorID:  onlineCollectorID,
@@ -444,7 +444,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	}
 	wrongAdministratorToken := bytes.Repeat(
 		[]byte("b"),
-		auth.MinimumBrowserBearerTokenBytes,
+		runtimeSessionCredentialBytes,
 	)
 	for name, bearer := range map[string][]byte{
 		"missing": nil,
@@ -732,7 +732,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	}
 	firstDatabaseOpen = false
 
-	reopenedDatabase, err := control.Open(ctx, databasePath)
+	reopenedDatabase, err := openTestControl(t, ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -846,7 +846,7 @@ func newCollectorAdminAcceptanceHandler(
 	t *testing.T,
 	database *control.DB,
 	administration *runtimeCollectorAdministration,
-	authenticator auth.BrowserAuthenticator,
+	authenticator server.IdentityAuthenticator,
 	tenantID string,
 	ownerID string,
 	now func() time.Time,
@@ -855,12 +855,12 @@ func newCollectorAdminAcceptanceHandler(
 	config := runtimeServerConfig()
 	config.Indexes = database
 	config.CollectorAdmin = administration
-	config.BrowserAuthenticator = authenticator
+	config.IdentityAuthenticator = authenticator
 	config.AdministrativeAllowedHosts = []string{"127.0.0.1"}
 	config.TenantID = tenantID
 	config.OwnerID = ownerID
 	config.Now = now
-	handler, err := server.NewHandler(config)
+	handler, err := newRuntimeTestHandler(config)
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}

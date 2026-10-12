@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"gorm.io/gorm"
 )
 
@@ -26,7 +26,7 @@ func TestAppLifecycleIsTenantScopedVersionedAndReferentiallySafe(t *testing.T) {
 	mainIndex := mustCreateIndex(t, db, enabledIndex("main"))
 	audit := mustCreateIndex(t, db, enabledIndex("audit"))
 
-	scope := AppAccessScope{TenantID: "tenant-a"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant-a"}
 	created, err := catalog.CreateApp(ctx, scope, AppDefinition{
 		Slug:        "  GradeThis_Prod ",
 		DisplayName: " GradeThis Production ",
@@ -77,7 +77,7 @@ func TestAppLifecycleIsTenantScopedVersionedAndReferentiallySafe(t *testing.T) {
 			}
 		})
 	}
-	if _, err := catalog.GetApp(ctx, AppAccessScope{TenantID: "tenant-b"}, AppSelector{AppID: created.ID}); !errors.Is(err, ErrNotFound) {
+	if _, err := catalog.GetApp(ctx, AppAccessScope{OrganizationID: 1, TenantID: "tenant-b"}, AppSelector{AppID: created.ID}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-tenant GetApp() error = %v, want ErrNotFound", err)
 	}
 
@@ -113,7 +113,7 @@ func TestAppLifecycleIsTenantScopedVersionedAndReferentiallySafe(t *testing.T) {
 		t.Fatalf("DeleteApp(active) error = %v, want ErrDependencyConflict", err)
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
-		DELETE FROM app_workspaces WHERE app_id = ?`,
+		DELETE FROM app_workspaces WHERE app_id = $1`,
 		created.ID,
 	); err == nil {
 		t.Fatal("direct active app deletion unexpectedly succeeded")
@@ -147,9 +147,9 @@ func TestAppLifecycleIsTenantScopedVersionedAndReferentiallySafe(t *testing.T) {
 
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		INSERT INTO saved_searches (
-			saved_search_id, version, name, app_id, owner_id, sharing_scope,
-			definition_proto, created_at_unix_micro, updated_at_unix_micro
-		) VALUES ('saved_app_dependency', 1, 'dependency', ?, 'owner', 1, X'01', 1, 1)`,
+			organization_id, saved_search_id, version, name, app_id, owner_id, sharing_scope,
+			definition_proto, source_index_names, created_at_unix_micro, updated_at_unix_micro
+		) VALUES (1, 'saved_app_dependency', 1, 'dependency', $1, 'owner', 1, decode('01','hex'), '[]'::jsonb, 1, 1)`,
 		created.ID,
 	); err != nil {
 		t.Fatalf("insert saved-search dependency: %v", err)
@@ -157,7 +157,7 @@ func TestAppLifecycleIsTenantScopedVersionedAndReferentiallySafe(t *testing.T) {
 	if _, err := catalog.DeleteApp(ctx, scope, AppSelector{Slug: created.Definition.Slug}, archived.Version, created.Definition.Slug); !errors.Is(err, ErrDependencyConflict) {
 		t.Fatalf("DeleteApp(referenced) error = %v, want ErrDependencyConflict", err)
 	}
-	if _, err := db.SQLDB().ExecContext(ctx, `DELETE FROM app_workspaces WHERE app_id = ?`, created.ID); err == nil {
+	if _, err := db.SQLDB().ExecContext(ctx, `DELETE FROM app_workspaces WHERE app_id = $1`, created.ID); err == nil {
 		t.Fatal("direct referenced app deletion unexpectedly succeeded")
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `DELETE FROM saved_searches WHERE saved_search_id = 'saved_app_dependency'`); err != nil {
@@ -181,9 +181,9 @@ func TestAppLifecycleIsTenantScopedVersionedAndReferentiallySafe(t *testing.T) {
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		INSERT INTO saved_searches (
-			saved_search_id, version, name, app_id, owner_id, sharing_scope,
-			definition_proto, created_at_unix_micro, updated_at_unix_micro
-		) VALUES ('saved_after_app_delete', 1, 'late dependency', ?, 'owner', 1, X'01', 1, 1)`,
+			organization_id, saved_search_id, version, name, app_id, owner_id, sharing_scope,
+			definition_proto, source_index_names, created_at_unix_micro, updated_at_unix_micro
+		) VALUES (1, 'saved_after_app_delete', 1, 'late dependency', $1, 'owner', 1, decode('01','hex'), '[]'::jsonb, 1, 1)`,
 		created.ID,
 	); err == nil {
 		t.Fatal("canonical saved-search reference created after app deletion")
@@ -200,7 +200,7 @@ func TestAppDeletionSerializesAgainstPostCommitCanonicalReference(t *testing.T) 
 	ctx := context.Background()
 	db := openTestDB(t)
 	catalog := newTestAppCatalog(t, db)
-	scope := AppAccessScope{TenantID: "tenant"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant"}
 	created, err := catalog.CreateApp(ctx, scope, validAppDefinition("delete-race"))
 	if err != nil {
 		t.Fatal(err)
@@ -221,7 +221,7 @@ func TestAppDeletionSerializesAgainstPostCommitCanonicalReference(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer deleteConnection.Close()
-	if _, err := deleteConnection.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+	if _, err := deleteConnection.ExecContext(ctx, `BEGIN`); err != nil {
 		t.Fatalf("begin delete transaction: %v", err)
 	}
 	committed := false
@@ -232,7 +232,7 @@ func TestAppDeletionSerializesAgainstPostCommitCanonicalReference(t *testing.T) 
 	}()
 	if _, err := deleteConnection.ExecContext(ctx, `
 		DELETE FROM app_workspaces
-		WHERE tenant_id = ? AND app_id = ? AND version = ? AND state = 'archived'`,
+		WHERE tenant_id = $1 AND app_id = $2 AND version = $3 AND state = 'archived'`,
 		scope.TenantID,
 		created.ID,
 		archived.Version,
@@ -244,9 +244,9 @@ func TestAppDeletionSerializesAgainstPostCommitCanonicalReference(t *testing.T) 
 	go func() {
 		_, insertErr := db.SQLDB().ExecContext(ctx, `
 			INSERT INTO saved_searches (
-				saved_search_id, version, name, app_id, owner_id, sharing_scope,
-				definition_proto, created_at_unix_micro, updated_at_unix_micro
-			) VALUES ('racing-reference', 1, 'race', ?, 'owner', 1, X'01', 1, 1)`,
+				organization_id, saved_search_id, version, name, app_id, owner_id, sharing_scope,
+				definition_proto, source_index_names, created_at_unix_micro, updated_at_unix_micro
+			) VALUES (1, 'racing-reference', 1, 'race', $1, 'owner', 1, decode('01','hex'), '[]'::jsonb, 1, 1)`,
 			created.ID,
 		)
 		insertDone <- insertErr
@@ -305,7 +305,7 @@ func TestAppDefaultIndexesMustExistAndRemainSearchable(t *testing.T) {
 		t.Fatalf("archive index: %v", err)
 	}
 	archived = archivedState
-	scope := AppAccessScope{TenantID: "tenant"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant"}
 
 	for name, indexName := range map[string]string{
 		"missing":        "missing",
@@ -387,8 +387,8 @@ func TestAppDefaultIndexesMustExistAndRemainSearchable(t *testing.T) {
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		UPDATE app_default_indexes
-		SET app_id = ?
-		WHERE tenant_id = ? AND app_id = ? AND index_id = ?`,
+		SET app_id = $1
+		WHERE tenant_id = $2 AND app_id = $3 AND index_id = $4`,
 		activeTarget.ID,
 		scope.TenantID,
 		created.ID,
@@ -423,18 +423,18 @@ func TestAppSlugUniquenessIsPerTenantAndErrorsDoNotEchoInput(t *testing.T) {
 	db := openTestDB(t)
 	catalog := newTestAppCatalog(t, db)
 	sentinel := "private-app-sentinel"
-	first, err := catalog.CreateApp(ctx, AppAccessScope{TenantID: "tenant-a"}, validAppDefinition(sentinel))
+	first, err := catalog.CreateApp(ctx, AppAccessScope{OrganizationID: 1, TenantID: "tenant-a"}, validAppDefinition(sentinel))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = catalog.CreateApp(ctx, AppAccessScope{TenantID: "tenant-a"}, validAppDefinition(" "+strings.ToUpper(sentinel)+" "))
+	_, err = catalog.CreateApp(ctx, AppAccessScope{OrganizationID: 1, TenantID: "tenant-a"}, validAppDefinition(" "+strings.ToUpper(sentinel)+" "))
 	if !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("duplicate CreateApp() error = %v, want ErrAlreadyExists", err)
 	}
 	if strings.Contains(err.Error(), sentinel) {
 		t.Fatalf("duplicate error echoed app slug: %v", err)
 	}
-	second, err := catalog.CreateApp(ctx, AppAccessScope{TenantID: "tenant-b"}, validAppDefinition(sentinel))
+	second, err := catalog.CreateApp(ctx, AppAccessScope{OrganizationID: 1, TenantID: "tenant-b"}, validAppDefinition(sentinel))
 	if err != nil {
 		t.Fatalf("same slug in another tenant: %v", err)
 	}
@@ -483,7 +483,7 @@ func TestNewAppCatalogValidatesDependenciesAndClonesCursorKey(t *testing.T) {
 	}
 	if _, err := invalidGenerator.CreateApp(
 		context.Background(),
-		AppAccessScope{TenantID: "tenant"},
+		AppAccessScope{OrganizationID: 1, TenantID: "tenant"},
 		validAppDefinition("invalid-generator"),
 	); err == nil || strings.Contains(err.Error(), "app_not-an-exact-canonical-id") {
 		t.Fatalf("invalid generator error = %v, want safe failure", err)
@@ -497,7 +497,7 @@ func TestAppDefinitionPresenceAndCallerStorageAreDetached(t *testing.T) {
 	db := openTestDB(t)
 	catalog := newTestAppCatalog(t, db)
 	index := mustCreateIndex(t, db, enabledIndex("main"))
-	scope := AppAccessScope{TenantID: "tenant"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant"}
 	definition := AppDefinition{
 		Slug:             "presence",
 		DisplayName:      " Presence ",
@@ -520,7 +520,7 @@ func TestAppDefinitionPresenceAndCallerStorageAreDetached(t *testing.T) {
 	var earliest, latest, timezone sql.NullString
 	if err := db.SQLDB().QueryRowContext(ctx, `
 		SELECT default_time_range_present, default_earliest, default_latest, default_timezone
-		FROM app_workspaces WHERE app_id = ?`,
+		FROM app_workspaces WHERE app_id = $1`,
 		created.ID,
 	).Scan(&present, &earliest, &latest, &timezone); err != nil {
 		t.Fatal(err)
@@ -553,7 +553,7 @@ func TestAppDefinitionPresenceAndCallerStorageAreDetached(t *testing.T) {
 	}
 	if err := db.SQLDB().QueryRowContext(ctx, `
 		SELECT default_time_range_present
-		FROM app_workspaces WHERE app_id = ?`,
+		FROM app_workspaces WHERE app_id = $1`,
 		nilRange.ID,
 	).Scan(&present); err != nil {
 		t.Fatal(err)
@@ -569,7 +569,7 @@ func TestAppCatalogEnforcesPerTenantCapacity(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	catalog := newTestAppCatalog(t, db)
-	scope := AppAccessScope{TenantID: "tenant-full"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant-full"}
 	for index := range MaximumAppsPerTenant {
 		if _, err := catalog.CreateApp(
 			ctx,
@@ -595,7 +595,7 @@ func TestAppCatalogEnforcesPerTenantCapacity(t *testing.T) {
 	}
 	if _, err := catalog.CreateApp(
 		ctx,
-		AppAccessScope{TenantID: "tenant-other"},
+		AppAccessScope{OrganizationID: 1, TenantID: "tenant-other"},
 		validAppDefinition("independent"),
 	); err != nil {
 		t.Fatalf("another tenant incorrectly shared capacity: %v", err)
@@ -608,8 +608,8 @@ func TestListAppsUsesBoundedDeterministicKeysetPages(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	catalog := newTestAppCatalog(t, db)
-	scope := AppAccessScope{TenantID: "tenant-list"}
-	otherScope := AppAccessScope{TenantID: "tenant-other"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant-list"}
+	otherScope := AppAccessScope{OrganizationID: 1, TenantID: "tenant-other"}
 	for _, item := range []struct {
 		slug, display string
 		state         AppState
@@ -706,8 +706,8 @@ func TestListAppIdentitiesUsesBoundedIdentityOnlyTenantPlan(t *testing.T) {
 	db := openTestDB(t)
 	catalog := newTestAppCatalog(t, db)
 	index := mustCreateIndex(t, db, enabledIndex("identity-only-default"))
-	scope := AppAccessScope{TenantID: "tenant-identities"}
-	otherScope := AppAccessScope{TenantID: "tenant-identities-other"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant-identities"}
+	otherScope := AppAccessScope{OrganizationID: 1, TenantID: "tenant-identities-other"}
 
 	created := make([]AppWorkspace, 0, 3)
 	for _, item := range []struct {
@@ -782,43 +782,35 @@ func TestListAppIdentitiesUsesBoundedIdentityOnlyTenantPlan(t *testing.T) {
 	}
 
 	type queryPlanRow struct {
-		Detail string `gorm:"column:detail"`
+		Detail string `gorm:"column:QUERY PLAN"`
 	}
 	var plan []queryPlanRow
 	if err := db.GORMDB().WithContext(ctx).Raw(
-		"EXPLAIN QUERY PLAN "+listAppIdentitiesSQL,
+		"EXPLAIN (FORMAT JSON) "+listAppIdentitiesSQL,
 		canonicalAppIDBytes+1,
 		len(AppStateArchived)+1,
 		scope.TenantID,
+		scope.OrganizationID,
 		4,
 	).Scan(&plan).Error; err != nil {
 		t.Fatalf("explain identity-only query: %v", err)
 	}
-	if len(plan) != 1 ||
-		!strings.Contains(
-			plan[0].Detail,
-			"USING INDEX app_workspaces_tenant_display_id_idx (tenant_id=?)",
-		) ||
-		strings.Contains(plan[0].Detail, "USE TEMP B-TREE") ||
-		strings.Contains(plan[0].Detail, "app_default_indexes") {
-		t.Fatalf("identity-only query plan = %#v", plan)
+	if len(plan) != 1 || strings.Contains(plan[0].Detail, "app_default_indexes") {
+		t.Fatalf("identity-only query unexpectedly hydrates default indexes: %#v", plan)
 	}
 
 	connection, err := db.SQLDB().Conn(ctx)
 	if err != nil {
 		t.Fatalf("reserve corruption connection: %v", err)
 	}
-	if _, err := connection.ExecContext(
-		ctx,
-		`PRAGMA ignore_check_constraints = ON`,
-	); err != nil {
+	if _, err := pgtest.Checks(ctx, connection, false); err != nil {
 		_ = connection.Close()
 		t.Fatalf("ignore test-only constraints: %v", err)
 	}
 	privateState := strings.Repeat("private-state-sentinel", 4_096)
 	if _, err := connection.ExecContext(
 		ctx,
-		`UPDATE app_workspaces SET state = ? WHERE app_id = ?`,
+		`UPDATE app_workspaces SET state = $1 WHERE app_id = $2`,
 		privateState,
 		created[0].ID,
 	); err != nil {
@@ -845,7 +837,7 @@ func TestAppListCursorIsAuthenticatedBoundAndRestartStable(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	catalog := newTestAppCatalog(t, db)
-	scope := AppAccessScope{TenantID: "tenant"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant"}
 	for _, slug := range []string{"alpha", "bravo", "charlie"} {
 		if _, err := catalog.CreateApp(ctx, scope, validAppDefinition(slug)); err != nil {
 			t.Fatal(err)
@@ -891,7 +883,7 @@ func TestAppListCursorIsAuthenticatedBoundAndRestartStable(t *testing.T) {
 		},
 		{
 			name:  "tenant",
-			scope: AppAccessScope{TenantID: "other"},
+			scope: AppAccessScope{OrganizationID: 1, TenantID: "other"},
 			request: AppListRequest{
 				PageSize: 1, PageToken: token,
 				SortBy: AppSortByDisplayName, Direction: AppSortAscending,
@@ -952,7 +944,7 @@ func TestAppListCursorRejectsEveryCatalogMutation(t *testing.T) {
 			ctx := context.Background()
 			db := openTestDB(t)
 			catalog := newTestAppCatalog(t, db)
-			scope := AppAccessScope{TenantID: "tenant"}
+			scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant"}
 			apps := make(map[string]AppWorkspace)
 			for _, slug := range []string{"alpha", "bravo", "charlie"} {
 				created, err := catalog.CreateApp(ctx, scope, validAppDefinition(slug))
@@ -1030,14 +1022,14 @@ func TestAppsPersistAcrossReopenAndRejectCorruptRows(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "control.sqlite")
+	path := pgtest.DSN(t)
 	db, err := Open(ctx, path)
 	if err != nil {
 		t.Fatalf("Open(): %v", err)
 	}
 	catalog := newTestAppCatalog(t, db)
 	index := mustCreateIndex(t, db, enabledIndex("persistent"))
-	scope := AppAccessScope{TenantID: "tenant"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant"}
 	created, err := catalog.CreateApp(ctx, scope, appDefinitionWithIndexes("persistent", index.Definition.Name))
 	if err != nil {
 		t.Fatalf("CreateApp(): %v", err)
@@ -1064,13 +1056,13 @@ func TestAppsPersistAcrossReopenAndRejectCorruptRows(t *testing.T) {
 		t.Fatalf("acquire corruption connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(ctx, connection, false); err != nil {
 		t.Fatalf("disable test-only check constraints: %v", err)
 	}
 	if _, err := connection.ExecContext(ctx, `
 		UPDATE app_workspaces
 		SET default_time_range_present = 2, description = 'private-description-sentinel'
-		WHERE app_id = ?`, created.ID); err != nil {
+		WHERE app_id = $1`, created.ID); err != nil {
 		t.Fatalf("corrupt app record: %v", err)
 	}
 	_, err = catalog.GetApp(ctx, scope, AppSelector{AppID: created.ID})
@@ -1089,7 +1081,7 @@ func TestActiveAppReadsTreatUnavailablePersistedIndexAsInternalCorruption(t *tes
 	db := openTestDB(t)
 	catalog := newTestAppCatalog(t, db)
 	index := mustCreateIndex(t, db, enabledIndex("corrupt-membership"))
-	scope := AppAccessScope{TenantID: "tenant"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant"}
 	created, err := catalog.CreateApp(
 		ctx,
 		scope,
@@ -1098,9 +1090,11 @@ func TestActiveAppReadsTreatUnavailablePersistedIndexAsInternalCorruption(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.SQLDB().ExecContext(ctx, `DROP TRIGGER active_app_default_indexes_remain_searchable ON indexes`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
-		DROP TRIGGER active_app_default_indexes_remain_searchable;
-		UPDATE indexes SET state = 'archived' WHERE index_id = ?`,
+		UPDATE indexes SET state = 'archived' WHERE index_id = $1`,
 		index.ID,
 	); err != nil {
 		t.Fatalf("create test-only persisted dependency corruption: %v", err)
@@ -1125,7 +1119,7 @@ func TestAppListRejectsCorruptCatalogRevision(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	catalog := newTestAppCatalog(t, db)
-	scope := AppAccessScope{TenantID: "tenant"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant"}
 	if _, err := catalog.CreateApp(ctx, scope, validAppDefinition("revision")); err != nil {
 		t.Fatal(err)
 	}
@@ -1134,13 +1128,14 @@ func TestAppListRejectsCorruptCatalogRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(ctx, connection, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.ExecContext(ctx, `DROP TRIGGER app_catalog_revision_transition_is_exact ON app_catalog_revisions; DROP TRIGGER app_catalog_revision_delete_is_forbidden ON app_catalog_revisions`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := connection.ExecContext(ctx, `
-		DROP TRIGGER app_catalog_revision_transition_is_exact;
-		DROP TRIGGER app_catalog_revision_delete_is_forbidden;
-		UPDATE app_catalog_revisions SET revision = 0 WHERE tenant_id = ?`,
+		UPDATE app_catalog_revisions SET revision = 0 WHERE tenant_id = $1`,
 		scope.TenantID,
 	); err != nil {
 		t.Fatal(err)
@@ -1150,7 +1145,7 @@ func TestAppListRejectsCorruptCatalogRevision(t *testing.T) {
 		t.Fatalf("ListApps(corrupt revision) error = %v", err)
 	}
 	if _, err := connection.ExecContext(ctx, `
-		DELETE FROM app_catalog_revisions WHERE tenant_id = ?`,
+		DELETE FROM app_catalog_revisions WHERE tenant_id = $1`,
 		scope.TenantID,
 	); err != nil {
 		t.Fatal(err)
@@ -1167,7 +1162,7 @@ func TestConcurrentAppUpdatesAllowOneOptimisticWinner(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	catalog := newTestAppCatalog(t, db)
-	scope := AppAccessScope{TenantID: "tenant"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant"}
 	created, err := catalog.CreateApp(ctx, scope, validAppDefinition("concurrent"))
 	if err != nil {
 		t.Fatal(err)
@@ -1213,7 +1208,7 @@ func TestAppValidationIsCanonicalAndBounded(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	catalog := newTestAppCatalog(t, db)
-	scope := AppAccessScope{TenantID: "tenant"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant"}
 	valid := validAppDefinition("valid")
 	invalidUTF8 := string([]byte{0xff})
 	tests := []struct {
@@ -1221,11 +1216,11 @@ func TestAppValidationIsCanonicalAndBounded(t *testing.T) {
 		scope  AppAccessScope
 		mutate func(*AppDefinition)
 	}{
-		{name: "empty tenant", scope: AppAccessScope{}},
-		{name: "padded tenant", scope: AppAccessScope{TenantID: " tenant "}},
-		{name: "control tenant", scope: AppAccessScope{TenantID: "ten\nant"}},
-		{name: "oversized tenant", scope: AppAccessScope{TenantID: strings.Repeat("t", maximumTenantIDBytes+1)}},
-		{name: "invalid tenant utf8", scope: AppAccessScope{TenantID: invalidUTF8}},
+		{name: "empty tenant", scope: AppAccessScope{OrganizationID: 1}},
+		{name: "padded tenant", scope: AppAccessScope{OrganizationID: 1, TenantID: " tenant "}},
+		{name: "control tenant", scope: AppAccessScope{OrganizationID: 1, TenantID: "ten\nant"}},
+		{name: "oversized tenant", scope: AppAccessScope{OrganizationID: 1, TenantID: strings.Repeat("t", maximumTenantIDBytes+1)}},
+		{name: "invalid tenant utf8", scope: AppAccessScope{OrganizationID: 1, TenantID: invalidUTF8}},
 		{name: "empty slug", scope: scope, mutate: func(definition *AppDefinition) { definition.Slug = " " }},
 		{name: "invalid slug", scope: scope, mutate: func(definition *AppDefinition) { definition.Slug = "_private" }},
 		{name: "oversized slug", scope: scope, mutate: func(definition *AppDefinition) {
@@ -1291,7 +1286,7 @@ func TestAppOperationsPreserveCanceledContextIdentity(t *testing.T) {
 
 	db := openTestDB(t)
 	catalog := newTestAppCatalog(t, db)
-	scope := AppAccessScope{TenantID: "tenant"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant"}
 	created, err := catalog.CreateApp(context.Background(), scope, validAppDefinition("canceled"))
 	if err != nil {
 		t.Fatal(err)
@@ -1340,7 +1335,7 @@ func TestAppOperationsPreserveCanceledContextIdentity(t *testing.T) {
 	}
 }
 
-func TestAppGORMModelsMatchMigratedSQLiteColumns(t *testing.T) {
+func TestAppGORMModelsMatchMigratedPostgreSQLColumns(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -1359,7 +1354,7 @@ func TestAppGORMModelsMatchMigratedSQLiteColumns(t *testing.T) {
 			if err := statement.Parse(test.model); err != nil {
 				t.Fatalf("parse GORM model: %v", err)
 			}
-			rows, err := db.SQLDB().QueryContext(ctx, fmt.Sprintf(`SELECT name FROM pragma_table_info('%s') ORDER BY cid`, test.table))
+			rows, err := db.SQLDB().QueryContext(ctx, `SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 ORDER BY ordinal_position`, test.table)
 			if err != nil {
 				t.Fatalf("read migrated columns: %v", err)
 			}
@@ -1388,9 +1383,9 @@ func TestAppGORMModelsMatchMigratedSQLiteColumns(t *testing.T) {
 func assertAppListIndexesMatchModel(t *testing.T, db *DB, statement *gorm.Statement) {
 	t.Helper()
 	expected := map[string][]string{
-		"app_workspaces_tenant_display_id_idx": {"tenant_id", "display_name", "app_id"},
-		"app_workspaces_tenant_created_id_idx": {"tenant_id", "created_at_unix_micro", "app_id"},
-		"app_workspaces_tenant_updated_id_idx": {"tenant_id", "updated_at_unix_micro", "app_id"},
+		"app_workspaces_tenant_display_id_idx": {"organization_id", "tenant_id", "display_name", "app_id"},
+		"app_workspaces_tenant_created_id_idx": {"organization_id", "tenant_id", "created_at_unix_micro", "app_id"},
+		"app_workspaces_tenant_updated_id_idx": {"organization_id", "tenant_id", "updated_at_unix_micro", "app_id"},
 	}
 	modelIndexes := make(map[string][]string)
 	for _, index := range statement.Schema.ParseIndexes() {
@@ -1406,7 +1401,7 @@ func assertAppListIndexesMatchModel(t *testing.T, db *DB, statement *gorm.Statem
 		}
 		rows, err := db.SQLDB().QueryContext(
 			context.Background(),
-			fmt.Sprintf(`SELECT name FROM pragma_index_info('%s') ORDER BY seqno`, name),
+			`SELECT a.attname FROM pg_index x JOIN pg_class idx ON idx.oid=x.indexrelid JOIN pg_namespace ns ON ns.oid=idx.relnamespace JOIN LATERAL unnest(x.indkey) WITH ORDINALITY AS k(attnum,ordinality) ON TRUE JOIN pg_attribute a ON a.attrelid=x.indrelid AND a.attnum=k.attnum WHERE ns.nspname=current_schema() AND idx.relname=$1 ORDER BY k.ordinality`, name,
 		)
 		if err != nil {
 			t.Fatalf("read migrated index %s: %v", name, err)

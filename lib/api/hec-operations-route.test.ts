@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { GetHECOperationalSnapshotRequest } from "@/gen/ts/open_splunk/hec_admin_api";
 
-import { clearAdministratorBearerToken, setAdministratorBearerToken } from "./administrator-session";
+import { clearIdentitySession } from "./identity-session";
 import { OpenSplunkApiClient } from "./open-splunk-client";
 import {
   PROTOBUF_CONTENT_TYPE,
@@ -33,7 +33,6 @@ test("HEC operations rejects an oversized response before protobuf decode", asyn
       },
     }),
   }));
-  setAdministratorBearerToken("hec-operations-test-administrator");
   try {
     await assert.rejects(
       client.hec.getOperationalSnapshot(GetHECOperationalSnapshotRequest.fromPartial({})),
@@ -42,7 +41,7 @@ test("HEC operations rejects an oversized response before protobuf decode", asyn
     assert.equal(hecOperationsRoutes.get.maximumResponseBytes, maximumResponseBytes);
     assert.equal(cancelled, true);
   } finally {
-    clearAdministratorBearerToken();
+    clearIdentitySession();
   }
 });
 
@@ -65,7 +64,6 @@ test("HEC operations bounds chunked responses without a declared length", async 
       headers: { "Content-Type": PROTOBUF_CONTENT_TYPE },
     }),
   }));
-  setAdministratorBearerToken("hec-operations-test-administrator");
   try {
     await assert.rejects(
       client.hec.getOperationalSnapshot(GetHECOperationalSnapshotRequest.fromPartial({})),
@@ -75,6 +73,6 @@ test("HEC operations bounds chunked responses without a declared length", async 
     assert.equal(sent, 17);
     assert.equal(cancelled, true);
   } finally {
-    clearAdministratorBearerToken();
+    clearIdentitySession();
   }
 });

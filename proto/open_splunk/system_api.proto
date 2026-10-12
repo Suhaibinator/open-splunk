@@ -68,6 +68,19 @@ message BrowserApiLimits {
   google.protobuf.Duration search_result_retention = 8;
   uint32 maximum_timeline_buckets = 9;
   uint32 maximum_field_summary_values = 10;
+  uint64 maximum_capture_rows = 11;
+  uint64 maximum_capture_bytes = 12;
+  uint64 organization_retention_bytes = 13;
+  uint64 global_retention_bytes = 14;
+}
+
+// Current persisted and reserved captures/exports for the selected scope.
+message RetainedStorageUsage {
+  string organization_id = 1;
+  uint64 organization_used_bytes = 2;
+  uint64 global_used_bytes = 3;
+  uint64 organization_limit_bytes = 4;
+  uint64 global_limit_bytes = 5;
 }
 
 // POST /api/system/bootstrap
@@ -89,4 +102,5 @@ message GetSystemBootstrapResponse {
   // The live instance palette. UNSPECIFIED when no settings service is
   // configured; the client paints that as classic.
   UiPalette ui_palette = 12;
+  RetainedStorageUsage retained_storage_usage = 13;
 }

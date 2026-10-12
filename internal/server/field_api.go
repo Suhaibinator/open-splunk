@@ -46,7 +46,7 @@ func (handler *apiHandler) listSearchFields(request *http.Request, input *opensp
 		analysisRequest.PageToken = page.GetPageToken()
 	}
 
-	result, err := handler.searchFields.ListFields(request.Context(), handler.accessScope(), analysisRequest)
+	result, err := handler.searchFields.ListFields(request.Context(), handler.accessScope(request.Context()), analysisRequest)
 	if err := mapSearchFieldsCallError(request.Context(), err); err != nil {
 		return nil, err
 	}

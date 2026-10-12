@@ -196,7 +196,7 @@ func TestManagerLiveConcurrencyAndAdmissionPolicySnapshots(t *testing.T) {
 		return sink.SetSchema(messageSchema())
 	})
 	manager := newTestManager(t, Config{
-		Executor: executor, MaxConcurrent: 3, MaxQueued: 4,
+		Executor: executor, MaxConcurrent: 3, MaxConcurrentPerUser: 3, MaxQueued: 4,
 		LimitSource: source, CleanupInterval: -1,
 		NewID: sequenceIDs("live-limits"),
 	})
@@ -297,11 +297,12 @@ func TestManagerBoundsExecutionConcurrency(t *testing.T) {
 		return sink.AddRow([]Value{StringValue("done")})
 	})
 	manager := newTestManager(t, Config{
-		Executor:        executor,
-		MaxConcurrent:   int(limit),
-		MaxQueued:       jobCount,
-		CleanupInterval: -1,
-		NewID:           sequenceIDs("concurrency"),
+		Executor:             executor,
+		MaxConcurrent:        int(limit),
+		MaxConcurrentPerUser: int(limit),
+		MaxQueued:            jobCount,
+		CleanupInterval:      -1,
+		NewID:                sequenceIDs("concurrency"),
 	})
 
 	jobs := make([]Job, 0, jobCount)
@@ -3120,6 +3121,7 @@ func validRequest() CreateRequest {
 	earliest := time.Date(2026, time.July, 20, 0, 0, 0, 0, time.UTC)
 	latest := time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC)
 	return CreateRequest{
+		OrganizationID:    "1",
 		SPL:               "index=main | table message",
 		OwnerID:           "owner",
 		TenantID:          "tenant",

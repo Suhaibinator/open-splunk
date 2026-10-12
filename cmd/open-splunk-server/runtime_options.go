@@ -15,8 +15,7 @@ import (
 type runtimeCredentialGroup string
 
 const (
-	administratorCredentialGroup runtimeCredentialGroup = "administrator"
-	clickHouseCredentialGroup    runtimeCredentialGroup = "clickhouse"
+	clickHouseCredentialGroup runtimeCredentialGroup = "clickhouse"
 )
 
 type runtimeOptionBinding struct {
@@ -36,15 +35,25 @@ var runtimeOptionBindings = []runtimeOptionBinding{
 	{flagName: "http-tls-certificate-file", environmentName: "OPEN_SPLUNK_SERVER_HTTP_TLS_CERTIFICATE_FILE"},
 	{flagName: "http-tls-private-key-file", environmentName: "OPEN_SPLUNK_SERVER_HTTP_TLS_PRIVATE_KEY_FILE"},
 	{flagName: "http-trust-x-forwarded-proto", environmentName: "OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO"},
-	{flagName: "control-database-file", environmentName: "OPEN_SPLUNK_SERVER_CONTROL_DATABASE_FILE"},
+	{flagName: "postgres-dsn", environmentName: "OPEN_SPLUNK_SERVER_POSTGRES_DSN", sensitive: true},
 	{flagName: "master-key-file", environmentName: "OPEN_SPLUNK_SERVER_MASTER_KEY_FILE"},
 	{flagName: "server-lock-file", environmentName: serverSingletonLockPathEnv},
 	{flagName: "export-artifact-directory", environmentName: "OPEN_SPLUNK_SERVER_EXPORT_ARTIFACT_DIRECTORY"},
 	{flagName: "search-artifact-directory", environmentName: "OPEN_SPLUNK_SERVER_SEARCH_ARTIFACT_DIRECTORY"},
 	{flagName: "alert-public-base-url", environmentName: "OPEN_SPLUNK_SERVER_ALERT_PUBLIC_BASE_URL"},
 	{flagName: "alert-private-webhook-hosts", environmentName: "OPEN_SPLUNK_SERVER_ALERT_PRIVATE_WEBHOOK_HOSTS"},
-	{flagName: "administrator-token", environmentName: "OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN", credentialGroup: administratorCredentialGroup, sensitive: true},
-	{flagName: "administrator-token-file", environmentName: "OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN_FILE", credentialGroup: administratorCredentialGroup},
+	{flagName: "google-client-id", environmentName: "OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_ID"},
+	{flagName: "google-client-secret", environmentName: "OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_SECRET", sensitive: true},
+	{flagName: "public-base-url", environmentName: "OPEN_SPLUNK_SERVER_PUBLIC_BASE_URL"},
+	{flagName: "minio-endpoint", environmentName: "OPEN_SPLUNK_SERVER_MINIO_ENDPOINT"},
+	{flagName: "minio-access-key", environmentName: "OPEN_SPLUNK_SERVER_MINIO_ACCESS_KEY", sensitive: true},
+	{flagName: "minio-secret-key", environmentName: "OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY", sensitive: true},
+	{flagName: "minio-bucket", environmentName: "OPEN_SPLUNK_SERVER_MINIO_BUCKET"},
+	{flagName: "minio-use-tls", environmentName: "OPEN_SPLUNK_SERVER_MINIO_USE_TLS"},
+	{flagName: "search-capture-maximum-rows", environmentName: "OPEN_SPLUNK_SERVER_SEARCH_CAPTURE_MAXIMUM_ROWS"},
+	{flagName: "search-capture-maximum-bytes", environmentName: "OPEN_SPLUNK_SERVER_SEARCH_CAPTURE_MAXIMUM_BYTES"},
+	{flagName: "search-retention-organization-bytes", environmentName: "OPEN_SPLUNK_SERVER_SEARCH_RETENTION_ORGANIZATION_BYTES"},
+	{flagName: "search-retention-global-bytes", environmentName: "OPEN_SPLUNK_SERVER_SEARCH_RETENTION_GLOBAL_BYTES"},
 	{flagName: "clickhouse-address", environmentName: "OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS"},
 	{flagName: "clickhouse-database", environmentName: "OPEN_SPLUNK_SERVER_CLICKHOUSE_DATABASE"},
 	{flagName: "clickhouse-username", environmentName: "OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME"},
@@ -116,10 +125,10 @@ func parseRuntimeOptions(
 		return options{}, err
 	}
 	if strings.TrimSpace(result.masterKeyPath) == "" {
-		result.masterKeyPath = result.controlDBPath + ".key"
+		result.masterKeyPath = "data/master.key"
 	}
 	if strings.TrimSpace(result.searchArtifactDir) == "" {
-		result.searchArtifactDir = result.controlDBPath + ".search-artifacts"
+		result.searchArtifactDir = "data/search-cache"
 	}
 	if _, err := logging.ParseLevel(result.logLevel); err != nil {
 		return options{}, fmt.Errorf("configure -log-level: %w", err)
@@ -170,15 +179,25 @@ func registerRuntimeFlags(flags *flag.FlagSet, result *options) {
 	flags.StringVar(&result.httpTLSCert, "http-tls-certificate-file", "", "PEM certificate chain for HTTPS browser/API traffic (requires -http-tls-private-key-file)")
 	flags.StringVar(&result.httpTLSKey, "http-tls-private-key-file", "", "PEM private key for HTTPS browser/API traffic (requires -http-tls-certificate-file)")
 	flags.BoolVar(&result.trustForwardedProto, "http-trust-x-forwarded-proto", false, "trust one X-Forwarded-Proto value on plaintext browser/API connections")
-	flags.StringVar(&result.controlDBPath, "control-database-file", "open-splunk.db", "SQLite control-plane database file")
-	flags.StringVar(&result.masterKeyPath, "master-key-file", "", "server master-key file (default: <control-database-file>.key)")
+	flags.StringVar(&result.postgresDSN, "postgres-dsn", "", "PostgreSQL control-plane connection string")
+	flags.StringVar(&result.masterKeyPath, "master-key-file", "", "server master-key file (default: data/master.key)")
 	flags.StringVar(&result.serverLockFile, "server-lock-file", hostSingletonLockPath, "host-wide singleton lock file")
-	flags.StringVar(&result.exportArtifactDir, "export-artifact-directory", "", "private export-artifact directory (default: <control-database-file>.exports)")
-	flags.StringVar(&result.searchArtifactDir, "search-artifact-directory", "", "private retained-search directory (default: <control-database-file>.search-artifacts)")
+	flags.StringVar(&result.exportArtifactDir, "export-artifact-directory", "", "private bounded export staging directory")
+	flags.StringVar(&result.searchArtifactDir, "search-artifact-directory", "", "private bounded result staging/cache directory")
 	flags.StringVar(&result.alertPublicBaseURL, "alert-public-base-url", "", "absolute public base URL required before enabling webhook alerts")
 	flags.StringVar(&result.alertPrivateWebhookHostsCSV, "alert-private-webhook-hosts", "", "comma-separated exact hostnames permitted to resolve to private addresses")
-	flags.StringVar(&result.administratorToken, "administrator-token", "", "administrator bearer token (unsafe in process arguments; prefer -administrator-token-file)")
-	flags.StringVar(&result.administratorTokenFile, "administrator-token-file", "", "owner-only administrator bearer-token file (required mode 0400 or 0600)")
+	flags.StringVar(&result.googleClientID, "google-client-id", "", "Google OAuth client ID")
+	flags.StringVar(&result.googleClientSecret, "google-client-secret", "", "Google OAuth client secret (prefer environment)")
+	flags.StringVar(&result.publicBaseURL, "public-base-url", "", "public browser origin used for Google OAuth redirects")
+	flags.StringVar(&result.minioEndpoint, "minio-endpoint", "", "private MinIO host and optional port")
+	flags.StringVar(&result.minioAccessKey, "minio-access-key", "", "private MinIO access key (prefer environment)")
+	flags.StringVar(&result.minioSecretKey, "minio-secret-key", "", "private MinIO secret key (prefer environment)")
+	flags.StringVar(&result.minioBucket, "minio-bucket", "", "private result and export bucket")
+	flags.BoolVar(&result.minioUseTLS, "minio-use-tls", true, "use TLS for private MinIO connections")
+	flags.Uint64Var(&result.captureMaximumRows, "search-capture-maximum-rows", 100_000, "maximum retained rows per captured search (up to 10000000)")
+	flags.Uint64Var(&result.captureMaximumBytes, "search-capture-maximum-bytes", 256<<20, "maximum retained bytes per captured search (up to 4294967296)")
+	flags.Uint64Var(&result.retentionOrganizationBytes, "search-retention-organization-bytes", 4<<30, "shared capture and export retention byte budget per organization")
+	flags.Uint64Var(&result.retentionGlobalBytes, "search-retention-global-bytes", 16<<30, "shared capture and export retention byte budget for the installation")
 	flags.StringVar(&result.clickhouseAddress, "clickhouse-address", "127.0.0.1:9000", "ClickHouse native-protocol address")
 	flags.StringVar(&result.clickhouseDatabase, "clickhouse-database", "open_splunk", "ClickHouse database")
 	flags.StringVar(&result.clickhouseUsername, "clickhouse-username", "default", "ClickHouse username for migrations and application operations")
@@ -247,7 +266,6 @@ func applyRuntimeEnvironment(flags *flag.FlagSet, environment runtimeEnvironment
 	}
 
 	for _, group := range []runtimeCredentialGroup{
-		administratorCredentialGroup,
 		clickHouseCredentialGroup,
 	} {
 		names := cliGroups[group]
@@ -278,7 +296,6 @@ func applyRuntimeEnvironment(flags *flag.FlagSet, environment runtimeEnvironment
 		}
 	}
 	for _, group := range []runtimeCredentialGroup{
-		administratorCredentialGroup,
 		clickHouseCredentialGroup,
 	} {
 		names := environmentGroups[group]

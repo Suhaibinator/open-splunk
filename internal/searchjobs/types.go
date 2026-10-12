@@ -225,6 +225,8 @@ type JobSource struct {
 // from the absolute interval used for execution and audit history. The manager
 // resolves IndexTimeCutoff from its clock when the immutable job is created.
 type CreateRequest struct {
+	siteAdministrator bool
+	OrganizationID    string
 	SPL               string
 	OwnerID           string
 	TenantID          string
@@ -300,8 +302,10 @@ type ValidationResult struct {
 // scoped read and cancellation methods. Cross-scope lookups return ErrNotFound
 // so job existence is not disclosed.
 type AccessScope struct {
-	TenantID string
-	OwnerID  string
+	TenantID          string
+	OwnerID           string
+	OrganizationID    string
+	SiteAdministrator bool
 }
 
 // JobListRequest selects one bounded, owner-scoped page of retained transient
@@ -321,6 +325,7 @@ type JobListRequest struct {
 // no field through which result schema or detailed failure diagnostics can be
 // exposed. New Job fields therefore remain absent until deliberately added.
 type JobListItem struct {
+	OrganizationID    string
 	ID                string
 	Version           uint64
 	OwnerID           string
@@ -349,6 +354,10 @@ type JobListItem struct {
 	StartedAt        time.Time
 	FinishedAt       time.Time
 	ExpiresAt        time.Time
+	CaptureComplete  bool
+	PreviewTruncated bool
+	CaptureRows      uint64
+	CaptureBytes     uint64
 }
 
 // JobListFailure is the diagnostics-free failure summary exposed by retained
@@ -373,28 +382,36 @@ type JobListPage struct {
 // Job is a detached snapshot of job metadata. Every slice, failure, and schema
 // returned by Manager is a deep copy and may be changed by the caller.
 type Job struct {
-	ID               string
-	Version          uint64
-	OwnerID          string
-	SPL              string
-	NormalizedSPL    string
-	TenantID         string
-	RequestedIndexes []string
-	EffectiveIndexes []string
-	TimeRange        searchtime.Intent
-	AppID            string
-	Source           JobSource
-	Earliest         time.Time
-	Latest           time.Time
-	IndexTimeCutoff  time.Time
-	VisibilityCutoff uint64
+	ID             string
+	Version        uint64
+	OwnerID        string
+	SPL            string
+	NormalizedSPL  string
+	TenantID       string
+	OrganizationID string
+	// SitePrivilegeUsed is immutable admission authority. Active work is fenced
+	// if its run-as user later loses site privileges; terminal reads use current
+	// resource permissions independently.
+	SitePrivilegeUsed bool
+	RequestedIndexes  []string
+	EffectiveIndexes  []string
+	TimeRange         searchtime.Intent
+	AppID             string
+	Source            JobSource
+	Earliest          time.Time
+	Latest            time.Time
+	IndexTimeCutoff   time.Time
+	VisibilityCutoff  uint64
 	// KnowledgeSnapshot is the bounded, definition-free identity and canonical
 	// inventory prefix sealed for this exact admission. Nil means the legacy
 	// knowledge-disabled path; a present zero-object summary is distinct and
 	// proves that configured admission observed an empty active authority.
 	KnowledgeSnapshot *opensplunk.KnowledgeSnapshotSummary
-	State             State
-	Schema            *Schema
+	// KnowledgeObjectIDs is the complete private registry inventory for fresh
+	// visibility checks. Public summaries retain their existing bounded prefix.
+	KnowledgeObjectIDs []string
+	State              State
+	Schema             *Schema
 	// NearbyEventProvenance is a compiler-authenticated binding from the final
 	// result schema to unchanged physical event fields. Nil is the compatible
 	// representation for legacy and transformed results.
@@ -410,6 +427,10 @@ type Job struct {
 	// exactly the configured row limit and the executor attempted to emit at
 	// least one additional row. It is never inferred from an executor error.
 	ResultsTruncated  bool
+	CaptureComplete   bool
+	CaptureRows       uint64
+	CaptureBytes      uint64
+	PreviewTruncated  bool
 	Failure           *Failure
 	CreatedAt         time.Time
 	StartedAt         time.Time
@@ -809,6 +830,7 @@ func cloneJob(source Job) Job {
 	result.RequestedIndexes = cloneStrings(source.RequestedIndexes)
 	result.EffectiveIndexes = cloneStrings(source.EffectiveIndexes)
 	result.KnowledgeSnapshot = cloneKnowledgeSnapshotSummary(source.KnowledgeSnapshot)
+	result.KnowledgeObjectIDs = cloneStrings(source.KnowledgeObjectIDs)
 	if source.Schema != nil {
 		schema := cloneSchema(*source.Schema)
 		result.Schema = &schema
@@ -831,6 +853,7 @@ func cloneJobSummary(source Job) Job {
 	result.RequestedIndexes = nil
 	result.EffectiveIndexes = nil
 	result.KnowledgeSnapshot = nil
+	result.KnowledgeObjectIDs = nil
 	result.Schema = nil
 	result.NearbyEventProvenance = nil
 	if source.Failure != nil {
@@ -856,6 +879,12 @@ func retainedKnowledgeAdmissionMetadata(
 	total, err := checkedAdd(snapshot.RetainedBytes(), compiledBytes)
 	if err != nil {
 		return 0, err
+	}
+	for _, id := range snapshot.ObjectIDs() {
+		total, err = checkedAdd(total, retainedStringBase+uint64(len(id)))
+		if err != nil {
+			return 0, err
+		}
 	}
 	// Charge the complete allowed summary envelope rather than its current
 	// serialized length. This covers protobuf object, repeated-slot, string,

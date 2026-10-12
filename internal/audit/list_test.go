@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
@@ -39,7 +41,7 @@ func eventSequences(events []Event) []uint64 {
 func TestListDescendingKeysetIsStableAcrossAppendsAndRestart(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "control.db")
+	path := pgtest.DSN(t)
 	database, err := control.Open(ctx, path)
 	if err != nil {
 		t.Fatalf("control.Open: %v", err)
@@ -306,8 +308,8 @@ func TestListCursorRejectsDatabaseRestoredBehindHighWater(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	directory := t.TempDir()
-	path := filepath.Join(directory, "control.db")
-	olderPath := filepath.Join(directory, "older.db")
+	path := pgtest.DSN(t)
+	olderPath := filepath.Join(directory, "older.pgdump")
 	database, err := control.Open(ctx, path)
 	if err != nil {
 		t.Fatalf("control.Open: %v", err)
@@ -325,7 +327,11 @@ func TestListCursorRejectsDatabaseRestoredBehindHighWater(t *testing.T) {
 		t.Fatalf("List(first) = (%+v, %v)", first, err)
 	}
 
-	older, err := control.Open(ctx, olderPath)
+	olderDSN := pgtest.EmptyCopy(t, path)
+	if err := control.RestoreFrom(ctx, olderDSN, olderPath); err != nil {
+		t.Fatal(err)
+	}
+	older, err := control.Open(ctx, olderDSN)
 	if err != nil {
 		t.Fatalf("control.Open(older): %v", err)
 	}
@@ -348,17 +354,17 @@ func TestListCorruptionFailsClosedBeforeReturningRows(t *testing.T) {
 		if err != nil {
 			t.Fatalf("acquire corruption connection: %v", err)
 		}
-		if _, err := connection.ExecContext(ctx, "DROP TRIGGER audit_event_update_is_forbidden"); err != nil {
+		if _, err := connection.ExecContext(ctx, "DROP TRIGGER audit_event_update_is_forbidden ON audit_events"); err != nil {
 			_ = connection.Close()
 			t.Fatalf("drop update trigger: %v", err)
 		}
-		if _, err := connection.ExecContext(ctx, "PRAGMA ignore_check_constraints = ON"); err != nil {
+		if _, err := pgtest.Checks(ctx, connection, false); err != nil {
 			_ = connection.Close()
 			t.Fatalf("ignore fixture constraints: %v", err)
 		}
 		if _, err := connection.ExecContext(ctx, `
 			UPDATE audit_events
-			SET actor_id = replace(hex(zeroblob(300)), '00', 'x')
+			SET actor_id = replace(encode(decode(repeat('00', (300)::int), 'hex'), 'hex'), '00', 'x')
 			WHERE tenant_id = 'tenant-poison'`); err != nil {
 			_ = connection.Close()
 			t.Fatalf("poison actor ID: %v", err)
@@ -384,11 +390,11 @@ func TestListCorruptionFailsClosedBeforeReturningRows(t *testing.T) {
 		if err != nil {
 			t.Fatalf("acquire corruption connection: %v", err)
 		}
-		if _, err := connection.ExecContext(ctx, "DROP TRIGGER audit_event_update_is_forbidden"); err != nil {
+		if _, err := connection.ExecContext(ctx, "DROP TRIGGER audit_event_update_is_forbidden ON audit_events"); err != nil {
 			_ = connection.Close()
 			t.Fatalf("drop update trigger: %v", err)
 		}
-		if _, err := connection.ExecContext(ctx, "PRAGMA ignore_check_constraints = ON"); err != nil {
+		if _, err := pgtest.Checks(ctx, connection, false); err != nil {
 			_ = connection.Close()
 			t.Fatalf("ignore fixture constraints: %v", err)
 		}
@@ -399,7 +405,7 @@ func TestListCorruptionFailsClosedBeforeReturningRows(t *testing.T) {
 			_ = connection.Close()
 			t.Fatalf("poison lookahead taxonomy: %v", err)
 		}
-		if _, err := connection.ExecContext(ctx, "PRAGMA ignore_check_constraints = OFF"); err != nil {
+		if _, err := pgtest.Checks(ctx, connection, true); err != nil {
 			_ = connection.Close()
 			t.Fatalf("restore fixture constraints: %v", err)
 		}
@@ -419,7 +425,7 @@ func TestListCorruptionFailsClosedBeforeReturningRows(t *testing.T) {
 		store := newAuditTestStore(t, database, auditTestCursorKey())
 		appendAuditTestEvent(t, store, ctx, "tenant-state", ActionIngestionTokenCreate, "token", 1)
 		if err := database.GORMDB().Exec(
-			"DROP TRIGGER audit_tenant_state_transition_is_valid",
+			"DROP TRIGGER audit_tenant_state_transition_is_valid ON audit_tenant_state",
 		).Error; err != nil {
 			t.Fatalf("drop state transition trigger: %v", err)
 		}

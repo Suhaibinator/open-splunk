@@ -90,6 +90,8 @@ type CatalogOptions struct {
 
 type normalizedListRequest struct {
 	tenantID        string
+	indexAccess     string
+	accessIdentity  string
 	pageSize        uint32
 	pageToken       string
 	includeTotal    bool
@@ -173,6 +175,8 @@ func normalizeListRequest(
 	}
 	return normalizedListRequest{
 		tenantID:        normalizedScope.TenantID,
+		indexAccess:     normalizedScope.IndexAccess,
+		accessIdentity:  normalizedScope.AccessIdentity,
 		pageSize:        pageSize,
 		pageToken:       request.PageToken,
 		includeTotal:    request.IncludeTotal,

@@ -260,7 +260,7 @@ func TestNewClickHouseConnectionOptionsRejectsMismatchedTLSMode(t *testing.T) {
 
 func TestRunRejectsClickHouseTLSBeforeCreatingDurableState(t *testing.T) {
 	directory := t.TempDir()
-	controlDBPath := filepath.Join(directory, "control.db")
+	postgresDSN := filepath.Join(directory, "control.db")
 	malformedCA := filepath.Join(directory, "malformed-ca.pem")
 	if err := os.WriteFile(malformedCA, []byte("not a certificate\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -268,7 +268,7 @@ func TestRunRejectsClickHouseTLSBeforeCreatingDurableState(t *testing.T) {
 
 	err := runWithOptions(options{
 		httpAddress:             "127.0.0.1:0",
-		controlDBPath:           controlDBPath,
+		postgresDSN:             postgresDSN,
 		clickhouseSecure:        true,
 		clickhouseCACertFile:    malformedCA,
 		clickhouseServerName:    "clickhouse",
@@ -280,11 +280,11 @@ func TestRunRejectsClickHouseTLSBeforeCreatingDurableState(t *testing.T) {
 		t.Fatalf("runWithOptions() error = %v, want ClickHouse CA error", err)
 	}
 	for _, path := range []string{
-		controlDBPath,
-		controlDBPath + "-shm",
-		controlDBPath + "-wal",
-		controlDBPath + ".key",
-		controlDBPath + ".exports",
+		postgresDSN,
+		postgresDSN + "-shm",
+		postgresDSN + "-wal",
+		postgresDSN + ".key",
+		postgresDSN + ".exports",
 	} {
 		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 			t.Fatalf("durable path %q exists after TLS preflight: %v", path, statErr)

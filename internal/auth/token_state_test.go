@@ -26,7 +26,7 @@ func TestSetCollectorTokenEnabledReportsBeginContentionWithoutMutation(t *testin
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "contended state token",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -46,14 +46,14 @@ func TestSetCollectorTokenEnabledReportsBeginContentionWithoutMutation(t *testin
 		_, _ = blocker.ExecContext(context.Background(), `ROLLBACK`)
 		_ = blocker.Close()
 	})
-	if _, err := blocker.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+	if _, err := blocker.ExecContext(ctx, `BEGIN; SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(), 5716000640707417153))`); err != nil {
 		t.Fatalf("reserve state mutation writer: %v", err)
 	}
 	contender, err := raw.Conn(ctx)
 	if err != nil {
 		t.Fatalf("acquire state mutation contender: %v", err)
 	}
-	if _, err := contender.ExecContext(ctx, `PRAGMA busy_timeout = 1`); err != nil {
+	if _, err := contender.ExecContext(ctx, `SET lock_timeout = '1ms'`); err != nil {
 		_ = contender.Close()
 		t.Fatalf("shorten state mutation busy timeout: %v", err)
 	}
@@ -74,10 +74,10 @@ func TestSetCollectorTokenEnabledReportsBeginContentionWithoutMutation(t *testin
 			err,
 		)
 	}
-	var databaseErr interface{ Code() int }
-	if !errors.As(err, &databaseErr) || databaseErr.Code()&0xff != 5 {
+	var databaseErr interface{ SQLState() string }
+	if !errors.As(err, &databaseErr) || databaseErr.SQLState() != "55P03" {
 		t.Fatalf(
-			"SetCollectorTokenEnabled(contended) database error = %v, want SQLITE_BUSY (5)",
+			"SetCollectorTokenEnabled(contended) database error = %v, want PostgreSQL lock_not_available (55P03)",
 			err,
 		)
 	}
@@ -91,7 +91,7 @@ func TestSetCollectorTokenEnabledReportsBeginContentionWithoutMutation(t *testin
 	var auditCount int
 	if err := raw.QueryRowContext(
 		ctx,
-		`SELECT count(*) FROM audit_events WHERE target_id = ?`,
+		`SELECT count(*) FROM audit_events WHERE target_id = $1`,
 		issued.Token.ID,
 	).Scan(&auditCount); err != nil {
 		t.Fatalf("count audit events after contention: %v", err)
@@ -138,7 +138,7 @@ func TestSetCollectorTokenEnabledTransitionsAndFencesAuthentication(t *testing.T
 		Name:              "stateful native token",
 		AllowedIndexNames: []string{"main"},
 		BoundCollectorID:  testCollectorID,
-		ExpiresAt:         anchor.Add(time.Hour),
+		ExpiresAt:         anchor.Add(time.Hour), OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -205,7 +205,7 @@ func TestSetCollectorTokenEnabledTransitionsAndFencesAuthentication(t *testing.T
 	rows, err := database.SQLDB().QueryContext(ctx, `
 		SELECT action, target_version
 		FROM audit_events
-		WHERE target_id = ? AND sequence > 1
+		WHERE target_id = $1 AND sequence > 1
 		ORDER BY sequence`, issued.Token.ID)
 	if err != nil {
 		t.Fatalf("query token state audit events: %v", err)
@@ -283,7 +283,7 @@ func TestSetCollectorTokenEnabledCannotReactivateRevokedToken(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "revoked state token",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -333,17 +333,13 @@ func TestSetCollectorTokenEnabledRollsBackWithoutAuditEvent(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "audited state token",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
-		CREATE TRIGGER test_force_token_state_audit_failure
-		BEFORE INSERT ON audit_events
-		BEGIN
-			SELECT RAISE(ABORT, 'forced token state audit failure');
-		END`); err != nil {
+		CREATE OR REPLACE FUNCTION test_force_token_state_audit_failure_function() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING MESSAGE = 'forced token state audit failure'; RETURN NEW; END $$; CREATE TRIGGER test_force_token_state_audit_failure BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION test_force_token_state_audit_failure_function()`); err != nil {
 		t.Fatalf("create audit failure trigger: %v", err)
 	}
 	if _, err := store.SetCollectorTokenEnabled(

@@ -1,6 +1,6 @@
 import {
-  subscribeToAdministratorSessionRevision,
-} from "./administrator-session";
+  subscribeToSessionRevision,
+} from "./identity-session";
 import { createOpenSplunkApiClient } from "./open-splunk-client";
 import { getSystemBootstrap, type SystemBootstrapModel } from "./system-bootstrap";
 
@@ -313,7 +313,7 @@ export function createAppCatalogStore(options: CreateAppCatalogStoreOptions = {}
 
 export const appCatalogStore = createAppCatalogStore();
 
-subscribeToAdministratorSessionRevision(() => appCatalogStore.clear());
+subscribeToSessionRevision(() => appCatalogStore.clear());
 
 export function invalidateAppCatalog(apiBaseUrl: string): void {
   appCatalogStore.invalidate(apiBaseUrl);

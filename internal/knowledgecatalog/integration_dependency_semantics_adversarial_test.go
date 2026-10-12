@@ -9,6 +9,7 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestIntegrationDependencySemanticsValidTierOneChainAcrossGetAndBatchList(t *testing.T) {
@@ -526,11 +527,11 @@ func rewriteSemanticDependencySet(t *testing.T, database *control.DB, sourceID, 
 		t.Fatalf("acquire dependency rewrite connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(context.Background(), connection); err != nil {
 		t.Fatalf("disable dependency rewrite foreign keys: %v", err)
 	}
 	defer func() {
-		if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`); err != nil {
+		if _, err := pgtest.RestoreForeignKeys(context.Background(), connection); err != nil {
 			t.Errorf("restore dependency rewrite foreign keys: %v", err)
 		}
 	}()
@@ -563,7 +564,7 @@ func rewriteSemanticDependencySet(t *testing.T, database *control.DB, sourceID, 
 		},
 	}
 	for _, statement := range statements {
-		if _, err := connection.ExecContext(context.Background(), statement.query, statement.args...); err != nil {
+		if _, err := connection.ExecContext(context.Background(), pgtest.Parameters(statement.query), statement.args...); err != nil {
 			t.Fatalf("rewrite semantic dependency set: %v", err)
 		}
 	}

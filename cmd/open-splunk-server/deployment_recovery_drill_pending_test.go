@@ -3,12 +3,19 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
@@ -20,11 +27,12 @@ func TestDeploymentRecoveryDrillPendingAttemptUsesProductionDurableProjections(t
 
 	ctx := context.Background()
 	directory := t.TempDir()
-	databasePath := filepath.Join(directory, "control.db")
+	databaseDSN := pgtest.DSN(t)
+	objects := newRecoveryDrillTestObjects(t)
 	artifactDirectory := filepath.Join(directory, "search-artifacts")
 	admittedAt := time.Date(2026, time.September, 12, 10, 15, 30, 123_456_000, time.UTC)
 
-	database, err := control.Open(ctx, databasePath)
+	database, err := control.Open(ctx, databaseDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +40,7 @@ func TestDeploymentRecoveryDrillPendingAttemptUsesProductionDurableProjections(t
 		ctx,
 		database,
 		artifactDirectory,
+		objects,
 		admittedAt,
 	); err != nil {
 		_ = database.Close()
@@ -42,7 +51,7 @@ func TestDeploymentRecoveryDrillPendingAttemptUsesProductionDurableProjections(t
 	}
 
 	recoveredAt := admittedAt.Add(45 * time.Second)
-	reopened, err := control.Open(ctx, databasePath)
+	reopened, err := control.Open(ctx, databaseDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,6 +61,7 @@ func TestDeploymentRecoveryDrillPendingAttemptUsesProductionDurableProjections(t
 		}
 	})
 	artifacts, err := searchartifacts.New(ctx, searchartifacts.Config{
+		Blobs:           objects,
 		DB:              reopened.SQLDB(),
 		Directory:       artifactDirectory,
 		Clock:           func() time.Time { return recoveredAt },
@@ -72,12 +82,12 @@ func TestDeploymentRecoveryDrillPendingAttemptUsesProductionDurableProjections(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	historyScope := searchhistory.AccessScope{TenantID: deploymentRecoveryDrillTenantID, OwnerID: defaultOwnerID}
+	historyScope := searchhistory.AccessScope{OrganizationID: "1", TenantID: deploymentRecoveryDrillTenantID, OwnerID: deploymentRecoveryDrillOwnerID}
 	if recovered, recoverErr := history.RecoverInterrupted(ctx, historyScope); recoverErr != nil || recovered != 1 {
 		t.Fatalf("RecoverInterrupted() = (%d, %v), want (1, nil)", recovered, recoverErr)
 	}
 
-	access := searchjobs.AccessScope{TenantID: deploymentRecoveryDrillTenantID, OwnerID: defaultOwnerID}
+	access := searchjobs.AccessScope{TenantID: deploymentRecoveryDrillTenantID, OwnerID: deploymentRecoveryDrillOwnerID, OrganizationID: "1"}
 	artifact, err := artifacts.Get(ctx, access, deploymentRecoveryDrillPendingJobID, searchartifacts.AccessInspect)
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +101,7 @@ func TestDeploymentRecoveryDrillPendingAttemptUsesProductionDurableProjections(t
 		t.Fatalf("recovered artifact = %#v", artifact)
 	}
 	if artifact.Job.ID != deploymentRecoveryDrillPendingJobID || artifact.Job.Version != 1 ||
-		artifact.Job.TenantID != deploymentRecoveryDrillTenantID || artifact.Job.OwnerID != defaultOwnerID ||
+		artifact.Job.TenantID != deploymentRecoveryDrillTenantID || artifact.Job.OwnerID != deploymentRecoveryDrillOwnerID || artifact.Job.OrganizationID != "1" ||
 		artifact.Job.AppID != "search" || artifact.Job.SPL != "index=main | head 1" ||
 		artifact.Job.Source.Origin != searchjobs.JobOriginAdHoc ||
 		len(artifact.Job.RequestedIndexes) != 1 || artifact.Job.RequestedIndexes[0] != "main" ||
@@ -105,7 +115,8 @@ func TestDeploymentRecoveryDrillPendingAttemptUsesProductionDurableProjections(t
 	}
 	if artifact.ArtifactPresent || artifact.ArtifactBytes != 0 || artifact.Job.Schema != nil ||
 		!artifact.Job.StartedAt.IsZero() || artifact.Job.ScannedRows != 0 ||
-		artifact.Job.ScannedBytes != 0 || artifact.Job.RowCount != 0 || artifact.Job.ResultBytes != 0 {
+		artifact.Job.ScannedBytes != 0 || artifact.Job.RowCount != 0 || artifact.Job.ResultBytes != 0 ||
+		artifact.Job.CaptureRows != 0 || artifact.Job.CaptureBytes != 0 || artifact.Job.CaptureComplete {
 		t.Fatalf("recovered artifact invented results = %#v", artifact)
 	}
 	if lease, acquireErr := artifacts.Acquire(ctx, access, artifact.Job.ID); !errors.Is(acquireErr, searchartifacts.ErrNotReady) {
@@ -152,7 +163,7 @@ func TestDeploymentRecoveryDrillPendingAttemptUsesProductionDurableProjections(t
 		t.Fatal(err)
 	}
 	auditPage, err := auditEvents.List(ctx, deploymentRecoveryDrillTenantID, searchaudit.ListRequest{
-		OwnerID:      new(defaultOwnerID),
+		OwnerID:      new(deploymentRecoveryDrillOwnerID),
 		IncludeTotal: true,
 	})
 	if err != nil {
@@ -160,7 +171,41 @@ func TestDeploymentRecoveryDrillPendingAttemptUsesProductionDurableProjections(t
 	}
 	if len(auditPage.Events) != 1 || auditPage.TotalSize == nil || *auditPage.TotalSize != 1 ||
 		auditPage.Events[0].SearchJobID != artifact.Job.ID ||
-		auditPage.Events[0].OwnerID != defaultOwnerID {
+		auditPage.Events[0].OwnerID != deploymentRecoveryDrillOwnerID {
 		t.Fatalf("persisted search-attempt audit = %+v", auditPage)
 	}
+}
+
+func newRecoveryDrillTestObjects(t *testing.T) *recoveryObjects {
+	t.Helper()
+	options := recoveryObjectOptions{Endpoint: os.Getenv("OPEN_SPLUNK_TEST_MINIO_ENDPOINT"), AccessKey: os.Getenv("OPEN_SPLUNK_TEST_MINIO_ACCESS_KEY"), SecretKey: os.Getenv("OPEN_SPLUNK_TEST_MINIO_SECRET_KEY"), Bucket: "os-drill-" + strings.ReplaceAll(uuid.NewString(), "-", ""), UseTLS: false}
+	objects, err := options.open(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := objects.Close(); err != nil {
+			t.Error(err)
+		}
+		client, err := minio.New(options.Endpoint, &minio.Options{Creds: credentials.NewStaticV4(options.AccessKey, options.SecretKey, ""), Secure: false})
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		for object := range client.ListObjects(ctx, options.Bucket, minio.ListObjectsOptions{Recursive: true, WithVersions: true}) {
+			if object.Err != nil {
+				t.Error(object.Err)
+				continue
+			}
+			if err := client.RemoveObject(ctx, options.Bucket, object.Key, minio.RemoveObjectOptions{VersionID: object.VersionID}); err != nil {
+				t.Error(err)
+			}
+		}
+		if err := client.RemoveBucket(ctx, options.Bucket); err != nil {
+			t.Error(err)
+		}
+	})
+	return objects
 }

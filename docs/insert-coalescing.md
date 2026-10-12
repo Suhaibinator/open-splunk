@@ -13,7 +13,7 @@ server-owned coalescer will durably bind multiple pending reservations into one
 ordered **write group**. One write group is sent as one synchronous ClickHouse
 insert with one stable group-level deduplication token. The whole group is
 marked ambiguous before the first possible ClickHouse side effect and all of
-its member reservations are committed in one SQLite transaction after
+its member reservations are committed in one PostgreSQL transaction after
 ClickHouse confirms the insert.
 
 The initial implementation will have one physical sender and one global
@@ -72,7 +72,7 @@ The required separation is:
 ## Current contract that must survive
 
 Today, admission persists a normalized replay outbox and response metadata in
-SQLite before ClickHouse can be touched. Immediately before `Send`, the
+PostgreSQL before ClickHouse can be touched. Immediately before `Send`, the
 reservation changes from `unsent` to `ambiguous`. A lost response is recovered
 by replaying the exact outbox with the same deduplication token. A search only
 captures a visibility cutoff through the highest contiguous terminal sequence.
@@ -86,7 +86,7 @@ Coalescing must preserve all of the following:
    mutable policy to invent a new result.
 3. No row is searchable above the captured visibility cutoff.
 4. A batch cannot be reported committed before its ClickHouse insert is
-   confirmed and its SQLite reservation is terminal.
+   confirmed and its PostgreSQL reservation is terminal.
 5. A failure after a possible ClickHouse side effect is replayed, never
    abandoned.
 6. A ClickHouse retry uses stable inserted row values and a stable
@@ -134,7 +134,7 @@ transactions, and tests rather than comments alone.
   values.
 - The group has a stable, non-secret ID used as
   `insert_deduplication_token`. Per-batch deduplication keys remain the logical
-  identity authority in SQLite but are not used as the physical insert token.
+  identity authority in PostgreSQL but are not used as the physical insert token.
 - A sealed membership digest covers a format discriminator plus the ordered
   member sequence, batch key, payload digest, outbox length, and outbox digest.
   It is recomputed before every send. A mismatch fails closed without touching
@@ -145,7 +145,7 @@ transactions, and tests rather than comments alone.
 - Group membership and its deduplication token are committed before preparing
   or sending ClickHouse rows.
 - All members are durably changed to the group-owned ambiguous phase in one
-  SQLite transaction before `prepared.Send()`.
+  PostgreSQL transaction before `prepared.Send()`.
 - Once a group is ambiguous, the server may only replay that exact group. It
   may not add members, remove members, reorder rows, or mint a new token.
 - An ambiguous group is retried before any newer ready group. This preserves
@@ -159,7 +159,7 @@ transactions, and tests rather than comments alone.
 
 ### Commit and visibility
 
-- A successful ClickHouse send is followed by one serializable SQLite
+- A successful ClickHouse send is followed by one serializable PostgreSQL
   transaction that commits every member, clears every member outbox, updates
   HEC terminal state, marks the group terminal, and advances the contiguous
   visibility cutoff once.
@@ -167,14 +167,14 @@ transactions, and tests rather than comments alone.
 - All members use the same physical-send `committed_at` value, while keeping
   distinct logical result metadata.
 - In-process native callers may be notified after commit, but notifications
-  are an optimization. SQLite lookup remains the authority after timeout,
+  are an optimization. PostgreSQL lookup remains the authority after timeout,
   disconnect, crash, or restart.
 - It is valid for several adjacent batches to become visible at the same
   instant. It is not valid for part of a write group to become visible.
 
 ## Durable data model
 
-Update the fresh-state SQLite baseline with group ownership. The exact names
+Update the fresh-state PostgreSQL baseline with group ownership. The exact names
 may change during implementation, but the represented state and constraints
 may not be dropped.
 
@@ -202,7 +202,7 @@ Required fields:
 - `row_count`, `decoded_bytes`, and `outbox_sha256` for bounded reconstruction
   and corruption detection.
 
-Group formation must not decode large outbox blobs while holding the SQLite
+Group formation must not decode large outbox blobs while holding the PostgreSQL
 write transaction. Add bounded `stored_row_count` and `decoded_event_bytes`
 accounting to each pending reservation and populate it in the original
 admission transaction. These values are server-derived, are checked against the
@@ -219,11 +219,11 @@ Pruning must delete terminal group membership before deleting referenced
 logical reservations, in the same bounded maintenance transaction.
 
 Do not copy outbox blobs into the group table. The reservation already owns the
-authoritative normalized payload. Duplicating it would double SQLite write
+authoritative normalized payload. Duplicating it would double PostgreSQL write
 amplification and complicate atomic cleanup.
 
 The accounting columns and write-group tables are introduced by forward
-SQLite migrations. A narrowly recognized release that folded these objects
+PostgreSQL migrations. A narrowly recognized release that folded these objects
 into its baseline adopts the accounting migration without reapplying its
 columns; earlier databases apply the complete migration sequence. Pending
 reservations without the newer accounting seal are replayed individually
@@ -298,7 +298,7 @@ wait for the reservation's terminal result. A process-local waiter registry,
 keyed by visibility sequence, can avoid polling. The rules are:
 
 - register without making the waiter authoritative;
-- recheck SQLite after registration to close the commit-before-register race;
+- recheck PostgreSQL after registration to close the commit-before-register race;
 - wake every waiter whose reservation was committed by a group;
 - remove waiters on completion or context cancellation;
 - if the request context expires, leave the durable reservation intact and
@@ -326,9 +326,9 @@ For each acquired group, the sender must:
    limits;
 6. prepare one native insert using the group ID as the deduplication token;
 7. append every row;
-8. mark the group ambiguous in SQLite;
+8. mark the group ambiguous in PostgreSQL;
 9. call `Send` once;
-10. commit the entire group in SQLite;
+10. commit the entire group in PostgreSQL;
 11. close the prepared insert and notify native waiters.
 
 Keep `async_insert=0` and `wait_for_async_insert=1` for the first
@@ -339,7 +339,7 @@ enabling two independent batching layers is not part of this task.
 ### Empty and oversized cases
 
 Only reservations containing at least one accepted event enter a write group;
-whole-batch rejections remain SQLite-only terminal outcomes. A partially
+whole-batch rejections remain PostgreSQL-only terminal outcomes. A partially
 accepted logical batch groups only its accepted rows and retains all rejection
 metadata for its response.
 
@@ -364,7 +364,7 @@ thousand-row group under sustained load.
 This is not permission to make buffering unbounded. Before changing the
 constants, add a sizing calculation and tests covering:
 
-- maximum SQLite outbox bytes;
+- maximum PostgreSQL outbox bytes;
 - maximum decoded rows and bytes for one group;
 - maximum in-process row slice and driver-batch memory;
 - maximum native waiters;
@@ -391,7 +391,7 @@ The coalescer is a server-owned lifecycle worker, not a request goroutine.
   reconciliation. An exclusive drain must prove there are no reserved
   reservations, ready groups, ambiguous groups, or live group leases before
   the callback can mutate storage.
-- **Backup:** the SQLite snapshot must never represent an ambiguous group
+- **Backup:** the PostgreSQL snapshot must never represent an ambiguous group
   without its complete membership and member outboxes. Backup coordination
   must use the same freeze/drain proof already required for ClickHouse and
   control-state consistency.
@@ -405,19 +405,19 @@ The coalescer is a server-owned lifecycle worker, not a request goroutine.
 | --- | --- | --- |
 | Before reservation commit | No accepted batch | Caller retries fresh admission. |
 | After reservation commit, before grouping | Ungrouped `unsent` reservation | Coalescer includes it in a later group. |
-| During group-formation transaction | Old state or complete sealed group | SQLite rollback/commit decides; never a partial membership. |
+| During group-formation transaction | Old state or complete sealed group | PostgreSQL rollback/commit decides; never a partial membership. |
 | After group seal, before ambiguous transition | `ready` group | Replay the same membership and token. |
 | Ambiguous transition fails with proven rollback | `ready` group | Release lease and retry; no ClickHouse send occurred. |
 | Ambiguous transition result is uncertain | Treat as `ambiguous` until reread | Do not abandon; reacquire and replay exact group. |
 | During append, before ambiguous transition | `ready` group | Abort prepared batch, release lease, retry or fail closed. |
 | During or after `Send` | `ambiguous` group | Replay exact rows with the same group token. |
-| Send succeeds, SQLite commit fails | `ambiguous` group; rows may exist | Replay exact token, then retry atomic group commit. |
+| Send succeeds, PostgreSQL commit fails | `ambiguous` group; rows may exist | Replay exact token, then retry atomic group commit. |
 | Group commit succeeds, response/wakeup is lost | terminal members and group | Retried native/HEC lookup returns durable per-batch result. |
-| Process crashes with ungrouped and grouped work | SQLite is authoritative | Resolve ambiguous, ready, then ungrouped work in order. |
+| Process crashes with ungrouped and grouped work | PostgreSQL is authoritative | Resolve ambiguous, ready, then ungrouped work in order. |
 
 Every row in this table requires at least one deterministic unit or integration
 test. The uncertain-result rows require injected failures both before and after
-the underlying SQLite commit where the harness can distinguish them.
+the underlying PostgreSQL commit where the harness can distinguish them.
 
 ## Observability
 
@@ -447,7 +447,7 @@ channels, or source-derived identifiers.
 
 ## Test plan
 
-### SQLite and sequencer tests
+### PostgreSQL and sequencer tests
 
 - schema rejects duplicate membership, noncontiguous ordinals, invalid totals,
   impossible timestamps, and illegal state transitions;
@@ -534,7 +534,7 @@ Implement and review this as small correctness-preserving slices:
    rows, parts, and latency; capture the existing load profile.
 2. **Durable group schema:** add tables, constraints, group types, formation,
    acquisition, release, ambiguous transition, atomic commit, and exhaustive
-   SQLite tests without changing production sending.
+   PostgreSQL tests without changing production sending.
 3. **Grouped sender:** reconstruct and validate a group, send one physical
    block, and implement the complete failure matrix behind a disabled runtime
    switch used by tests.
@@ -574,7 +574,7 @@ This task is complete only when all of the following are true.
 - Crash/restart and lost-response integration tests prove zero missing and zero
   duplicate event IDs.
 - An ambiguous group blocks newer physical sends until reconciled.
-- Group commit and HEC terminal transitions are one SQLite transaction.
+- Group commit and HEC terminal transitions are one PostgreSQL transaction.
 - Durable and in-memory queues have tested hard row, byte, member, and waiter
   bounds.
 - Freeze/drain proves all four states empty: ungrouped reservations, ready
@@ -608,7 +608,7 @@ This task is complete only when all of the following are true.
 - parallel physical send lanes;
 - changing collector WAL batch identity or HEC request identity;
 - splitting one logical batch across physical groups;
-- weakening `wait_for_async_insert`, returning success before SQLite commit, or
+- weakening `wait_for_async_insert`, returning success before PostgreSQL commit, or
   acknowledging in-memory-only buffering;
 - relying on scheduled `OPTIMIZE TABLE` to clean up excessive parts;
 - changing event schema, search semantics, retention semantics, or authorization;

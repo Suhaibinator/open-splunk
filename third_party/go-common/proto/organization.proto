@@ -1,0 +1,225 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+import "google/protobuf/timestamp.proto";
+import "user.proto";
+
+// Represents an organization, which is a collection of users.
+message Organization {
+  int64 id = 1;
+  string name = 2;
+  string slug = 3;                        // URL-friendly organization identifier
+  optional string description = 4;
+  optional string avatar_url = 5;         // URL to the organization's avatar/logo
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  optional uint64 parent_organization_id = 8;
+  repeated uint64 lineage = 9;            // Ordered list of ancestor org IDs (root -> parent)
+  OrganizationType organization_type = 10; // Type/tier used for org capability gating
+  optional uint64 personal_owner_user_id = 11; // Present for every organization in a personal workspace tree
+}
+
+// Defines the role of a user within an organization.
+// Ordered bands/tiers are permission identities. Actual operations are controlled
+// by configured role/user-type thresholds and organization capability policy.
+enum OrganizationRole {
+  ORGANIZATION_ROLE_UNSPECIFIED = 0;
+  
+  // Member roles (tiers 0-10) - Basic organizational access
+  ORGANIZATION_ROLE_MEMBER_TIER_0 = 1;
+  ORGANIZATION_ROLE_MEMBER_TIER_1 = 2;
+  ORGANIZATION_ROLE_MEMBER_TIER_2 = 3;
+  ORGANIZATION_ROLE_MEMBER_TIER_3 = 4;
+  ORGANIZATION_ROLE_MEMBER_TIER_4 = 5;
+  ORGANIZATION_ROLE_MEMBER_TIER_5 = 6;
+  ORGANIZATION_ROLE_MEMBER_TIER_6 = 7;
+  ORGANIZATION_ROLE_MEMBER_TIER_7 = 8;
+  ORGANIZATION_ROLE_MEMBER_TIER_8 = 9;
+  ORGANIZATION_ROLE_MEMBER_TIER_9 = 10;
+  ORGANIZATION_ROLE_MEMBER_TIER_10 = 11;
+  
+  // Moderator roles (tiers 0-10) - Content and user management
+  ORGANIZATION_ROLE_MODERATOR_TIER_0 = 12;
+  ORGANIZATION_ROLE_MODERATOR_TIER_1 = 13;
+  ORGANIZATION_ROLE_MODERATOR_TIER_2 = 14;
+  ORGANIZATION_ROLE_MODERATOR_TIER_3 = 15;
+  ORGANIZATION_ROLE_MODERATOR_TIER_4 = 16;
+  ORGANIZATION_ROLE_MODERATOR_TIER_5 = 17;
+  ORGANIZATION_ROLE_MODERATOR_TIER_6 = 18;
+  ORGANIZATION_ROLE_MODERATOR_TIER_7 = 19;
+  ORGANIZATION_ROLE_MODERATOR_TIER_8 = 20;
+  ORGANIZATION_ROLE_MODERATOR_TIER_9 = 21;
+  ORGANIZATION_ROLE_MODERATOR_TIER_10 = 22;
+  
+  // Admin roles (tiers 0-10) - Administrative and management access
+  ORGANIZATION_ROLE_ADMIN_TIER_0 = 23;
+  ORGANIZATION_ROLE_ADMIN_TIER_1 = 24;
+  ORGANIZATION_ROLE_ADMIN_TIER_2 = 25;
+  ORGANIZATION_ROLE_ADMIN_TIER_3 = 26;
+  ORGANIZATION_ROLE_ADMIN_TIER_4 = 27;
+  ORGANIZATION_ROLE_ADMIN_TIER_5 = 28;
+  ORGANIZATION_ROLE_ADMIN_TIER_6 = 29;
+  ORGANIZATION_ROLE_ADMIN_TIER_7 = 30;
+  ORGANIZATION_ROLE_ADMIN_TIER_8 = 31;
+  ORGANIZATION_ROLE_ADMIN_TIER_9 = 32;
+  ORGANIZATION_ROLE_ADMIN_TIER_10 = 33;
+  
+  // Owner roles (tiers 0-10) - Ultimate organizational control
+  ORGANIZATION_ROLE_OWNER_TIER_0 = 34;
+  ORGANIZATION_ROLE_OWNER_TIER_1 = 35;
+  ORGANIZATION_ROLE_OWNER_TIER_2 = 36;
+  ORGANIZATION_ROLE_OWNER_TIER_3 = 37;
+  ORGANIZATION_ROLE_OWNER_TIER_4 = 38;
+  ORGANIZATION_ROLE_OWNER_TIER_5 = 39;
+  ORGANIZATION_ROLE_OWNER_TIER_6 = 40;
+  ORGANIZATION_ROLE_OWNER_TIER_7 = 41;
+  ORGANIZATION_ROLE_OWNER_TIER_8 = 42;
+  ORGANIZATION_ROLE_OWNER_TIER_9 = 43;
+  ORGANIZATION_ROLE_OWNER_TIER_10 = 44;
+}
+
+// Defines the type/tier of an organization.
+// Uses a tiered approach similar to UserType for feature and capability gating.
+enum OrganizationType {
+  ORGANIZATION_TYPE_UNSPECIFIED = 0;              // Default unspecified state
+
+  // Basic organizations (tiers 0-10) - Minimal organization capabilities
+  ORGANIZATION_TYPE_BASIC_TIER_0 = 1;
+  ORGANIZATION_TYPE_BASIC_TIER_1 = 2;
+  ORGANIZATION_TYPE_BASIC_TIER_2 = 3;
+  ORGANIZATION_TYPE_BASIC_TIER_3 = 4;
+  ORGANIZATION_TYPE_BASIC_TIER_4 = 5;
+  ORGANIZATION_TYPE_BASIC_TIER_5 = 6;
+  ORGANIZATION_TYPE_BASIC_TIER_6 = 7;
+  ORGANIZATION_TYPE_BASIC_TIER_7 = 8;
+  ORGANIZATION_TYPE_BASIC_TIER_8 = 9;
+  ORGANIZATION_TYPE_BASIC_TIER_9 = 10;
+  ORGANIZATION_TYPE_BASIC_TIER_10 = 11;
+
+  // Business organizations (tiers 0-10) - Standard organization capabilities
+  ORGANIZATION_TYPE_BUSINESS_TIER_0 = 12;
+  ORGANIZATION_TYPE_BUSINESS_TIER_1 = 13;
+  ORGANIZATION_TYPE_BUSINESS_TIER_2 = 14;
+  ORGANIZATION_TYPE_BUSINESS_TIER_3 = 15;
+  ORGANIZATION_TYPE_BUSINESS_TIER_4 = 16;
+  ORGANIZATION_TYPE_BUSINESS_TIER_5 = 17;
+  ORGANIZATION_TYPE_BUSINESS_TIER_6 = 18;
+  ORGANIZATION_TYPE_BUSINESS_TIER_7 = 19;
+  ORGANIZATION_TYPE_BUSINESS_TIER_8 = 20;
+  ORGANIZATION_TYPE_BUSINESS_TIER_9 = 21;
+  ORGANIZATION_TYPE_BUSINESS_TIER_10 = 22;
+
+  // Enterprise organizations (tiers 0-10) - Expanded organization capabilities
+  ORGANIZATION_TYPE_ENTERPRISE_TIER_0 = 23;
+  ORGANIZATION_TYPE_ENTERPRISE_TIER_1 = 24;
+  ORGANIZATION_TYPE_ENTERPRISE_TIER_2 = 25;
+  ORGANIZATION_TYPE_ENTERPRISE_TIER_3 = 26;
+  ORGANIZATION_TYPE_ENTERPRISE_TIER_4 = 27;
+  ORGANIZATION_TYPE_ENTERPRISE_TIER_5 = 28;
+  ORGANIZATION_TYPE_ENTERPRISE_TIER_6 = 29;
+  ORGANIZATION_TYPE_ENTERPRISE_TIER_7 = 30;
+  ORGANIZATION_TYPE_ENTERPRISE_TIER_8 = 31;
+  ORGANIZATION_TYPE_ENTERPRISE_TIER_9 = 32;
+  ORGANIZATION_TYPE_ENTERPRISE_TIER_10 = 33;
+
+  // Internal organizations (tiers 0-10) - Internal/system organization capabilities
+  ORGANIZATION_TYPE_INTERNAL_TIER_0 = 34;
+  ORGANIZATION_TYPE_INTERNAL_TIER_1 = 35;
+  ORGANIZATION_TYPE_INTERNAL_TIER_2 = 36;
+  ORGANIZATION_TYPE_INTERNAL_TIER_3 = 37;
+  ORGANIZATION_TYPE_INTERNAL_TIER_4 = 38;
+  ORGANIZATION_TYPE_INTERNAL_TIER_5 = 39;
+  ORGANIZATION_TYPE_INTERNAL_TIER_6 = 40;
+  ORGANIZATION_TYPE_INTERNAL_TIER_7 = 41;
+  ORGANIZATION_TYPE_INTERNAL_TIER_8 = 42;
+  ORGANIZATION_TYPE_INTERNAL_TIER_9 = 43;
+  ORGANIZATION_TYPE_INTERNAL_TIER_10 = 44;
+}
+
+// Represents a user's membership and role within an organization.
+message OrganizationUser {
+  int64 organization_id = 1;
+  uint64 user_id = 2;
+  OrganizationRole explicit_role = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  reserved 6;
+  reserved "is_virtual";
+  optional uint64 inherited_from_organization_id = 7;
+  OrganizationRole effective_role = 8;
+  optional uint32 effective_role_depth = 9; // Absolute depth of org that supplied effective_role (0=root)
+}
+
+// Combines organization information with the user's role in that organization.
+// Used for listing organizations where we need both the org details and user's role.
+message OrganizationWithUserRole {
+  Organization organization = 1;
+  OrganizationRole explicit_role = 2;
+  reserved 3;
+  reserved "is_virtual";
+  optional uint64 inherited_from_organization_id = 4;
+  OrganizationRole effective_role = 5;
+  optional uint32 effective_role_depth = 6; // Absolute depth of org that supplied effective_role (0=root)
+}
+
+// Represents a domain that is associated with an organization for auto-membership.
+message OrganizationEmailDomain {
+  uint64 id = 1;
+  int64 organization_id = 2;
+  string domain = 3;                           // Normalized (lowercase) domain value
+  optional uint64 created_by_user_id = 4;      // Optional user responsible for adding the domain
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message OrganizationMembershipMaskFilter {
+  uint32 depth = 1;
+  uint64 explicit_role_mask = 2;
+  uint64 organization_type_mask = 3;
+}
+
+// Detailed member information including user profile and activity data.
+// Member-attribute visibility is filtered using the configured organization-role
+// and global user-type policy for the requesting viewer.
+message OrganizationMemberDetails {
+  int64 organization_id = 1;
+  uint64 user_id = 2;
+  OrganizationRole explicit_role = 3;
+  google.protobuf.Timestamp created_at = 4;  // When user joined the organization
+  google.protobuf.Timestamp updated_at = 5;  // When membership was last updated
+
+  // User profile information
+  PublicUser user = 6;
+
+  // Activity and status information
+  bool is_active = 7;                       // Whether the account is not banned; not an online-presence indicator
+  optional google.protobuf.Timestamp last_activity = 8;  // Optional activity timestamp; the built-in user projection does not track it
+  reserved 9;
+  reserved "is_virtual";
+  optional uint64 inherited_from_organization_id = 10;
+  OrganizationRole effective_role = 11;
+  optional uint32 effective_role_depth = 12; // Absolute depth of org that supplied effective_role (0=root)
+
+}
+
+// --- Organization Invitation Messages ---
+
+// Represents a pending invitation for a user to join an organization.
+// Used when inviting users by email (who may not have accounts yet) or when
+// the invite flow requires user acceptance before joining.
+message OrganizationInvitation {
+  uint64 id = 1;
+  int64 organization_id = 2;
+  string email = 3;                                      // Email of the invited user (normalized lowercase)
+  OrganizationRole role = 4;                             // Role the user will have upon acceptance
+  uint64 invited_by_user_id = 5;                         // User who sent the invitation
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp expires_at = 7;              // When the invitation expires
+  optional google.protobuf.Timestamp accepted_at = 8;    // When the invitation was accepted (null if pending)
+  optional google.protobuf.Timestamp declined_at = 9;    // When the invitation was declined (null if pending)
+  Organization organization = 10;                        // Organization details for display purposes
+  bool requires_acceptance = 11;                         // True for invite flow; false for auto-add once user registers
+}

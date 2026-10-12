@@ -576,7 +576,7 @@ func (machine *writerStateMachine) assertStoredVersions() {
 	if err := machine.suite.harness.database.SQLDB().QueryRowContext(machine.t.Context(), `
 		SELECT count(*)
 		FROM knowledge_object_versions
-		WHERE tenant_id = ? AND knowledge_object_id = ?`,
+		WHERE tenant_id = $1 AND knowledge_object_id = $2`,
 		writerTestTenant,
 		machine.model.objectID,
 	).Scan(&versionCount); err != nil {
@@ -620,7 +620,7 @@ func (machine *writerStateMachine) assertCommitProvenance() {
 		       count(successful_audit_sequence),
 		       count(DISTINCT successful_audit_sequence)
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND knowledge_object_id = ?`,
+		WHERE tenant_id = $1 AND knowledge_object_id = $2`,
 		writerTestTenant,
 		machine.model.objectID,
 	).Scan(&receiptCount, &receiptAuditCount, &receiptAuditDistinct); err != nil {
@@ -629,7 +629,7 @@ func (machine *writerStateMachine) assertCommitProvenance() {
 	if err := database.QueryRowContext(machine.t.Context(), `
 		SELECT count(*)
 		FROM audit_events
-		WHERE tenant_id = ? AND target_kind = ? AND target_id = ?`,
+		WHERE tenant_id = $1 AND target_kind = $2 AND target_id = $3`,
 		writerTestTenant,
 		audit.TargetKindKnowledgeObject,
 		machine.model.objectID,
@@ -652,8 +652,8 @@ func (machine *writerStateMachine) assertCommitProvenance() {
 			       committed_catalog_state_token, successful_audit_sequence,
 			       recovery_audit_sequence, length(outcome_proto)
 			FROM knowledge_mutation_idempotency
-			WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
-			  AND route = ? AND client_request_id = ?`,
+			WHERE tenant_id = $1 AND actor_kind = $2 AND actor_id = $3
+			  AND route = $4 AND client_request_id = $5`,
 			writerTestTenant,
 			audit.ActorKindBrowser,
 			"writer-blackbox-administrator",
@@ -692,7 +692,7 @@ func (machine *writerStateMachine) assertCommitProvenance() {
 			SELECT action, actor_kind, actor_id, actor_role,
 			       target_kind, target_id, target_version
 			FROM audit_events
-			WHERE tenant_id = ? AND sequence = ?`,
+			WHERE tenant_id = $1 AND sequence = $2`,
 			writerTestTenant,
 			auditSequence,
 		).Scan(

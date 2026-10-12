@@ -20,7 +20,7 @@ npm run build && npm run test:workspace   # demo-export workspace behaviour (Pla
 go build ./... && go vet ./... && go test ./...
 ```
 
-- `npm run lint` includes `lint:css` (stylelint, errors). Go lint in CI is `golangci-lint` pinned in `.github/workflows/ci.yml` — run it with `GOOS=linux` and uncapped issue counts.
+- `npm run lint` includes `lint:css` (stylelint, errors). Go lint in CI is `golangci-lint` pinned in `.github/workflows/ci.yml` — run it with `GOOS=linux` and uncapped issue counts, using the complete first-party `GO_LINT_PACKAGES` scope declared in Makefile and CI (`.`, `cmd`, `deploy`, `gen/go`, `internal`, `integration`, and `migrations`). This package discovery keeps npm-bundled Go examples outside the first-party lint target; do not replace it with lint exclusions or issue filters.
 - Install the pinned browser once with `npx --no-install playwright install chromium` before `npm run test:contracts` or `npm run test:workspace`. The workspace tests drive the static export in `out/`, so build first.
 - `scripts/test-frontend.mjs` has a **hardcoded** test list; a new `*.test.ts(x)` or `scripts/*.test.mjs` runs only if added there.
 - `scripts/check-docs.mjs` allow-lists `docs/*.md`; register a new doc in both lists or `check:docs` fails.

@@ -171,7 +171,7 @@ mutation creates the next immutable revision and advances the tenant catalog
 revision. Those counters are optimistic-concurrency and snapshot mechanics,
 not product or API versions. Mutations require `expected_version`; idempotency, committed
 receipt, object version, body digest, dependency graph, projection, audit, and
-catalog-revision changes are one SQLite transaction.
+catalog-revision changes are one PostgreSQL transaction.
 
 Definitions move among `DRAFT`, `ACTIVE`, `DISABLED`, quarantined, and deleted
 states through explicit validated operations. Publication validates identity,

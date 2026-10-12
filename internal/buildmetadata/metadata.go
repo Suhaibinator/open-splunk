@@ -56,7 +56,7 @@ func Validate(metadata *opensplunk.BuildMetadata) (buildinfo.Identity, error) {
 	}{
 		{name: "UI", value: metadata.GetUiSha256()},
 		{name: "protobuf schema", value: metadata.GetProtobufSchemaSha256()},
-		{name: "SQLite migrations", value: metadata.GetSqliteMigrationsSha256()},
+		{name: "PostgreSQL migrations", value: metadata.GetPostgresMigrationsSha256()},
 		{name: "ClickHouse migrations", value: metadata.GetClickhouseMigrationsSha256()},
 	}
 	for _, digest := range digests {

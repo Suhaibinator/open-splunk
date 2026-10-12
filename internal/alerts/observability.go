@@ -3,6 +3,7 @@ package alerts
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/featureops"
@@ -46,6 +47,44 @@ func ObserveTestWebhookDeliverer(deliverer WebhookDeliverer, options Observabili
 type observedRepository struct {
 	Repository
 	observer featureops.Observer
+}
+
+// Optional persistence ports must survive decoration: owner enumeration is a
+// startup requirement, and source scope resolution rechecks current identity
+// permissions before secret access. Missing capabilities fail closed.
+type runtimeOwnerRepository interface {
+	ListRuntimeOwners(context.Context, string, int) ([]string, error)
+}
+type sourceScopeRepository interface {
+	ResolveSourceScope(context.Context, AccessScope) (AccessScope, error)
+}
+
+var (
+	_ runtimeOwnerRepository = (*observedRepository)(nil)
+	_ sourceScopeRepository  = (*observedRepository)(nil)
+	_ pagedRepository        = (*observedRepository)(nil)
+)
+
+func (repository *observedRepository) ListRuntimeOwners(ctx context.Context, after string, limit int) ([]string, error) {
+	underlying, ok := repository.Repository.(runtimeOwnerRepository)
+	if !ok {
+		return nil, fmt.Errorf("%w: repository must enumerate runtime alert owners", ErrInvalidArgument)
+	}
+	return underlying.ListRuntimeOwners(ctx, after, limit)
+}
+func (repository *observedRepository) ResolveSourceScope(ctx context.Context, scope AccessScope) (AccessScope, error) {
+	underlying, ok := repository.Repository.(sourceScopeRepository)
+	if !ok {
+		return AccessScope{}, fmt.Errorf("%w: repository must resolve current alert source scope", ErrInvalidArgument)
+	}
+	return underlying.ResolveSourceScope(ctx, scope)
+}
+func (repository *observedRepository) ListPage(ctx context.Context, ownerID string, request ListPageRequest) (ListPage, error) {
+	underlying, ok := repository.Repository.(pagedRepository)
+	if !ok {
+		return ListPage{}, fmt.Errorf("%w: native catalog pagination unavailable", ErrInvalidArgument)
+	}
+	return underlying.ListPage(ctx, ownerID, request)
 }
 
 func (repository *observedRepository) Create(ctx context.Context, record CreateRecord) (CreateResult, error) {

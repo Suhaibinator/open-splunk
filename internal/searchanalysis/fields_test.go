@@ -24,7 +24,7 @@ var fieldTestCursorKey = []byte("field-catalog-test-cursor-key-32-bytes")
 func TestFieldServiceBuildsCachesFiltersAndPagesDetachedCatalog(t *testing.T) {
 	snapshot := fieldTestSnapshot("search-1")
 	searches := &fakeFieldSearches{lookup: func(_ context.Context, access searchjobs.AccessScope, id string) (searchjobs.ExecutionSnapshot, error) {
-		if access != (searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}) || id != snapshot.ID {
+		if access != (searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}) || id != snapshot.ID {
 			t.Fatalf("snapshot lookup = (%+v, %q)", access, id)
 		}
 		return snapshot, nil
@@ -43,7 +43,7 @@ func TestFieldServiceBuildsCachesFiltersAndPagesDetachedCatalog(t *testing.T) {
 		Searches: searches, Compiler: compiler, Executor: executor,
 		DefaultPageSize: 2, MaximumPageSize: 3,
 	})
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 
 	first, err := service.ListFields(context.Background(), access, ListFieldsRequest{
 		SearchJobID: snapshot.ID, PageSize: new(uint32(2)),
@@ -1635,7 +1635,7 @@ func fieldTestSnapshot(id string) searchjobs.ExecutionSnapshot {
 }
 
 func fieldAccess(snapshot searchjobs.ExecutionSnapshot) searchjobs.AccessScope {
-	return searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	return searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 }
 
 func twoFieldCatalog() queryexec.FieldCatalogResult {

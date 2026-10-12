@@ -47,6 +47,16 @@ func requireExplicitAdministrativeMutationActor(ctx context.Context) error {
 	return nil
 }
 
+// Capability authorization is performed by the application boundary. Index
+// operations delegated to a Viewer retain that user's actual role in audit.
+func requireExplicitSuccessfulMutationActor(ctx context.Context, action Action) error {
+	actor, explicit := ActorFromContext(ctx)
+	if !explicit || !validSuccessfulActorForAction(actor, action) {
+		return fmt.Errorf("%w: audit actor cannot perform successful mutations", control.ErrInvalidArgument)
+	}
+	return nil
+}
+
 func actorForAppend(ctx context.Context) Actor {
 	if actor, ok := ActorFromContext(ctx); ok {
 		return actor

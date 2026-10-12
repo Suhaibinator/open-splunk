@@ -44,7 +44,7 @@ func TestJobJournalPersistsExactDetachedKnowledgeSnapshotSummary(t *testing.T) {
 	terminal.KnowledgeSnapshot.Objects[1].GetAuthorizedObject().Name = "mutated"
 	terminal.KnowledgeSnapshot.LookupAssets[0].Asset.LookupAssetId = "mutated"
 
-	got, err := store.Get(context.Background(), AccessScope{TenantID: "tenant", OwnerID: "owner"}, terminal.ID)
+	got, err := store.Get(context.Background(), AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}, terminal.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestJobJournalPersistsExactDetachedKnowledgeSnapshotSummary(t *testing.T) {
 func TestKnowledgeSnapshotSummaryIsDetachedIdempotentAndImmutableAcrossLifecycle(t *testing.T) {
 	_, store := openTestStore(t, Options{})
 	ctx := context.Background()
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	created := time.Now().UTC().Add(-time.Minute)
 	want := historyKnowledgeSnapshotSummary(2)
 	pending := pendingHistoryEntry("snapshot-lifecycle", "index=main", created)
@@ -108,7 +108,7 @@ func TestCompleteAttemptRejectsChangedOrRemovedKnowledgeSnapshotAdmission(t *tes
 		t.Run(name, func(t *testing.T) {
 			_, store := openTestStore(t, Options{})
 			ctx := context.Background()
-			scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+			scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 			created := time.Now().UTC().Add(-time.Minute)
 			pending := pendingHistoryEntry("snapshot-conflict", "index=main", created)
 			pending.KnowledgeSnapshot = historyKnowledgeSnapshotSummary(0)
@@ -160,7 +160,7 @@ func TestHistoryNormalizationRejectsInvalidKnowledgeSummaryBeforeClone(t *testin
 func TestPersistedKnowledgeSnapshotCorruptionIsNotCallerInvalidArgument(t *testing.T) {
 	database, store := openTestStore(t, Options{})
 	ctx := context.Background()
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	created := time.Now().UTC().Add(-time.Minute)
 	entry := historyEntry("snapshot-corruption", "index=main", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
 	entry.KnowledgeSnapshot = historyKnowledgeSnapshotSummary(1)

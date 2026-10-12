@@ -1,0 +1,127 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+import "google/protobuf/timestamp.proto";
+
+// Request message for finalizing multiple uploaded attachments
+message FinalizeAttachmentsRequest {
+  // List of attachment IDs to process
+  repeated uint64 attachment_ids = 1;
+  
+  reserved 2;
+  reserved "request_id";
+}
+
+// Response message for attachment finalization
+message FinalizeAttachmentsResponse {
+  // Results for individual attachments
+  repeated AttachmentResult results = 1;
+}
+
+// Result for an individual attachment
+message AttachmentResult {
+  // The attachment ID
+  uint64 attachment_id = 1;
+  
+  // Whether processing succeeded for this attachment
+  bool success = 2;
+  
+  // Status code for the processing result
+  AttachmentProcessingStatus status = 3;
+  
+  // Optional error message if processing failed
+  optional string error_message = 4;
+}
+
+// Status codes for attachment processing
+enum AttachmentProcessingStatus {
+  // Default unspecified state
+  ATTACHMENT_PROCESSING_STATUS_UNSPECIFIED = 0;
+  
+  // Processing completed successfully
+  ATTACHMENT_PROCESSING_STATUS_SUCCESS = 1;
+  
+  // Attachment was not found
+  ATTACHMENT_PROCESSING_STATUS_NOT_FOUND = 2;
+  
+  // Invalid attachment state (e.g., not in pending_upload status)
+  ATTACHMENT_PROCESSING_STATUS_INVALID_STATE = 3;
+  
+  // Validation failed
+  ATTACHMENT_PROCESSING_STATUS_VALIDATION_FAILED = 4;
+  
+  // General processing error
+  ATTACHMENT_PROCESSING_STATUS_ERROR = 5;
+  
+  // Attachment is already processed
+  ATTACHMENT_PROCESSING_STATUS_ALREADY_PROCESSED = 6;
+}
+
+// Storage visibility of an attachment. Decided server-side by the object-type
+// registry, never by the client. Determines whether a returned URL is a stable,
+// anonymously fetchable (CDN-cacheable) URL or a short-lived presigned URL.
+// This enum is also the stored representation on the attachment row:
+// UNSPECIFIED marks rows that predate the visibility field, whose objects live
+// in the private bucket, so UNSPECIFIED always classifies as private.
+enum AttachmentVisibility {
+  // Default unspecified state (legacy rows; always treat as private)
+  ATTACHMENT_VISIBILITY_UNSPECIFIED = 0;
+
+  // Object lives in the private bucket; URLs are presigned and expire
+  ATTACHMENT_VISIBILITY_PRIVATE = 1;
+
+  // Object lives in the public bucket; URLs are stable and anonymously fetchable
+  ATTACHMENT_VISIBILITY_PUBLIC = 2;
+}
+
+// Uploaded attachment data for existing files (edit mode)
+message UploadedAttachment {
+  // Unique identifier for this attachment  
+  string id = 1;
+  
+  // Original filename
+  string filename = 2;
+  
+  // MIME content type
+  string content_type = 3;
+  
+  // File size in bytes
+  uint64 size = 4;
+  
+  // Unsalted SHA-256 content hash; pending uploads expose the sender-declared hash.
+  string content_hash = 5;
+  
+  // Attachment ID from the backend
+  uint64 attachment_id = 6;
+  
+  // Download URL for the existing file
+  string download_url = 7;
+  
+  // Optional thumbnail URL for images
+  optional string thumbnail_url = 8;
+
+  // Storage visibility of the attachment. Tells the client whether download_url
+  // (and thumbnail_url) is stable/cacheable or a presigned URL that expires.
+  // Unset on servers that predate visibility support, and UNSPECIFIED for rows
+  // stored before the field existed; treat both as private.
+  optional AttachmentVisibility visibility = 9;
+}
+
+// Attachment metadata for requests
+message AttachmentMetadata {
+  string content_hash = 1;                         // SHA-256 hash of file content
+  string filename = 2;                             // Original filename
+  string content_type = 3;                         // MIME type
+}
+
+// Attachment upload information for responses
+message AttachmentUploadInfo {
+  string content_hash = 1;                         // Hash to identify which attachment (fileId)
+  string upload_url = 2;                           // Presigned URL for upload
+  map<string, string> form_data = 3;               // Form data for upload
+  uint64 attachment_id = 4;                        // Generated attachment ID
+  google.protobuf.Timestamp expiry = 5;           // Upload URL expiry timestamp
+}

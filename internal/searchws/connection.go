@@ -17,9 +17,11 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
 type connection struct {
+	access  searchjobs.AccessScope
 	service *Service
 	socket  *websocket.Conn
 	ctx     context.Context
@@ -148,6 +150,15 @@ func (service *Service) ServeHTTP(response http.ResponseWriter, request *http.Re
 		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	access := service.config.access
+	if service.config.accessForRequest != nil {
+		var err error
+		access, err = service.config.accessForRequest(request)
+		if err != nil || validateIdentity(access.TenantID, "tenant") != nil || validateIdentity(access.OwnerID, "owner") != nil {
+			http.Error(response, "sign in is required", http.StatusUnauthorized)
+			return
+		}
+	}
 	if !service.reserveConnection() {
 		service.unavailable(response)
 		return
@@ -174,6 +185,7 @@ func (service *Service) ServeHTTP(response http.ResponseWriter, request *http.Re
 		return
 	}
 	connection := newConnection(service, socket)
+	connection.access = access
 	if !service.registerConnection(connection) {
 		connection.hardClose()
 		return
@@ -186,6 +198,7 @@ func (service *Service) ServeHTTP(response http.ResponseWriter, request *http.Re
 func newConnection(service *Service, socket *websocket.Conn) *connection {
 	ctx, cancel := context.WithCancelCause(service.ctx)
 	return &connection{
+		access:  service.config.access,
 		service: service, socket: socket, ctx: ctx, cancel: cancel,
 		wake: make(chan struct{}, 1), writerDone: make(chan struct{}),
 		subscriptions:       make(map[string]*subscription),
@@ -328,6 +341,9 @@ func (connection *connection) subscribe(requestID string, command *opensplunk.Su
 		key, failure := parseTarget(input.GetTarget(), path+".target")
 		if failure != nil {
 			return failure
+		}
+		if connection.service.config.accessForRequest != nil {
+			key.access = connection.access
 		}
 		previewRows := uint32(0)
 		if input.PreviewRowLimit != nil && !input.GetIncludePreviews() {

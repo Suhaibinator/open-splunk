@@ -269,6 +269,14 @@ func (executor *Executor) executeTimechartStages(ctx context.Context, query clic
 	if err := budget.charge(uint64(unsafe.Sizeof(stagedFinalSink{}))); err != nil {
 		return err
 	}
+	if searchjobs.CanStagePrivately(sink) {
+		if recipient, ok := sink.(searchjobs.CompiledResultSink); ok {
+			if err := recipient.SetCompiledQuery(query); err != nil {
+				return err
+			}
+		}
+		return frozen.executeAdmittedStage(stageContext, query, sink)
+	}
 	transaction := &stagedFinalSink{ctx: ctx, stageBudget: budget, maxRows: logicalRowLimit}
 	if err := frozen.executeAdmittedStage(stageContext, query, transaction); err != nil {
 		return err

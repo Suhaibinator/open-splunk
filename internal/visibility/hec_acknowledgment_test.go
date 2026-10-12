@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 )
 
 type scriptedHECAcknowledgmentIDSource struct {
@@ -205,8 +206,8 @@ func TestHECAdmissionAndAcknowledgmentAreAtomicWithVisibility(t *testing.T) {
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		UPDATE ingest_visibility_reservations
-		SET created_at_unix_micro = ?
-		WHERE sequence = ?`,
+		SET created_at_unix_micro = $1
+		WHERE sequence = $2`,
 		observedAt.Add(-5*time.Minute).UnixMicro(),
 		reservation.Sequence,
 	); err != nil {
@@ -360,7 +361,7 @@ func TestHECTerminalFailurePersistsAcrossRestartAndCleanupAllocatesOpaqueID(t *t
 	if err := sequencer.Close(); err != nil {
 		t.Fatalf("close first sequencer: %v", err)
 	}
-	reopened, err := NewSQLite(ctx, db)
+	reopened, err := NewPostgreSQL(ctx, db)
 	if err != nil {
 		t.Fatalf("reopen sequencer: %v", err)
 	}
@@ -402,7 +403,7 @@ func TestHECChannelCapacityPrecedesQuotaAndRollsBackAdmission(t *testing.T) {
 	ctx := context.Background()
 	insertHECTestToken(t, db.SQLDB(), "hec-token", 1, true)
 	nowMicros := time.Now().UTC().UnixMicro()
-	tx, err := db.SQLDB().BeginTx(ctx, nil)
+	tx, err := pgmeta.BeginSQL(ctx, db.SQLDB(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +414,7 @@ func TestHECChannelCapacityPrecedesQuotaAndRollsBackAdmission(t *testing.T) {
 				tenant_id, ingestion_token_id, channel_id,
 				next_acknowledgment_id, created_at_unix_micro,
 				last_used_at_unix_micro
-			) VALUES ('tenant-a', 'hec-token', ?, 1, ?, ?)`,
+			) VALUES ('tenant-a', 'hec-token', $1, 1, $2, $3)`,
 			channel,
 			nowMicros,
 			nowMicros,
@@ -479,7 +480,7 @@ func TestHECSequenceExhaustionIsAtomic(t *testing.T) {
 					INSERT INTO hec_source_sequences (
 						tenant_id, ingestion_token_id, next_request_sequence,
 						updated_at_unix_micro
-					) VALUES ('tenant-a', 'hec-token', ?, ?)`, math.MaxInt64, nowMicros); err != nil {
+					) VALUES ('tenant-a', 'hec-token', $1, $2)`, math.MaxInt64, nowMicros); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -494,7 +495,7 @@ func TestHECSequenceExhaustionIsAtomic(t *testing.T) {
 						tenant_id, ingestion_token_id, channel_id,
 						next_acknowledgment_id, created_at_unix_micro,
 						last_used_at_unix_micro
-					) VALUES ('tenant-a', 'hec-token', 'overflow-channel', ?, ?, ?)`,
+					) VALUES ('tenant-a', 'hec-token', 'overflow-channel', $1, $2, $3)`,
 					math.MaxInt64,
 					nowMicros,
 					nowMicros,
@@ -585,7 +586,7 @@ func TestHECAdmissionRechecksExpiryAtReserveTransactionBoundary(t *testing.T) {
 	expiresAt := time.Date(2026, time.August, 10, 12, 0, 1, 0, time.UTC)
 	if _, err := db.SQLDB().ExecContext(context.Background(), `
 		UPDATE ingestion_tokens
-		SET expires_at_unix_micro = ?
+		SET expires_at_unix_micro = $1
 		WHERE ingestion_token_id = 'hec-expiring-token'`, expiresAt.UnixMicro()); err != nil {
 		t.Fatal(err)
 	}
@@ -650,13 +651,10 @@ func insertHECTestToken(
 	t.Helper()
 	now := time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC).UnixMicro()
 	digest := sha256.Sum256([]byte("test-token:" + tokenID))
-	ack := 0
-	if acknowledgment {
-		ack = 1
-	}
+	ack := acknowledgment
 	if _, err := db.ExecContext(context.Background(), `
 		INSERT INTO ingestion_tokens (
-			ingestion_token_id, version, name, description,
+			organization_id, issuer_user_id, ingestion_token_id, version, name, description,
 			token_prefix, token_digest, state,
 			created_at_unix_micro, updated_at_unix_micro,
 			expires_at_unix_micro, revoked_at_unix_micro,
@@ -664,8 +662,8 @@ func insertHECTestToken(
 			max_ingest_events_per_second,
 			max_ingest_uncompressed_bytes_per_second,
 			purpose
-		) VALUES (?, ?, 'HEC test token', '', 'hectest00', ?, 'active',
-		          ?, ?, NULL, NULL, NULL, NULL, 0, 0, 'hec')`,
+		) VALUES (1, 42, $1, $2, 'HEC test token', '', 'hectest00', $3, 'active',
+		          $4, $5, NULL, NULL, NULL, NULL, 0, 0, 'hec')`,
 		tokenID,
 		version,
 		digest[:],
@@ -678,17 +676,17 @@ func insertHECTestToken(
 		INSERT INTO ingestion_token_hec_profiles (
 			ingestion_token_id, default_index_id, default_host,
 			default_source, default_sourcetype, indexer_acknowledgment
-		) VALUES (?, NULL, NULL, NULL, NULL, ?)`,
+		) VALUES ($1, NULL, NULL, NULL, NULL, $2)`,
 		tokenID,
 		ack,
 	); err != nil {
 		t.Fatalf("insert HEC profile: %v", err)
 	}
 	if _, err := db.ExecContext(context.Background(), `
-		INSERT OR IGNORE INTO indexes (
+		INSERT INTO indexes (
 			index_id, version, name, display_name, ingestion_enabled,
 			search_enabled, state, created_at_unix_micro, updated_at_unix_micro
-		) VALUES ('hec-test-index', 1, 'main', 'Main', 1, 1, 'active', ?, ?)`,
+		) VALUES ('hec-test-index', 1, 'main', 'Main', 1, 1, 'active', $1, $2) ON CONFLICT DO NOTHING`,
 		now,
 		now,
 	); err != nil {
@@ -696,7 +694,7 @@ func insertHECTestToken(
 	}
 	if _, err := db.ExecContext(context.Background(), `
 		INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
-		VALUES (?, 'hec-test-index')`,
+		VALUES ($1, 'hec-test-index')`,
 		tokenID,
 	); err != nil {
 		t.Fatalf("insert HEC token index scope: %v", err)

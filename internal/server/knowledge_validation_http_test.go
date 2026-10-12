@@ -435,14 +435,14 @@ func TestKnowledgeValidationHTTPRouteBypassesOuterAdministratorPolicy(
 	writer := newReadyKnowledgeWriter(t)
 	attempts := &knowledgeBoundaryAppender{}
 	config := knowledgeConfigBase(t)
-	config.BrowserAuthenticator = &knowledgeBoundaryAuthenticator{
+	config.IdentityAuthenticator = adaptTestBrowserAuthenticator(&knowledgeBoundaryAuthenticator{
 		principal: knowledgeBoundaryPrincipal(t, auth.BrowserRoleUser),
-	}
+	})
 	config.KnowledgeCatalog = &knowledgeHTTPCatalog{}
 	config.KnowledgeWriter = writer
 	config.KnowledgeApps = knowledgeHTTPApps()
 	config.KnowledgeAttempts = attempts
-	handler, err := NewHandler(config)
+	handler, err := newAuthenticatedTestHandler(config)
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}

@@ -3,10 +3,10 @@ package control
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"gorm.io/gorm"
 )
@@ -24,16 +24,18 @@ func (appender serverSettingsAuditAppenderFunc) AppendServerSettingsMutationInTr
 
 func TestServerSearchSettingsDefaultPersistenceConflictAndRollback(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "control.sqlite")
+	path := pgtest.DSN(t)
 	database, err := Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var auditObjects int
 	if err := database.SQLDB().QueryRowContext(ctx, `
-		SELECT count(*) FROM sqlite_schema
-		WHERE name IN (
-			'audit_event_identity_collision_is_forbidden',
+		SELECT count(*) FROM (
+ SELECT t.tgname AS name FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND NOT t.tgisinternal
+ UNION ALL SELECT indexname FROM pg_indexes WHERE schemaname=current_schema()
+ ) AS storage_objects WHERE name IN (
+			'audit_events_pkey',
 			'audit_event_insert_requires_current_tenant_state',
 			'audit_event_advances_tenant_state',
 			'audit_event_update_is_forbidden',
@@ -48,44 +50,13 @@ func TestServerSearchSettingsDefaultPersistenceConflictAndRollback(t *testing.T)
 		t.Fatalf("post-migration audit objects = %d, want 8", auditObjects)
 	}
 	var staleReferences int
-	if err := database.SQLDB().QueryRowContext(ctx, `
-		SELECT count(*) FROM sqlite_schema
-		WHERE sql LIKE '%audit_events_with_server_settings%'
-		   OR sql LIKE '%audit_events_before_server_settings%'`).Scan(&staleReferences); err != nil {
+	if err := database.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=current_schema() AND (p.prosrc LIKE '%audit_events_with_server_settings%' OR p.prosrc LIKE '%audit_events_before_server_settings%')`).Scan(&staleReferences); err != nil {
 		t.Fatal(err)
 	}
 	if staleReferences != 0 {
-		rows, queryErr := database.SQLDB().QueryContext(ctx, `SELECT name FROM sqlite_schema WHERE sql LIKE '%audit_events_before_server_settings%'`)
-		if queryErr != nil {
-			t.Fatal(queryErr)
-		}
-		defer rows.Close()
-		var names []string
-		for rows.Next() {
-			var name string
-			if scanErr := rows.Scan(&name); scanErr != nil {
-				t.Fatal(scanErr)
-			}
-			names = append(names, name)
-		}
-		t.Fatalf("post-migration schema retains %d temporary audit references: %v", staleReferences, names)
+		t.Fatalf("native schema retains %d obsolete audit references", staleReferences)
 	}
-	foreignKeyRows, err := database.SQLDB().QueryContext(ctx, `PRAGMA foreign_key_check`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer foreignKeyRows.Close()
-	if foreignKeyRows.Next() {
-		var table string
-		var rowID int64
-		var parent string
-		var foreignKeyID int
-		if err := foreignKeyRows.Scan(&table, &rowID, &parent, &foreignKeyID); err != nil {
-			t.Fatal(err)
-		}
-		t.Fatalf("post-migration foreign key violation: table=%s row=%d parent=%s constraint=%d", table, rowID, parent, foreignKeyID)
-	}
-	if err := foreignKeyRows.Err(); err != nil {
+	if err := database.VerifyIntegrity(ctx); err != nil {
 		t.Fatal(err)
 	}
 	auditCalls := 0

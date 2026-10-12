@@ -371,7 +371,7 @@ export function WorkspaceDialogs({
                   ))}
                 </Select>
               </label>
-              <p className="search-sharing-note">Sharing is organizational metadata in the current single-user model; it does not grant access.</p>
+              <p className="search-sharing-note">Sharing is organizational metadata in the organization workspace; it does not grant access.</p>
             </>
           ) : (
             <p className="search-sharing-note">Sharing scope is persisted only when the workspace is connected to a backend.</p>

@@ -170,6 +170,27 @@ func NewIntent(
 }
 
 // ValidateClientRequestID applies the public request-key wire contract.
+// NewScopedIntent seals the selected organization in the existing native
+// receipt digest. Actor identity and client key remain unchanged, so reusing
+// the same key in another organization conflicts instead of replaying data.
+func NewScopedIntent(tenantID, actorKind, actorID, route, clientRequestID string, organizationID int64, canonical proto.Message) (Intent, error) {
+	if organizationID < 0 {
+		return Intent{}, ErrInvalid
+	}
+	intent, err := NewIntent(tenantID, actorKind, actorID, route, clientRequestID, canonical)
+	if err != nil {
+		return Intent{}, err
+	}
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("open-splunk/organization-mutation-intent\x00"))
+	var organization [8]byte
+	binary.BigEndian.PutUint64(organization[:], uint64(organizationID))
+	_, _ = hash.Write(organization[:])
+	_, _ = hash.Write(intent.RequestSHA256[:])
+	copy(intent.RequestSHA256[:], hash.Sum(nil))
+	return intent, nil
+}
+
 func ValidateClientRequestID(value string) error {
 	if len(value) < MinimumRequestID || len(value) > MaximumRequestID {
 		return fmt.Errorf(
@@ -255,8 +276,8 @@ func ReadSQL(
 		        retain_until_unix_micro, target_terminal_at_unix_micro,
 		        encoded_bytes
 		 FROM api_mutation_receipts
-		 WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
-		   AND route = ? AND client_request_id = ?`,
+		 WHERE tenant_id = $1 AND actor_kind = $2 AND actor_id = $3
+		   AND route = $4 AND client_request_id = $5`,
 		intent.TenantID,
 		intent.ActorKind,
 		intent.ActorID,
@@ -320,7 +341,7 @@ func AppendInTransaction(
 	}
 	if err := database.Exec(
 		`UPDATE api_mutation_receipt_tenant_state
-		 SET high_water_unix_micro = MAX(high_water_unix_micro, ?)
+		 SET high_water_unix_micro = GREATEST(high_water_unix_micro, ?)
 		 WHERE tenant_id = ?`,
 		canonicalNow.UnixMicro(),
 		intent.TenantID,
@@ -343,7 +364,16 @@ func AppendInTransaction(
 	if err != nil {
 		return Receipt{}, err
 	}
+	if err := database.SavePoint("receipt_append").Error; err != nil {
+		return Receipt{}, mapDatabaseError(ctx, err)
+	}
 	if err := database.Create(&record).Error; err != nil {
+		if rollbackErr := database.RollbackTo("receipt_append").Error; rollbackErr != nil {
+			return Receipt{}, mapDatabaseError(ctx, rollbackErr)
+		}
+		if releaseErr := database.Exec("RELEASE SAVEPOINT receipt_append").Error; releaseErr != nil {
+			return Receipt{}, mapDatabaseError(ctx, releaseErr)
+		}
 		existing, found, readErr := Read(ctx, database, intent)
 		if readErr != nil {
 			return Receipt{}, readErr
@@ -354,6 +384,9 @@ func AppendInTransaction(
 			}
 			return existing, nil
 		}
+		return Receipt{}, mapDatabaseError(ctx, err)
+	}
+	if err := database.Exec("RELEASE SAVEPOINT receipt_append").Error; err != nil {
 		return Receipt{}, mapDatabaseError(ctx, err)
 	}
 	return receiptFromRecord(record)
@@ -381,7 +414,7 @@ func AppendInSQLTransaction(
 		ctx,
 		`INSERT INTO api_mutation_receipt_tenant_state (
 			tenant_id, receipt_count, encoded_bytes, high_water_unix_micro
-		 ) VALUES (?, 0, 0, ?)
+		 ) VALUES ($1, 0, 0, $2)
 		 ON CONFLICT (tenant_id) DO NOTHING`,
 		intent.TenantID,
 		canonicalNow.UnixMicro(),
@@ -394,8 +427,8 @@ func AppendInSQLTransaction(
 	if _, err := transaction.ExecContext(
 		ctx,
 		`UPDATE api_mutation_receipt_tenant_state
-		 SET high_water_unix_micro = MAX(high_water_unix_micro, ?)
-		 WHERE tenant_id = ?`,
+		 SET high_water_unix_micro = GREATEST(high_water_unix_micro, $1)
+		 WHERE tenant_id = $2`,
 		canonicalNow.UnixMicro(),
 		intent.TenantID,
 	); err != nil {
@@ -405,7 +438,7 @@ func AppendInSQLTransaction(
 	if err := transaction.QueryRowContext(
 		ctx,
 		`SELECT high_water_unix_micro
-		 FROM api_mutation_receipt_tenant_state WHERE tenant_id = ?`,
+		 FROM api_mutation_receipt_tenant_state WHERE tenant_id = $1`,
 		intent.TenantID,
 	).Scan(&highWater); err != nil {
 		return Receipt{}, mapDatabaseError(ctx, err)
@@ -420,6 +453,9 @@ func AppendInSQLTransaction(
 	if err != nil {
 		return Receipt{}, err
 	}
+	if _, err := transaction.ExecContext(ctx, "SAVEPOINT receipt_append"); err != nil {
+		return Receipt{}, mapDatabaseError(ctx, err)
+	}
 	_, err = transaction.ExecContext(
 		ctx,
 		`INSERT INTO api_mutation_receipts (
@@ -428,7 +464,7 @@ func AppendInSQLTransaction(
 			target_version, audit_sequence, created_at_unix_micro,
 			retain_until_unix_micro, target_terminal_at_unix_micro,
 			encoded_bytes
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 		record.TenantID,
 		record.ActorKind,
 		record.ActorID,
@@ -446,6 +482,12 @@ func AppendInSQLTransaction(
 		record.EncodedBytes,
 	)
 	if err != nil {
+		if _, rollbackErr := transaction.ExecContext(ctx, "ROLLBACK TO SAVEPOINT receipt_append"); rollbackErr != nil {
+			return Receipt{}, mapDatabaseError(ctx, rollbackErr)
+		}
+		if _, releaseErr := transaction.ExecContext(ctx, "RELEASE SAVEPOINT receipt_append"); releaseErr != nil {
+			return Receipt{}, mapDatabaseError(ctx, releaseErr)
+		}
 		existing, found, readErr := ReadSQL(ctx, transaction, intent)
 		if readErr != nil {
 			return Receipt{}, readErr
@@ -456,6 +498,9 @@ func AppendInSQLTransaction(
 			}
 			return existing, nil
 		}
+		return Receipt{}, mapDatabaseError(ctx, err)
+	}
+	if _, err := transaction.ExecContext(ctx, "RELEASE SAVEPOINT receipt_append"); err != nil {
 		return Receipt{}, mapDatabaseError(ctx, err)
 	}
 	return receiptFromRecord(record)
@@ -484,7 +529,7 @@ func MarkTargetTerminalInTransaction(
 	database := tx.WithContext(ctx)
 	if err := database.Exec(
 		`UPDATE api_mutation_receipt_tenant_state
-		 SET high_water_unix_micro = MAX(high_water_unix_micro, ?)
+		 SET high_water_unix_micro = GREATEST(high_water_unix_micro, ?)
 		 WHERE tenant_id = ?`,
 		canonicalNow.UnixMicro(), tenantID,
 	).Error; err != nil {
@@ -508,7 +553,7 @@ func MarkTargetTerminalInTransaction(
 	result := database.Exec(
 		`UPDATE api_mutation_receipts
 		 SET target_terminal_at_unix_micro = ?,
-		     retain_until_unix_micro = MAX(retain_until_unix_micro, ?)
+		     retain_until_unix_micro = GREATEST(retain_until_unix_micro, ?)
 		 WHERE tenant_id = ? AND target_kind = ? AND target_id = ?
 		   AND target_terminal_at_unix_micro IS NULL`,
 		highWater, retainUntil, tenantID, targetKind, targetID,
@@ -533,7 +578,7 @@ func ExtendRetentionInTransaction(
 	}
 	result := tx.WithContext(ctx).Exec(
 		`UPDATE api_mutation_receipts
-		 SET retain_until_unix_micro = MAX(retain_until_unix_micro, ?)
+		 SET retain_until_unix_micro = GREATEST(retain_until_unix_micro, ?)
 		 WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
 		   AND route = ? AND client_request_id = ?
 		   AND canonical_version = ? AND request_sha256 = ?`,
@@ -712,15 +757,15 @@ func reclaimExpiredSQL(ctx context.Context, transaction SQLTransaction, tenantID
 		 WHERE (tenant_id, actor_kind, actor_id, route, client_request_id) IN (
 		     SELECT tenant_id, actor_kind, actor_id, route, client_request_id
 		     FROM api_mutation_receipts
-		     WHERE tenant_id = ?
+		     WHERE tenant_id = $1
 		       AND target_terminal_at_unix_micro IS NOT NULL
 		       AND retain_until_unix_micro <= (
 		           SELECT high_water_unix_micro
-		           FROM api_mutation_receipt_tenant_state WHERE tenant_id = ?
+		           FROM api_mutation_receipt_tenant_state WHERE tenant_id = $2
 		       )
 		     ORDER BY retain_until_unix_micro, actor_kind, actor_id, route,
 		              client_request_id
-		     LIMIT ?
+		     LIMIT $3
 		 )`,
 		tenantID, tenantID, reclaimBatchSize,
 	)
@@ -818,6 +863,10 @@ func mapDatabaseError(ctx context.Context, err error) error {
 	}
 	if contextErr := ctx.Err(); contextErr != nil {
 		return contextErr
+	}
+	var state interface{ SQLState() string }
+	if errors.As(err, &state) && state.SQLState() == "23505" {
+		return ErrConflict
 	}
 	message := err.Error()
 	switch {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"fortio.org/safecast"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
@@ -185,7 +186,7 @@ func (writer *Writer) create(
 		return nil, err
 	}
 
-	tx := writer.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(writer.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return nil, writerError(ctx, "begin create", tx.Error)
 	}
@@ -413,7 +414,7 @@ func (writer *Writer) update(
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookPrepared, Route: mutationRouteUpdate}); err != nil {
 		return nil, err
 	}
-	tx := writer.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(writer.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return nil, writerError(ctx, "begin update", tx.Error)
 	}
@@ -692,7 +693,7 @@ func (writer *Writer) setState(
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookPrepared, Route: mutationRouteSetState}); err != nil {
 		return nil, err
 	}
-	tx := writer.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(writer.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return nil, writerError(ctx, "begin set-state", tx.Error)
 	}
@@ -952,7 +953,7 @@ func (writer *Writer) delete(
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookPrepared, Route: mutationRouteDelete}); err != nil {
 		return nil, err
 	}
-	tx := writer.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(writer.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return nil, writerError(ctx, "begin delete", tx.Error)
 	}
@@ -1127,7 +1128,7 @@ func reclaimExpiredMutationReceipts(tx *gorm.DB, tenantID string, limit int64) e
 		return fmt.Errorf("%w: knowledge receipt reclamation authority is invalid", control.ErrInvalidArgument)
 	}
 	var cutoff int64
-	if err := tx.Raw(`SELECT CAST(unixepoch('subsec') * 1000000 AS INTEGER)`).Scan(&cutoff).Error; err != nil {
+	if err := tx.Raw(`SELECT CAST(EXTRACT(EPOCH FROM clock_timestamp()) * 1000000 AS BIGINT)`).Scan(&cutoff).Error; err != nil {
 		return err
 	}
 	if _, err := canonicalTime(cutoff); err != nil {
@@ -1177,8 +1178,7 @@ func preflightExpiredMutationReceiptReclaim(
 		return fmt.Errorf("%w: knowledge receipt reclamation cutoff is invalid", ErrCorrupt)
 	}
 	var widths []idempotencyWidthRecord
-	if err := tx.Table(`knowledge_mutation_idempotency
-		INDEXED BY knowledge_mutation_idempotency_retention_idx`).
+	if err := tx.Table(`knowledge_mutation_idempotency`).
 		Select(idempotencyWidthProjectionSQL).
 		Where(`knowledge_mutation_idempotency.tenant_id = ?
 			AND knowledge_mutation_idempotency.retain_until_unix_micro <= ?`, tenantID, cutoff).
@@ -1198,8 +1198,7 @@ func preflightExpiredMutationReceiptReclaim(
 		}
 	}
 	var records []mutationReceiptReclaimRecord
-	if err := tx.Table(`knowledge_mutation_idempotency
-		INDEXED BY knowledge_mutation_idempotency_retention_idx`).
+	if err := tx.Table(`knowledge_mutation_idempotency`).
 		Select(`knowledge_mutation_idempotency.*,
 			CASE WHEN EXISTS (
 				SELECT 1
@@ -1218,8 +1217,8 @@ func preflightExpiredMutationReceiptReclaim(
 				  AND committed.occurred_at_unix_micro = knowledge_mutation_idempotency.created_at_unix_micro
 				  AND committed.retention_anchor_unix_micro = knowledge_mutation_idempotency.retention_anchor_unix_micro
 				  AND committed.retain_until_unix_micro = knowledge_mutation_idempotency.retain_until_unix_micro
-				  AND committed.successful_audit_sequence IS knowledge_mutation_idempotency.successful_audit_sequence
-				  AND committed.recovery_audit_sequence IS knowledge_mutation_idempotency.recovery_audit_sequence
+				  AND committed.successful_audit_sequence IS NOT DISTINCT FROM knowledge_mutation_idempotency.successful_audit_sequence
+				  AND committed.recovery_audit_sequence IS NOT DISTINCT FROM knowledge_mutation_idempotency.recovery_audit_sequence
 			) THEN 1 ELSE 0 END AS commit_authority_matches,
 			CASE WHEN immutable.tenant_id IS NOT NULL AND (
 				(knowledge_mutation_idempotency.mutation_kind <> 'quarantine'
@@ -1276,52 +1275,52 @@ func preflightExpiredMutationReceiptReclaim(
 				 )
 				)
 			  ) THEN 1 ELSE 0 END AS audit_authority_matches,
-			CASE WHEN length(CAST(immutable.tenant_id AS BLOB)) BETWEEN 1 AND 128
+			CASE WHEN octet_length(immutable.tenant_id) BETWEEN 1 AND 128
 			  THEN immutable.tenant_id ELSE '' END AS immutable_tenant_id,
-			CASE WHEN length(CAST(immutable.knowledge_object_id AS BLOB)) BETWEEN 1 AND 128
+			CASE WHEN octet_length(immutable.knowledge_object_id) BETWEEN 1 AND 128
 			  THEN immutable.knowledge_object_id ELSE '' END AS immutable_knowledge_object_id,
 			coalesce(immutable.object_version, 0) AS immutable_object_version,
-			CASE WHEN length(CAST(immutable.app_id AS BLOB)) BETWEEN 1 AND 128
+			CASE WHEN octet_length(immutable.app_id) BETWEEN 1 AND 128
 			  THEN immutable.app_id ELSE '' END AS immutable_app_id,
-			CASE WHEN length(CAST(immutable.owner_id AS BLOB)) BETWEEN 1 AND 255
+			CASE WHEN octet_length(immutable.owner_id) BETWEEN 1 AND 255
 			  THEN immutable.owner_id ELSE '' END AS immutable_owner_id,
-			CASE WHEN length(CAST(immutable.object_type AS BLOB)) BETWEEN 1 AND 64
+			CASE WHEN octet_length(immutable.object_type) BETWEEN 1 AND 64
 			  THEN immutable.object_type ELSE '' END AS immutable_object_type,
-			CASE WHEN length(CAST(immutable.name AS BLOB)) BETWEEN 1 AND 255
+			CASE WHEN octet_length(immutable.name) BETWEEN 1 AND 255
 			  THEN immutable.name ELSE '' END AS immutable_name,
-			CASE WHEN length(CAST(immutable.sharing_scope AS BLOB)) BETWEEN 1 AND 16
+			CASE WHEN octet_length(immutable.sharing_scope) BETWEEN 1 AND 16
 			  THEN immutable.sharing_scope ELSE '' END AS immutable_sharing_scope,
-			CASE WHEN length(CAST(immutable.state AS BLOB)) BETWEEN 1 AND 16
+			CASE WHEN octet_length(immutable.state) BETWEEN 1 AND 16
 			  THEN immutable.state ELSE '' END AS immutable_state,
 			CASE
-			  WHEN immutable.definition_digest IS NULL THEN X''
+			  WHEN immutable.definition_digest IS NULL THEN decode('', 'hex')
 			  WHEN length(immutable.definition_digest) = 32 THEN immutable.definition_digest
 			  ELSE NULL
 			END AS immutable_definition_digest,
 			coalesce(immutable.dependency_count, -1) AS immutable_dependency_count,
-			CASE WHEN length(CAST(immutable.mutation_kind AS BLOB)) BETWEEN 1 AND 32
+			CASE WHEN octet_length(immutable.mutation_kind) BETWEEN 1 AND 32
 			  THEN immutable.mutation_kind ELSE '' END AS immutable_mutation_kind,
 			CASE WHEN immutable.quarantine_reason IS NULL THEN NULL
-			  WHEN length(CAST(immutable.quarantine_reason AS BLOB)) BETWEEN 1 AND 32
+			  WHEN octet_length(immutable.quarantine_reason) BETWEEN 1 AND 32
 			  THEN immutable.quarantine_reason ELSE NULL END AS immutable_quarantine_reason,
 			coalesce(immutable.created_at_unix_micro, 0) AS immutable_created_at_unix_micro,
 			coalesce(length(immutable.definition_digest), 0) AS immutable_definition_digest_bytes,
-			coalesce(length(CAST(immutable.quarantine_reason AS BLOB)), 0)
+			coalesce(octet_length(immutable.quarantine_reason), 0)
 			  AS immutable_quarantine_reason_bytes,
-			CASE WHEN length(CAST(lifecycle.tenant_id AS BLOB)) BETWEEN 1 AND 128
+			CASE WHEN octet_length(lifecycle.tenant_id) BETWEEN 1 AND 128
 			  THEN lifecycle.tenant_id ELSE '' END AS lifecycle_tenant_id,
-			CASE WHEN length(CAST(lifecycle.knowledge_object_id AS BLOB)) BETWEEN 1 AND 128
+			CASE WHEN octet_length(lifecycle.knowledge_object_id) BETWEEN 1 AND 128
 			  THEN lifecycle.knowledge_object_id ELSE '' END AS lifecycle_knowledge_object_id,
 			coalesce(lifecycle.object_version, 0) AS lifecycle_object_version,
-			CASE WHEN length(CAST(lifecycle.state AS BLOB)) BETWEEN 1 AND 16
+			CASE WHEN octet_length(lifecycle.state) BETWEEN 1 AND 16
 			  THEN lifecycle.state ELSE '' END AS lifecycle_state,
 			lifecycle.disabled_at_unix_micro AS lifecycle_disabled_at_unix_micro,
 			lifecycle.quarantined_at_unix_micro AS lifecycle_quarantined_at_unix_micro,
 			lifecycle.deleted_at_unix_micro AS lifecycle_deleted_at_unix_micro,
 			CASE WHEN lifecycle.quarantine_reason IS NULL THEN NULL
-			  WHEN length(CAST(lifecycle.quarantine_reason AS BLOB)) BETWEEN 1 AND 32
+			  WHEN octet_length(lifecycle.quarantine_reason) BETWEEN 1 AND 32
 			  THEN lifecycle.quarantine_reason ELSE NULL END AS lifecycle_quarantine_reason,
-			coalesce(length(CAST(lifecycle.quarantine_reason AS BLOB)), 0)
+			coalesce(octet_length(lifecycle.quarantine_reason), 0)
 			  AS lifecycle_quarantine_reason_bytes`).
 		Joins(`LEFT JOIN knowledge_object_versions AS immutable
 		  ON immutable.tenant_id = knowledge_mutation_idempotency.tenant_id
@@ -1598,16 +1597,16 @@ func activeCounterPreflightQuery(
 	secondKeyProjection := "0 AS second_key_bytes, '' AS second_key"
 	if spec.secondKeyColumn != "" {
 		secondKeyProjection = fmt.Sprintf(`
-			length(CAST(counter.%[1]s AS BLOB)) AS second_key_bytes,
-			CASE WHEN length(CAST(counter.%[1]s AS BLOB)) BETWEEN 1 AND %[2]d
+			octet_length(counter.%[1]s) AS second_key_bytes,
+			CASE WHEN octet_length(counter.%[1]s) BETWEEN 1 AND %[2]d
 				THEN counter.%[1]s ELSE '' END AS second_key`,
 			spec.secondKeyColumn,
 			spec.maximumSecondKeyBytes,
 		)
 	}
 	selection := fmt.Sprintf(`
-		length(CAST(counter.%[1]s AS BLOB)) AS first_key_bytes,
-		CASE WHEN length(CAST(counter.%[1]s AS BLOB)) BETWEEN 1 AND %[2]d
+		octet_length(counter.%[1]s) AS first_key_bytes,
+		CASE WHEN octet_length(counter.%[1]s) BETWEEN 1 AND %[2]d
 			THEN counter.%[1]s ELSE '' END AS first_key,
 		%[3]s,
 		counter.%[4]s AS counter_value`,
@@ -1616,7 +1615,7 @@ func activeCounterPreflightQuery(
 		secondKeyProjection,
 		spec.countColumn,
 	)
-	// Every table is WITHOUT ROWID with a tenant-leading primary key. No
+	// Every table has a tenant-leading primary key. No
 	// attacker-controlled key is detached until its scalar width has passed.
 	return tx.Table(spec.table+" AS counter").
 		Select(selection).
@@ -1689,14 +1688,14 @@ func preflightActivePublicationName(
 		)
 	}
 
-	selection := `length(CAST(knowledge_object_id AS BLOB)) AS object_id_bytes,
-		CASE WHEN length(CAST(knowledge_object_id AS BLOB)) BETWEEN 1 AND ?
+	selection := `octet_length(knowledge_object_id) AS object_id_bytes,
+		CASE WHEN octet_length(knowledge_object_id) BETWEEN 1 AND ?
 			THEN knowledge_object_id ELSE '' END AS object_id`
 	var query *gorm.DB
 	switch authority.sharingScope {
 	case SharingScopePrivate:
 		query = tx.Raw(`SELECT `+selection+`
-			FROM knowledge_objects INDEXED BY knowledge_objects_active_private_name_idx
+			FROM knowledge_objects
 			WHERE tenant_id = ? AND app_id = ? AND owner_id = ?
 			  AND object_type = ? AND name = ?
 			  AND state = 'active' AND sharing_scope = 'private'
@@ -1707,7 +1706,7 @@ func preflightActivePublicationName(
 		)
 	case SharingScopeApp:
 		query = tx.Raw(`SELECT `+selection+`
-			FROM knowledge_objects INDEXED BY knowledge_objects_active_app_name_idx
+			FROM knowledge_objects
 			WHERE tenant_id = ? AND app_id = ? AND object_type = ? AND name = ?
 			  AND state = 'active' AND sharing_scope = 'app'
 			  AND knowledge_object_id <> ? LIMIT 2`,
@@ -1717,12 +1716,13 @@ func preflightActivePublicationName(
 		)
 	case SharingScopeGlobal:
 		query = tx.Raw(`SELECT `+selection+`
-			FROM knowledge_objects INDEXED BY knowledge_objects_active_global_name_idx
+			FROM knowledge_objects
 			WHERE tenant_id = ? AND object_type = ? AND name = ?
+			  AND app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = (SELECT organization_id FROM app_workspaces WHERE app_id = ?))
 			  AND state = 'active' AND sharing_scope = 'global'
 			  AND knowledge_object_id <> ? LIMIT 2`,
 			maximumObjectIDBytes,
-			tenantID, authority.objectType, authority.name,
+			tenantID, authority.objectType, authority.name, authority.appID,
 			excludedObjectID,
 		)
 	default:
@@ -1852,7 +1852,8 @@ func readAuthorizedMutationRegistry(
 ) (registryRecord, error) {
 	query := tx.Model(&registryRecord{}).Where(
 		"tenant_id = ? AND knowledge_object_id = ?", scope.tenantID, objectID,
-	).Where("owner_id = ?", scope.ownerID).
+	).Where("(owner_id = ? OR ?)", scope.ownerID, scope.siteAdministrator).
+		Where("app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = ?)", scope.organizationID).
 		Where("app_id IN ?", scope.writableAppIDs)
 	current, found, err := readRegistryRecord(query)
 	if err != nil {
@@ -2113,11 +2114,11 @@ func authorizeDefinitionApp(
 		State      string `gorm:"column:state"`
 	}
 	if err := tx.Table("app_workspaces").Select(`
-		length(CAST(state AS BLOB)) AS state_bytes,
-		CASE WHEN length(CAST(state AS BLOB)) <= ? THEN state END AS state`,
+		octet_length(state) AS state_bytes,
+		CASE WHEN octet_length(state) <= ? THEN state END AS state`,
 		len("archived"),
 	).Where(
-		"tenant_id = ? AND app_id = ?", scope.tenantID, appID,
+		"tenant_id = ? AND app_id = ? AND organization_id = ?", scope.tenantID, appID, scope.organizationID,
 	).Limit(2).Find(&records).Error; err != nil {
 		return writerError(tx.Statement.Context, "read mutation app", err)
 	}
@@ -2402,27 +2403,29 @@ func hasActiveDependents(tx *gorm.DB, tenantID, objectID string) (bool, error) {
 	var records []struct {
 		Found int64 `gorm:"column:found"`
 	}
-	// CROSS JOIN is intentional: SQLite must drive from the bounded current
+	// A dependent LATERAL point probe makes PostgreSQL drive from the bounded current
 	// ACTIVE registry set instead of the unbounded retained-history inverse
 	// target index. readMutationTenantHealth has already proved that this set
 	// contains at most 4,096 rows. Each dependent then probes the exact
 	// (tenant, source, current-version, target-kind, target-id) prefix of the
 	// immutable dependency set, whose per-version width is at most 1,024.
-	err := tx.Raw(activeDependentLookupSQL, tenantID, objectID).Scan(&records).Error
+	err := tx.Raw(activeDependentLookupSQL, objectID, tenantID).Scan(&records).Error
 	return len(records) != 0, err
 }
 
 const activeDependentLookupSQL = `SELECT 1 AS found
-	FROM knowledge_objects AS dependent INDEXED BY knowledge_objects_resolution_idx
-	CROSS JOIN knowledge_object_dependencies AS dependency
-		INDEXED BY knowledge_object_dependencies_source_target_idx
+	FROM knowledge_objects AS dependent
+	JOIN LATERAL (
+		SELECT 1 FROM knowledge_object_dependencies AS dependency
+		WHERE dependency.tenant_id = dependent.tenant_id
+		  AND dependency.source_object_id = dependent.knowledge_object_id
+		  AND dependency.source_object_version = dependent.current_version
+		  AND dependency.target_kind = 'object'
+		  AND dependency.target_object_id = ?
+		LIMIT 1
+	) AS dependency ON true
 	WHERE dependent.tenant_id = ?
 	  AND dependent.state = 'active'
-	  AND dependency.tenant_id = dependent.tenant_id
-	  AND dependency.source_object_id = dependent.knowledge_object_id
-	  AND dependency.source_object_version = dependent.current_version
-	  AND dependency.target_kind = 'object'
-	  AND dependency.target_object_id = ?
 	LIMIT 1`
 
 func normalizeWriterClock(value time.Time) (time.Time, error) {

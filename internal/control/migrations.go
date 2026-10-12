@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -14,15 +13,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 )
 
-const (
-	migrationLockRetryWindow                    = 30 * time.Second
-	firstMigrationVersion                       = uint32(1)
-	foldedIngestReservationAccountingVersion    = uint32(9)
-	originalSQLiteBaselineSHA256                = "3ceec9b0c2f2a44edccff0b3e8b5cd0622fe72c462dc8c36616d9d7683bb2b75"
-	foldedIngestWriteGroupsSQLiteBaselineSHA256 = "23e85b8b288addf86eda7f848e2b087a40194f8c5281459a9f0f8c1d215e1d64"
-)
+const firstMigrationVersion = uint32(1)
 
 var migrationFilename = regexp.MustCompile(`^([0-9]{4})_([a-z0-9][a-z0-9_]*)\.sql$`)
 
@@ -34,11 +29,10 @@ type migration struct {
 }
 
 type verifiedMigrationHistory struct {
-	appliedCount                      uint32
-	foldedIngestReservationAccounting bool
+	appliedCount uint32
 }
 
-// MigrationIdentity identifies one exact, ordered set of SQLite migrations.
+// MigrationIdentity identifies one exact, ordered set of PostgreSQL migrations.
 // It can be persisted alongside a backup manifest and compared without
 // depending on the migrations' application timestamps.
 type MigrationIdentity struct {
@@ -47,7 +41,7 @@ type MigrationIdentity struct {
 }
 
 // VerifyCurrentMigrations verifies that the database migration ledger matches
-// migrationFS or a narrowly recognized compatible release history. Unlike
+// migrationFS exactly. Unlike
 // ApplyMigrations, it never creates the ledger or applies missing migrations,
 // making it safe for read-only backup tooling.
 func (db *DB) VerifyCurrentMigrations(
@@ -64,16 +58,14 @@ func (db *DB) VerifyCurrentMigrations(
 	if err != nil {
 		return MigrationIdentity{}, err
 	}
-	var ledgerCount int
-	if err := db.sql.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM sqlite_schema
-		WHERE type = 'table' AND name = 'schema_migrations'`).Scan(&ledgerCount); err != nil {
-		return MigrationIdentity{}, fmt.Errorf("inspect SQLite migration ledger: %w", err)
+	var ledgerExists bool
+	if err := db.sql.QueryRowContext(ctx, "SELECT to_regclass(current_schema() || '.open_splunk_schema_migrations') IS NOT NULL").Scan(&ledgerExists); err != nil {
+		return MigrationIdentity{}, fmt.Errorf("inspect PostgreSQL migration ledger: %w", err)
 	}
-	if ledgerCount != 1 {
+	if !ledgerExists {
 		return MigrationIdentity{}, fmt.Errorf("%w: migration ledger is missing", ErrDatabaseNotCurrent)
 	}
+
 	history, err := verifyMigrationHistory(ctx, db.sql, loaded)
 	if err != nil {
 		return MigrationIdentity{}, err
@@ -96,7 +88,7 @@ func (db *DB) VerifyCurrentMigrations(
 
 func migrationSetIdentity(loaded []migration) MigrationIdentity {
 	hasher := sha256.New()
-	_, _ = hasher.Write([]byte("open-splunk/sqlite-migrations/format-1\x00"))
+	_, _ = hasher.Write([]byte("open-splunk/postgres-migrations/format-1\x00"))
 	for _, item := range loaded {
 		_, _ = hasher.Write([]byte(strconv.FormatUint(uint64(item.version), 10)))
 		_, _ = hasher.Write([]byte{0})
@@ -114,97 +106,90 @@ func migrationSetIdentity(loaded []migration) MigrationIdentity {
 }
 
 // ApplyMigrations applies a contiguous, ordered set of SQL migrations. History
-// verification and all pending migrations run under one BEGIN IMMEDIATE lock,
+// verification and all pending migrations run under one PostgreSQL advisory lock,
 // preventing old and new binaries from racing schema versions at startup.
-// Reapplying an unchanged set is safe; changing an applied file is rejected
-// unless it is the one explicitly recognized folded release baseline.
-func ApplyMigrations(ctx context.Context, db *sql.DB, migrations fs.FS) (err error) {
-	if ctx == nil || db == nil || migrations == nil {
+// Reapplying an unchanged set is safe; changing an applied file is rejected.
+func ApplyMigrations(ctx context.Context, db *sql.DB, migrationFS fs.FS) error {
+	if ctx == nil || db == nil || migrationFS == nil {
 		return fmt.Errorf("%w: migration context, database, and filesystem are required", ErrInvalidArgument)
 	}
-	loaded, err := loadMigrations(migrations)
+	loaded, err := loadMigrations(migrationFS)
 	if err != nil {
 		return err
 	}
-
-	conn, err := db.Conn(ctx)
+	tx, err := pgmeta.BeginSQL(ctx, db, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
-		return fmt.Errorf("acquire SQLite migration connection: %w", err)
+		return fmt.Errorf("begin PostgreSQL migrations: %w", err)
 	}
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close SQLite migration connection: %w", closeErr))
-		}
-	}()
-	if err := retrySQLiteBusy(ctx, migrationLockRetryWindow, func() error {
-		_, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`)
-		return err
-	}); err != nil {
-		return fmt.Errorf("begin SQLite migrations: %w", err)
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended('open-splunk:migrations:' || current_database() || ':' || current_schema(),0))"); err != nil {
+		return fmt.Errorf("lock PostgreSQL migrations: %w", err)
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			if _, rollbackErr := conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`); rollbackErr != nil {
-				err = errors.Join(err, fmt.Errorf("roll back SQLite migrations: %w", rollbackErr))
-			}
-		}
-	}()
-
 	var ledgerExists, schemaExists bool
-	if err := conn.QueryRowContext(ctx, `
-		SELECT
-			EXISTS (
-				SELECT 1
-				FROM sqlite_schema
-				WHERE type = 'table' AND name = 'schema_migrations'
-			),
-			EXISTS (
-				SELECT 1
-				FROM sqlite_schema
-			)`).Scan(&ledgerExists, &schemaExists); err != nil {
-		return fmt.Errorf("inspect SQLite migration state: %w", err)
+	if err := tx.QueryRowContext(ctx, `SELECT to_regclass(current_schema() || '.open_splunk_schema_migrations') IS NOT NULL,
+ EXISTS(SELECT 1 FROM pg_tables WHERE schemaname=current_schema() AND tablename NOT LIKE 'gocommon_%' AND tablename <> 'open_splunk_additional_migrations')`).Scan(&ledgerExists, &schemaExists); err != nil {
+		return err
 	}
 	if !ledgerExists && schemaExists {
-		return fmt.Errorf(
-			"%w: ledgerless database contains existing schema",
-			ErrMigrationDrift,
-		)
+		return fmt.Errorf("%w: ledgerless control schema exists", ErrMigrationDrift)
 	}
-
-	if _, err := conn.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version INTEGER PRIMARY KEY NOT NULL CHECK (version >= 1),
-			name TEXT NOT NULL,
-			checksum BLOB NOT NULL CHECK (length(checksum) = 32),
-			applied_at_unix_micro INTEGER NOT NULL CHECK (applied_at_unix_micro > 0)
-		) STRICT`); err != nil {
-		return fmt.Errorf("create SQLite migration ledger: %w", err)
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS open_splunk_schema_migrations(version BIGINT PRIMARY KEY CHECK(version>=1), name TEXT NOT NULL, checksum BYTEA NOT NULL CHECK(octet_length(checksum)=32), applied_at_unix_micro BIGINT NOT NULL CHECK(applied_at_unix_micro>0))`); err != nil {
+		return err
 	}
-
-	history, err := verifyMigrationHistory(ctx, conn, loaded)
+	history, err := verifyMigrationHistory(ctx, tx, loaded)
 	if err != nil {
 		return err
 	}
-
 	for _, next := range loaded[int(history.appliedCount):] {
-		if history.foldedIngestReservationAccounting &&
-			next.version == foldedIngestReservationAccountingVersion &&
-			next.name == "0009_ingest_reservation_accounting.sql" {
-			if err := recordAppliedMigration(ctx, conn, next); err != nil {
-				return fmt.Errorf("adopt folded SQLite migration %s: %w", next.name, err)
-			}
-			continue
+		if _, err := tx.ExecContext(ctx, string(next.contents)); err != nil {
+			return fmt.Errorf("apply PostgreSQL migration %s: %w", next.name, err)
 		}
-		if err := applyPendingMigration(ctx, conn, next); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO open_splunk_schema_migrations(version,name,checksum,applied_at_unix_micro) VALUES($1,$2,$3,$4)`, next.version, next.name, next.checksum[:], time.Now().UnixMicro()); err != nil {
 			return err
 		}
 	}
-	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-		return fmt.Errorf("commit SQLite migrations: %w", err)
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit PostgreSQL migrations: %w", err)
 	}
-	committed = true
 	return nil
+}
+
+// ApplyAdditionalMigration applies a named, immutable application schema only
+// after its external prerequisites (such as go-common identity) are initialized.
+func (db *DB) ApplyAdditionalMigration(ctx context.Context, name, contents string) error {
+	if ctx == nil || db == nil || strings.TrimSpace(name) == "" || strings.TrimSpace(contents) == "" {
+		return ErrInvalidArgument
+	}
+	digest := sha256.Sum256([]byte(contents))
+	tx, err := pgmeta.BeginSQL(ctx, db.sql, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended('open-splunk:migrations:' || current_database() || ':' || current_schema(),0))"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS open_splunk_additional_migrations(name TEXT PRIMARY KEY,checksum BYTEA NOT NULL CHECK(octet_length(checksum)=32),applied_at_unix_micro BIGINT NOT NULL)`); err != nil {
+		return err
+	}
+	var recorded []byte
+	err = tx.QueryRowContext(ctx, "SELECT checksum FROM open_splunk_additional_migrations WHERE name=$1", name).Scan(&recorded)
+	if err == nil {
+		if !bytes.Equal(recorded, digest[:]) {
+			return fmt.Errorf("%w: additional migration %s", ErrMigrationDrift, name)
+		}
+		return tx.Commit()
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, contents); err != nil {
+		return fmt.Errorf("apply additional migration %s: %w", name, err)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO open_splunk_additional_migrations VALUES($1,$2,$3)", name, digest[:], time.Now().UnixMicro()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 type migrationQuerier interface {
@@ -216,9 +201,9 @@ func verifyMigrationHistory(
 	db migrationQuerier,
 	loaded []migration,
 ) (verifiedMigrationHistory, error) {
-	rows, err := db.QueryContext(ctx, `SELECT version, name, checksum FROM schema_migrations ORDER BY version`)
+	rows, err := db.QueryContext(ctx, `SELECT version, name, checksum FROM open_splunk_schema_migrations ORDER BY version`)
 	if err != nil {
-		return verifiedMigrationHistory{}, fmt.Errorf("read SQLite migration history: %w", err)
+		return verifiedMigrationHistory{}, fmt.Errorf("read PostgreSQL migration history: %w", err)
 	}
 	defer rows.Close()
 
@@ -229,7 +214,7 @@ func verifyMigrationHistory(
 		var name string
 		var checksum []byte
 		if err := rows.Scan(&version, &name, &checksum); err != nil {
-			return verifiedMigrationHistory{}, fmt.Errorf("scan SQLite migration history: %w", err)
+			return verifiedMigrationHistory{}, fmt.Errorf("scan PostgreSQL migration history: %w", err)
 		}
 		if version > loaded[len(loaded)-1].version {
 			return verifiedMigrationHistory{}, fmt.Errorf("%w: database version %d, latest embedded version %d", ErrDatabaseTooNew, version, loaded[len(loaded)-1].version)
@@ -242,57 +227,21 @@ func verifyMigrationHistory(
 			return verifiedMigrationHistory{}, fmt.Errorf("%w: version %04d", ErrMigrationDrift, version)
 		}
 		if !bytes.Equal(checksum, embedded.checksum[:]) {
-			if !isFoldedIngestWriteGroupsBaseline(embedded, checksum) {
-				return verifiedMigrationHistory{}, fmt.Errorf("%w: version %04d", ErrMigrationDrift, version)
-			}
-			history.foldedIngestReservationAccounting = true
+			return verifiedMigrationHistory{}, fmt.Errorf("%w: version %04d", ErrMigrationDrift, version)
 		}
 		expectedVersion++
 	}
 	if err := rows.Err(); err != nil {
-		return verifiedMigrationHistory{}, fmt.Errorf("iterate SQLite migration history: %w", err)
+		return verifiedMigrationHistory{}, fmt.Errorf("iterate PostgreSQL migration history: %w", err)
 	}
 	history.appliedCount = expectedVersion - firstMigrationVersion
 	return history, nil
 }
 
-func isFoldedIngestWriteGroupsBaseline(embedded migration, appliedChecksum []byte) bool {
-	return embedded.version == firstMigrationVersion &&
-		embedded.name == "0001_baseline.sql" &&
-		hex.EncodeToString(embedded.checksum[:]) == originalSQLiteBaselineSHA256 &&
-		hex.EncodeToString(appliedChecksum) == foldedIngestWriteGroupsSQLiteBaselineSHA256
-}
-
-func applyPendingMigration(
-	ctx context.Context,
-	conn *sql.Conn,
-	next migration,
-) error {
-	if _, err := conn.ExecContext(ctx, string(next.contents)); err != nil {
-		return fmt.Errorf("apply SQLite migration %s: %w", next.name, err)
-	}
-	if err := recordAppliedMigration(ctx, conn, next); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func recordAppliedMigration(ctx context.Context, conn *sql.Conn, next migration) error {
-	if _, err := conn.ExecContext(ctx, `
-		INSERT INTO schema_migrations (version, name, checksum, applied_at_unix_micro)
-		VALUES (?, ?, ?, CAST(unixepoch('subsec') * 1000000 AS INTEGER))`,
-		next.version, next.name, next.checksum[:]); err != nil {
-		return fmt.Errorf("record SQLite migration %s: %w", next.name, err)
-	}
-
-	return nil
-}
-
 func loadMigrations(migrations fs.FS) ([]migration, error) {
 	entries, err := fs.ReadDir(migrations, ".")
 	if err != nil {
-		return nil, fmt.Errorf("read SQLite migrations: %w", err)
+		return nil, fmt.Errorf("read PostgreSQL migrations: %w", err)
 	}
 	loaded := make([]migration, 0, len(entries))
 	for _, entry := range entries {
@@ -306,7 +255,7 @@ func loadMigrations(migrations fs.FS) ([]migration, error) {
 		version := parseMigrationVersion(matches[1])
 		contents, err := fs.ReadFile(migrations, entry.Name())
 		if err != nil {
-			return nil, fmt.Errorf("read SQLite migration %s: %w", entry.Name(), err)
+			return nil, fmt.Errorf("read PostgreSQL migration %s: %w", entry.Name(), err)
 		}
 		if len(bytes.TrimSpace(contents)) == 0 {
 			return nil, fmt.Errorf("%w: migration %q is empty", ErrInvalidArgument, entry.Name())
@@ -319,7 +268,7 @@ func loadMigrations(migrations fs.FS) ([]migration, error) {
 		})
 	}
 	if len(loaded) == 0 {
-		return nil, fmt.Errorf("%w: no SQLite migrations found", ErrInvalidArgument)
+		return nil, fmt.Errorf("%w: no PostgreSQL migrations found", ErrInvalidArgument)
 	}
 	sort.Slice(loaded, func(i, j int) bool { return loaded[i].version < loaded[j].version })
 	wantVersion := firstMigrationVersion

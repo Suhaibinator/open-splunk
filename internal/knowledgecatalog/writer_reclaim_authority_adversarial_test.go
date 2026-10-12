@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"google.golang.org/protobuf/proto"
@@ -25,7 +27,7 @@ func TestWriterIdempotencyReclaimRejectsCorruptVersionLifecycleAndAuditAuthoriti
 				var encoded []byte
 				if err := fixture.connection.QueryRowContext(t.Context(), `
 					SELECT outcome_proto FROM knowledge_mutation_idempotency
-					WHERE tenant_id = ? AND client_request_id = ?`,
+					WHERE tenant_id = $1 AND client_request_id = $2`,
 					writerTestTenant, fixture.corruptRequestID,
 				).Scan(&encoded); err != nil {
 					t.Fatalf("read reclaim outcome: %v", err)
@@ -54,8 +56,8 @@ func TestWriterIdempotencyReclaimRejectsCorruptVersionLifecycleAndAuditAuthoriti
 				fixture.setIgnoreChecks(t, true)
 				assertOneCapacityRowUpdated(t, fixture.connection, `
 					UPDATE knowledge_object_version_lifecycle
-					SET disabled_at_unix_micro = ?
-					WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = ?`,
+					SET disabled_at_unix_micro = $1
+					WHERE tenant_id = $2 AND knowledge_object_id = $3 AND object_version = $4`,
 					fixture.createdAt, writerTestTenant, fixture.objectID, fixture.objectVersion,
 				)
 				fixture.setIgnoreChecks(t, false)
@@ -64,7 +66,7 @@ func TestWriterIdempotencyReclaimRejectsCorruptVersionLifecycleAndAuditAuthoriti
 				assertOneCapacityRowUpdated(t, fixture.connection, `
 					UPDATE knowledge_object_version_lifecycle
 					SET disabled_at_unix_micro = NULL
-					WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = ?`,
+					WHERE tenant_id = $1 AND knowledge_object_id = $2 AND object_version = $3`,
 					writerTestTenant, fixture.objectID, fixture.objectVersion,
 				)
 			},
@@ -76,13 +78,13 @@ func TestWriterIdempotencyReclaimRejectsCorruptVersionLifecycleAndAuditAuthoriti
 				fixture.setIgnoreChecks(t, true)
 				assertOneCapacityRowUpdated(t, fixture.connection, `
 					UPDATE audit_events SET actor_role = 'user'
-					WHERE tenant_id = ? AND sequence = ?`, writerTestTenant, fixture.auditSequence)
+					WHERE tenant_id = $1 AND sequence = $2`, writerTestTenant, fixture.auditSequence)
 				fixture.setIgnoreChecks(t, false)
 			},
 			restore: func(t *testing.T, fixture *writerReclaimAuthorityFixture) {
 				assertOneCapacityRowUpdated(t, fixture.connection, `
 					UPDATE audit_events SET actor_role = 'administrator'
-					WHERE tenant_id = ? AND sequence = ?`, writerTestTenant, fixture.auditSequence)
+					WHERE tenant_id = $1 AND sequence = $2`, writerTestTenant, fixture.auditSequence)
 			},
 		},
 	}
@@ -167,7 +169,7 @@ func newWriterReclaimAuthorityFixture(t *testing.T) *writerReclaimAuthorityFixtu
 		SELECT knowledge_object_id, object_version, created_at_unix_micro,
 		       successful_audit_sequence
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND client_request_id = ?`,
+		WHERE tenant_id = $1 AND client_request_id = $2`,
 		writerTestTenant, corruptRequestID,
 	).Scan(&fixture.objectID, &fixture.objectVersion, &fixture.createdAt, &fixture.auditSequence); err != nil {
 		_ = connection.Close()
@@ -178,30 +180,24 @@ func newWriterReclaimAuthorityFixture(t *testing.T) *writerReclaimAuthorityFixtu
 
 func (fixture *writerReclaimAuthorityFixture) dropTrigger(t *testing.T, name string) {
 	t.Helper()
-	if _, err := fixture.connection.ExecContext(t.Context(), "DROP TRIGGER "+name); err != nil {
+	if _, err := fixture.connection.ExecContext(t.Context(), "DROP TRIGGER "+name+" ON "+writerTriggerTable(name)); err != nil {
 		t.Fatalf("drop %s: %v", name, err)
 	}
 }
 
 func (fixture *writerReclaimAuthorityFixture) updateReceipt(t *testing.T, assignment string, value any) {
 	t.Helper()
-	assertOneCapacityRowUpdated(t, fixture.connection, `
+	assertOneCapacityRowUpdated(t, fixture.connection, pgtest.Parameters(`
 		UPDATE knowledge_mutation_idempotency SET `+assignment+`
-		WHERE tenant_id = ? AND client_request_id = ?`,
+		WHERE tenant_id = ? AND client_request_id = ?`),
 		value, writerTestTenant, fixture.corruptRequestID,
 	)
 }
 
 func (fixture *writerReclaimAuthorityFixture) setIgnoreChecks(t *testing.T, enabled bool) {
 	t.Helper()
-	value := "OFF"
-	if enabled {
-		value = "ON"
-	}
-	if _, err := fixture.connection.ExecContext(
-		t.Context(), "PRAGMA ignore_check_constraints = "+value,
-	); err != nil {
-		t.Fatalf("set reclaim-authority check bypass %s: %v", value, err)
+	if _, err := pgtest.CheckTables(t.Context(), fixture.connection, !enabled, "knowledge_mutation_idempotency", "knowledge_object_version_lifecycle", "audit_events"); err != nil {
+		t.Fatalf("set reclaim-authority check bypass: %v", err)
 	}
 }
 

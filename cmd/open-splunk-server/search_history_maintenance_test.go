@@ -10,7 +10,6 @@ import (
 	"time"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 )
 
@@ -32,7 +31,7 @@ func TestSearchHistoryMaintenancePhysicallyPrunesExpiredTerminalScopes(t *testin
 	t.Parallel()
 
 	ctx := context.Background()
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.db"))
+	database, err := openTestControl(t, ctx, filepath.Join(t.TempDir(), "control.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,8 +50,8 @@ func TestSearchHistoryMaintenancePhysicallyPrunesExpiredTerminalScopes(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope := searchhistory.AccessScope{TenantID: "tenant", OwnerID: "owner"}
-	otherScope := searchhistory.AccessScope{TenantID: "tenant", OwnerID: "other"}
+	scope := searchhistory.AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "1"}
+	otherScope := searchhistory.AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "other"}
 	if _, err := store.Record(
 		ctx,
 		scope,

@@ -7,11 +7,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/resourcepolicy"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
@@ -19,12 +21,17 @@ import (
 
 const (
 	maximumDashboardsPerOwner = 64
+	maximumVisibleDashboards  = 10000
 	maximumIDAttempts         = 4
 )
 
 // AccessScope is the authenticated owner namespace. Object identifiers never
 // select a different owner.
-type AccessScope struct{ OwnerID string }
+type AccessScope struct {
+	OwnerID           string
+	OrganizationID    string
+	SiteAdministrator bool
+}
 
 type Options struct {
 	Clock       func() time.Time
@@ -64,6 +71,9 @@ func (store *Store) Create(ctx context.Context, scope AccessScope, input *opensp
 	if err != nil {
 		return nil, err
 	}
+	if scope.OrganizationID == "" {
+		return nil, fmt.Errorf("%w: organization is required for dashboard creation", control.ErrInvalidArgument)
+	}
 	definition, indexed, encoded, err := normalizeDefinition(input, ownerID)
 	if err != nil {
 		return nil, err
@@ -73,7 +83,7 @@ func (store *Store) Create(ctx context.Context, scope AccessScope, input *opensp
 		return nil, err
 	}
 	var count int64
-	if err := store.orm.WithContext(ctx).Model(&dashboardRecord{}).Where("tenant_id = ? AND owner_id = ?", store.tenantID, ownerID).Count(&count).Error; err != nil {
+	if err := store.orm.WithContext(ctx).Model(&dashboardRecord{}).Where("organization_id = ? AND tenant_id = ? AND owner_id = ?", scopeOrganization(scope), store.tenantID, ownerID).Count(&count).Error; err != nil {
 		return nil, mapContext(ctx, "count dashboards", err)
 	}
 	if count >= maximumDashboardsPerOwner {
@@ -86,7 +96,8 @@ func (store *Store) Create(ctx context.Context, scope AccessScope, input *opensp
 		}
 		record := dashboardRecord{
 			DashboardID: id, Version: 1, Name: indexed.name, AppID: indexed.appID,
-			TenantID: store.tenantID, OwnerID: ownerID, SharingScope: int64(indexed.sharingScope), DefinitionProto: encoded,
+			SourceIndexNames: indexed.sourceIndexNames,
+			TenantID:         store.tenantID, OrganizationID: scopeOrganization(scope), OwnerID: ownerID, SharingScope: int64(indexed.sharingScope), DefinitionProto: encoded,
 			CreatedAtUnixMicro: now.UnixMicro(), UpdatedAtUnixMicro: now.UnixMicro(),
 		}
 		if createErr := store.orm.WithContext(ctx).Create(&record).Error; createErr == nil {
@@ -96,7 +107,7 @@ func (store *Store) Create(ctx context.Context, scope AccessScope, input *opensp
 		} else if strings.Contains(createErr.Error(), "dashboard owner capacity exhausted") {
 			return nil, control.ErrCapacityExceeded
 		}
-		conflict, conflictErr := store.nameConflict(ctx, ownerID, indexed.appID, indexed.name, "")
+		conflict, conflictErr := store.nameConflict(ctx, scopeOrganization(scope), ownerID, indexed.appID, indexed.name, "")
 		if conflictErr != nil {
 			return nil, conflictErr
 		}
@@ -123,7 +134,7 @@ func (store *Store) Get(ctx context.Context, scope AccessScope, id string) (*ope
 		return nil, err
 	}
 	var record dashboardRecord
-	err = store.orm.WithContext(ctx).Where("dashboard_id = ? AND tenant_id = ? AND owner_id = ?", id, store.tenantID, ownerID).Take(&record).Error
+	err = dashboardScopeQuery(store.orm.WithContext(ctx), scope, ownerID, true).Where("dashboard_id = ? AND tenant_id = ?", id, store.tenantID).Take(&record).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, control.ErrNotFound
 	}
@@ -138,7 +149,7 @@ func (store *Store) List(ctx context.Context, scope AccessScope, appID *string) 
 	if err != nil {
 		return nil, err
 	}
-	query := store.orm.WithContext(ctx).Where("tenant_id = ? AND owner_id = ?", store.tenantID, ownerID)
+	query := dashboardScopeQuery(store.orm.WithContext(ctx), scope, ownerID, true).Where("tenant_id = ?", store.tenantID)
 	if appID != nil {
 		value, normalizationErr := canonicalRequiredText("dashboard app ID filter", *appID, maximumDashboardAppIDBytes)
 		if normalizationErr != nil {
@@ -147,11 +158,19 @@ func (store *Store) List(ctx context.Context, scope AccessScope, appID *string) 
 		query = query.Where("app_id = ?", value)
 	}
 	var records []dashboardRecord
-	if err := query.Order("updated_at_unix_micro DESC, dashboard_id DESC").Limit(maximumDashboardsPerOwner + 1).Find(&records).Error; err != nil {
+	if err := query.Order("updated_at_unix_micro DESC, dashboard_id DESC").Limit(maximumVisibleDashboards + 1).Find(&records).Error; err != nil {
 		return nil, mapContext(ctx, "list dashboards", err)
 	}
-	if len(records) > maximumDashboardsPerOwner {
-		return nil, errors.New("list dashboards: persisted owner capacity invariant exceeded")
+	if len(records) > maximumVisibleDashboards {
+		return nil, control.ErrCapacityExceeded
+	}
+	ownerCounts := make(map[string]int)
+	for _, record := range records {
+		key := strconv.FormatInt(record.OrganizationID, 10) + ":" + record.OwnerID
+		ownerCounts[key]++
+		if ownerCounts[key] > maximumDashboardsPerOwner {
+			return nil, errors.New("list dashboards: persisted owner capacity invariant exceeded")
+		}
 	}
 	result := make([]*opensplunk.Dashboard, len(records))
 	for index := range records {
@@ -175,18 +194,23 @@ func (store *Store) Update(ctx context.Context, scope AccessScope, id string, ex
 	if err != nil {
 		return nil, err
 	}
-	definition, indexed, encoded, err := normalizeDefinition(input, ownerID)
-	if err != nil {
-		return nil, err
-	}
 	current, err := store.Get(ctx, scope, id)
 	if err != nil {
 		return nil, err
 	}
+	if !scope.SiteAdministrator && current.GetDefinition().GetOwnerId() != ownerID {
+		return nil, control.ErrNotFound
+	}
+	ownerID = current.GetDefinition().GetOwnerId()
+	definition, indexed, encoded, err := normalizeDefinition(input, ownerID)
+	if err != nil {
+		return nil, err
+	}
+
 	if current.GetVersion() != expectedVersion {
 		return nil, control.ErrVersionConflict
 	}
-	conflict, err := store.nameConflict(ctx, ownerID, indexed.appID, indexed.name, id)
+	conflict, err := store.nameConflict(ctx, scopeOrganization(scope), ownerID, indexed.appID, indexed.name, id)
 	if err != nil {
 		return nil, err
 	}
@@ -197,11 +221,12 @@ func (store *Store) Update(ctx context.Context, scope AccessScope, id string, ex
 	if err != nil {
 		return nil, err
 	}
-	updated := store.orm.WithContext(ctx).Model(&dashboardRecord{}).
+	updated := dashboardScopeQuery(store.orm.WithContext(ctx), scope, ownerID, false).Model(&dashboardRecord{}).
 		Where("dashboard_id = ? AND tenant_id = ? AND owner_id = ? AND version = ?", id, store.tenantID, ownerID, storedExpectedVersion).
 		Updates(map[string]any{
 			"version": gorm.Expr("version + 1"), "name": indexed.name, "app_id": indexed.appID,
 			"sharing_scope": int64(indexed.sharingScope), "definition_proto": encoded,
+			"source_index_names":    indexed.sourceIndexNames,
 			"updated_at_unix_micro": now.UnixMicro(),
 		})
 	if updated.Error != nil {
@@ -226,17 +251,18 @@ func (store *Store) Delete(ctx context.Context, scope AccessScope, id string, ex
 		return err
 	}
 	var current dashboardRecord
-	err = store.orm.WithContext(ctx).Select("dashboard_id", "version").Where("dashboard_id = ? AND tenant_id = ? AND owner_id = ?", id, store.tenantID, ownerID).Take(&current).Error
+	err = dashboardScopeQuery(store.orm.WithContext(ctx), scope, ownerID, false).Select("dashboard_id", "version", "owner_id").Where("dashboard_id = ? AND tenant_id = ?", id, store.tenantID).Take(&current).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return control.ErrNotFound
 	}
 	if err != nil {
 		return mapContext(ctx, "read dashboard for delete", err)
 	}
+	ownerID = current.OwnerID
 	if current.Version != storedExpectedVersion {
 		return control.ErrVersionConflict
 	}
-	deleted := store.orm.WithContext(ctx).Where("dashboard_id = ? AND tenant_id = ? AND owner_id = ? AND version = ?", id, store.tenantID, ownerID, storedExpectedVersion).Delete(&dashboardRecord{})
+	deleted := dashboardScopeQuery(store.orm.WithContext(ctx), scope, ownerID, false).Where("dashboard_id = ? AND tenant_id = ? AND owner_id = ? AND version = ?", id, store.tenantID, ownerID, storedExpectedVersion).Delete(&dashboardRecord{})
 	if deleted.Error != nil {
 		return mapContext(ctx, "delete dashboard", deleted.Error)
 	}
@@ -246,8 +272,13 @@ func (store *Store) Delete(ctx context.Context, scope AccessScope, id string, ex
 	return nil
 }
 
-func (store *Store) nameConflict(ctx context.Context, ownerID, appID, name, exceptID string) (bool, error) {
+func (store *Store) nameConflict(ctx context.Context, organizationID int64, ownerID, appID, name, exceptID string) (bool, error) {
 	query := store.orm.WithContext(ctx).Model(&dashboardRecord{}).Where("tenant_id = ? AND owner_id = ? AND app_id = ? AND name = ?", store.tenantID, ownerID, appID, name)
+	if exceptID != "" {
+		query = query.Where("organization_id = (SELECT organization_id FROM dashboards WHERE dashboard_id = ?)", exceptID)
+	} else {
+		query = query.Where("organization_id = ?", organizationID)
+	}
 	if exceptID != "" {
 		query = query.Where("dashboard_id <> ?", exceptID)
 	}
@@ -267,7 +298,7 @@ func fromRecord(record dashboardRecord, tenantID string) (*opensplunk.Dashboard,
 		return nil, errors.New("invalid persisted dashboard definition")
 	}
 	normalized, indexed, encoded, err := normalizeDefinition(definition, record.OwnerID)
-	if err != nil || !proto.Equal(normalized, definition) || indexed.name != record.Name ||
+	if err != nil || !resourcepolicy.MatchesSourceNames(record.SourceIndexNames, indexed.sourceIndexNames) || !proto.Equal(normalized, definition) || indexed.name != record.Name ||
 		indexed.appID != record.AppID || int64(indexed.sharingScope) != record.SharingScope ||
 		!bytes.Equal(encoded, record.DefinitionProto) {
 		return nil, errors.New("dashboard record does not match its definition")
@@ -297,6 +328,12 @@ func owner(ctx context.Context, scope AccessScope) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if !scope.SiteAdministrator || scope.OrganizationID != "" {
+		id, err := strconv.ParseInt(scope.OrganizationID, 10, 64)
+		if err != nil || id < 1 || strconv.FormatInt(id, 10) != scope.OrganizationID {
+			return "", fmt.Errorf("%w: organization ID must be canonical positive decimal", control.ErrInvalidArgument)
+		}
+	}
 	return canonicalRequiredText("owner ID", scope.OwnerID, maximumDashboardOwnerIDBytes)
 }
 
@@ -313,4 +350,24 @@ func newID() (string, error) {
 		return "", err
 	}
 	return "dash_" + base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+func scopeOrganization(scope AccessScope) int64 {
+	id, _ := strconv.ParseInt(scope.OrganizationID, 10, 64)
+	return id
+}
+func dashboardScopeQuery(query *gorm.DB, scope AccessScope, ownerID string, read bool) *gorm.DB {
+	if read {
+		query = resourcepolicy.Filter(query, "dashboards")
+	}
+	if !scope.SiteAdministrator || scope.OrganizationID != "" {
+		query = query.Where("organization_id = ?", scopeOrganization(scope))
+	}
+	if scope.SiteAdministrator {
+		return query
+	}
+	if read {
+		return query.Where("(owner_id = ? OR sharing_scope IN (2, 3))", ownerID)
+	}
+	return query.Where("owner_id = ?", ownerID)
 }

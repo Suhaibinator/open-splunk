@@ -109,7 +109,7 @@ func (handler *apiHandler) protectKnowledgeManagementRoutes(
 			return
 		}
 		if handler == nil || principal.TenantID() != handler.tenantID ||
-			principal.OwnerID() != handler.ownerID {
+			principal.OwnerID() != handler.requestOwner(authenticatedContext) {
 			if err := appendAttempt(knowledgeattemptaudit.Definition{
 				Action: action,
 				Reason: knowledgeattemptaudit.ReasonNotFoundOrForbidden,

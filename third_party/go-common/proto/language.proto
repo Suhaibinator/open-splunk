@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+enum Language {
+    LANGUAGE_UNSPECIFIED = 0; // Default unspecified state
+    LANGUAGE_ENGLISH = 1;     // English language
+    LANGUAGE_SPANISH = 2;    // Spanish language
+    LANGUAGE_FRENCH = 3;     // French language
+    LANGUAGE_GERMAN = 4;    // German language
+    LANGUAGE_CHINESE = 5;    // Chinese language
+    LANGUAGE_RUSSIAN = 6;    // Russian language
+    LANGUAGE_ARABIC = 7;     // Arabic language
+    LANGUAGE_PORTUGUESE = 8; // Portuguese language
+    LANGUAGE_HINDI = 9;      // Hindi language
+    LANGUAGE_JAPANESE = 10;  // Japanese language
+    LANGUAGE_KOREAN = 11;    // Korean language
+    LANGUAGE_ITALIAN = 12;   // Italian language
+    LANGUAGE_DUTCH = 13;     // Dutch language
+    LANGUAGE_SWEDISH = 14;   // Swedish language
+    LANGUAGE_TURKISH = 15;   // Turkish language
+    LANGUAGE_POLISH = 16;    // Polish language
+    LANGUAGE_DANISH = 17;    // Danish language
+    LANGUAGE_NORWEGIAN = 18; // Norwegian language
+    LANGUAGE_FINNISH = 19;   // Finnish language
+    LANGUAGE_CZECH = 20;     // Czech language
+    LANGUAGE_HUNGARIAN = 21; // Hungarian language
+    LANGUAGE_ROMANIAN = 22;  // Romanian language
+    LANGUAGE_BULGARIAN = 23; // Bulgarian language
+    LANGUAGE_CROATIAN = 24; // Croatian language
+    LANGUAGE_SLOVAK = 25;    // Slovak language
+    LANGUAGE_SERBIAN = 26;   // Serbian language
+    LANGUAGE_SLOVENIAN = 27; // Slovenian language
+    LANGUAGE_UKRAINIAN = 28; // Ukrainian language
+    LANGUAGE_BASQUE = 29;    // Basque language
+    LANGUAGE_CATALAN = 30;   // Catalan language
+    LANGUAGE_WELSH = 31;     // Welsh language
+    LANGUAGE_GREEK = 32;     // Greek language
+    LANGUAGE_THAI = 33;      // Thai language
+    LANGUAGE_VIETNAMESE = 34; // Vietnamese language
+    LANGUAGE_INDONESIAN = 35; // Indonesian language
+    LANGUAGE_MALAY = 36;     // Malay language
+    LANGUAGE_FILIPINO = 37;  // Filipino language
+    LANGUAGE_SWAHILI = 38;   // Swahili language
+    LANGUAGE_TAMIL = 39;     // Tamil language
+    LANGUAGE_TELUGU = 40;   // Telugu language
+    LANGUAGE_BENGALI = 41;   // Bengali language
+    LANGUAGE_PUNJABI = 42;   // Punjabi language
+    LANGUAGE_URDU = 43;      // Urdu language
+    LANGUAGE_MARATHI = 44;   // Marathi language
+    LANGUAGE_GUJARATI = 45;  // Gujarati language
+    LANGUAGE_KANNADA = 46;   // Kannada language
+    LANGUAGE_MALAYALAM = 47; // Malayalam language
+    LANGUAGE_PERSIAN = 48;   // Persian language
+    LANGUAGE_HEBREW = 49;    // Hebrew language
+   }
+  

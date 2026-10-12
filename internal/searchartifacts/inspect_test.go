@@ -42,7 +42,7 @@ func TestInspectManyCanonicalizesWithoutRefreshingOrExpiring(t *testing.T) {
 	}
 	var persisted State
 	if err := database.SQLDB().QueryRowContext(ctx, `
-		SELECT state FROM durable_search_jobs WHERE id = ?`, "inspect-a").Scan(&persisted); err != nil {
+		SELECT state FROM durable_search_jobs WHERE id = $1`, "inspect-a").Scan(&persisted); err != nil {
 		t.Fatal(err)
 	}
 	if persisted != StateQueued {

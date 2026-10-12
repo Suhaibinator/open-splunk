@@ -7,10 +7,9 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	"google.golang.org/protobuf/types/known/timestamppb"
-
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // optionPackEvent stores one command-option fixture row. app is omitted

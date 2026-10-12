@@ -40,15 +40,17 @@ type collectorListNullableInt64 struct {
 }
 
 type collectorListFingerprint struct {
-	Version   int      `json:"v"`
-	TenantID  string   `json:"t"`
-	PageSize  uint32   `json:"p"`
-	Total     bool     `json:"z"`
-	States    []string `json:"s"`
-	IndexName *string  `json:"i"`
-	Text      *string  `json:"x"`
-	SortBy    string   `json:"b"`
-	Direction string   `json:"d"`
+	Version        int      `json:"v"`
+	TenantID       string   `json:"t"`
+	IndexAccess    string   `json:"a"`
+	AccessIdentity string   `json:"u"`
+	PageSize       uint32   `json:"p"`
+	Total          bool     `json:"z"`
+	States         []string `json:"s"`
+	IndexName      *string  `json:"i"`
+	Text           *string  `json:"x"`
+	SortBy         string   `json:"b"`
+	Direction      string   `json:"d"`
 }
 
 type collectorLivenessFingerprint struct {
@@ -84,15 +86,17 @@ func collectorListFilterHash(request normalizedListRequest) (string, error) {
 		states[index] = string(state)
 	}
 	payload, err := json.Marshal(collectorListFingerprint{
-		Version:   collectorListCursorVersion,
-		TenantID:  request.tenantID,
-		PageSize:  request.pageSize,
-		Total:     request.includeTotal,
-		States:    states,
-		IndexName: request.indexNameFilter,
-		Text:      request.textFilter,
-		SortBy:    string(request.sortBy),
-		Direction: string(request.direction),
+		Version:        collectorListCursorVersion,
+		TenantID:       request.tenantID,
+		IndexAccess:    request.indexAccess,
+		AccessIdentity: request.accessIdentity,
+		PageSize:       request.pageSize,
+		Total:          request.includeTotal,
+		States:         states,
+		IndexName:      request.indexNameFilter,
+		Text:           request.textFilter,
+		SortBy:         string(request.sortBy),
+		Direction:      string(request.direction),
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode collector list filter: %w", err)

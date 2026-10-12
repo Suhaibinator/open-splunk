@@ -1,0 +1,410 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+import "organization.proto";
+import "pagination.proto";
+import "user.proto";
+
+
+// --- Message Definitions ---
+
+message CreateOrganizationRequest {
+  string name = 1;
+  string slug = 2;                        // URL-friendly organization identifier
+  optional string description = 3;
+  optional string avatar_url = 4;         // URL to the organization's avatar/logo
+  optional uint64 parent_organization_id = 5;
+}
+
+message CreateOrganizationResponse {
+  Organization organization = 1;
+}
+
+message AdminCreateOrganizationRequest {
+  string name = 1;
+  string slug = 2;                        // URL-friendly organization identifier
+  optional string description = 3;
+  optional string avatar_url = 4;         // URL to the organization's avatar/logo
+  optional uint64 parent_organization_id = 5;
+  optional OrganizationType organization_type = 6; // Defaults when omitted
+}
+
+message AdminCreateOrganizationResponse {
+  Organization organization = 1;
+}
+
+message GetOrganizationRequest {
+  int64 organization_id = 1;
+}
+
+message GetOrganizationResponse {
+  Organization organization = 1;
+}
+
+message GetOrganizationBySlugRequest {
+  string slug = 1;
+}
+
+message GetOrganizationBySlugResponse {
+  Organization organization = 1;
+}
+
+// Request to get the authenticated user's role in an organization by id or slug.
+// Exactly one identifier should be provided.
+message GetMyOrganizationRoleRequest {
+  oneof identifier {
+    int64 organization_id = 1;
+    string slug = 2;
+  }
+}
+
+// Response containing the authenticated user's role in the organization.
+message GetMyOrganizationRoleResponse {
+  OrganizationRole explicit_role = 1;
+  reserved 2;
+  reserved "is_virtual";
+  optional uint64 inherited_from_organization_id = 3;
+  OrganizationRole effective_role = 4;
+  optional uint32 effective_role_depth = 5; // Absolute depth of org that supplied effective_role (0=root)
+}
+
+message UpdateOrganizationRequest {
+  int64 organization_id = 1;
+  string name = 2;
+  string slug = 3;                        // URL-friendly organization identifier
+  optional string description = 4;
+  optional string avatar_url = 5;         // URL to the organization's avatar/logo
+}
+
+message UpdateOrganizationResponse {
+  Organization organization = 1;
+}
+
+message DeleteOrganizationRequest {
+  int64 organization_id = 1;
+}
+
+message DeleteOrganizationResponse {
+}
+
+message AddUserToOrganizationRequest {
+  int64 organization_id = 1;
+  uint64 user_id = 2;
+  OrganizationRole role = 3;
+}
+
+// Add a user to an organization by identifier (email or username).
+// This is the direct add flow:
+// - If the user exists, they are added immediately (no acceptance needed).
+// - If the user does not exist, a pending auto-add entry is created and will be applied when they register.
+message AddUserToOrganizationByIdentifierRequest {
+  int64 organization_id = 1;
+  UserIdentifierType identifier_type = 2;  // Must be EMAIL or USERNAME
+  string identifier = 3;                   // Email address or username
+  OrganizationRole role = 4;               // Role to assign upon joining
+}
+
+// Response for direct add by identifier.
+message AddUserToOrganizationByIdentifierResponse {
+  bool user_added = 1;                               // True if user was added immediately
+  bool auto_add_pending = 2;                         // True if a pending auto-add entry was created
+  optional OrganizationUser organization_user = 3;   // Membership details if user_added is true
+  optional OrganizationInvitation auto_add_entry = 4;// Pending auto-add entry if user does not yet exist
+}
+
+message AddUserToOrganizationResponse {
+  OrganizationUser organization_user = 1;
+}
+
+message RemoveUserFromOrganizationRequest {
+  int64 organization_id = 1;
+  uint64 user_id = 2;
+}
+
+message RemoveUserFromOrganizationResponse {
+}
+
+message UpdateUserRoleInOrganizationRequest {
+  int64 organization_id = 1;
+  uint64 user_id = 2;
+  OrganizationRole role = 3;
+}
+
+message UpdateUserRoleInOrganizationResponse {
+  OrganizationUser organization_user = 1;
+}
+
+message ListOrganizationUsersRequest {
+  int64 organization_id = 1;
+  PaginationRequest pagination = 2;       // Standard pagination parameters
+}
+
+message ListOrganizationUsersResponse {
+  repeated OrganizationMemberDetails members = 1;  // Enriched member data with user profile info
+  PaginationResponse pagination = 2;               // Standard pagination metadata
+}
+
+enum ListOrganizationsSortBy {
+  LIST_ORGANIZATIONS_SORT_BY_UNSPECIFIED = 0;
+  LIST_ORGANIZATIONS_SORT_BY_NAME = 1;
+  LIST_ORGANIZATIONS_SORT_BY_SLUG = 2;
+  LIST_ORGANIZATIONS_SORT_BY_ORGANIZATION_TYPE = 3;
+  LIST_ORGANIZATIONS_SORT_BY_CREATED_AT = 4;
+  LIST_ORGANIZATIONS_SORT_BY_UPDATED_AT = 5;
+  LIST_ORGANIZATIONS_SORT_BY_JOINED_AT = 6;
+}
+
+message ListOrganizationsRequest {
+  PaginationRequest pagination = 1;
+  optional SortRequest sort = 2;
+  optional FilterRequest filter = 3;      // Optional filtering parameters
+  ListOrganizationsSortBy sort_by = 4;
+  repeated OrganizationMembershipMaskFilter organization_membership_mask_filters = 5;
+  OrganizationType organization_type_filter = 6; // ORGANIZATION_TYPE_UNSPECIFIED means no filter
+  optional int64 parent_organization_id_filter = 7;
+  optional uint32 depth_filter = 8;
+}
+
+message ListOrganizationsResponse {
+  repeated OrganizationWithUserRole organizations = 1;
+  PaginationResponse pagination = 2;      // Standard pagination metadata
+}
+
+enum AdminListAllOrganizationsSortBy {
+  ADMIN_LIST_ALL_ORGANIZATIONS_SORT_BY_UNSPECIFIED = 0;
+  ADMIN_LIST_ALL_ORGANIZATIONS_SORT_BY_NAME = 1;
+  ADMIN_LIST_ALL_ORGANIZATIONS_SORT_BY_SLUG = 2;
+  ADMIN_LIST_ALL_ORGANIZATIONS_SORT_BY_ORGANIZATION_TYPE = 3;
+  ADMIN_LIST_ALL_ORGANIZATIONS_SORT_BY_CREATED_AT = 4;
+  ADMIN_LIST_ALL_ORGANIZATIONS_SORT_BY_UPDATED_AT = 5;
+}
+
+message AdminListAllOrganizationsRequest {
+  PaginationRequest pagination = 1;       // Standard pagination parameters
+  optional SortRequest sort = 2;          // Optional sorting parameters
+  optional FilterRequest filter = 3;      // Optional filtering parameters
+  OrganizationType organization_type_filter = 4; // ORGANIZATION_TYPE_UNSPECIFIED means no filter
+  AdminListAllOrganizationsSortBy sort_by = 5;
+  optional int64 parent_organization_id_filter = 6;
+  optional uint32 depth_filter = 7;
+}
+
+message AdminListAllOrganizationsResponse {
+  repeated Organization organizations = 1;
+  PaginationResponse pagination = 2;      // Standard pagination metadata
+  repeated AdminOrganizationParentOption parent_options = 3; // Parents referenced by this page only
+}
+
+message AdminOrganizationParentOption {
+  int64 id = 1;
+  string name = 2;
+  string slug = 3;
+}
+
+message AdminListAllOrganizationsFilterMetadataRequest {
+  optional FilterRequest filter = 1;      // Optional filtering parameters
+  OrganizationType organization_type_filter = 2; // ORGANIZATION_TYPE_UNSPECIFIED means no filter
+}
+
+message AdminListAllOrganizationsFilterMetadataResponse {
+  reserved 1;
+  reserved "parent_options";
+  uint32 max_depth = 2;
+  reserved 3;
+  reserved "parent_options_max_limit";
+}
+
+message AdminListOrganizationParentOptionsRequest {
+  PaginationRequest pagination = 1;       // Page/limit; limit defaults to and may not exceed organization_parent_options_max_limit
+  optional FilterRequest filter = 2;      // Search parent organization name or slug
+  optional FilterRequest table_filter = 3; // Current organization-table filters
+  OrganizationType organization_type_filter = 4; // Current organization-table type filter
+}
+
+message AdminListOrganizationParentOptionsResponse {
+  repeated AdminOrganizationParentOption parent_options = 1;
+  bool has_more = 2;
+}
+
+message AdminChangeOrganizationTypeRequest {
+  int64 organization_id = 1;
+  OrganizationType new_organization_type = 2;
+  string reason = 3;                      // Reason for change
+}
+
+message AdminChangeOrganizationTypeResponse {
+}
+
+// List organizations by parent organization (null/empty for roots).
+message ListOrganizationsByParentRequest {
+  optional int64 parent_organization_id = 1;
+  PaginationRequest pagination = 2;       // Standard pagination parameters
+}
+
+message ListOrganizationsByParentResponse {
+  repeated Organization organizations = 1;
+  PaginationResponse pagination = 2;      // Standard pagination metadata
+}
+
+// Hierarchy node used for tree responses.
+message OrganizationHierarchyNode {
+  Organization organization = 1;
+  repeated OrganizationHierarchyNode children = 2;
+}
+
+message GetOrganizationHierarchyRequest {
+  int64 organization_id = 1;
+  bool include_descendants = 2;
+  PaginationRequest pagination = 3;       // Pages immediate children when include_descendants is false
+}
+
+message GetOrganizationHierarchyResponse {
+  OrganizationHierarchyNode hierarchy = 1;
+  PaginationResponse pagination = 2;      // Immediate-child pagination; omitted for full descendants
+  bool truncated = 3;                     // True when more children/nodes are available
+}
+
+message GetOrganizationMemberRequest {
+  int64 organization_id = 1;
+  uint64 user_id = 2;
+}
+
+message GetOrganizationMemberResponse {
+  OrganizationMemberDetails member_details = 1;
+}
+
+// --- Organization Email Domain Management ---
+
+message CreateOrganizationEmailDomainRequest {
+  int64 organization_id = 1;
+  string domain = 2;
+}
+
+message CreateOrganizationEmailDomainResponse {
+  OrganizationEmailDomain email_domain = 1;
+}
+
+message DeleteOrganizationEmailDomainRequest {
+  int64 organization_id = 1;
+  uint64 organization_email_domain_id = 2;
+}
+
+message DeleteOrganizationEmailDomainResponse {}
+
+message ListOrganizationEmailDomainsRequest {
+  int64 organization_id = 1;
+  PaginationRequest pagination = 2;
+}
+
+message ListOrganizationEmailDomainsResponse {
+  repeated OrganizationEmailDomain email_domains = 1;
+  PaginationResponse pagination = 2;
+}
+
+// --- Organization Invitation API Messages ---
+
+// Request to invite a user to an organization by email or username.
+// Existing users receive an invitation requiring acceptance. For an unknown
+// email, the invitation remains pending and can be accepted after registration.
+message InviteUserToOrganizationRequest {
+  int64 organization_id = 1;
+  UserIdentifierType identifier_type = 2;  // Must be EMAIL or USERNAME
+  string identifier = 3;                   // Email address or username
+  OrganizationRole role = 4;               // Role to assign upon joining
+}
+
+// Response from an invitation request.
+message InviteUserToOrganizationResponse {
+  reserved 1, 2, 4;
+  reserved "user_added", "invitation_pending", "organization_user";
+
+  uint64 invitation_id = 3;  // ID of the created invitation
+}
+
+// Request to list pending invitations for the authenticated user.
+// Uses the authenticated user's email to find matching invitations.
+message ListPendingInvitationsRequest {
+  PaginationRequest pagination = 1;
+}
+
+// Response containing pending invitations for the user.
+message ListPendingInvitationsResponse {
+  repeated OrganizationInvitation invitations = 1;
+  PaginationResponse pagination = 2;
+}
+
+// Request to accept an organization invitation.
+message AcceptInvitationRequest {
+  uint64 invitation_id = 1;
+}
+
+// Response after accepting an invitation.
+message AcceptInvitationResponse {
+  OrganizationUser organization_user = 1;  // The newly created membership
+}
+
+// Request to decline an organization invitation.
+message DeclineInvitationRequest {
+  uint64 invitation_id = 1;
+}
+
+// Response after declining an invitation.
+message DeclineInvitationResponse {
+}
+
+// Request to cancel a pending invitation (admin action).
+// Requires the configured CancelInvitation permission (organization role or site
+// user type) and organization capability; it does not reuse InviteMembers.
+message CancelInvitationRequest {
+  int64 organization_id = 1;
+  uint64 invitation_id = 2;
+}
+
+// Response after cancelling an invitation.
+message CancelInvitationResponse {
+}
+
+// Request to list pending invitations sent by the organization.
+// Used by org admins to view and manage outgoing invitations.
+message ListOrganizationInvitationsRequest {
+  int64 organization_id = 1;
+  PaginationRequest pagination = 2;
+}
+
+// Response containing pending invitations sent by the organization.
+message ListOrganizationInvitationsResponse {
+  repeated OrganizationInvitation invitations = 1;
+  PaginationResponse pagination = 2;
+}
+
+// --- Organization Slug Availability Check Messages ---
+
+// Request to check if an organization slug is available.
+message CheckOrganizationSlugAvailabilityRequest {
+  // The slug to check for availability.
+  string slug = 1;
+}
+
+// Response indicating whether the organization slug is available.
+message CheckOrganizationSlugAvailabilityResponse {
+  // Whether the slug is available for use.
+  bool available = 1;
+  // Optional message providing additional context (e.g., "Slug already taken", "Slug is reserved").
+  string message = 2;
+}
+
+// Complete-access subtree pages for admin deletion previews. The root is excluded.
+// Pages are ordered by organization ID; pass the last returned ID as the cursor.
+message AdminGetOrganizationDeletionImpactRequest {
+  int64 organization_id = 1;
+  int64 after_organization_id = 2;
+  uint32 limit = 3; // 0 or above max_pagination_limit (default 100) is clamped to it.
+}
+
+message AdminGetOrganizationDeletionImpactResponse {
+  repeated Organization organizations = 1;
+  bool has_more = 2;
+}

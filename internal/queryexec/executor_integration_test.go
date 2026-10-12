@@ -74,6 +74,14 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		"--env", "CLICKHOUSE_USER=open_splunk",
 		"--env", "CLICKHOUSE_PASSWORD="+password,
 		"--env", "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
+		"--env", "HTTP_PROXY=",
+		"--env", "HTTPS_PROXY=",
+		"--env", "ALL_PROXY=",
+		"--env", "http_proxy=",
+		"--env", "https_proxy=",
+		"--env", "all_proxy=",
+		"--env", "NO_PROXY=127.0.0.1,localhost",
+		"--env", "no_proxy=127.0.0.1,localhost",
 		image,
 	)
 	t.Cleanup(func() {
@@ -4205,6 +4213,18 @@ func queryIntegrationWait(t *testing.T, ctx context.Context, container, password
 	stable := 0
 	var last string
 	for time.Now().Before(deadline) {
+		process := exec.CommandContext(ctx, "docker", "exec", container, "cat", "/proc/1/comm")
+		processOutput, processErr := process.CombinedOutput()
+		if processErr != nil || strings.TrimSpace(string(processOutput)) != "clickhouse-serv" {
+			stable = 0
+			last = fmt.Sprintf("final ClickHouse daemon: %v: %s", processErr, processOutput)
+			select {
+			case <-ctx.Done():
+				t.Fatalf("wait for final ClickHouse daemon: %v", ctx.Err())
+			case <-time.After(500 * time.Millisecond):
+			}
+			continue
+		}
 		command := exec.CommandContext(ctx, "docker", "exec", container, "clickhouse-client",
 			"--user", "open_splunk", "--password", password, "--query", "SELECT 1")
 		output, err := command.CombinedOutput()

@@ -17,6 +17,8 @@ import (
 	"unicode/utf8"
 
 	"fortio.org/safecast"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
@@ -41,7 +43,7 @@ type StoreOptions struct {
 }
 
 // Store persists verified staging uploads and immutable published versions in
-// migration-owned SQLite tables. It does not expose a server route or perform
+// migration-owned PostgreSQL tables. It does not expose a server route or perform
 // logical lookup authorization.
 type Store struct {
 	database         *sql.DB
@@ -119,13 +121,13 @@ func (store *Store) StageCSV(ctx context.Context, request StageRequest) (StagedA
 		if !validIdentity(stageID, maximumStageIDBytes) {
 			return StagedAsset{}, fmt.Errorf("%w: generated lookup stage identity is invalid", ErrInvalidArgument)
 		}
-		if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		if err := beginWriteConnection(ctx, conn); err != nil {
 			return StagedAsset{}, fmt.Errorf("begin lookup staging: %w", err)
 		}
 		rollback := func() {
 			_, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
 		}
-		// The connection may have waited behind another SQLite writer. Define
+		// The connection may have waited behind another metadata writer. Define
 		// the TTL only after acquiring that write boundary, then atomically prune
 		// and insert so a successful response never describes a stage that
 		// expired while the request was blocked.
@@ -144,7 +146,7 @@ func (store *Store) StageCSV(ctx context.Context, request StageRequest) (StagedA
 		// ledgers. At most 64 rows can exist for one tenant.
 		if _, err := conn.ExecContext(ctx, `
 			DELETE FROM knowledge_lookup_asset_stages
-			WHERE tenant_id = ? AND expires_at_unix_micro <= ?`,
+			WHERE tenant_id = $1 AND expires_at_unix_micro <= $2`,
 			request.TenantID,
 			now.UnixMicro(),
 		); err != nil {
@@ -157,7 +159,7 @@ func (store *Store) StageCSV(ctx context.Context, request StageRequest) (StagedA
 				tenant_id, stage_id, owner_id, source_sha256, content_sha256,
 				source_bytes, canonical_csv, canonical_bytes, row_count,
 				column_count, created_at_unix_micro, expires_at_unix_micro
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 			request.TenantID,
 			stageID,
 			request.OwnerID,
@@ -211,7 +213,7 @@ func (store *Store) Publish(ctx context.Context, request PublishRequest) (Versio
 }
 
 // PublishAtomic publishes one immutable physical version and invokes finalize
-// on the same SQLite connection before COMMIT. Any callback error rolls back
+// on the same PostgreSQL connection before COMMIT. Any callback error rolls back
 // the new identity/version and restores the consumed stage as one transaction.
 func (store *Store) PublishAtomic(
 	ctx context.Context,
@@ -252,7 +254,7 @@ func (store *Store) PublishAtomic(
 		return Version{}, fmt.Errorf("acquire lookup publication connection: %w", err)
 	}
 	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+	if err := beginWriteConnection(ctx, conn); err != nil {
 		return Version{}, fmt.Errorf("begin lookup publication: %w", err)
 	}
 	committed := false
@@ -261,8 +263,8 @@ func (store *Store) PublishAtomic(
 			_, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
 		}
 	}()
-	// The connection may have waited behind another SQLite writer. Sample the
-	// publication time only after BEGIN IMMEDIATE owns the write boundary so a
+	// The connection may have waited behind another metadata writer. Sample the
+	// publication time only after the advisory lock owns the write boundary so a
 	// stage that expired while waiting cannot be promoted with a stale clock.
 	now, err := store.now()
 	if err != nil {
@@ -288,7 +290,7 @@ func (store *Store) PublishAtomic(
 			INSERT INTO knowledge_lookup_assets (
 				tenant_id, lookup_asset_id, current_version,
 				created_at_unix_micro, updated_at_unix_micro
-			) VALUES (?, ?, 1, ?, ?)`,
+			) VALUES ($1, $2, 1, $3, $4)`,
 			request.TenantID, lookupAssetID, now.UnixMicro(), now.UnixMicro(),
 		); err != nil {
 			if isIdentityCollision(err) {
@@ -300,7 +302,7 @@ func (store *Store) PublishAtomic(
 		var current int64
 		if err := conn.QueryRowContext(ctx, `
 			SELECT current_version FROM knowledge_lookup_assets
-			WHERE tenant_id = ? AND lookup_asset_id = ?`,
+			WHERE tenant_id = $1 AND lookup_asset_id = $2`,
 			request.TenantID, lookupAssetID,
 		).Scan(&current); errors.Is(err, sql.ErrNoRows) {
 			return Version{}, ErrNotFound
@@ -310,7 +312,7 @@ func (store *Store) PublishAtomic(
 		if current < 1 {
 			return Version{}, fmt.Errorf("%w: current lookup asset version is invalid", ErrCorrupt)
 		}
-		// SQLite INTEGER values are signed; the positivity check makes this
+		// PostgreSQL BIGINT values are signed; the positivity check makes this
 		// conversion lossless.
 
 		currentVersion := uint64(current)
@@ -323,8 +325,8 @@ func (store *Store) PublishAtomic(
 	if !creating {
 		result, err := conn.ExecContext(ctx, `
 			UPDATE knowledge_lookup_assets
-			SET current_version = ?, updated_at_unix_micro = ?
-			WHERE tenant_id = ? AND lookup_asset_id = ? AND current_version = ?`,
+			SET current_version = $1, updated_at_unix_micro = $2
+			WHERE tenant_id = $3 AND lookup_asset_id = $4 AND current_version = $5`,
 			version, now.UnixMicro(), request.TenantID, lookupAssetID, request.ExpectedCurrentVersion,
 		)
 		if err != nil {
@@ -340,7 +342,7 @@ func (store *Store) PublishAtomic(
 	// fails, while successful publication charges exactly one retained copy.
 	result, err := conn.ExecContext(ctx, `
 		DELETE FROM knowledge_lookup_asset_stages
-		WHERE tenant_id = ? AND stage_id = ? AND owner_id = ?`,
+		WHERE tenant_id = $1 AND stage_id = $2 AND owner_id = $3`,
 		request.TenantID, request.StageID, request.OwnerID,
 	)
 	if err != nil {
@@ -355,7 +357,7 @@ func (store *Store) PublishAtomic(
 			tenant_id, lookup_asset_id, asset_version, source_sha256,
 			content_sha256, source_bytes, canonical_csv, canonical_bytes,
 			row_count, column_count, created_at_unix_micro
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		request.TenantID,
 		lookupAssetID,
 		version,
@@ -436,7 +438,7 @@ func (store *Store) GetCurrent(ctx context.Context, tenantID, lookupAssetID stri
 	var version uint64
 	if err := store.database.QueryRowContext(ctx, `
 		SELECT current_version FROM knowledge_lookup_assets
-		WHERE tenant_id = ? AND lookup_asset_id = ?`, tenantID, lookupAssetID,
+		WHERE tenant_id = $1 AND lookup_asset_id = $2`, tenantID, lookupAssetID,
 	).Scan(&version); errors.Is(err, sql.ErrNoRows) {
 		return Version{}, ErrNotFound
 	} else if err != nil {
@@ -455,7 +457,7 @@ func (store *Store) DiscardStage(ctx context.Context, tenantID, ownerID, stageID
 	}
 	result, err := store.database.ExecContext(ctx, `
 		DELETE FROM knowledge_lookup_asset_stages
-		WHERE tenant_id = ? AND owner_id = ? AND stage_id = ?`, tenantID, ownerID, stageID)
+		WHERE tenant_id = $1 AND owner_id = $2 AND stage_id = $3`, tenantID, ownerID, stageID)
 	if err != nil {
 		return mapStorageError("discard lookup asset stage", err)
 	}
@@ -482,9 +484,9 @@ func (store *Store) PruneExpiredStages(ctx context.Context, before time.Time, li
 		WHERE (tenant_id, stage_id) IN (
 			SELECT tenant_id, stage_id
 			FROM knowledge_lookup_asset_stages
-			WHERE expires_at_unix_micro <= ?
+			WHERE expires_at_unix_micro <= $1
 			ORDER BY expires_at_unix_micro, tenant_id, stage_id
-			LIMIT ?
+			LIMIT $2
 		)`, before.UnixMicro(), limit)
 	if err != nil {
 		return 0, mapStorageError("prune expired lookup stages", err)
@@ -531,7 +533,7 @@ func readStagedAsset(ctx context.Context, query interface {
 		       canonical_bytes, row_count, column_count,
 		       created_at_unix_micro, expires_at_unix_micro
 		FROM knowledge_lookup_asset_stages
-		WHERE tenant_id = ? AND owner_id = ? AND stage_id = ?`,
+		WHERE tenant_id = $1 AND owner_id = $2 AND stage_id = $3`,
 		tenantID, ownerID, stageID,
 	).Scan(
 		&sourceDigest, &contentDigest, &sourceBytes, &canonical,
@@ -607,7 +609,7 @@ func readVersion(ctx context.Context, query interface {
 		SELECT source_sha256, content_sha256, source_bytes, canonical_csv,
 		       canonical_bytes, row_count, column_count, created_at_unix_micro
 		FROM knowledge_lookup_asset_versions
-		WHERE tenant_id = ? AND lookup_asset_id = ? AND asset_version = ?`,
+		WHERE tenant_id = $1 AND lookup_asset_id = $2 AND asset_version = $3`,
 		tenantID, assetID, version,
 	).Scan(
 		&sourceDigest, &contentDigest, &sourceBytes, &canonical,
@@ -736,8 +738,8 @@ func isIdentityCollision(err error) bool {
 	if err == nil {
 		return false
 	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "unique constraint failed") || strings.Contains(message, "already exists")
+	var postgresError *pgconn.PgError
+	return errors.As(err, &postgresError) && postgresError.Code == "23505"
 }
 
 func mapStorageError(operation string, err error) error {
@@ -748,11 +750,25 @@ func mapStorageError(operation string, err error) error {
 	if strings.Contains(message, "capacity") || strings.Contains(message, "too many") {
 		return fmt.Errorf("%s: %w", operation, ErrResourceLimit)
 	}
-	if strings.Contains(message, "foreign key constraint failed") || strings.Contains(message, "ledger is missing") {
+	var postgresError *pgconn.PgError
+	if (errors.As(err, &postgresError) && postgresError.Code == "23503") || strings.Contains(message, "ledger is missing") {
 		return fmt.Errorf("%s: %w", operation, ErrNotFound)
 	}
 	if isIdentityCollision(err) {
 		return fmt.Errorf("%s: %w", operation, ErrConflict)
 	}
 	return fmt.Errorf("%s: %w", operation, err)
+}
+
+// Publication callbacks require the same connection until COMMIT. Acquire the
+// native shared metadata lock before reading clocks or resource ledgers.
+func beginWriteConnection(ctx context.Context, conn *sql.Conn) error {
+	if _, err := conn.ExecContext(ctx, "BEGIN ISOLATION LEVEL READ COMMITTED"); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(), $1))", pgmeta.WriteLock); err != nil {
+		_, _ = conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK")
+		return err
+	}
+	return nil
 }

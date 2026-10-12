@@ -1,0 +1,217 @@
+syntax = "proto3";
+
+package go_common.v1;
+option go_package = "./proto_models";
+
+import "inference.proto";
+
+enum InferenceOperationOrgModelChoice {
+  INFERENCE_OPERATION_ORG_MODEL_CHOICE_UNSPECIFIED = 0;
+  INFERENCE_OPERATION_ORG_MODEL_CHOICE_NEVER = 1;
+  INFERENCE_OPERATION_ORG_MODEL_CHOICE_SITE_ADMIN_DECIDES = 2;
+}
+
+// Application gate on moving an existing agent session's pinned model, set per
+// operation in code. UNSPECIFIED is treated as NEVER.
+enum InferenceSessionRetarget {
+  INFERENCE_SESSION_RETARGET_UNSPECIFIED = 0;
+  // No re-targeting of any kind, including site overrides and policy MOVE actions.
+  INFERENCE_SESSION_RETARGET_NEVER = 1;
+  // Site inference administrators and organization ManageInferencePolicy holders
+  // may move sessions; members may not.
+  INFERENCE_SESSION_RETARGET_MANAGERS = 2;
+  // Managers may move sessions; the organization's member_retarget policy
+  // decides whether members may move their own.
+  INFERENCE_SESSION_RETARGET_ORG_DECIDES = 3;
+}
+
+enum InferenceModelPayerEligibility {
+  INFERENCE_MODEL_PAYER_ELIGIBILITY_UNSPECIFIED = 0;
+  INFERENCE_MODEL_PAYER_ELIGIBILITY_PLATFORM_OR_CONNECTION = 1;
+  INFERENCE_MODEL_PAYER_ELIGIBILITY_PLATFORM_ONLY = 2;
+  INFERENCE_MODEL_PAYER_ELIGIBILITY_CONNECTION_ONLY = 3;
+}
+
+enum InferenceSelectionSource {
+  INFERENCE_SELECTION_SOURCE_UNSPECIFIED = 0;
+  INFERENCE_SELECTION_SOURCE_PLATFORM_DEFAULT = 1;
+  INFERENCE_SELECTION_SOURCE_ORG_DEFAULT = 2;
+  INFERENCE_SELECTION_SOURCE_USER_CHOICE = 3;
+  INFERENCE_SELECTION_SOURCE_SITE_OVERRIDE = 4;
+  INFERENCE_SELECTION_SOURCE_RETARGET = 5;
+}
+
+enum InferenceBlockReason {
+  INFERENCE_BLOCK_REASON_UNSPECIFIED = 0;
+  INFERENCE_BLOCK_REASON_MODEL_NOT_IN_OPERATION_LIST = 1;
+  INFERENCE_BLOCK_REASON_MODEL_NOT_PERMITTED_BY_ORG = 2;
+  INFERENCE_BLOCK_REASON_MEMBER_CHOICE_CLOSED = 3;
+  INFERENCE_BLOCK_REASON_PROVIDER_NOT_ALLOWED = 4;
+  INFERENCE_BLOCK_REASON_CAPABILITY_MISSING = 5;
+  INFERENCE_BLOCK_REASON_BELOW_OPERATION_MINIMUM = 6;
+  INFERENCE_BLOCK_REASON_MODEL_UNAVAILABLE = 7;
+  INFERENCE_BLOCK_REASON_PROVIDER_UNAVAILABLE = 8;
+  INFERENCE_BLOCK_REASON_NO_ELIGIBLE_MODEL = 9;
+  INFERENCE_BLOCK_REASON_PAYER_NOT_PERMITTED = 10;
+  INFERENCE_BLOCK_REASON_CONNECTION_REQUIRED = 11;
+  INFERENCE_BLOCK_REASON_AUTHORITY_REVOKED = 12;
+  INFERENCE_BLOCK_REASON_INVALID_MODEL_SETTINGS = 13;
+}
+
+enum InferencePolicySessionAction {
+  INFERENCE_POLICY_SESSION_ACTION_UNSPECIFIED = 0;
+  INFERENCE_POLICY_SESSION_ACTION_KEEP = 1;
+  INFERENCE_POLICY_SESSION_ACTION_BLOCK = 2;
+  INFERENCE_POLICY_SESSION_ACTION_MOVE = 3;
+}
+
+message InferenceOperationModelOption {
+  uint64 inference_model_id = 1;
+  InferenceModelPayerEligibility payer_eligibility = 2;
+}
+
+message InferenceOperationModelList {
+  int32 operation = 1;
+  uint64 default_model_id = 2;
+  repeated InferenceOperationModelOption models = 3;
+  uint64 version = 4;
+  InferenceOperationOrgModelChoice org_model_choice = 5;
+  // Application re-target gate for the operation; read-only.
+  InferenceSessionRetarget session_retarget = 6;
+}
+
+message OrganizationInferenceOperationPolicy {
+  uint64 organization_id = 1;
+  int32 operation = 2;
+  repeated uint64 inference_model_ids = 3;
+  optional uint64 default_model_id = 4;
+  bool member_choice = 5;
+  uint64 version = 6;
+  bool parked = 7;
+  InferenceBlockReason block_reason = 8;
+  repeated InferenceModelChoice effective_models = 9;
+  // Site-listed models the organization may narrow to, before its own narrowing
+  // and provider allowlists: active, provider configured, platform-payable.
+  // is_default marks the platform default. Lets editors re-add removed models.
+  repeated InferenceModelChoice available_models = 10;
+  // True when the application opened this operation to organizations and the
+  // site list has more than one model. False means locked; stored preferences
+  // are then parked and do not apply.
+  bool choice_open = 11;
+  // Stored organization preference letting members move their own sessions.
+  // Applies only when session_retarget is ORG_DECIDES; otherwise it is parked.
+  bool member_retarget = 12;
+  // Application re-target gate for the operation; read-only.
+  InferenceSessionRetarget session_retarget = 13;
+}
+
+message InferenceProviderSummary {
+  string id = 1;
+  string display_name = 2;
+}
+
+message OrganizationInferencePolicy {
+  uint64 organization_id = 1;
+  repeated string provider_ids = 2;
+  uint64 version = 3;
+  repeated OrganizationInferenceOperationPolicy operations = 4;
+  // Configured providers an organization may name in its provider allowlist.
+  repeated InferenceProviderSummary available_providers = 5;
+  // Intersection of the ancestors' non-empty provider allowlists, sorted.
+  // Meaningful only when inherited_provider_restriction is true.
+  repeated string inherited_provider_ids = 6;
+  // True when any ancestor organization restricts providers.
+  bool inherited_provider_restriction = 7;
+}
+
+message InferenceModelChoice {
+  uint64 inference_model_id = 1;
+  string provider_id = 2;
+  string provider_model_id = 3;
+  string display_name = 4;
+  InferenceAPI api = 5;
+  bool is_default = 6;
+  // Set in an organization's available_models when an ancestor organization's
+  // provider allowlist excludes the model's provider (PROVIDER_NOT_ALLOWED).
+  InferenceBlockReason block_reason = 7;
+}
+
+message InferencePolicyImpact {
+  int32 operation = 1;
+  InferenceBlockReason block_reason = 2;
+  uint64 affected_sessions = 3;
+  bool session_count_complete = 4;
+  bool parked = 5;
+  // Models the save removes from the operation's effective list, ascending: the
+  // set a BLOCK or MOVE session action applies to. Set on site operation-list and
+  // organization operation-policy saves; empty for provider allowlist saves.
+  repeated uint64 removed_model_ids = 6;
+}
+
+message InferencePolicyPreview {
+  repeated InferencePolicyImpact impacts = 1;
+}
+
+message GetInferenceOperationModelsRequest { int32 operation = 1; }
+message GetInferenceOperationModelsResponse { InferenceOperationModelList model_list = 1; }
+message UpdateInferenceOperationModelsRequest {
+  int32 operation = 1;
+  repeated InferenceOperationModelOption models = 2;
+  uint64 expected_version = 3;
+  bool dry_run = 4;
+  InferencePolicySessionAction session_action = 5;
+  optional uint64 move_to_model_id = 6;
+}
+message UpdateInferenceOperationModelsResponse {
+  InferenceOperationModelList model_list = 1;
+  InferencePolicyPreview preview = 2;
+}
+message GetOrganizationInferencePolicyRequest { uint64 organization_id = 1; }
+message GetOrganizationInferencePolicyResponse { OrganizationInferencePolicy policy = 1; }
+message UpdateOrganizationInferencePolicyRequest {
+  uint64 organization_id = 1;
+  repeated string provider_ids = 2;
+  uint64 expected_version = 3;
+  bool dry_run = 4;
+}
+message UpdateOrganizationInferencePolicyResponse {
+  OrganizationInferencePolicy policy = 1;
+  InferencePolicyPreview preview = 2;
+}
+message UpdateOrganizationInferenceOperationPolicyRequest {
+  uint64 organization_id = 1;
+  int32 operation = 2;
+  repeated uint64 inference_model_ids = 3;
+  optional uint64 default_model_id = 4;
+  bool member_choice = 5;
+  uint64 expected_version = 6;
+  bool dry_run = 7;
+  InferencePolicySessionAction session_action = 8;
+  optional uint64 move_to_model_id = 9;
+  // Valid only when the operation's session_retarget gate is ORG_DECIDES.
+  bool member_retarget = 10;
+}
+message UpdateOrganizationInferenceOperationPolicyResponse {
+  OrganizationInferenceOperationPolicy policy = 1;
+  InferencePolicyPreview preview = 2;
+}
+message ListInferenceModelChoicesRequest {
+  uint64 organization_id = 1;
+  int32 operation = 2;
+}
+message ListInferenceModelChoicesResponse {
+  repeated InferenceModelChoice choices = 1;
+  bool member_choice = 2;
+  InferenceBlockReason block_reason = 3;
+  // True when members may move their own sessions: the gate is ORG_DECIDES, the
+  // organization enabled member_retarget, and member choice is open.
+  bool member_retarget = 4;
+  // Application re-target gate for the operation.
+  InferenceSessionRetarget session_retarget = 5;
+  // True when the viewer is a re-targeting manager: site inference administration
+  // or the organization's ManageInferencePolicy.
+  bool management = 6;
+  // True when the viewer holds the organization's ChooseInferenceModel. Member
+  // pickers offer choices only when member_choice and can_choose are both true.
+  bool can_choose = 7;
+}

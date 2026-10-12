@@ -4,6 +4,8 @@ import (
 	"context"
 	"slices"
 	"testing"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestIntegrationAuthorizedRogueProjectionsCannotConsumeListDriverBound(t *testing.T) {
@@ -28,14 +30,14 @@ func TestIntegrationAuthorizedRogueProjectionsCannotConsumeListDriverBound(t *te
 		t.Fatalf("acquire rogue-projection connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(context.Background(), connection); err != nil {
 		t.Fatalf("disable rogue-projection foreign keys: %v", err)
 	}
 	if _, err := connection.ExecContext(context.Background(), `
 		WITH RECURSIVE sequence(value) AS (
 			SELECT 1
 			UNION ALL
-			SELECT value + 1 FROM sequence WHERE value < ?
+			SELECT value + 1 FROM sequence WHERE value < $1
 		)
 		INSERT INTO knowledge_object_list_projections (
 			tenant_id, knowledge_object_id, object_version,
@@ -45,14 +47,14 @@ func TestIntegrationAuthorizedRogueProjectionsCannotConsumeListDriverBound(t *te
 			source_selector_count, sourcetype_selector_count,
 			selector_value_bytes, canonical_selector_bytes
 		)
-		SELECT ?, printf('aaa-rogue-projection-%05d', value), 1,
-		       ?, ?, 'field_alias', 'aaa-rogue-projection', 'private', 'draft',
+		SELECT $2, 'aaa-rogue-projection-' || lpad((value)::text,5,'0') || '', 1,
+		       $3, $4, 'field_alias', 'aaa-rogue-projection', 'private', 'draft',
 		       0, '', 0, 0, 0, 0, 0, 43
 		FROM sequence
 	`, maximumObjectsPerTenant+1, testTenant, testApp, testOwner); err != nil {
 		t.Fatalf("insert rogue visible projections: %v", err)
 	}
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`); err != nil {
+	if _, err := pgtest.RestoreForeignKeys(context.Background(), connection); err != nil {
 		t.Fatalf("restore rogue-projection foreign keys: %v", err)
 	}
 

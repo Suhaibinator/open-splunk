@@ -166,6 +166,10 @@ type BrowserApiLimits struct {
 	SearchResultRetention         *durationpb.Duration   `protobuf:"bytes,8,opt,name=search_result_retention,json=searchResultRetention,proto3" json:"search_result_retention,omitempty"`
 	MaximumTimelineBuckets        uint32                 `protobuf:"varint,9,opt,name=maximum_timeline_buckets,json=maximumTimelineBuckets,proto3" json:"maximum_timeline_buckets,omitempty"`
 	MaximumFieldSummaryValues     uint32                 `protobuf:"varint,10,opt,name=maximum_field_summary_values,json=maximumFieldSummaryValues,proto3" json:"maximum_field_summary_values,omitempty"`
+	MaximumCaptureRows            uint64                 `protobuf:"varint,11,opt,name=maximum_capture_rows,json=maximumCaptureRows,proto3" json:"maximum_capture_rows,omitempty"`
+	MaximumCaptureBytes           uint64                 `protobuf:"varint,12,opt,name=maximum_capture_bytes,json=maximumCaptureBytes,proto3" json:"maximum_capture_bytes,omitempty"`
+	OrganizationRetentionBytes    uint64                 `protobuf:"varint,13,opt,name=organization_retention_bytes,json=organizationRetentionBytes,proto3" json:"organization_retention_bytes,omitempty"`
+	GlobalRetentionBytes          uint64                 `protobuf:"varint,14,opt,name=global_retention_bytes,json=globalRetentionBytes,proto3" json:"global_retention_bytes,omitempty"`
 	unknownFields                 protoimpl.UnknownFields
 	sizeCache                     protoimpl.SizeCache
 }
@@ -270,6 +274,111 @@ func (x *BrowserApiLimits) GetMaximumFieldSummaryValues() uint32 {
 	return 0
 }
 
+func (x *BrowserApiLimits) GetMaximumCaptureRows() uint64 {
+	if x != nil {
+		return x.MaximumCaptureRows
+	}
+	return 0
+}
+
+func (x *BrowserApiLimits) GetMaximumCaptureBytes() uint64 {
+	if x != nil {
+		return x.MaximumCaptureBytes
+	}
+	return 0
+}
+
+func (x *BrowserApiLimits) GetOrganizationRetentionBytes() uint64 {
+	if x != nil {
+		return x.OrganizationRetentionBytes
+	}
+	return 0
+}
+
+func (x *BrowserApiLimits) GetGlobalRetentionBytes() uint64 {
+	if x != nil {
+		return x.GlobalRetentionBytes
+	}
+	return 0
+}
+
+// Current persisted and reserved captures/exports for the selected scope.
+type RetainedStorageUsage struct {
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	OrganizationId         string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
+	OrganizationUsedBytes  uint64                 `protobuf:"varint,2,opt,name=organization_used_bytes,json=organizationUsedBytes,proto3" json:"organization_used_bytes,omitempty"`
+	GlobalUsedBytes        uint64                 `protobuf:"varint,3,opt,name=global_used_bytes,json=globalUsedBytes,proto3" json:"global_used_bytes,omitempty"`
+	OrganizationLimitBytes uint64                 `protobuf:"varint,4,opt,name=organization_limit_bytes,json=organizationLimitBytes,proto3" json:"organization_limit_bytes,omitempty"`
+	GlobalLimitBytes       uint64                 `protobuf:"varint,5,opt,name=global_limit_bytes,json=globalLimitBytes,proto3" json:"global_limit_bytes,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *RetainedStorageUsage) Reset() {
+	*x = RetainedStorageUsage{}
+	mi := &file_open_splunk_system_api_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetainedStorageUsage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetainedStorageUsage) ProtoMessage() {}
+
+func (x *RetainedStorageUsage) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_system_api_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetainedStorageUsage.ProtoReflect.Descriptor instead.
+func (*RetainedStorageUsage) Descriptor() ([]byte, []int) {
+	return file_open_splunk_system_api_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *RetainedStorageUsage) GetOrganizationId() string {
+	if x != nil {
+		return x.OrganizationId
+	}
+	return ""
+}
+
+func (x *RetainedStorageUsage) GetOrganizationUsedBytes() uint64 {
+	if x != nil {
+		return x.OrganizationUsedBytes
+	}
+	return 0
+}
+
+func (x *RetainedStorageUsage) GetGlobalUsedBytes() uint64 {
+	if x != nil {
+		return x.GlobalUsedBytes
+	}
+	return 0
+}
+
+func (x *RetainedStorageUsage) GetOrganizationLimitBytes() uint64 {
+	if x != nil {
+		return x.OrganizationLimitBytes
+	}
+	return 0
+}
+
+func (x *RetainedStorageUsage) GetGlobalLimitBytes() uint64 {
+	if x != nil {
+		return x.GlobalLimitBytes
+	}
+	return 0
+}
+
 // POST /api/system/bootstrap
 type GetSystemBootstrapRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
@@ -280,7 +389,7 @@ type GetSystemBootstrapRequest struct {
 
 func (x *GetSystemBootstrapRequest) Reset() {
 	*x = GetSystemBootstrapRequest{}
-	mi := &file_open_splunk_system_api_proto_msgTypes[1]
+	mi := &file_open_splunk_system_api_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -292,7 +401,7 @@ func (x *GetSystemBootstrapRequest) String() string {
 func (*GetSystemBootstrapRequest) ProtoMessage() {}
 
 func (x *GetSystemBootstrapRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_system_api_proto_msgTypes[1]
+	mi := &file_open_splunk_system_api_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -305,7 +414,7 @@ func (x *GetSystemBootstrapRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSystemBootstrapRequest.ProtoReflect.Descriptor instead.
 func (*GetSystemBootstrapRequest) Descriptor() ([]byte, []int) {
-	return file_open_splunk_system_api_proto_rawDescGZIP(), []int{1}
+	return file_open_splunk_system_api_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *GetSystemBootstrapRequest) GetPreferredAppId() string {
@@ -327,14 +436,15 @@ type GetSystemBootstrapResponse struct {
 	Build               *BuildMetadata         `protobuf:"bytes,11,opt,name=build,proto3" json:"build,omitempty"`
 	// The live instance palette. UNSPECIFIED when no settings service is
 	// configured; the client paints that as classic.
-	UiPalette     UiPalette `protobuf:"varint,12,opt,name=ui_palette,json=uiPalette,proto3,enum=open_splunk.UiPalette" json:"ui_palette,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	UiPalette            UiPalette             `protobuf:"varint,12,opt,name=ui_palette,json=uiPalette,proto3,enum=open_splunk.UiPalette" json:"ui_palette,omitempty"`
+	RetainedStorageUsage *RetainedStorageUsage `protobuf:"bytes,13,opt,name=retained_storage_usage,json=retainedStorageUsage,proto3" json:"retained_storage_usage,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *GetSystemBootstrapResponse) Reset() {
 	*x = GetSystemBootstrapResponse{}
-	mi := &file_open_splunk_system_api_proto_msgTypes[2]
+	mi := &file_open_splunk_system_api_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -346,7 +456,7 @@ func (x *GetSystemBootstrapResponse) String() string {
 func (*GetSystemBootstrapResponse) ProtoMessage() {}
 
 func (x *GetSystemBootstrapResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_system_api_proto_msgTypes[2]
+	mi := &file_open_splunk_system_api_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -359,7 +469,7 @@ func (x *GetSystemBootstrapResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSystemBootstrapResponse.ProtoReflect.Descriptor instead.
 func (*GetSystemBootstrapResponse) Descriptor() ([]byte, []int) {
-	return file_open_splunk_system_api_proto_rawDescGZIP(), []int{2}
+	return file_open_splunk_system_api_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *GetSystemBootstrapResponse) GetSearchWebsocketPath() string {
@@ -425,11 +535,18 @@ func (x *GetSystemBootstrapResponse) GetUiPalette() UiPalette {
 	return UiPalette_UI_PALETTE_UNSPECIFIED
 }
 
+func (x *GetSystemBootstrapResponse) GetRetainedStorageUsage() *RetainedStorageUsage {
+	if x != nil {
+		return x.RetainedStorageUsage
+	}
+	return nil
+}
+
 var File_open_splunk_system_api_proto protoreflect.FileDescriptor
 
 const file_open_splunk_system_api_proto_rawDesc = "" +
 	"\n" +
-	"\x1copen_splunk/system_api.proto\x12\vopen_splunk\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x15open_splunk/app.proto\x1a\x18open_splunk/common.proto\x1a\x17open_splunk/index.proto\x1a%open_splunk/server_settings_api.proto\"\xfc\x04\n" +
+	"\x1copen_splunk/system_api.proto\x12\vopen_splunk\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x15open_splunk/app.proto\x1a\x18open_splunk/common.proto\x1a\x17open_splunk/index.proto\x1a%open_splunk/server_settings_api.proto\"\xda\x06\n" +
 	"\x10BrowserApiLimits\x12*\n" +
 	"\x11maximum_page_size\x18\x01 \x01(\rR\x0fmaximumPageSize\x120\n" +
 	"\x14maximum_preview_rows\x18\x02 \x01(\rR\x12maximumPreviewRows\x12F\n" +
@@ -441,10 +558,20 @@ const file_open_splunk_system_api_proto_rawDesc = "" +
 	"\x17search_result_retention\x18\b \x01(\v2\x19.google.protobuf.DurationR\x15searchResultRetention\x128\n" +
 	"\x18maximum_timeline_buckets\x18\t \x01(\rR\x16maximumTimelineBuckets\x12?\n" +
 	"\x1cmaximum_field_summary_values\x18\n" +
-	" \x01(\rR\x19maximumFieldSummaryValues\"_\n" +
+	" \x01(\rR\x19maximumFieldSummaryValues\x120\n" +
+	"\x14maximum_capture_rows\x18\v \x01(\x04R\x12maximumCaptureRows\x122\n" +
+	"\x15maximum_capture_bytes\x18\f \x01(\x04R\x13maximumCaptureBytes\x12@\n" +
+	"\x1corganization_retention_bytes\x18\r \x01(\x04R\x1aorganizationRetentionBytes\x124\n" +
+	"\x16global_retention_bytes\x18\x0e \x01(\x04R\x14globalRetentionBytes\"\x8b\x02\n" +
+	"\x14RetainedStorageUsage\x12'\n" +
+	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x126\n" +
+	"\x17organization_used_bytes\x18\x02 \x01(\x04R\x15organizationUsedBytes\x12*\n" +
+	"\x11global_used_bytes\x18\x03 \x01(\x04R\x0fglobalUsedBytes\x128\n" +
+	"\x18organization_limit_bytes\x18\x04 \x01(\x04R\x16organizationLimitBytes\x12,\n" +
+	"\x12global_limit_bytes\x18\x05 \x01(\x04R\x10globalLimitBytes\"_\n" +
 	"\x19GetSystemBootstrapRequest\x12-\n" +
 	"\x10preferred_app_id\x18\x01 \x01(\tH\x00R\x0epreferredAppId\x88\x01\x01B\x13\n" +
-	"\x11_preferred_app_id\"\xd2\x04\n" +
+	"\x11_preferred_app_id\"\xab\x05\n" +
 	"\x1aGetSystemBootstrapResponse\x122\n" +
 	"\x15search_websocket_path\x18\x04 \x01(\tR\x13searchWebsocketPath\x126\n" +
 	"\bfeatures\x18\x05 \x03(\x0e2\x1a.open_splunk.ServerFeatureR\bfeatures\x125\n" +
@@ -457,7 +584,8 @@ const file_open_splunk_system_api_proto_rawDesc = "" +
 	"serverTime\x120\n" +
 	"\x05build\x18\v \x01(\v2\x1a.open_splunk.BuildMetadataR\x05build\x125\n" +
 	"\n" +
-	"ui_palette\x18\f \x01(\x0e2\x16.open_splunk.UiPaletteR\tuiPaletteB\x12\n" +
+	"ui_palette\x18\f \x01(\x0e2\x16.open_splunk.UiPaletteR\tuiPalette\x12W\n" +
+	"\x16retained_storage_usage\x18\r \x01(\v2!.open_splunk.RetainedStorageUsageR\x14retainedStorageUsageB\x12\n" +
 	"\x10_selected_app_idJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\x0eserver_versionR\vapi_versionR\x19spl_compatibility_version*\xd9\x06\n" +
 	"\rServerFeature\x12\x1e\n" +
 	"\x1aSERVER_FEATURE_UNSPECIFIED\x10\x00\x12\x19\n" +
@@ -499,34 +627,36 @@ func file_open_splunk_system_api_proto_rawDescGZIP() []byte {
 }
 
 var file_open_splunk_system_api_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_open_splunk_system_api_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_open_splunk_system_api_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_open_splunk_system_api_proto_goTypes = []any{
 	(ServerFeature)(0),                 // 0: open_splunk.ServerFeature
 	(*BrowserApiLimits)(nil),           // 1: open_splunk.BrowserApiLimits
-	(*GetSystemBootstrapRequest)(nil),  // 2: open_splunk.GetSystemBootstrapRequest
-	(*GetSystemBootstrapResponse)(nil), // 3: open_splunk.GetSystemBootstrapResponse
-	(*durationpb.Duration)(nil),        // 4: google.protobuf.Duration
-	(*AppSummary)(nil),                 // 5: open_splunk.AppSummary
-	(*IndexSummary)(nil),               // 6: open_splunk.IndexSummary
-	(*timestamppb.Timestamp)(nil),      // 7: google.protobuf.Timestamp
-	(*BuildMetadata)(nil),              // 8: open_splunk.BuildMetadata
-	(UiPalette)(0),                     // 9: open_splunk.UiPalette
+	(*RetainedStorageUsage)(nil),       // 2: open_splunk.RetainedStorageUsage
+	(*GetSystemBootstrapRequest)(nil),  // 3: open_splunk.GetSystemBootstrapRequest
+	(*GetSystemBootstrapResponse)(nil), // 4: open_splunk.GetSystemBootstrapResponse
+	(*durationpb.Duration)(nil),        // 5: google.protobuf.Duration
+	(*AppSummary)(nil),                 // 6: open_splunk.AppSummary
+	(*IndexSummary)(nil),               // 7: open_splunk.IndexSummary
+	(*timestamppb.Timestamp)(nil),      // 8: google.protobuf.Timestamp
+	(*BuildMetadata)(nil),              // 9: open_splunk.BuildMetadata
+	(UiPalette)(0),                     // 10: open_splunk.UiPalette
 }
 var file_open_splunk_system_api_proto_depIdxs = []int32{
-	4, // 0: open_splunk.BrowserApiLimits.default_search_timeout:type_name -> google.protobuf.Duration
-	4, // 1: open_splunk.BrowserApiLimits.search_result_retention:type_name -> google.protobuf.Duration
-	0, // 2: open_splunk.GetSystemBootstrapResponse.features:type_name -> open_splunk.ServerFeature
-	1, // 3: open_splunk.GetSystemBootstrapResponse.limits:type_name -> open_splunk.BrowserApiLimits
-	5, // 4: open_splunk.GetSystemBootstrapResponse.apps:type_name -> open_splunk.AppSummary
-	6, // 5: open_splunk.GetSystemBootstrapResponse.indexes:type_name -> open_splunk.IndexSummary
-	7, // 6: open_splunk.GetSystemBootstrapResponse.server_time:type_name -> google.protobuf.Timestamp
-	8, // 7: open_splunk.GetSystemBootstrapResponse.build:type_name -> open_splunk.BuildMetadata
-	9, // 8: open_splunk.GetSystemBootstrapResponse.ui_palette:type_name -> open_splunk.UiPalette
-	9, // [9:9] is the sub-list for method output_type
-	9, // [9:9] is the sub-list for method input_type
-	9, // [9:9] is the sub-list for extension type_name
-	9, // [9:9] is the sub-list for extension extendee
-	0, // [0:9] is the sub-list for field type_name
+	5,  // 0: open_splunk.BrowserApiLimits.default_search_timeout:type_name -> google.protobuf.Duration
+	5,  // 1: open_splunk.BrowserApiLimits.search_result_retention:type_name -> google.protobuf.Duration
+	0,  // 2: open_splunk.GetSystemBootstrapResponse.features:type_name -> open_splunk.ServerFeature
+	1,  // 3: open_splunk.GetSystemBootstrapResponse.limits:type_name -> open_splunk.BrowserApiLimits
+	6,  // 4: open_splunk.GetSystemBootstrapResponse.apps:type_name -> open_splunk.AppSummary
+	7,  // 5: open_splunk.GetSystemBootstrapResponse.indexes:type_name -> open_splunk.IndexSummary
+	8,  // 6: open_splunk.GetSystemBootstrapResponse.server_time:type_name -> google.protobuf.Timestamp
+	9,  // 7: open_splunk.GetSystemBootstrapResponse.build:type_name -> open_splunk.BuildMetadata
+	10, // 8: open_splunk.GetSystemBootstrapResponse.ui_palette:type_name -> open_splunk.UiPalette
+	2,  // 9: open_splunk.GetSystemBootstrapResponse.retained_storage_usage:type_name -> open_splunk.RetainedStorageUsage
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_system_api_proto_init() }
@@ -538,15 +668,15 @@ func file_open_splunk_system_api_proto_init() {
 	file_open_splunk_common_proto_init()
 	file_open_splunk_index_proto_init()
 	file_open_splunk_server_settings_api_proto_init()
-	file_open_splunk_system_api_proto_msgTypes[1].OneofWrappers = []any{}
 	file_open_splunk_system_api_proto_msgTypes[2].OneofWrappers = []any{}
+	file_open_splunk_system_api_proto_msgTypes[3].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_open_splunk_system_api_proto_rawDesc), len(file_open_splunk_system_api_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

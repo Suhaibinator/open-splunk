@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestKnowledgeAuditTaxonomyValidatesActionTargetVersionAndActor(t *testing.T) {
@@ -114,7 +116,7 @@ func TestKnowledgeAuditTaxonomyValidatesActionTargetVersionAndActor(t *testing.T
 	}
 }
 
-func TestKnowledgeAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing.T) {
+func TestKnowledgeAuditEventsPersistAndPostgreSQLRejectsTaxonomyForgeries(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -167,7 +169,7 @@ func TestKnowledgeAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing
 		actor_kind, actor_id, actor_role, action,
 		target_kind, target_id, target_version,
 		app_id, object_type, sharing_scope
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`
 	for _, forgery := range []struct {
 		name       string
 		action     Action
@@ -201,9 +203,7 @@ func TestKnowledgeAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing
 				"field_extraction",
 				"app",
 			)
-			if insertErr == nil {
-				t.Fatal("forged knowledge-object audit event succeeded")
-			}
+			requireNativeAuditRejection(t, insertErr, "forged knowledge-object audit event")
 		})
 	}
 	for _, forgery := range []string{
@@ -258,7 +258,7 @@ func TestKnowledgeAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing
 			'tenant-knowledge-schema', 2, 2,
 			'system', 'open-splunk-server', 'system',
 			'knowledge.object.update', 'knowledge_object', 'ko-forged', 2,
-			replace(hex(zeroblob(129)), '00', 'a'), 'field_alias', 'private'
+			replace(encode(decode(repeat('00', (129)::int), 'hex'), 'hex'), '00', 'a'), 'field_alias', 'private'
 		)`,
 	} {
 		if _, err := database.SQLDB().ExecContext(ctx, forgery); err == nil {
@@ -308,11 +308,11 @@ func TestKnowledgeAuditMetadataCorruptionFailsStartupListAndContinuation(t *test
 			if err != nil {
 				t.Fatalf("acquire corruption connection: %v", err)
 			}
-			if _, err := connection.ExecContext(ctx, "DROP TRIGGER audit_event_update_is_forbidden"); err != nil {
+			if _, err := connection.ExecContext(ctx, "DROP TRIGGER audit_event_update_is_forbidden ON audit_events"); err != nil {
 				_ = connection.Close()
 				t.Fatalf("drop audit update trigger: %v", err)
 			}
-			if _, err := connection.ExecContext(ctx, "PRAGMA ignore_check_constraints = ON"); err != nil {
+			if _, err := pgtest.Checks(ctx, connection, false); err != nil {
 				_ = connection.Close()
 				t.Fatalf("ignore fixture constraints: %v", err)
 			}
@@ -321,15 +321,15 @@ func TestKnowledgeAuditMetadataCorruptionFailsStartupListAndContinuation(t *test
 			switch testCase.name {
 			case "app ID":
 				_, corruptErr = connection.ExecContext(ctx, `UPDATE audit_events
-					SET app_id = replace(hex(zeroblob(129)), '00', 'a')
+					SET app_id = replace(encode(decode(repeat('00', (129)::int), 'hex'), 'hex'), '00', 'a')
 					WHERE tenant_id = 'tenant-metadata-corrupt' AND sequence = 2`)
 			case "object type":
 				_, corruptErr = connection.ExecContext(ctx, `UPDATE audit_events
-					SET object_type = replace(hex(zeroblob(17)), '00', 'a')
+					SET object_type = replace(encode(decode(repeat('00', (17)::int), 'hex'), 'hex'), '00', 'a')
 					WHERE tenant_id = 'tenant-metadata-corrupt' AND sequence = 2`)
 			case "sharing scope":
 				_, corruptErr = connection.ExecContext(ctx, `UPDATE audit_events
-					SET sharing_scope = replace(hex(zeroblob(8)), '00', 'a')
+					SET sharing_scope = replace(encode(decode(repeat('00', (8)::int), 'hex'), 'hex'), '00', 'a')
 					WHERE tenant_id = 'tenant-metadata-corrupt' AND sequence = 2`)
 			default:
 				t.Fatalf("unknown corruption case %q", testCase.name)
@@ -338,7 +338,7 @@ func TestKnowledgeAuditMetadataCorruptionFailsStartupListAndContinuation(t *test
 				_ = connection.Close()
 				t.Fatalf("corrupt knowledge metadata: %v", corruptErr)
 			}
-			if _, err := connection.ExecContext(ctx, "PRAGMA ignore_check_constraints = OFF"); err != nil {
+			if _, err := pgtest.Checks(ctx, connection, true); err != nil {
 				_ = connection.Close()
 				t.Fatalf("restore fixture constraints: %v", err)
 			}
@@ -431,7 +431,7 @@ func TestKnowledgeAuditContinuationRejectsValidMetadataRewrite(t *testing.T) {
 		t.Fatalf("List(first) = (%+v, %v)", first, err)
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
-		DROP TRIGGER audit_event_update_is_forbidden;
+		DROP TRIGGER audit_event_update_is_forbidden ON audit_events;
 		UPDATE audit_events
 		SET app_id = 'app_BBBBBBBBBBBBBBBBBBBBBB'
 		WHERE tenant_id = 'tenant-metadata-cursor' AND sequence = 2

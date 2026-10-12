@@ -1,0 +1,149 @@
+syntax = "proto3";
+package go_common.v1;
+option go_package = "./proto_models";
+
+import "google/protobuf/timestamp.proto";
+import "organization.proto";
+
+// IDs 1-999 are reserved for go-common; application types start at 1000.
+enum NativeNotificationType {
+  NATIVE_NOTIFICATION_TYPE_UNSPECIFIED = 0;
+  NATIVE_NOTIFICATION_TYPE_UNREAD_CHAT = 1;
+  NATIVE_NOTIFICATION_TYPE_TOOL_APPROVAL = 2;
+  NATIVE_NOTIFICATION_TYPE_ORGANIZATION_INVITATION = 3;
+}
+
+// Recipient email is source authority, never display payload.
+message OrganizationInvitationNotificationPayload {
+  uint64 invitation_id = 1;
+  int64 organization_id = 2;
+  string organization_name = 3;
+  uint64 inviter_id = 4;
+  string inviter_display_name = 5;
+  OrganizationRole role = 6;
+  google.protobuf.Timestamp expires_at = 7;
+}
+
+// Immutable native event envelope. Display fields are prepared from the source
+// separately so name edits cannot change an accepted async event's fingerprint.
+message OrganizationInvitationNotificationSourcePayload {
+  uint64 invitation_id = 1;
+  uint64 recipient_id = 2;
+}
+
+message Notification {
+  uint64 id = 1;
+  uint32 type = 2;
+  bytes payload = 3;
+  string fallback_text = 5;
+  uint64 revision = 6;
+  uint64 read_revision = 7;
+  bool resolved = 8;
+  bool unavailable = 9;
+  string activity_scope = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+  uint64 occurrence_count = 13;
+  // Optional per-type display view, computed at read time by the type's source
+  // evaluator from the same snapshot that authorized the row and never
+  // persisted. Present only for rows authorized at this read; absent for
+  // unavailable rows and for types whose evaluator returns no view. Decode it
+  // with the type's view decoder, never with the payload decoder.
+  bytes view = 14;
+}
+
+message ChatNotificationPayload {
+  uint64 channel_id = 1;
+  uint64 parent_message_id = 2;
+  uint64 message_id = 3;
+  uint64 agent_run_id = 4;
+  // The message is a thread reply also shown on the main timeline; parent_message_id
+  // still names the thread root so clients can navigate into the thread.
+  bool broadcast_to_channel = 5;
+}
+
+// Read-time view for both native chat types (unread chat and tool approval),
+// built from the snapshot that authorized the entry and never persisted. Every
+// name is the current one at read time. A view whose fields are all empty is
+// not sent.
+message ChatNotificationView {
+  // Group channel's current name; empty for direct messages and unnamed channels.
+  string channel_name = 1;
+  // Direct messages: the other participant's current display name. Empty for
+  // group channels, self-conversations, and a missing or deleted counterpart.
+  string counterpart_name = 2;
+  // Unread chat only: the channel's current last_message_preview. Empty for
+  // tool approvals and when the recipient sent the channel's last message.
+  string last_message_preview = 3;
+  // Unread chat only: current display name of the last message's sender. Empty
+  // when unknown, deleted, or the recipient themself.
+  string last_sender_name = 4;
+}
+
+// Durable native source envelope. Mention recipients are captured when the
+// source message is recorded and never reconstructed from later message edits.
+message ChatNotificationSourcePayload {
+  ChatNotificationPayload target = 1;
+  repeated uint64 mention_user_ids = 2;
+}
+
+message ListNotificationsRequest {
+  uint64 before_id = 1;
+  uint32 limit = 2;
+  bool unread_only = 3;
+  // Exact registered activity scope; omitted lists the global inbox.
+  optional string activity_scope = 4;
+}
+message ListNotificationsResponse {
+  repeated Notification notifications = 1;
+  uint64 next_before_id = 2;
+}
+message GetNotificationRequest { uint64 id = 1; }
+message NotificationCountRequest {}
+// A bounded count under current source authorization. When complete is false,
+// unread_count is a confirmed lower bound; zero means unknown, not an empty inbox.
+message NotificationCountResponse {
+  uint64 unread_count = 1;
+  bool complete = 2;
+}
+message NotificationReadReceipt { uint64 id = 1; uint64 revision = 2; }
+// Explicit observed revisions make bulk acknowledgement safe against new arrivals.
+message MarkNotificationsReadRequest { repeated NotificationReadReceipt receipts = 1; }
+message NotificationMutationResponse { bool success = 1; }
+message ClaimNotificationAlertRequest { uint64 id = 1; uint64 revision = 2; }
+message ClaimNotificationAlertResponse {
+  bool claimed = 1;
+  Notification notification = 2;
+  // Present only when the qualifying source is too young for the sampled alert
+  // window. Retry this observed revision after this delay; other refusals are final.
+  optional uint32 retry_after_ms = 3;
+}
+
+message NotificationPreference {
+  uint32 type = 1;
+  optional bool alerts_enabled = 2;
+  optional bool email_enabled = 3;
+}
+message NotificationPreferencesRequest {}
+message NotificationTypeInfo {
+  uint32 type = 1;
+  string name = 2;
+  bool alerts_available = 3;
+  bool email_available = 4;
+}
+message NotificationPreferencesResponse {
+  reserved 3;
+  reserved "registered_types";
+  bool in_app_alerts_enabled = 1;
+  repeated NotificationPreference preferences = 2;
+  repeated NotificationTypeInfo types = 4;
+  bool email_notifications_enabled = 5;
+  bool chat_email_notifications_enabled = 6;
+}
+message UpdateNotificationPreferencesRequest {
+  optional bool in_app_alerts_enabled = 1;
+  repeated NotificationPreference preferences = 2;
+}
+message NotificationChanged { uint64 id = 1; uint64 revision = 2; }
+// One complete scope set per connection; an empty set releases all its activity.
+message NotificationActivity { repeated string scopes = 1; }

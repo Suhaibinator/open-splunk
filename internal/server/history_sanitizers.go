@@ -157,7 +157,7 @@ func sanitizeHistoryFilterTime(name string, timestamp *timestamppb.Timestamp) (*
 	if timestamp.CheckValid() != nil {
 		return nil, fmt.Errorf("%s is outside the supported timestamp range", name)
 	}
-	// SQLite history predicates are stored at microsecond precision. Normalize
+	// PostgreSQL history predicates are stored at microsecond precision. Normalize
 	// here so validation and fake implementations observe the same boundaries.
 	return timestamppb.New(time.UnixMicro(timestamp.AsTime().UnixMicro()).UTC()), nil
 }

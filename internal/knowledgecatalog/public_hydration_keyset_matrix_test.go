@@ -307,7 +307,7 @@ func TestListKeysetTraversalSortMatrix(t *testing.T) {
 		t.Fatalf("saved continuations = %d, want 16", len(staleContinuations))
 	}
 	mustExec(t, database, `UPDATE knowledge_catalog_tenants
-		SET catalog_revision = catalog_revision + 1 WHERE tenant_id = ?`, testTenant)
+		SET catalog_revision = catalog_revision + 1 WHERE tenant_id = $1`, testTenant)
 	for _, continuation := range staleContinuations {
 		t.Run("revision invalidates "+continuation.name, func(t *testing.T) {
 			if _, err := store.List(context.Background(), testReadScope(), continuation.request); !errors.Is(err, control.ErrPageInvalidated) {

@@ -25,7 +25,7 @@ import (
 
 func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 	const (
-		ownerID              = "owner-1"
+		ownerID              = "1009"
 		tenantID             = "tenant-1"
 		jobID                = "search-ws-integration"
 		inheritedHTTPTimeout = 400 * time.Millisecond
@@ -54,7 +54,7 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 	socketService, err := searchws.New(searchws.Config{
 		Searches: searches,
 		Exports:  exports,
-		Access:   searchjobs.AccessScope{TenantID: tenantID, OwnerID: ownerID},
+		Access:   searchjobs.AccessScope{OrganizationID: "1", TenantID: tenantID, OwnerID: ownerID},
 		// Deliberately permit every origin at the transport. Rejection assertions
 		// below therefore prove that the server's outer Host/Origin boundary runs
 		// before Gorilla can upgrade the connection.
@@ -68,7 +68,7 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("searchws.New: %v", err)
 	}
-	handler, err := NewHandler(Config{
+	handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:                 searches,
 		SearchWebSocket:            socketService,
 		Indexes:                    fakeIndexCatalog{},
@@ -188,7 +188,7 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 	searches.mu.Lock()
 	gotScope, gotID := searches.getScope, searches.getID
 	searches.mu.Unlock()
-	if gotScope != (searchjobs.AccessScope{TenantID: tenantID, OwnerID: ownerID}) || gotID != jobID {
+	if gotScope != (searchjobs.AccessScope{OrganizationID: "1", TenantID: tenantID, OwnerID: ownerID}) || gotID != jobID {
 		t.Fatalf("scoped websocket lookup = %+v %q", gotScope, gotID)
 	}
 
@@ -452,7 +452,7 @@ func newRealSearchWebSocketFixtureWithOptions(
 ) *realSearchWebSocketFixture {
 	t.Helper()
 	const (
-		ownerID       = "owner-real-websocket"
+		ownerID       = "1027"
 		tenantID      = "tenant-real-websocket"
 		clientTimeout = 3 * time.Second
 	)
@@ -488,7 +488,7 @@ func newRealSearchWebSocketFixtureWithOptions(
 	socketConfig := searchws.Config{
 		Searches: manager,
 		Exports:  exports,
-		Access:   searchjobs.AccessScope{TenantID: tenantID, OwnerID: ownerID},
+		Access:   searchjobs.AccessScope{OrganizationID: "1", TenantID: tenantID, OwnerID: ownerID},
 		CheckOrigin: func(*http.Request) bool {
 			return true
 		},
@@ -508,7 +508,7 @@ func newRealSearchWebSocketFixtureWithOptions(
 	if err != nil {
 		t.Fatalf("searchws.New: %v", err)
 	}
-	handler, err := NewHandler(Config{
+	handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:      manager,
 		SearchWebSocket: socketService,
 		Indexes: fakeIndexCatalog{indexes: []control.Index{{

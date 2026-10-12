@@ -13,7 +13,7 @@ func TestPatternsRoutesShareCompletedResultSnapshotAuthority(t *testing.T) {
 	job := completeJob("retained-route")
 	jobs := &fakeSearchJobs{getJob: job, resultsPage: searchjobs.ResultPage{Schema: searchjobs.Schema{Columns: []searchjobs.Column{{Name: "_raw", Kind: searchjobs.ValueKindString}}}, Complete: true, Generation: 37}}
 	service := &patternAPIFake{result: patterns.ListResult{Generation: 37, SnapshotComplete: true, TotalSize: new(uint64(0)), TotalSizeExact: true}}
-	handler := newTestHandler(t, Config{SearchJobs: jobs, SearchPatterns: service, Indexes: fakeIndexCatalog{}, WebUI: testUI(), OwnerID: "owner-1", TenantID: "tenant-1"})
+	handler := newTestHandler(t, Config{SearchJobs: jobs, SearchPatterns: service, Indexes: fakeIndexCatalog{}, WebUI: testUI(), OwnerID: "1009", TenantID: "tenant-1"})
 	results := postProto(t, handler, "/api/search/jobs/results", &opensplunk.GetSearchResultsRequest{SearchJobId: job.ID})
 	if results.Code != http.StatusOK {
 		t.Fatalf("results status %d: %s", results.Code, results.Body.String())

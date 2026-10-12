@@ -22,7 +22,7 @@ var (
 	// disposition. The caller must retry discovery instead of allocating a new
 	// sequence from potentially incomplete replay data.
 	ErrReservationGone = errors.New("visibility sequencer: active reservation is gone")
-	// ErrExhausted means the SQLite signed-integer sequence space is exhausted.
+	// ErrExhausted means the PostgreSQL signed-integer sequence space is exhausted.
 	ErrExhausted = errors.New("visibility sequencer: sequence space exhausted")
 	// ErrConflict means a stable batch key was reused for different normalized
 	// event content. Its existing reservation is left untouched.
@@ -42,7 +42,7 @@ var (
 	// ErrClosed means the sequencer owner has begun shutdown and no longer
 	// admits visibility operations.
 	ErrClosed = errors.New("visibility sequencer: closed")
-	// ErrOwnerExists means another live SQLiteSequencer already owns attempt
+	// ErrOwnerExists means another live PostgreSQLSequencer already owns attempt
 	// fencing for the supplied control database file. Callers must share that
 	// owner.
 	ErrOwnerExists = errors.New("visibility sequencer: database file already has a live owner")
@@ -106,14 +106,16 @@ const (
 // token snapshot and optional channel-scoped acknowledgment. TokenID is the
 // stable token record ID, never a secret, prefix, digest, or display name.
 type HECAdmissionRequest struct {
-	TenantID              string
-	TokenID               string
-	TokenVersion          uint64
-	AuthorizedIndexes     []HECIndexAuthority
-	RequestID             string
-	Acknowledgment        bool
-	AcknowledgmentChannel string
-	CreatedAt             time.Time
+	OrganizationID               int64
+	RequireOrganizationOwnership bool
+	TenantID                     string
+	TokenID                      string
+	TokenVersion                 uint64
+	AuthorizedIndexes            []HECIndexAuthority
+	RequestID                    string
+	Acknowledgment               bool
+	AcknowledgmentChannel        string
+	CreatedAt                    time.Time
 }
 
 // HECIndexAuthority identifies one selected, already-normalized index policy
@@ -154,7 +156,7 @@ type ReserveRequest struct {
 	QuotaAdmission   *ingestquota.Admission
 	QuotaEvaluatedAt time.Time
 	// HECAdmission, when present on a fresh reservation, is revalidated and
-	// allocated in the same SQLite transaction as quota and outbox persistence.
+	// allocated in the same PostgreSQL transaction as quota and outbox persistence.
 	HECAdmission *HECAdmissionRequest
 }
 

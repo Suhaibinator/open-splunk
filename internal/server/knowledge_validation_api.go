@@ -108,14 +108,18 @@ func cloneKnowledgeValidationScope(
 ) knowledgecatalog.ValidationScope {
 	return knowledgecatalog.ValidationScope{
 		Read: knowledgecatalog.ReadScope{
-			TenantID:       strings.Clone(scopes.read.TenantID),
-			OwnerID:        strings.Clone(scopes.read.OwnerID),
-			ReadableAppIDs: slices.Clone(scopes.read.ReadableAppIDs),
+			OrganizationID:    scopes.read.OrganizationID,
+			SiteAdministrator: scopes.read.SiteAdministrator,
+			TenantID:          strings.Clone(scopes.read.TenantID),
+			OwnerID:           strings.Clone(scopes.read.OwnerID),
+			ReadableAppIDs:    slices.Clone(scopes.read.ReadableAppIDs),
 		},
 		Write: knowledgecatalog.WriteScope{
-			TenantID:       strings.Clone(scopes.write.TenantID),
-			OwnerID:        strings.Clone(scopes.write.OwnerID),
-			WritableAppIDs: slices.Clone(scopes.write.WritableAppIDs),
+			OrganizationID:    scopes.write.OrganizationID,
+			SiteAdministrator: scopes.write.SiteAdministrator,
+			TenantID:          strings.Clone(scopes.write.TenantID),
+			OwnerID:           strings.Clone(scopes.write.OwnerID),
+			WritableAppIDs:    slices.Clone(scopes.write.WritableAppIDs),
 		},
 	}
 }

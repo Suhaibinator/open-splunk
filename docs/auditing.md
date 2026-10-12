@@ -1,6 +1,6 @@
 # Auditing
 
-Open Splunk uses separate bounded SQLite surfaces because their retention and
+Open Splunk uses separate bounded PostgreSQL surfaces because their retention and
 failure behavior differ. None stores request bodies, credentials, SPL,
 generated SQL, event payloads, definition bodies, or free-form backend errors.
 
@@ -40,9 +40,7 @@ Representative actions are:
 
 Protective knowledge quarantine belongs to the separate recovery journal.
 
-An action is bound to its fixed target kind and actor domain. System and
-browser-administrator actors may perform administrative work; a browser user
-is valid only for the user-owned families permitted by the API. Unknown enum
+An action is bound to its fixed target kind and actor domain. System and authenticated users may perform the operations their configured permissions allow. Unknown enum
 values and invalid actor/action/target combinations fail closed.
 
 Every row contains only tenant-local sequence, UTC microsecond occurrence
@@ -57,7 +55,7 @@ fabricate another generation merely for audit. Audit projections must equal the
 committed mutation revision.
 
 For the mutation families listed above, the target mutation and success append
-use the same caller-owned SQLite/GORM transaction and captured timestamp. If
+use the same caller-owned PostgreSQL/GORM transaction and captured timestamp. If
 audit persistence fails, the complete mutation rolls back. Rejected or failed
 mutations do not become successful events. GORM is only the
 projection/transaction API and never runs `AutoMigrate`; ClickHouse is not part
@@ -124,7 +122,7 @@ definitions, SPL, index/app scope, SQL, results, warnings, request headers, or
 credentials.
 
 The pending search-history row and search-attempt event commit in the same
-SQLite transaction. Audit failure rolls back admission. The journal has an
+PostgreSQL transaction. Audit failure rolls back admission. The journal has an
 operator-configured tenant retention ceiling from 1 through 100,000, default
 100,000. At capacity, append atomically removes the oldest retained row,
 appends the next monotonically increasing sequence, and preserves a dense

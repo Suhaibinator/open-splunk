@@ -50,19 +50,19 @@ func readPreflightedAuditRecords(
 	preflight := query.Session(&gorm.Session{}).
 		Select(`
 			sequence,
-			length(CAST(tenant_id AS BLOB)) AS tenant_id_bytes,
-			length(CAST(actor_kind AS BLOB)) AS actor_kind_bytes,
-			length(CAST(actor_id AS BLOB)) AS actor_id_bytes,
-			length(CAST(actor_role AS BLOB)) AS actor_role_bytes,
-			length(CAST(action AS BLOB)) AS action_bytes,
-			length(CAST(target_kind AS BLOB)) AS target_kind_bytes,
-			length(CAST(target_id AS BLOB)) AS target_id_bytes,
-			app_id IS NOT NULL AS app_id_present,
-			coalesce(length(CAST(app_id AS BLOB)), 0) AS app_id_bytes,
-			object_type IS NOT NULL AS object_type_present,
-			coalesce(length(CAST(object_type AS BLOB)), 0) AS object_type_bytes,
-			sharing_scope IS NOT NULL AS sharing_scope_present,
-			coalesce(length(CAST(sharing_scope AS BLOB)), 0) AS sharing_scope_bytes
+			octet_length(tenant_id) AS tenant_id_bytes,
+			octet_length(actor_kind) AS actor_kind_bytes,
+			octet_length(actor_id) AS actor_id_bytes,
+			octet_length(actor_role) AS actor_role_bytes,
+			octet_length(action) AS action_bytes,
+			octet_length(target_kind) AS target_kind_bytes,
+			octet_length(target_id) AS target_id_bytes,
+			CASE WHEN app_id IS NOT NULL THEN 1 ELSE 0 END AS app_id_present,
+			coalesce(octet_length(app_id), 0) AS app_id_bytes,
+			CASE WHEN object_type IS NOT NULL THEN 1 ELSE 0 END AS object_type_present,
+			coalesce(octet_length(object_type), 0) AS object_type_bytes,
+			CASE WHEN sharing_scope IS NOT NULL THEN 1 ELSE 0 END AS sharing_scope_present,
+			coalesce(octet_length(sharing_scope), 0) AS sharing_scope_bytes
 		`).
 		Limit(limit).
 		Find(&sizes)

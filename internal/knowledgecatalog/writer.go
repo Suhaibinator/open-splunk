@@ -49,14 +49,16 @@ var (
 	)
 )
 
-// WriteScope is trusted caller-derived mutation authority. TenantID, OwnerID,
-// and WritableAppIDs must come from the authenticated server context, never a
-// request body. The initial single-user policy still validates every app and
-// current object identity before definition bytes are decoded.
+// WriteScope is trusted caller-derived mutation authority. The organization,
+// physical tenant, user identity, site authority and app allowlist must come
+// from authenticated server context. Every app is checked against its immutable
+// organization before definition bytes are decoded.
 type WriteScope struct {
-	TenantID       string
-	OwnerID        string
-	WritableAppIDs []string
+	OrganizationID    int64
+	SiteAdministrator bool
+	TenantID          string
+	OwnerID           string
+	WritableAppIDs    []string
 }
 
 // WriterOptions configures deterministic dependencies used by the mutation
@@ -154,7 +156,7 @@ func NewWriter(
 			maximumIdempotencyRetention,
 		)
 	}
-	// SQLite authorities are canonical microseconds. Round upward so the
+	// PostgreSQL authorities are canonical microseconds. Round upward so the
 	// persisted replay fence is never shorter than a caller's configured retry
 	// window; the validated maximum is itself microsecond-aligned.
 	retention = ((retention + time.Microsecond - 1) / time.Microsecond) * time.Microsecond
@@ -244,13 +246,15 @@ func (writer *Writer) Delete(
 }
 
 type normalizedWriteScope struct {
-	tenantID       string
-	ownerID        string
-	writableAppIDs []string
+	organizationID    int64
+	siteAdministrator bool
+	tenantID          string
+	ownerID           string
+	writableAppIDs    []string
 }
 
 func normalizeWriteScope(scope WriteScope) (normalizedWriteScope, error) {
-	if !validIdentity(scope.TenantID, maximumTenantIDBytes) ||
+	if scope.OrganizationID <= 0 || !validIdentity(scope.TenantID, maximumTenantIDBytes) ||
 		!validIdentity(scope.OwnerID, maximumOwnerIDBytes) ||
 		len(scope.WritableAppIDs) == 0 || len(scope.WritableAppIDs) > maximumReadableApps {
 		return normalizedWriteScope{}, fmt.Errorf(
@@ -270,9 +274,11 @@ func normalizeWriteScope(scope WriteScope) (normalizedWriteScope, error) {
 	slices.Sort(apps)
 	apps = slices.Compact(apps)
 	return normalizedWriteScope{
-		tenantID:       scope.TenantID,
-		ownerID:        scope.OwnerID,
-		writableAppIDs: apps,
+		tenantID:          scope.TenantID,
+		organizationID:    scope.OrganizationID,
+		siteAdministrator: scope.SiteAdministrator,
+		ownerID:           scope.OwnerID,
+		writableAppIDs:    apps,
 	}, nil
 }
 

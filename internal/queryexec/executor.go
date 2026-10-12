@@ -636,6 +636,11 @@ func (executor *Executor) executeSingleWithAdmission(ctx context.Context, query 
 	if settingsErr != nil {
 		return settingsErr
 	}
+	if capture, ok := searchlimits.CaptureFromContext(executionContext); ok {
+		executionSettings = maps.Clone(executionSettings)
+		executionSettings["max_result_rows"] = capture.Rows + 1
+		executionSettings["max_result_bytes"] = capture.Bytes * 2
+	}
 	rowLimit := uint64(0)
 	if query.HasTimechartStage() && !query.RequiresTimechartInputDiscovery() {
 		rowLimit = logicalResultRowLimit(executionContext, base.limit("max_result_rows"))
@@ -887,7 +892,7 @@ func (executor *Executor) executeSingleWithAdmission(ctx context.Context, query 
 	}
 
 	schemaPublished := false
-	atomicResult := query.RequiresAtomicResult() || query.TimeBucket != nil
+	atomicResult := (query.RequiresAtomicResult() || query.TimeBucket != nil) && !searchjobs.CanStagePrivately(sink)
 	sparseTopLevelFields := make(map[string]struct{})
 	if query.SparseFieldsSubset {
 		for _, name := range query.OutputFields {
@@ -1239,6 +1244,9 @@ func (executor *Executor) settingsForContext(
 // logicalResultRowLimit excludes the native overflow sentinel only when an
 // admitted policy supplies the logical cap. Explicit Config limits stay exact.
 func logicalResultRowLimit(ctx context.Context, nativeLimit uint64) uint64 {
+	if capture, ok := searchlimits.CaptureFromContext(ctx); ok {
+		return capture.Rows
+	}
 	if policy, admitted := searchlimits.FromContext(ctx); admitted {
 		return policy.MaxResultRows
 	}

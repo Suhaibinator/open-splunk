@@ -46,7 +46,7 @@ func (handler *apiHandler) listExportJobs(
 		}
 	}()
 
-	access := handler.accessScope()
+	access := handler.accessScope(request.Context())
 	page, operationErr := handler.exports.List(
 		request.Context(),
 		access,
@@ -73,7 +73,7 @@ func (handler *apiHandler) listExportJobs(
 		if err := exportListRequestContextError(request.Context()); err != nil {
 			return nil, err
 		}
-		if item.TenantID != access.TenantID || item.OwnerID != access.OwnerID {
+		if item.TenantID != access.TenantID || (!access.SiteAdministrator && item.OwnerID != access.OwnerID) {
 			return nil, internalError()
 		}
 		job := item.Job

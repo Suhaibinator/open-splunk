@@ -60,8 +60,8 @@ type alertAPITestCoordinator struct {
 	err     error
 }
 
-func (coordinator *alertAPITestCoordinator) RunNow(_ context.Context, ownerID, alertID string) (alerts.RunSummary, error) {
-	coordinator.ownerID = ownerID
+func (coordinator *alertAPITestCoordinator) RunNow(_ context.Context, scope alerts.AccessScope, alertID string) (alerts.RunSummary, error) {
+	coordinator.ownerID = scope.OwnerID
 	coordinator.alertID = alertID
 	return coordinator.run, coordinator.err
 }
@@ -69,7 +69,7 @@ func (coordinator *alertAPITestCoordinator) RunNow(_ context.Context, ownerID, a
 func TestAlertAPIProjectsOnlySafeMetadataAcrossLifecycle(t *testing.T) {
 	handler, closeDatabase := newAlertAPIHandler(t, nil)
 	defer closeDatabase()
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/alerts/create", nil)
+	request := httptest.NewRequestWithContext(serverFixtureScope(context.Background(), 1009), http.MethodPost, "/api/alerts/create", nil)
 
 	created, err := handler.createAlert(request, &opensplunk.CreateAlertRequest{Definition: alertAPITestDefinition("Errors", "https://hooks.example.com/alerts")})
 	if err != nil {
@@ -126,7 +126,7 @@ func TestAlertAPIProjectsOnlySafeMetadataAcrossLifecycle(t *testing.T) {
 func TestAlertAPICreateReplayNeverReissuesSigningSecret(t *testing.T) {
 	handler, closeDatabase := newAlertAPIHandler(t, nil)
 	defer closeDatabase()
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/alerts/create", nil)
+	request := httptest.NewRequestWithContext(serverFixtureScope(context.Background(), 1009), http.MethodPost, "/api/alerts/create", nil)
 	clientRequestID := "request-123456789"
 	input := &opensplunk.CreateAlertRequest{
 		Definition:      alertAPITestDefinition("Errors", "https://hooks.example.com/alerts"),
@@ -158,8 +158,8 @@ func TestAlertSummaryProjectionKeepsIndependentEvaluationAndDeliveryTimes(t *tes
 		t.Fatalf("sanitizeAlertDefinition() error = %v", err)
 	}
 	definition, _ := alertDefinitionFromProto(accepted)
-	projected, err := alertSummaryToProto(alerts.AlertSummary{
-		ID: "alert-1", OwnerID: "owner-1", Version: 4, State: alerts.AlertEnabled,
+	projected, err := alertSummaryToProto(alerts.AlertSummary{OrganizationID: "1",
+		ID: "alert-1", OwnerID: "1009", Version: 4, State: alerts.AlertEnabled,
 		Definition: definition, WebhookHostname: "hooks.example.com", SecretGeneration: 2,
 		SecretRotatedAt: createdAt, LastOutcome: alerts.RunOverlapSkipped,
 		LastEvaluatedAt: &evaluatedAt, LastDeliveredAt: &deliveredAt,
@@ -227,7 +227,7 @@ func TestAlertDefinitionDefaultsOnlyAbsentWebhookSampleRows(t *testing.T) {
 func TestAlertAPIListFiltersPagesAndNeverReturnsWebhookURL(t *testing.T) {
 	handler, closeDatabase := newAlertAPIHandler(t, nil)
 	defer closeDatabase()
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/alerts/list", nil)
+	request := httptest.NewRequestWithContext(serverFixtureScope(context.Background(), 1009), http.MethodPost, "/api/alerts/list", nil)
 	for _, name := range []string{"Database errors", "API errors", "Latency"} {
 		definition := alertAPITestDefinition(name, "https://hooks.example.com/alerts")
 		if _, err := handler.createAlert(request, &opensplunk.CreateAlertRequest{Definition: definition}); err != nil {
@@ -270,7 +270,7 @@ func TestAlertAPIListFiltersPagesAndNeverReturnsWebhookURL(t *testing.T) {
 func TestAlertAPIListRunsProjectsCurrentRetainedResultState(t *testing.T) {
 	handler, closeDatabase := newAlertAPIHandler(t, nil)
 	defer closeDatabase()
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/alerts/runs/list", nil)
+	request := httptest.NewRequestWithContext(serverFixtureScope(context.Background(), 1009), http.MethodPost, "/api/alerts/runs/list", nil)
 	created, err := handler.createAlert(request, &opensplunk.CreateAlertRequest{
 		Definition: alertAPITestDefinition("Retained errors", "https://hooks.example.com/alerts"),
 	})
@@ -278,8 +278,12 @@ func TestAlertAPIListRunsProjectsCurrentRetainedResultState(t *testing.T) {
 		t.Fatalf("createAlert() error = %v", err)
 	}
 	runRepository := handler.alertRepository.(*alertstore.SQLRepository)
+	runContext, err := alerts.WithAccessScope(request.Context(), handler.alertScope(request.Context()))
+	if err != nil {
+		t.Fatal(err)
+	}
 	snapshot, active, err := runRepository.ClaimRunNow(
-		request.Context(), handler.ownerID, created.GetAlert().GetAlertId(), handler.now(),
+		runContext, handler.ownerID, created.GetAlert().GetAlertId(), handler.now(),
 	)
 	if err != nil || !active {
 		t.Fatalf("ClaimRunNow() = %+v, %t, %v", snapshot, active, err)
@@ -396,7 +400,7 @@ func TestAlertAPITestWebhookSignsAndDeliversWithoutExposingSecrets(t *testing.T)
 	}
 	handler, closeDatabase := newAlertAPIHandler(t, deliverer)
 	defer closeDatabase()
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/alerts/webhook/test", nil)
+	request := httptest.NewRequestWithContext(serverFixtureScope(context.Background(), 1009), http.MethodPost, "/api/alerts/webhook/test", nil)
 	created, err := handler.createAlert(request, &opensplunk.CreateAlertRequest{Definition: alertAPITestDefinition("Errors", "https://hooks.example.com/alerts")})
 	if err != nil {
 		t.Fatalf("createAlert() error = %v", err)
@@ -439,7 +443,8 @@ func TestAlertAPIOutcomeAndCursorMappingsAreClosed(t *testing.T) {
 }
 
 func TestAlertAPIRunNowUsesCoordinatorAndProjectsRun(t *testing.T) {
-	t.Parallel()
+	handler, closeDatabase := newAlertAPIHandler(t, nil)
+	defer closeDatabase()
 	now := time.Date(2026, time.August, 29, 1, 2, 3, 0, time.UTC)
 	coordinator := &alertAPITestCoordinator{run: alerts.RunSummary{
 		AlertID: "alert-1", AlertRunID: "run-1", AlertVersion: 3,
@@ -447,16 +452,21 @@ func TestAlertAPIRunNowUsesCoordinatorAndProjectsRun(t *testing.T) {
 		Outcome: alerts.RunNotTriggered, Evaluation: alerts.EvaluationFalse,
 		ResultCount: 0, ResultCountExact: true,
 	}}
-	handler := &apiHandler{alertCoordinator: coordinator, ownerID: "owner-1"}
-	runRequest, err := sanitizeRunAlertRequest(context.Background(), &opensplunk.RunAlertRequest{AlertId: " alert-1 "})
+	handler.alertCoordinator = coordinator
+	created, err := handler.createAlert(httptest.NewRequestWithContext(serverFixtureScope(t.Context(), 1009), http.MethodPost, "/api/alerts/create", nil), &opensplunk.CreateAlertRequest{Definition: alertAPITestDefinition("Run now", "https://hooks.example.com/alerts")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.run.AlertID = created.GetAlert().GetAlertId()
+	runRequest, err := sanitizeRunAlertRequest(serverFixtureScope(context.Background(), 1009), &opensplunk.RunAlertRequest{AlertId: " alert-1 "})
 	if err != nil {
 		t.Fatalf("sanitizeRunAlertRequest() error = %v", err)
 	}
-	response, err := handler.runAlert(httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/alerts/run", nil), runRequest)
+	response, err := handler.runAlert(httptest.NewRequestWithContext(serverFixtureScope(context.Background(), 1009), http.MethodPost, "/api/alerts/run", nil), runRequest)
 	if err != nil {
 		t.Fatalf("runAlert() error = %v", err)
 	}
-	if coordinator.ownerID != "owner-1" || coordinator.alertID != "alert-1" || response.GetRun().GetAlertRunId() != "run-1" || response.GetRun().GetOutcome() != opensplunk.AlertRunOutcome_ALERT_RUN_OUTCOME_NOT_TRIGGERED {
+	if coordinator.ownerID != "1009" || coordinator.alertID != "alert-1" || response.GetRun().GetAlertRunId() != "run-1" || response.GetRun().GetOutcome() != opensplunk.AlertRunOutcome_ALERT_RUN_OUTCOME_NOT_TRIGGERED {
 		t.Fatalf("runAlert() coordinator=%+v response=%+v", coordinator, response)
 	}
 }
@@ -475,7 +485,7 @@ func TestAlertCapabilityAndRoutesRequireCoordinator(t *testing.T) {
 	}
 	partial := newTestHandler(t, config)
 	var bootstrap opensplunk.GetSystemBootstrapResponse
-	unmarshalResponse(t, postProto(t, partial, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}), &bootstrap)
+	unmarshalResponse(t, postProtoHeaders(t, partial, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken}), &bootstrap)
 	if containsServerFeature(bootstrap.GetFeatures(), feature) {
 		t.Fatalf("partial alert runtime advertised capability: %v", bootstrap.GetFeatures())
 	}
@@ -485,9 +495,10 @@ func TestAlertCapabilityAndRoutesRequireCoordinator(t *testing.T) {
 	}
 
 	config.AlertCoordinator = &alertAPITestCoordinator{}
-	config.BrowserAuthenticator = testSearchInspectionAuthenticator(t)
+	config.TenantID = browserGateTenantID
+	config.IdentityAuthenticator = adaptTestBrowserAuthenticator(testSearchInspectionAuthenticator(t))
 	complete := newTestHandler(t, config)
-	unmarshalResponse(t, postProto(t, complete, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}), &bootstrap)
+	unmarshalResponse(t, postProtoHeaders(t, complete, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken}), &bootstrap)
 	if !containsServerFeature(bootstrap.GetFeatures(), feature) {
 		t.Fatalf("complete alert runtime did not advertise capability: %v", bootstrap.GetFeatures())
 	}
@@ -496,9 +507,16 @@ func TestAlertCapabilityAndRoutesRequireCoordinator(t *testing.T) {
 func newAlertAPIHandler(t *testing.T, deliverer *alerts.Deliverer) (*apiHandler, func()) {
 	t.Helper()
 	now := time.Date(2026, time.August, 29, 1, 2, 3, 0, time.UTC)
-	database, err := control.Open(context.Background(), filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := openTestControl(t, serverFixtureScope(context.Background(), 1009), filepath.Join(t.TempDir(), "control.sqlite"))
 	if err != nil {
 		t.Fatalf("control.Open() error = %v", err)
+	}
+	appCatalog, err := control.NewAppCatalog(database, control.AppCatalogOptions{CursorKey: bytes.Repeat([]byte{1}, 32), IDGenerator: func() (string, error) { return knowledgeHTTPAppID, nil }})
+	if err != nil {
+		t.Fatalf("control.NewAppCatalog: %v", err)
+	}
+	if _, err := appCatalog.CreateApp(t.Context(), control.AppAccessScope{OrganizationID: 1, TenantID: "tenant-1"}, control.AppDefinition{Slug: "search", DisplayName: "Search"}); err != nil {
+		t.Fatalf("CreateApp: %v", err)
 	}
 	repository, err := alertstore.NewSQLRepository(database, alertstore.SQLRepositoryOptions{TenantID: "tenant-1", Clock: func() time.Time { return now }})
 	if err != nil {
@@ -527,13 +545,13 @@ func newAlertAPIHandler(t *testing.T, deliverer *alerts.Deliverer) (*apiHandler,
 	}
 	return &apiHandler{
 		alertService: service, alertRepository: repository, alertDeliverer: deliverer,
-		alertPublicBaseURL: "https://splunk.example.com", ownerID: "owner-1", maximumPageSize: 100,
+		alertPublicBaseURL: "https://splunk.example.com", ownerID: "1009", maximumPageSize: 100,
 		now: func() time.Time { return now }, adminCursorKey: [32]byte{1},
 	}, func() { _ = database.Close() }
 }
 
 func alertAPITestDefinition(name, webhookURL string) *opensplunk.AlertDefinition {
-	earliest, latest, application, timezone := "-5m", "now", "search", "UTC"
+	earliest, latest, application, timezone := "-5m", "now", knowledgeHTTPAppID, "UTC"
 	return &opensplunk.AlertDefinition{
 		Name: name,
 		Search: &opensplunk.SearchDefinition{

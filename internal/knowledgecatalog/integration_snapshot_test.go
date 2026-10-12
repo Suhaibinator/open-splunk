@@ -325,7 +325,7 @@ func installIntegrationCatalogStateBarrier(
 				 FROM knowledge_catalog_tenants AS tenant
 				 JOIN knowledge_catalog_revision_heads AS head
 				   ON head.tenant_id = tenant.tenant_id
-				 WHERE tenant.tenant_id = ?`,
+				 WHERE tenant.tenant_id = $1`,
 				testTenant,
 			).Scan(&revision, &token)
 			if barrier.captureErr == nil {

@@ -83,7 +83,7 @@ func (api *patternAPI) list(request *http.Request, input *opensplunk.ListSearchP
 	pageSize, pageToken, includeTotal := api.pageRequest(input.GetPage())
 	query := patterns.ListRequest{SearchJobID: input.GetSearchJobId(), Generation: generation,
 		Sensitivity: sensitivity, PageSize: pageSize, PageToken: pageToken, IncludeTotal: includeTotal}
-	result, err := api.service.List(request.Context(), api.handler.accessScope(), query)
+	result, err := api.service.List(request.Context(), api.handler.accessScope(request.Context()), query)
 	transferred := false
 	defer func() {
 		if !transferred {
@@ -123,7 +123,7 @@ func (api *patternAPI) members(request *http.Request, input *opensplunk.ListSear
 	query := patterns.MemberRequest{SearchJobID: input.GetSearchJobId(), Generation: generation,
 		Sensitivity: sensitivity, PatternID: input.GetPatternId(), Columns: input.GetColumns(),
 		PageSize: pageSize, PageToken: pageToken, IncludeTotal: includeTotal}
-	result, err := api.service.Members(request.Context(), api.handler.accessScope(), query)
+	result, err := api.service.Members(request.Context(), api.handler.accessScope(request.Context()), query)
 	transferred := false
 	defer func() {
 		if !transferred {

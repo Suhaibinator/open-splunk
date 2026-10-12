@@ -5,315 +5,160 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
-	"os"
-	"path/filepath"
+	"math"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/migrations"
-	gormsqlite "gorm.io/driver/sqlite"
+	pgx "github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/stdlib"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-	"modernc.org/sqlite"
 )
 
 const (
-	defaultBusyTimeout               = 5 * time.Second
-	defaultMaxOpenConns              = 8
+	defaultMaxOpenConns              = 16
 	maximumControlTimestampUnixMicro = int64(253_402_300_799_999_999)
 )
 
-// DB is the SQLite-backed single-node control-plane database.
+var ErrServerAlreadyRunning = errors.New("control: another server owns this PostgreSQL control plane")
+
+// DB owns the PostgreSQL control-plane pool. SQLDB and GORMDB share that pool;
+// consumers borrow it and must never close either handle.
 type DB struct {
 	sql                *sql.DB
+	connectionConfig   *pgx.ConnConfig
 	orm                *gorm.DB
-	fileInfo           os.FileInfo
+	identity           string
+	owner              *sql.Conn
+	ownerPool          *sql.DB
+	ownerKey           int64
+	ownerCancel        context.CancelFunc
+	ownershipLost      chan struct{}
+	ownerWait          sync.WaitGroup
+	closeOnce          sync.Once
+	closeErr           error
 	sharedAdmissionMu  sync.Mutex
 	sharedAdmissionMap map[string]*AdmissionGate
 }
 
-// Open opens a persistent SQLite control-plane database, configures its
-// connection invariants, and applies all embedded migrations. path must name a
-// file; an in-memory database cannot provide the required WAL durability.
-func Open(ctx context.Context, path string) (*DB, error) {
-	if ctx == nil {
-		return nil, fmt.Errorf("%w: nil context", ErrInvalidArgument)
-	}
-	if strings.TrimSpace(path) == "" || path == ":memory:" {
-		return nil, fmt.Errorf("%w: SQLite path must name a persistent file", ErrInvalidArgument)
-	}
+// Open connects to PostgreSQL, exclusively leases this database/schema to one
+// server, verifies/applies native migrations and validates the index catalog.
+// dsn is a PostgreSQL URI or libpq connection string; file paths are rejected.
+func Open(ctx context.Context, dsn string) (*DB, error) { return open(ctx, dsn, false) }
 
-	absPath, err := filepath.Abs(path)
+// OpenReadOnly verifies a PostgreSQL control plane without migrations or a
+// server lease. Every transaction on its pool is read-only by default.
+func OpenReadOnly(ctx context.Context, dsn string) (*DB, error) { return open(ctx, dsn, true) }
+
+func open(ctx context.Context, dsn string, readOnly bool) (*DB, error) {
+	if ctx == nil || strings.TrimSpace(dsn) == "" || (!strings.Contains(dsn, "=") && !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://")) {
+		return nil, fmt.Errorf("%w: a PostgreSQL connection string and context are required", ErrInvalidArgument)
+	}
+	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("resolve SQLite path: %w", err)
+		return nil, fmt.Errorf("%w: invalid PostgreSQL connection string", ErrInvalidArgument)
 	}
-	if err := secureSQLiteFiles(absPath, true); err != nil {
-		return nil, err
+	cfg.RuntimeParams["application_name"] = "open-splunk-control"
+	if readOnly {
+		cfg.RuntimeParams["default_transaction_read_only"] = "on"
 	}
-	dsn := sqliteDSN(absPath)
-	raw, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open SQLite control plane: %w", err)
-	}
+	raw := stdlib.OpenDB(*cfg, stdlib.OptionAfterConnect(func(_ context.Context, conn *pgx.Conn) error {
+		conn.TypeMap().RegisterType(&pgtype.Type{Name: "int8", OID: pgtype.Int8OID, Codec: strictIntegerCodec{}})
+		return nil
+	}))
 	raw.SetMaxOpenConns(defaultMaxOpenConns)
 	raw.SetMaxIdleConns(defaultMaxOpenConns)
-
-	closeOnError := func(openErr error) (*DB, error) {
-		if closeErr := raw.Close(); closeErr != nil {
-			return nil, errors.Join(openErr, fmt.Errorf("close SQLite control plane: %w", closeErr))
-		}
-		return nil, openErr
-	}
+	database := &DB{sql: raw, connectionConfig: cfg, ownershipLost: make(chan struct{})}
+	fail := func(cause error) (*DB, error) { return nil, errors.Join(cause, database.Close()) }
 	if err := raw.PingContext(ctx); err != nil {
-		return closeOnError(fmt.Errorf("connect to SQLite control plane: %w", err))
+		return fail(fmt.Errorf("connect to PostgreSQL control plane: %w", err))
 	}
-
-	if err := enableWAL(ctx, raw); err != nil {
-		return closeOnError(err)
+	if err := raw.QueryRowContext(ctx, "SELECT current_database() || ':' || current_schema()").Scan(&database.identity); err != nil {
+		return fail(fmt.Errorf("identify PostgreSQL control plane: %w", err))
 	}
-	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
-		return closeOnError(err)
-	}
-	orm, err := configureGORM(raw)
+	database.identity = fmt.Sprintf("%s:%d/%s", cfg.Host, cfg.Port, database.identity)
+	database.orm, err = configureGORM(raw)
 	if err != nil {
-		return closeOnError(fmt.Errorf("configure GORM control plane: %w", err))
+		return fail(fmt.Errorf("configure PostgreSQL control plane: %w", err))
 	}
-	if _, err := readIndexCatalogIntegrity(orm.WithContext(ctx)); err != nil {
-		return closeOnError(fmt.Errorf("audit index catalog: %w", err))
-	}
-	if err := secureSQLiteFiles(absPath, false); err != nil {
-		return closeOnError(err)
-	}
-	fileInfo, err := os.Stat(absPath)
-	if err != nil {
-		return closeOnError(fmt.Errorf("identify SQLite control plane: %w", err))
-	}
-
-	return &DB{sql: raw, orm: orm, fileInfo: fileInfo}, nil
-}
-
-// OpenReadOnly opens an existing control-plane database without creating it,
-// changing its permissions, selecting a journal mode, or applying migrations.
-// It is intended for offline verification and backup tooling. The returned
-// GORM handle shares the same single-connection, query-only pool.
-func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
-	if ctx == nil {
-		return nil, fmt.Errorf("%w: nil context", ErrInvalidArgument)
-	}
-	if strings.TrimSpace(path) == "" || path == ":memory:" {
-		return nil, fmt.Errorf("%w: SQLite path must name an existing persistent file", ErrInvalidArgument)
-	}
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return nil, fmt.Errorf("resolve read-only SQLite path: %w", err)
-	}
-	before, err := os.Lstat(absPath)
-	if err != nil {
-		return nil, fmt.Errorf("inspect read-only SQLite control plane: %w", err)
-	}
-	if !before.Mode().IsRegular() {
-		return nil, errors.New("open read-only SQLite control plane: source must be a regular file")
-	}
-
-	raw, err := sql.Open("sqlite", sqliteReadOnlyDSN(absPath))
-	if err != nil {
-		return nil, fmt.Errorf("open read-only SQLite control plane: %w", err)
-	}
-	raw.SetMaxOpenConns(1)
-	raw.SetMaxIdleConns(1)
-	closeOnError := func(openErr error) (*DB, error) {
-		if closeErr := raw.Close(); closeErr != nil {
-			return nil, errors.Join(openErr, fmt.Errorf("close read-only SQLite control plane: %w", closeErr))
+	if !readOnly {
+		if err := database.acquireOwner(ctx); err != nil {
+			return fail(err)
 		}
-		return nil, openErr
+		if err := ApplyMigrations(ctx, raw, migrations.PostgreSQL()); err != nil {
+			return fail(err)
+		}
+		if _, err := readIndexCatalogIntegrity(database.orm.WithContext(ctx)); err != nil {
+			return fail(fmt.Errorf("audit index catalog: %w", err))
+		}
+		database.startOwnershipMonitor()
 	}
-	if err := raw.PingContext(ctx); err != nil {
-		return closeOnError(fmt.Errorf("connect to read-only SQLite control plane: %w", err))
-	}
-	after, err := os.Lstat(absPath)
-	if err != nil {
-		return closeOnError(fmt.Errorf("reinspect read-only SQLite control plane: %w", err))
-	}
-	if !sameReadOnlySQLiteFileState(before, after) {
-		return closeOnError(errors.New("open read-only SQLite control plane: source changed while opening"))
-	}
-	orm, err := configureGORM(raw)
-	if err != nil {
-		return closeOnError(fmt.Errorf("configure read-only GORM control plane: %w", err))
-	}
-	return &DB{sql: raw, orm: orm, fileInfo: after}, nil
+	return database, nil
 }
 
 func configureGORM(raw *sql.DB) (*gorm.DB, error) {
-	return gorm.Open(gormsqlite.New(gormsqlite.Config{
-		DriverName: "sqlite",
-		Conn:       raw,
-	}), &gorm.Config{
-		DisableAutomaticPing:   true,
-		Logger:                 logger.Discard,
-		SkipDefaultTransaction: true,
-	})
+	return gorm.Open(postgres.New(postgres.Config{Conn: raw}), &gorm.Config{DisableAutomaticPing: true, Logger: logger.Discard, SkipDefaultTransaction: true})
 }
 
-func sameReadOnlySQLiteFileState(left, right os.FileInfo) bool {
-	return left != nil && right != nil &&
-		left.Mode().IsRegular() && right.Mode().IsRegular() &&
-		os.SameFile(left, right) &&
-		left.Mode() == right.Mode() &&
-		left.Size() == right.Size() &&
-		left.ModTime().Equal(right.ModTime())
-}
-
-// secureSQLiteFiles ensures the control database and every SQLite sidecar are
-// accessible only to their owner. The ingestion visibility outbox can contain
-// normalized log payloads, so relying on the process umask is insufficient.
-func secureSQLiteFiles(path string, create bool) error {
-	if create {
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-		if err == nil {
-			if closeErr := file.Close(); closeErr != nil {
-				return fmt.Errorf("secure SQLite control plane: close new database: %w", closeErr)
-			}
-		} else if !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("secure SQLite control plane: create database: %w", err)
-		}
-	}
-
-	for _, candidate := range sqliteFileCandidates(path) {
-		info, err := os.Lstat(candidate)
-		if errors.Is(err, os.ErrNotExist) && candidate != path {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("secure SQLite control plane file %q: %w", filepath.Base(candidate), err)
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("secure SQLite control plane file %q: must be a regular file", filepath.Base(candidate))
-		}
-		if err := os.Chmod(candidate, 0o600); err != nil {
-			if candidate != path && errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return fmt.Errorf("secure SQLite control plane file %q: %w", filepath.Base(candidate), err)
-		}
-	}
-	return nil
-}
-
-func enableWAL(ctx context.Context, db *sql.DB) error {
-	var journalMode string
-	err := retrySQLiteBusy(ctx, defaultBusyTimeout, func() error {
-		journalMode = ""
-		return db.QueryRowContext(ctx, `PRAGMA journal_mode = WAL`).Scan(&journalMode)
-	})
+func (db *DB) acquireOwner(ctx context.Context) error {
+	db.ownerPool = stdlib.OpenDB(*db.connectionConfig)
+	db.ownerPool.SetMaxOpenConns(1)
+	db.ownerPool.SetMaxIdleConns(1)
+	conn, err := db.ownerPool.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("enable SQLite WAL: %w", err)
+		return fmt.Errorf("acquire server ownership connection: %w", err)
 	}
-	if !strings.EqualFold(journalMode, "wal") {
-		return fmt.Errorf("enable SQLite WAL: database selected %q journal mode", journalMode)
+	db.owner = conn
+	if err := conn.QueryRowContext(ctx, "SELECT hashtextextended('open-splunk:server:' || current_database() || ':' || current_schema(), 0)").Scan(&db.ownerKey); err != nil {
+		return err
+	}
+	var acquired bool
+	if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", db.ownerKey).Scan(&acquired); err != nil {
+		return fmt.Errorf("acquire PostgreSQL server lease: %w", err)
+	}
+	if !acquired {
+		return ErrServerAlreadyRunning
 	}
 	return nil
 }
 
-func retrySQLiteBusy(
-	ctx context.Context,
-	retryWindow time.Duration,
-	operation func() error,
-) error {
-	// The window bounds when another attempt may begin. The operation itself
-	// remains bounded by its context and any driver-level busy timeout.
-	deadline := time.Now().Add(retryWindow)
-	delay := 2 * time.Millisecond
-	for {
-		err := operation()
-		if err == nil {
-			return nil
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		if !IsDatabaseContention(err) || !time.Now().Before(deadline) {
-			return err
-		}
-
-		wait := min(delay, time.Until(deadline))
-		if wait <= 0 {
-			return err
-		}
-		timer := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
+func (db *DB) startOwnershipMonitor() {
+	ctx, cancel := context.WithCancel(context.Background())
+	db.ownerCancel = cancel
+	db.ownerWait.Go(func() {
+		tick := time.NewTicker(time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				check, cancel := context.WithTimeout(ctx, 5*time.Second)
+				err := db.owner.PingContext(check)
+				cancel()
+				if err != nil && ctx.Err() == nil {
+					close(db.ownershipLost)
+					return
 				}
 			}
-			return ctx.Err()
-		case <-timer.C:
 		}
-		delay = min(delay*2, 100*time.Millisecond)
-	}
+	})
 }
 
-// IsDatabaseContention reports whether err is SQLite's transient writer or
-// shared-cache contention result. Callers use it to preserve retryable
-// dependency failures across package boundaries without treating corruption
-// or other database failures as temporary.
-func IsDatabaseContention(err error) bool {
-	var sqliteErr *sqlite.Error
-	if !errors.As(err, &sqliteErr) {
-		return false
-	}
-	// SQLite's primary result codes are stable API values. Mask extended
-	// result codes before checking SQLITE_BUSY (5) and SQLITE_LOCKED (6).
-	switch sqliteErr.Code() & 0xff {
-	case 5, 6:
-		return true
-	default:
-		return false
-	}
-}
-
-func sqliteDSN(path string) string {
-	u := &url.URL{Scheme: "file", Path: path}
-	query := u.Query()
-	query.Add("_pragma", "foreign_keys(1)")
-	query.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", defaultBusyTimeout.Milliseconds()))
-	query.Add("_pragma", "synchronous(FULL)")
-	query.Set("_txlock", "immediate")
-	query.Set("_dqs", "0")
-	u.RawQuery = query.Encode()
-	return u.String()
-}
-
-func sqliteReadOnlyDSN(path string) string {
-	u := &url.URL{Scheme: "file", Path: path}
-	query := u.Query()
-	query.Set("mode", "ro")
-	query.Add("_pragma", "foreign_keys(1)")
-	query.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", defaultBusyTimeout.Milliseconds()))
-	query.Add("_pragma", "query_only(1)")
-	query.Set("_dqs", "0")
-	u.RawQuery = query.Encode()
-	return u.String()
-}
-
-// SQLDB exposes the pooled database handle to other internal persistence
-// packages. Callers must preserve the connection invariants established by
-// Open and must not close the returned handle directly.
+// OwnershipLost closes if the pinned PostgreSQL lease connection is lost.
+// The process must stop serving and exit when this channel closes.
+func (db *DB) OwnershipLost() <-chan struct{} { return db.ownershipLost }
 func (db *DB) SQLDB() *sql.DB {
 	if db == nil {
 		return nil
 	}
 	return db.sql
 }
-
-// GORMDB exposes the GORM handle configured over the same SQLite connection
-// pool as SQLDB. Versioned SQL migrations remain authoritative; callers must
-// not use AutoMigrate or close the underlying pool.
 func (db *DB) GORMDB() *gorm.DB {
 	if db == nil {
 		return nil
@@ -321,23 +166,95 @@ func (db *DB) GORMDB() *gorm.DB {
 	return db.orm
 }
 
-// SameSQLiteFile reports whether two control handles were opened over the same
-// physical database file. It is used only for process-local ownership fencing;
-// SQLite transactions remain authoritative for persisted state.
-func (db *DB) SameSQLiteFile(other *DB) bool {
-	if db == nil || other == nil {
-		return false
-	}
-	if db.fileInfo == nil || other.fileInfo == nil {
-		return db == other || (db.sql != nil && db.sql == other.sql)
-	}
-	return os.SameFile(db.fileInfo, other.fileInfo)
+// SameDatabase compares the canonical database/schema identity without exposing credentials.
+func (db *DB) SameDatabase(other *DB) bool {
+	return db != nil && other != nil && db.identity != "" && db.identity == other.identity
 }
 
-// Close releases all SQLite connections.
+// IsDatabaseContention identifies PostgreSQL errors that can retry the entire
+// transaction; a failed statement never retries inside an aborted transaction.
+func IsDatabaseContention(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && (pg.Code == "40001" || pg.Code == "40P01" || pg.Code == "55P03")
+}
+func IsUniqueViolation(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "23505"
+}
+func IsConstraintViolation(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && strings.HasPrefix(pg.Code, "23")
+}
+
 func (db *DB) Close() error {
-	if db == nil || db.sql == nil {
+	if db == nil {
 		return nil
 	}
-	return db.sql.Close()
+	db.closeOnce.Do(func() {
+		if db.ownerCancel != nil {
+			db.ownerCancel()
+		}
+		db.ownerWait.Wait()
+		if db.owner != nil {
+			var unlockErr error
+			select {
+			case <-db.ownershipLost:
+				// The broken session has already released its PostgreSQL locks.
+			default:
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				var released bool
+				unlockErr = db.owner.QueryRowContext(ctx, "SELECT pg_advisory_unlock($1)", db.ownerKey).Scan(&released)
+				cancel()
+			}
+			ownerErr := db.owner.Close()
+			// Canceling an in-flight heartbeat may have closed the pinned
+			// connection before this cleanup reaches it.
+			if errors.Is(unlockErr, sql.ErrConnDone) {
+				unlockErr = nil
+			}
+			if errors.Is(ownerErr, sql.ErrConnDone) {
+				ownerErr = nil
+			}
+			db.closeErr = errors.Join(db.closeErr, unlockErr, ownerErr)
+		}
+		if db.ownerPool != nil {
+			db.closeErr = errors.Join(db.closeErr, db.ownerPool.Close())
+		}
+		if db.sql != nil {
+			db.closeErr = errors.Join(db.closeErr, db.sql.Close())
+		}
+	})
+	return db.closeErr
+}
+
+// strictIntegerCodec prevents pgx's generic numeric wrapper from truncating a
+// fractional Go float before PostgreSQL can enforce a BIGINT storage contract.
+// Application integer fields and integral numeric values keep their native encoding.
+type strictIntegerCodec struct{ pgtype.Int8Codec }
+type rejectedIntegerEncoding struct{}
+
+func (rejectedIntegerEncoding) Encode(any, []byte) ([]byte, error) {
+	return nil, errors.New("fractional value cannot be encoded as PostgreSQL BIGINT")
+}
+func (codec strictIntegerCodec) PlanEncode(m *pgtype.Map, oid uint32, format int16, value any) pgtype.EncodePlan {
+	var number float64
+	var numeric bool
+	switch v := value.(type) {
+	case float64:
+		number = v
+		numeric = true
+	case float32:
+		number = float64(v)
+		numeric = true
+	case pgtype.Float64Valuer:
+		f, err := v.Float64Value()
+		if err == nil && f.Valid {
+			number = f.Float64
+			numeric = true
+		}
+	}
+	if numeric && (math.IsNaN(number) || math.IsInf(number, 0) || math.Trunc(number) != number) {
+		return rejectedIntegerEncoding{}
+	}
+	return codec.Int8Codec.PlanEncode(m, oid, format, value)
 }

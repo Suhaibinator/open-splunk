@@ -3,10 +3,10 @@ package control
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"sync"
 	"testing"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 )
 
@@ -14,7 +14,7 @@ func TestEnsureIndexDeletionMutationAttemptPersistsExactTargetAcrossRestart(t *t
 	t.Parallel()
 
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "control.sqlite")
+	path := pgtest.DSN(t)
 	db, err := Open(ctx, path)
 	if err != nil {
 		t.Fatalf("Open(): %v", err)
@@ -323,7 +323,7 @@ func TestIndexDeletionMutationAttemptSchemaPreventsMutationAndReplacement(t *tes
 			WHERE deletion_operation_id = ?`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := db.SQLDB().ExecContext(ctx, statement, firstOperation.ID); err == nil {
+			if _, err := db.SQLDB().ExecContext(ctx, pgtest.Parameters(statement), firstOperation.ID); err == nil {
 				t.Fatalf("%s unexpectedly succeeded", name)
 			}
 		})
@@ -338,7 +338,7 @@ func TestIndexDeletionMutationAttemptSchemaPreventsMutationAndReplacement(t *tes
 			clickhouse_table_uuid,
 			protocol_version,
 			created_at_unix_micro
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		secondOperation.ID,
 		"idxmut_wrong_tenant",
 		"other-tenant",
@@ -351,7 +351,7 @@ func TestIndexDeletionMutationAttemptSchemaPreventsMutationAndReplacement(t *tes
 		t.Fatal("cross-tenant mutation attempt unexpectedly succeeded")
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
-		INSERT OR REPLACE INTO index_deletion_mutation_attempts (
+		INSERT INTO index_deletion_mutation_attempts (
 			deletion_operation_id,
 			correlation_id,
 			tenant_id,
@@ -360,7 +360,7 @@ func TestIndexDeletionMutationAttemptSchemaPreventsMutationAndReplacement(t *tes
 			clickhouse_table_uuid,
 			protocol_version,
 			created_at_unix_micro
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT(correlation_id) DO UPDATE SET deletion_operation_id=EXCLUDED.deletion_operation_id,tenant_id=EXCLUDED.tenant_id`,
 		secondOperation.ID,
 		attempt.CorrelationID,
 		target.TenantID,
@@ -371,6 +371,8 @@ func TestIndexDeletionMutationAttemptSchemaPreventsMutationAndReplacement(t *tes
 		attempt.CreatedAt.UnixMicro(),
 	); err == nil {
 		t.Fatal("correlation identity replacement unexpectedly succeeded")
+	} else {
+		requireNativeControlGuard(t, err, "index deletion mutation attempt identity is already in use")
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		INSERT INTO index_deletion_mutation_attempts (
@@ -382,7 +384,7 @@ func TestIndexDeletionMutationAttemptSchemaPreventsMutationAndReplacement(t *tes
 			clickhouse_table_uuid,
 			protocol_version,
 			created_at_unix_micro
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		nulUUIDOperation.ID,
 		"idxmut_nul_uuid",
 		target.TenantID,

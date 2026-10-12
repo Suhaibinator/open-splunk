@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+// Contact form submission request
+message ContactRequest {
+    string name = 1;
+    string email = 2;
+    string subject = 3;
+    string message = 4;
+}
+
+// Contact form submission response
+message ContactResponse {
+    string reference_id = 3; // Unique reference for tracking
+}

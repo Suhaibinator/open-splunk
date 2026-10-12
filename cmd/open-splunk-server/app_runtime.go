@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Suhaibinator/open-splunk/internal/audit"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/server"
@@ -96,7 +97,7 @@ func newRuntimeAppCatalog(
 // newRuntimeAuditedAppCatalog is the production app-administration
 // constructor. Read-only catalog operations continue to use the same GORM
 // store, while every mutation is made contingent on an audit append in its
-// caller-owned SQLite transaction.
+// caller-owned PostgreSQL transaction.
 func newRuntimeAuditedAppCatalog(
 	ctx context.Context,
 	db *control.DB,
@@ -372,7 +373,7 @@ func (adapter *runtimeAppCatalog) ListActiveApps(
 	}
 	result, err := adapter.catalog.ListApps(
 		ctx,
-		control.AppAccessScope{TenantID: strings.Clone(tenantID)},
+		runtimeAppReadScope(ctx, tenantID),
 		control.AppListRequest{
 			PageSize:     maximum,
 			StateFilters: []control.AppState{control.AppStateActive},
@@ -424,7 +425,7 @@ func (adapter *runtimeAppCatalog) ListKnowledgeApps(
 	}
 	result, err := adapter.catalog.ListAppIdentities(
 		ctx,
-		control.AppAccessScope{TenantID: strings.Clone(tenantID)},
+		runtimeAppReadScope(ctx, tenantID),
 		maximum,
 	)
 	if err != nil {
@@ -463,7 +464,7 @@ func (adapter *runtimeAppCatalog) ListKnowledgeApps(
 }
 
 func controlAppScope(scope server.AppAdministrationScope) control.AppAccessScope {
-	return control.AppAccessScope{TenantID: strings.Clone(scope.TenantID)}
+	return control.AppAccessScope{TenantID: strings.Clone(scope.TenantID), OrganizationID: scope.OrganizationID, SiteAdministrator: scope.SiteAdministrator}
 }
 
 func controlAppSelector(selector server.AppAdministrationSelector) control.AppSelector {
@@ -685,4 +686,12 @@ func cloneRuntimeUint64(value *uint64) *uint64 {
 	}
 	result := *value
 	return &result
+}
+
+func runtimeAppReadScope(ctx context.Context, tenantID string) control.AppAccessScope {
+	scope, ok := authorization.FromContext(ctx)
+	if !ok || scope.PhysicalTenant != tenantID {
+		return control.AppAccessScope{TenantID: tenantID}
+	}
+	return control.AppAccessScope{TenantID: tenantID, OrganizationID: scope.OrganizationID, SiteAdministrator: scope.Subject.IsSiteAdmin()}
 }

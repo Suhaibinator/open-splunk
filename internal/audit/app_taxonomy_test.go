@@ -67,7 +67,7 @@ func TestAppAuditTaxonomyValidatesActionTargetAndVersion(t *testing.T) {
 	}
 }
 
-func TestAppAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing.T) {
+func TestAppAuditEventsPersistAndPostgreSQLRejectsTaxonomyForgeries(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -114,7 +114,7 @@ func TestAppAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing.T) {
 		tenant_id, sequence, occurred_at_unix_micro,
 		actor_kind, actor_id, actor_role, action,
 		target_kind, target_id, target_version
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 	for _, forgery := range []struct {
 		name       string
 		action     Action
@@ -146,9 +146,7 @@ func TestAppAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing.T) {
 				"app-observability",
 				forgery.version,
 			)
-			if err == nil {
-				t.Fatal("forged app audit event succeeded")
-			}
+			requireNativeAuditRejection(t, err, "forged app audit event")
 		})
 	}
 }

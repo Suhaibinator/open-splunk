@@ -51,7 +51,7 @@ func TestCreateSearchHistoryRerunUsesTrustedSnapshotAndFreshAdmission(t *testing
 
 	const (
 		historyID = "history-original"
-		ownerID   = "owner-1"
+		ownerID   = "1009"
 		tenantID  = "tenant-1"
 		appID     = "app-main"
 	)
@@ -182,7 +182,7 @@ func TestCreateSearchHistoryRerunRejectsClientDefinition(t *testing.T) {
 		AppCatalog:    activeHistoryRerunAppCatalog(),
 		SearchHistory: history,
 		WebUI:         testUI(),
-		OwnerID:       "owner-1",
+		OwnerID:       "1009",
 		TenantID:      "tenant-1",
 	})
 	request := historyRerunRequest("history-original")
@@ -217,7 +217,7 @@ func TestCreateSearchHistoryRerunUsesHistoryIDBoundary(t *testing.T) {
 			scope searchhistory.AccessScope,
 			id string,
 		) (*opensplunk.SearchHistoryEntry, error) {
-			assertHistoryScope(t, scope, "tenant-1", "owner-1")
+			assertHistoryScope(t, scope, "tenant-1", "1009")
 			if id != historyID {
 				t.Fatalf("history lookup ID has %d bytes, want %d", len(id), len(historyID))
 			}
@@ -230,7 +230,7 @@ func TestCreateSearchHistoryRerunUsesHistoryIDBoundary(t *testing.T) {
 			AppCatalog:    activeHistoryRerunAppCatalog(),
 			SearchHistory: history,
 			WebUI:         testUI(),
-			OwnerID:       "owner-1",
+			OwnerID:       "1009",
 			TenantID:      "tenant-1",
 		})
 
@@ -273,7 +273,7 @@ func TestCreateSearchHistoryRerunUsesHistoryIDBoundary(t *testing.T) {
 			AppCatalog:    activeHistoryRerunAppCatalog(),
 			SearchHistory: history,
 			WebUI:         testUI(),
-			OwnerID:       "owner-1",
+			OwnerID:       "1009",
 			TenantID:      "tenant-1",
 		})
 
@@ -347,7 +347,7 @@ func TestCreateSearchHistoryRerunUsesEffectiveScopeWithDefinitionFallback(t *tes
 				AppCatalog:    activeHistoryRerunAppCatalog(),
 				SearchHistory: history,
 				WebUI:         testUI(),
-				OwnerID:       "owner-1",
+				OwnerID:       "1009",
 				TenantID:      "tenant-1",
 			})
 
@@ -446,7 +446,7 @@ func TestCreateSearchHistoryRerunLookupFailuresCreateNoJob(t *testing.T) {
 				scope searchhistory.AccessScope,
 				id string,
 			) (*opensplunk.SearchHistoryEntry, error) {
-				assertHistoryScope(t, scope, "tenant-1", "owner-1")
+				assertHistoryScope(t, scope, "tenant-1", "1009")
 				if id != "history-original" {
 					t.Fatalf("history lookup ID = %q", id)
 				}
@@ -459,7 +459,7 @@ func TestCreateSearchHistoryRerunLookupFailuresCreateNoJob(t *testing.T) {
 				AppCatalog:    activeHistoryRerunAppCatalog(),
 				SearchHistory: history,
 				WebUI:         testUI(),
-				OwnerID:       "owner-1",
+				OwnerID:       "1009",
 				TenantID:      "tenant-1",
 			})
 
@@ -559,7 +559,7 @@ func TestCreateSearchHistoryRerunReauthorizesAppAndIndexes(t *testing.T) {
 				AppCatalog:    test.apps,
 				SearchHistory: history,
 				WebUI:         testUI(),
-				OwnerID:       "owner-1",
+				OwnerID:       "1009",
 				TenantID:      "tenant-1",
 			})
 

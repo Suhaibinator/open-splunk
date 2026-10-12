@@ -29,7 +29,42 @@ services:
       retries: 20
       start_period: 20s
 
+  postgres:
+    image: "${OPEN_SPLUNK_DEPLOY_POSTGRES_IMAGE:-postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873}"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: open_splunk
+      POSTGRES_USER: open_splunk
+      POSTGRES_PASSWORD: "${OPEN_SPLUNK_POSTGRES_PASSWORD:?set OPEN_SPLUNK_POSTGRES_PASSWORD}"
+    ports:
+      - "127.0.0.1:${OPEN_SPLUNK_DEPLOY_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    networks:
+      - per-obs-network
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U open_splunk -d open_splunk"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: "${OPEN_SPLUNK_DEPLOY_MINIO_IMAGE:?set an exact approved MinIO server image}"
+    restart: unless-stopped
+    command: [server, /data]
+    environment:
+      MINIO_ROOT_USER: "${OPEN_SPLUNK_SERVER_MINIO_ACCESS_KEY:-open-splunk}"
+      MINIO_ROOT_PASSWORD: "${OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY:?set OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY}"
+    ports:
+      - "127.0.0.1:${OPEN_SPLUNK_DEPLOY_MINIO_PORT:-9001}:9000"
+    volumes:
+      - minio-data:/data
+    networks:
+      - per-obs-network
+
 volumes:
+  postgres-data:
+  minio-data:
   clickhouse-data:
 
 networks:

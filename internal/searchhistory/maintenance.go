@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 )
@@ -138,7 +139,7 @@ func (store *Store) pruneExpiredTransaction(
 	maximumRows int,
 ) (deleted int64, more bool, returnedErr error) {
 	cutoff := now.Add(-store.maximumAge).UnixMicro()
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(store.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return 0, false, mapContextError(
 			ctx,
@@ -190,7 +191,7 @@ func (store *Store) discoverOverflowCursor(
 		Select("tenant_id", "owner_id", "terminal_count").
 		Where("terminal_count > ?", store.maximumEntriesPerOwner)
 	if after != nil {
-		scope, err := normalizeScope(AccessScope{
+		scope, err := normalizeOwnerScope(AccessScope{
 			TenantID: after.tenantID,
 			OwnerID:  after.ownerID,
 		})
@@ -242,14 +243,14 @@ func (store *Store) pruneOverflowTransaction(
 			"prune over-capacity search history: cursor is required",
 		)
 	}
-	scope, err := normalizeScope(AccessScope{
+	scope, err := normalizeOwnerScope(AccessScope{
 		TenantID: cursor.tenantID,
 		OwnerID:  cursor.ownerID,
 	})
 	if err != nil {
 		return 0, false, invalid("search-history maintenance cursor is invalid")
 	}
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(store.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return 0, false, mapContextError(
 			ctx,
@@ -292,7 +293,7 @@ func (store *Store) pruneOverflowTransaction(
 }
 
 func persistedMaintenanceScope(record historyOwnerCountRecord) (AccessScope, error) {
-	scope, err := normalizeScope(AccessScope{
+	scope, err := normalizeOwnerScope(AccessScope{
 		TenantID: record.TenantID,
 		OwnerID:  record.OwnerID,
 	})
@@ -337,7 +338,7 @@ func (store *Store) deleteOldestExcess(
 	if err != nil {
 		return 0, false, err
 	}
-	if persistedScope != scope {
+	if persistedScope.TenantID != scope.TenantID || persistedScope.OwnerID != scope.OwnerID {
 		return 0, false, errors.New(
 			"search-history owner count query returned a cross-scope row",
 		)
@@ -385,7 +386,7 @@ func (store *Store) pruneScopeTransaction(
 	now time.Time,
 	maximumRows int,
 ) (deleted int64, more bool, returnedErr error) {
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(store.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return 0, false, mapContextError(
 			ctx,

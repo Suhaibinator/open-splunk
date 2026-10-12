@@ -11,6 +11,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestAuthenticateReturnsDetachedCurrentAuthorizedIndexPolicies(t *testing.T) {
@@ -35,7 +36,7 @@ func TestAuthenticateReturnsDetachedCurrentAuthorizedIndexPolicies(t *testing.T)
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "collector",
 		AllowedIndexNames: []string{"main", "audit"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -113,82 +114,82 @@ func TestAuthenticateFailsClosedForCorruptAuthorizedIndexPolicy(t *testing.T) {
 		dropRetentionTrigger bool
 	}{
 		"version": {
-			statement: `UPDATE indexes SET version = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET version = $1 WHERE name = 'main'`,
 			value:     int64(0),
 		},
 		"retention": {
-			statement:            `UPDATE indexes SET retention_nanoseconds = ? WHERE name = 'main'`,
+			statement:            `UPDATE indexes SET retention_nanoseconds = $1 WHERE name = 'main'`,
 			value:                int64(-time.Millisecond),
 			dropRetentionTrigger: true,
 		},
 		"unaligned retention": {
-			statement:            `UPDATE indexes SET retention_nanoseconds = ? WHERE name = 'main'`,
+			statement:            `UPDATE indexes SET retention_nanoseconds = $1 WHERE name = 'main'`,
 			value:                int64(time.Millisecond + time.Nanosecond),
 			dropRetentionTrigger: true,
 		},
 		"retention past storage horizon": {
-			statement: `UPDATE indexes SET retention_nanoseconds = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET retention_nanoseconds = $1 WHERE name = 'main'`,
 			value:     int64(8_000_000_000 * time.Second),
 		},
 		"default sourcetype": {
-			statement:          `UPDATE indexes SET default_sourcetype = ? WHERE name = 'main'`,
+			statement:          `UPDATE indexes SET default_sourcetype = $1 WHERE name = 'main'`,
 			value:              " surrounding-space ",
 			dropBoundedTrigger: true,
 		},
 		"max event bytes": {
-			statement: `UPDATE indexes SET max_event_bytes = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET max_event_bytes = $1 WHERE name = 'main'`,
 			value:     int64(-1),
 		},
 		"max event bytes above hard ceiling": {
-			statement: `UPDATE indexes SET max_event_bytes = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET max_event_bytes = $1 WHERE name = 'main'`,
 			value:     int64(indexpolicy.HardMaxEventBytes + 1),
 		},
 		"max field count": {
-			statement: `UPDATE indexes SET max_field_count = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET max_field_count = $1 WHERE name = 'main'`,
 			value:     int64(math.MaxUint32) + 1,
 		},
 		"max field count above hard ceiling": {
-			statement: `UPDATE indexes SET max_field_count = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET max_field_count = $1 WHERE name = 'main'`,
 			value:     int64(indexpolicy.HardMaxFieldCount + 1),
 		},
 		"max nesting depth": {
-			statement: `UPDATE indexes SET max_nesting_depth = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET max_nesting_depth = $1 WHERE name = 'main'`,
 			value:     int64(math.MaxUint32) + 1,
 		},
 		"max nesting depth above hard ceiling": {
-			statement: `UPDATE indexes SET max_nesting_depth = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET max_nesting_depth = $1 WHERE name = 'main'`,
 			value:     int64(indexpolicy.HardMaxNestingDepth + 1),
 		},
 		"maximum future skew": {
-			statement: `UPDATE indexes SET maximum_future_skew_nanoseconds = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET maximum_future_skew_nanoseconds = $1 WHERE name = 'main'`,
 			value:     int64(-1),
 		},
 		"maximum future skew above hard ceiling": {
-			statement: `UPDATE indexes SET maximum_future_skew_nanoseconds = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET maximum_future_skew_nanoseconds = $1 WHERE name = 'main'`,
 			value:     int64(indexpolicy.HardMaxFutureSkew + time.Nanosecond),
 		},
 		"maximum event age": {
-			statement: `UPDATE indexes SET maximum_event_age_nanoseconds = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET maximum_event_age_nanoseconds = $1 WHERE name = 'main'`,
 			value:     int64(-1),
 		},
 		"maximum event age above hard ceiling": {
-			statement: `UPDATE indexes SET maximum_event_age_nanoseconds = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET maximum_event_age_nanoseconds = $1 WHERE name = 'main'`,
 			value:     int64(indexpolicy.HardMaxEventAge + time.Nanosecond),
 		},
 		"max ingest events per second negative": {
-			statement: `UPDATE indexes SET max_ingest_events_per_second = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET max_ingest_events_per_second = $1 WHERE name = 'main'`,
 			value:     int64(-1),
 		},
 		"max ingest events per second above hard ceiling": {
-			statement: `UPDATE indexes SET max_ingest_events_per_second = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET max_ingest_events_per_second = $1 WHERE name = 'main'`,
 			value:     int64(ingestquota.HardMaxEventsPerSecond + 1),
 		},
 		"max ingest uncompressed bytes per second negative": {
-			statement: `UPDATE indexes SET max_ingest_uncompressed_bytes_per_second = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET max_ingest_uncompressed_bytes_per_second = $1 WHERE name = 'main'`,
 			value:     int64(-1),
 		},
 		"max ingest uncompressed bytes per second above hard ceiling": {
-			statement: `UPDATE indexes SET max_ingest_uncompressed_bytes_per_second = ? WHERE name = 'main'`,
+			statement: `UPDATE indexes SET max_ingest_uncompressed_bytes_per_second = $1 WHERE name = 'main'`,
 			value:     int64(ingestquota.HardMaxUncompressedBytesPerSecond + 1),
 		},
 	}
@@ -205,7 +206,7 @@ func TestAuthenticateFailsClosedForCorruptAuthorizedIndexPolicy(t *testing.T) {
 				t.Fatalf("NewStore(): %v", err)
 			}
 			issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
-				Name: "collector", AllowedIndexNames: []string{"main"}, BoundCollectorID: testCollectorID,
+				Name: "collector", AllowedIndexNames: []string{"main"}, BoundCollectorID: testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 			})
 			if err != nil {
 				t.Fatalf("CreateCollectorToken(): %v", err)
@@ -214,18 +215,18 @@ func TestAuthenticateFailsClosedForCorruptAuthorizedIndexPolicy(t *testing.T) {
 			if err != nil {
 				t.Fatalf("acquire corrupting connection: %v", err)
 			}
-			if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+			if _, err := pgtest.Checks(ctx, connection, false); err != nil {
 				_ = connection.Close()
 				t.Fatalf("ignore check constraints: %v", err)
 			}
 			if test.dropBoundedTrigger {
-				if _, err := connection.ExecContext(ctx, `DROP TRIGGER index_catalog_record_update_is_bounded`); err != nil {
+				if _, err := connection.ExecContext(ctx, `DROP TRIGGER index_catalog_record_update_is_bounded ON indexes`); err != nil {
 					_ = connection.Close()
 					t.Fatalf("drop bounded index trigger: %v", err)
 				}
 			}
 			if test.dropRetentionTrigger {
-				if _, err := connection.ExecContext(ctx, `DROP TRIGGER indexes_retention_is_millisecond_aligned_on_update`); err != nil {
+				if _, err := connection.ExecContext(ctx, `DROP TRIGGER indexes_retention_is_millisecond_aligned_on_update ON indexes`); err != nil {
 					_ = connection.Close()
 					t.Fatalf("drop retention alignment trigger: %v", err)
 				}

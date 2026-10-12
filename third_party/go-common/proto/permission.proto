@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+// SitePermissionOperation defines operations for site-wide admin actions.
+// These use only UserType thresholds (no organization roles).
+enum SitePermissionOperation {
+  SITE_PERMISSION_OPERATION_UNSPECIFIED = 0;
+
+  // Basic admin operations
+  SITE_PERMISSION_OPERATION_ADMIN_ACCESS = 1;           // Basic admin panel access
+  SITE_PERMISSION_OPERATION_USER_LISTING = 2;           // List users via admin APIs
+  SITE_PERMISSION_OPERATION_USER_VIEWING = 3;           // View user details via admin APIs
+  SITE_PERMISSION_OPERATION_USER_BANNING = 4;           // Ban or unban users
+  SITE_PERMISSION_OPERATION_USER_MODIFICATION = 5;      // Modify user accounts
+  SITE_PERMISSION_OPERATION_USER_DELETION = 6;          // Delete user accounts
+  SITE_PERMISSION_OPERATION_USER_TYPE_CHANGE = 7;       // Change user types
+  SITE_PERMISSION_OPERATION_SYSTEM_ACCESS = 8;          // Access system settings
+  SITE_PERMISSION_OPERATION_CONTENT_MODERATION = 9;     // Moderate content
+  SITE_PERMISSION_OPERATION_ATTACHMENT_ACCESS = 10;     // Access attachment tools
+  SITE_PERMISSION_OPERATION_ATTACHMENT_MODIFICATION = 11; // Modify attachments
+  SITE_PERMISSION_OPERATION_ANALYTICS_ACCESS = 12;      // Access analytics
+  SITE_PERMISSION_OPERATION_REPORTING_ACCESS = 13;      // Access reporting
+
+  // Admin organization operations (site-level, not org-scoped)
+  SITE_PERMISSION_OPERATION_ADMIN_CREATE_ORGANIZATION = 14;       // Create organizations via admin APIs
+  SITE_PERMISSION_OPERATION_ADMIN_LIST_ORGANIZATIONS = 15;        // List all organizations
+  SITE_PERMISSION_OPERATION_ADMIN_LIST_ORGANIZATION_MEMBERS = 16; // List organization members
+  SITE_PERMISSION_OPERATION_ADMIN_MANAGE_ORGANIZATION_MEMBERS = 17; // Manage organization members
+  SITE_PERMISSION_OPERATION_ADMIN_GET_ORGANIZATION_MEMBER = 18;   // Get individual member details
+  SITE_PERMISSION_OPERATION_ADMIN_CHAT_CHANNELS = 19;             // Manage chat channels via admin APIs
+  SITE_PERMISSION_OPERATION_CAREERS_MANAGEMENT = 20;              // Manage career postings and applications
+  SITE_PERMISSION_OPERATION_CHAT_TOOL_APPROVAL = 21;              // Resolve agentic tool-call approvals (Decision 6 / M0)
+
+  // AI control-plane operations (M2 item 6). Reads and writes are separate so a
+  // route/rate-limit write freeze can coexist with read access.
+  SITE_PERMISSION_OPERATION_INFERENCE_VIEWING = 22;        // View inference routes, rate-limit policies, attempts, usage
+  SITE_PERMISSION_OPERATION_INFERENCE_MODEL_OVERRIDE = 24; // Select a model for an individual request or run
+  SITE_PERMISSION_OPERATION_INFERENCE_ADMINISTRATION = 23; // Update inference routes and rate-limit policies
+}
+
+// OrganizationPermissionOperation defines operations for organization-scoped actions.
+// These support global UserType OR OrganizationRole checks, except inference
+// policy and model choice operations, which require an OrganizationRole.
+enum OrganizationPermissionOperation {
+  ORGANIZATION_PERMISSION_OPERATION_UNSPECIFIED = 0;
+
+  // Member management
+  ORGANIZATION_PERMISSION_OPERATION_INVITE_MEMBERS = 1;       // Invite members to organization
+  ORGANIZATION_PERMISSION_OPERATION_ADD_MEMBERS = 2;          // Add members directly
+  ORGANIZATION_PERMISSION_OPERATION_REMOVE_MEMBERS = 3;       // Remove members
+  ORGANIZATION_PERMISSION_OPERATION_UPDATE_MEMBER_ROLES = 4;  // Update member roles
+  ORGANIZATION_PERMISSION_OPERATION_LIST_MEMBERS = 5;         // List organization members
+
+  // Organization management
+  ORGANIZATION_PERMISSION_OPERATION_VIEW = 6;                 // View organization details
+  ORGANIZATION_PERMISSION_OPERATION_UPDATE = 7;               // Update organization details
+  ORGANIZATION_PERMISSION_OPERATION_DELETE = 8;               // Delete organization
+  ORGANIZATION_PERMISSION_OPERATION_CREATE = 9;               // Create new organization
+
+  // Invitations
+  ORGANIZATION_PERMISSION_OPERATION_CANCEL_INVITATION = 10;   // Cancel pending invitations
+  ORGANIZATION_PERMISSION_OPERATION_VIEW_INVITATIONS = 11;    // View pending invitations
+
+  // Email domains
+  ORGANIZATION_PERMISSION_OPERATION_MANAGE_EMAIL_DOMAINS = 12; // Manage email domains
+
+  // Hierarchy operations
+  ORGANIZATION_PERMISSION_OPERATION_CREATE_CHILD = 13;        // Create child organization
+  ORGANIZATION_PERMISSION_OPERATION_SELF_JOIN = 14;           // Self-join organization
+  ORGANIZATION_PERMISSION_OPERATION_VIEW_INFERENCE_POLICY = 15;
+  ORGANIZATION_PERMISSION_OPERATION_MANAGE_INFERENCE_POLICY = 16;
+  ORGANIZATION_PERMISSION_OPERATION_CHOOSE_INFERENCE_MODEL = 17;
+}

@@ -291,7 +291,7 @@ func TestCoordinatorRunNowOverlapAndRecover(t *testing.T) {
 	snapshot := coordinatorSnapshot(now)
 	runs := &coordinatorRunStore{runNow: snapshot, runNowActive: false, interrupted: 3}
 	coordinator := newTestCoordinator(t, now, runs, &coordinatorAdmission{}, coordinatorJobReader{}, &coordinatorResults{}, &coordinatorRetention{}, &coordinatorAuthorizer{}, &coordinatorDeliverer{}, coordinatorPoller{}, 1)
-	summary, err := coordinator.RunNow(context.Background(), snapshot.OwnerID, snapshot.AlertID)
+	summary, err := coordinator.RunNow(context.Background(), AccessScope{OwnerID: snapshot.OwnerID, OrganizationID: "1"}, snapshot.AlertID)
 	if err != nil || summary.Outcome != RunOverlapSkipped {
 		t.Fatalf("RunNow() = %#v, %v", summary, err)
 	}
@@ -318,7 +318,7 @@ func TestCoordinatorRunNowReturnsBeforeExecutionCompletes(t *testing.T) {
 		}
 	}}
 	coordinator := newTestCoordinator(t, now, runs, &coordinatorAdmission{jobID: "job-1"}, coordinatorJobReader{}, &coordinatorResults{}, &coordinatorRetention{}, &coordinatorAuthorizer{}, &coordinatorDeliverer{}, poller, 1)
-	summary, err := coordinator.RunNow(context.Background(), snapshot.OwnerID, snapshot.AlertID)
+	summary, err := coordinator.RunNow(context.Background(), AccessScope{OwnerID: snapshot.OwnerID, OrganizationID: "1"}, snapshot.AlertID)
 	if err != nil || summary.Outcome != RunSearching || summary.AlertRunID != snapshot.AlertRunID {
 		t.Fatalf("RunNow() = %#v, %v", summary, err)
 	}
@@ -569,7 +569,7 @@ func coordinatorSnapshot(now time.Time) RunSnapshot {
 			Name: "Errors", Application: "search", SPL: "index=main", IndexScope: []string{"main"}, Earliest: "-5m", Latest: "now",
 			Timezone: "UTC", Condition: Condition{Operator: ConditionGreaterThan, Threshold: 4}, SampleRows: 2,
 		},
-		ScheduledAt: now, ClaimedAt: now, DispatchRetention: 10 * time.Minute, TriggeredRetention: 50 * time.Minute,
+		ScheduledAt: now, ClaimedAt: now, DispatchRetention: 10 * time.Minute, TriggeredRetention: 50 * time.Minute, OrganizationID: "1",
 	}
 }
 

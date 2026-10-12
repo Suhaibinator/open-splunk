@@ -13,19 +13,15 @@ import (
 var embeddedMigrationName = regexp.MustCompile(`^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$`)
 
 var embeddedMigrationSHA256 = map[string]map[string]string{
-	"SQLite": {
-		"0001_baseline.sql":                        "3ceec9b0c2f2a44edccff0b3e8b5cd0622fe72c462dc8c36616d9d7683bb2b75",
-		"0002_server_search_settings.sql":          "0c485f9b509705e049453a5bc8dd21f71e0543a54045cde4854d737d340a3038",
-		"0003_durable_search_jobs.sql":             "1371ae38492b5a05894f3f25b3f9ccfb8a41cd51c71d74deb2878754057ab79a",
-		"0004_saved_search_schedules.sql":          "fbd52b43e24c247394a005c6cd518b90947ee80350dacd61fbfee827f27954bd",
-		"0005_alerts.sql":                          "ffd83bedc7c2c3e27b8ba2f2985731dfda05d9733e907410f76ec7b1d14aeec2",
-		"0006_feature_operation_audit.sql":         "b39358fdfc47d552af4cbd31d50ef9a80aaf538677c929ba29e17bcb13fd1a79",
-		"0007_lookup_mutation_audit.sql":           "131f237ddb526d45c9c0d806680c82d37e3e8b75cb4322f855ff70e93bdb489c",
-		"0008_rolling_feature_operation_audit.sql": "865194b2ff0be9c07a5e4e10713922bf5de06c2bb9e32a9119fc8894e7ac13c5",
-		"0009_ingest_reservation_accounting.sql":   "b3b8692b4ea9ad8972d74fc048b9d3cac8178863fe8b916f26ca5db4622026f2",
-		"0010_ingest_write_groups.sql":             "1f8fdb475bee28fab65a8487dd6e926287e34567beeb80b51568d2567ef1a80a",
-		"0011_server_appearance_settings.sql":      "a7c533e50a9493f8cc5a2e70e82ae3b80e6f962111e23b7eb95459f9fcfa9327",
-		"0012_ingest_budgets_and_api_receipts.sql": "22b32358635c6b23051b7d736410a84eb3bc1fb611de5e47e8355f6b911f74b6",
+	"PostgreSQL": {
+		"0001_baseline.sql":                      "e87de3ed27a7774bbf6c6c9cf6c50eef82c31623b0cbc667a4a6c3a132c2bb40",
+		"0002_search_capture.sql":                "b457ee8b9f0ee6441c6a1f379293b4d4cfd32fb257ab7bd098800a759c6a4595",
+		"0003_retained_export_reservations.sql":  "9487a57290f318c03336f63fd74b4fc61074f59fd6e8e37b775b7a07e56cfbea",
+		"0004_history_organizations.sql":         "301a9d117f11f8b8d68ba18602a2781a29aa0483f79018c033780568b8e94941",
+		"0005_scheduled_alert_organizations.sql": "0c01526e7bc733480f6cde13d607dd88b209aa530483ebadbf1807c5fa66f681",
+		"0006_metadata_source_indexes.sql":       "7bf03b4415c0efb2eab2ff0de961179fc509022b33001d827f52ca94da7ad468",
+		"0007_ingestion_token_organizations.sql": "728e09778006ba7e2ec0f65256011c76e2555a7642f18efa3bae236f59a43fd2",
+		"0008_export_source_identity.sql":        "b4cd02369f8c893df30f16c5daa39f0ea4124b4fa323f326b84dfb19aca56337",
 	},
 	"ClickHouse": {
 		"0001_baseline.sql":              "3f1d7104e6fbb1072c8353855d055a950b22135828ec9f23d0bd63c1fef601da",
@@ -37,7 +33,7 @@ func TestEmbeddedMigrationSetsAreContiguousAndHaveOneBaseline(t *testing.T) {
 	t.Parallel()
 
 	for name, migrationFS := range map[string]fs.FS{
-		"SQLite":     SQLite(),
+		"PostgreSQL": PostgreSQL(),
 		"ClickHouse": ClickHouse(),
 	} {
 		t.Run(name, func(t *testing.T) {

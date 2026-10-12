@@ -351,12 +351,14 @@ func admissionRequest(
 		QuotaEvaluatedAt:  context.ReceivedAt,
 		Events:            admissionEvents,
 		HECAdmission: &ingest.HECStageAdmission{
-			TokenID:               context.Authentication.TokenID,
-			TokenVersion:          context.Authentication.TokenVersion,
-			RequestID:             context.RequestID,
-			AcknowledgmentEnabled: context.Authentication.HECProfile.IndexerAcknowledgment,
-			Channel:               channel,
-			CreatedAt:             context.ReceivedAt,
+			OrganizationID:               context.Authentication.OrganizationID,
+			RequireOrganizationOwnership: context.Authentication.OrganizationOwnershipRequired,
+			TokenID:                      context.Authentication.TokenID,
+			TokenVersion:                 context.Authentication.TokenVersion,
+			RequestID:                    context.RequestID,
+			AcknowledgmentEnabled:        context.Authentication.HECProfile.IndexerAcknowledgment,
+			Channel:                      channel,
+			CreatedAt:                    context.ReceivedAt,
 		},
 	}, nil
 }

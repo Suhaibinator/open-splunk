@@ -5,8 +5,8 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import {
   appCatalogKey,
   appCatalogStore,
-  currentAdministratorSessionRevision,
-  subscribeToAdministratorSessionRevision,
+  currentSessionRevision,
+  subscribeToSessionRevision,
   type AppCatalogSnapshot,
 } from "@/lib/api";
 
@@ -28,8 +28,8 @@ export function useAppCatalog(
   enabled = true,
 ): UseAppCatalogResult {
   const sessionRevision = useSyncExternalStore(
-    subscribeToAdministratorSessionRevision,
-    currentAdministratorSessionRevision,
+    subscribeToSessionRevision,
+    currentSessionRevision,
     () => 0,
   );
   const key = useMemo(

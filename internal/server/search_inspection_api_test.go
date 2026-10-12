@@ -182,9 +182,10 @@ func TestSearchInspectionRouteUsesAuthenticatedPrincipalAndProjectsResult(
 	}
 
 	access, request := service.lastCall()
-	if access != (searchjobs.AccessScope{
-		TenantID: browserGateTenantID,
-		OwnerID:  browserGateOwnerID,
+	if access != (searchjobs.AccessScope{OrganizationID: "1",
+		SiteAdministrator: true,
+		TenantID:          browserGateTenantID,
+		OwnerID:           browserGateOwnerID,
 	}) || request.SearchJobID != "inspection-job" {
 		t.Fatalf("inspection call = %#v/%#v", access, request)
 	}
@@ -301,7 +302,7 @@ func TestSearchInspectionRouteRejectsNonAdministratorPrincipal(
 	t.Parallel()
 
 	service := &fakeSearchInspections{}
-	tokenAuthenticator, err := auth.NewBearerTokenAuthenticator(
+	tokenAuthenticator, err := newTestBearerTokenAuthenticator(
 		[]byte(adminIntegrationBearerToken),
 		browserGateTenantID,
 		browserGateOwnerID,
@@ -450,7 +451,7 @@ func TestSearchInspectionHandlerDefensivelyRejectsUntrustedPrincipals(
 			principal: browserGatePrincipal(
 				t,
 				browserGateTenantID,
-				"other-owner",
+				"1007",
 				auth.BrowserRoleAdministrator,
 			),
 			present: true,
@@ -989,12 +990,7 @@ func TestSearchInspectionFeatureAndRouteFollowServiceAvailability(
 		&fakeSearchInspections{},
 		BootstrapConfig{},
 	)
-	bootstrap := postProto(
-		t,
-		implicitlyEnabled,
-		"/api/system/bootstrap",
-		&opensplunk.GetSystemBootstrapRequest{},
-	)
+	bootstrap := postProtoHeaders(t, implicitlyEnabled, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 	if bootstrap.Code != http.StatusOK {
 		t.Fatalf(
 			"implicit bootstrap status = %d, body = %s",
@@ -1021,12 +1017,7 @@ func TestSearchInspectionFeatureAndRouteFollowServiceAvailability(
 		&fakeSearchInspections{},
 		requested,
 	)
-	bootstrap = postProto(
-		t,
-		enabled,
-		"/api/system/bootstrap",
-		&opensplunk.GetSystemBootstrapRequest{},
-	)
+	bootstrap = postProtoHeaders(t, enabled, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 	if bootstrap.Code != http.StatusOK {
 		t.Fatalf(
 			"enabled bootstrap status = %d, body = %s",
@@ -1043,7 +1034,7 @@ func TestSearchInspectionFeatureAndRouteFollowServiceAvailability(
 	}
 
 	var typedNil *fakeSearchInspections
-	disabled, err := NewHandler(Config{
+	disabled, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:                 &fakeSearchJobs{},
 		Indexes:                    fakeIndexCatalog{},
 		SavedSearches:              &fakeSavedSearches{},
@@ -1053,14 +1044,9 @@ func TestSearchInspectionFeatureAndRouteFollowServiceAvailability(
 		AdministrativeAllowedHosts: []string{"example.com"},
 	})
 	if err != nil {
-		t.Fatalf("NewHandler(typed nil inspection): %v", err)
+		t.Fatalf("newAuthenticatedTestHandler(typed nil inspection): %v", err)
 	}
-	bootstrap = postProto(
-		t,
-		disabled,
-		"/api/system/bootstrap",
-		&opensplunk.GetSystemBootstrapRequest{},
-	)
+	bootstrap = postProtoHeaders(t, disabled, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 	unmarshalResponse(t, bootstrap, &decoded)
 	if countFeature(
 		decoded.GetFeatures(),
@@ -1089,7 +1075,7 @@ func TestHandlerRequiresBrowserAuthenticationForSearchInspection(
 ) {
 	t.Parallel()
 
-	for _, authenticator := range []auth.BrowserAuthenticator{
+	for _, authenticator := range []fixtureBrowserAuthenticator{
 		nil,
 		(*recordingBrowserAuthenticator)(nil),
 	} {
@@ -1098,14 +1084,14 @@ func TestHandlerRequiresBrowserAuthenticationForSearchInspection(
 			Indexes:                    fakeIndexCatalog{},
 			SavedSearches:              &fakeSavedSearches{},
 			SearchInspections:          &fakeSearchInspections{},
-			BrowserAuthenticator:       authenticator,
+			IdentityAuthenticator:      adaptTestBrowserAuthenticator(authenticator),
 			WebUI:                      testUI(),
 			AdministrativeAllowedHosts: []string{"example.com"},
 		})
 		if err == nil ||
 			!strings.Contains(
 				err.Error(),
-				"administrative services require browser authentication",
+				"user identity and resource authorization are required",
 			) {
 			t.Fatalf("NewHandler error = %v", err)
 		}
@@ -1123,11 +1109,12 @@ func TestOrdinarySearchJobGetCannotRequestInspectionData(
 		{SearchJobId: "inspection-job", IncludePlan: true},
 		{SearchJobId: "inspection-job", IncludeGeneratedSql: true},
 	} {
-		response := postProto(
+		response := postProtoHeaders(
 			t,
 			handler,
 			"/api/search/jobs/get",
 			request,
+			map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken},
 		)
 		if response.Code != http.StatusBadRequest {
 			t.Fatalf(
@@ -1160,7 +1147,7 @@ func newSearchInspectionTestHandler(
 func newSearchInspectionHandlerWithAuthenticator(
 	t *testing.T,
 	service SearchInspections,
-	authenticator auth.BrowserAuthenticator,
+	authenticator fixtureBrowserAuthenticator,
 	bootstrap BootstrapConfig,
 	maximumConcurrentResponses int,
 ) *Handler {
@@ -1169,7 +1156,7 @@ func newSearchInspectionHandlerWithAuthenticator(
 		SearchJobs:                 &fakeSearchJobs{},
 		Indexes:                    fakeIndexCatalog{},
 		SearchInspections:          service,
-		BrowserAuthenticator:       authenticator,
+		IdentityAuthenticator:      adaptTestBrowserAuthenticator(authenticator),
 		SavedSearches:              &fakeSavedSearches{},
 		WebUI:                      testUI(),
 		Bootstrap:                  bootstrap,
@@ -1196,9 +1183,9 @@ func directSearchInspectionAPIHandler(
 
 func testSearchInspectionAuthenticator(
 	t *testing.T,
-) auth.BrowserAuthenticator {
+) fixtureBrowserAuthenticator {
 	t.Helper()
-	authenticator, err := auth.NewBearerTokenAuthenticator(
+	authenticator, err := newTestBearerTokenAuthenticator(
 		[]byte(adminIntegrationBearerToken),
 		browserGateTenantID,
 		browserGateOwnerID,
@@ -1248,11 +1235,7 @@ func inspectionRequestWithPrincipal(
 		searchInspectionPath,
 		nil,
 	)
-	return request.WithContext(context.WithValue(
-		request.Context(),
-		browserPrincipalContextKey{},
-		principal,
-	))
+	return request.WithContext(serverFixturePrincipalContext(request.Context(), principal))
 }
 
 func validServerSearchInspectionResult(
@@ -1291,7 +1274,7 @@ func validServerSearchInspectionResult(
 	if err != nil {
 		t.Fatalf("create inspection fixture time range: %v", err)
 	}
-	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{
+	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{OrganizationID: "1",
 		SPL:               source,
 		OwnerID:           browserGateOwnerID,
 		TenantID:          browserGateTenantID,
@@ -1304,7 +1287,7 @@ func validServerSearchInspectionResult(
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		job, getErr := manager.GetFor(searchjobs.AccessScope{
+		job, getErr := manager.GetFor(searchjobs.AccessScope{OrganizationID: "1",
 			TenantID: browserGateTenantID,
 			OwnerID:  browserGateOwnerID,
 		}, created.ID)
@@ -1332,7 +1315,7 @@ func validServerSearchInspectionResult(
 	}
 	result, err := service.Inspect(
 		context.Background(),
-		searchjobs.AccessScope{
+		searchjobs.AccessScope{OrganizationID: "1",
 			TenantID: browserGateTenantID,
 			OwnerID:  browserGateOwnerID,
 		},

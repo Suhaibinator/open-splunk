@@ -21,7 +21,7 @@ func futureSavedField() protoreflect.RawFields {
 // is still consulted on the clone (not the caller's message) for each nested
 // message slot a saved-search definition can reach.
 func TestCreateRejectsUnknownFieldsAtEveryReachableDepth(t *testing.T) {
-	scope := AccessScope{OwnerID: "owner"}
+	scope := AccessScope{OwnerID: "owner", OrganizationID: "1"}
 	tests := map[string]func(*opensplunk.SavedSearchDefinition) protoreflect.Message{
 		"root": func(definition *opensplunk.SavedSearchDefinition) protoreflect.Message {
 			return definition.ProtoReflect()
@@ -58,7 +58,7 @@ func TestCreateRejectsUnknownFieldsAtEveryReachableDepth(t *testing.T) {
 // skips it must still never persist unknown bytes.
 func TestUpdateNeverPersistsUnknownFieldsRegardlessOfMask(t *testing.T) {
 	ctx := context.Background()
-	scope := AccessScope{OwnerID: "owner"}
+	scope := AccessScope{OwnerID: "owner", OrganizationID: "1"}
 
 	for name, test := range map[string]struct {
 		mask       []string
@@ -121,14 +121,14 @@ func TestCreateSeparatesTypedNilFromUnknownFields(t *testing.T) {
 	if protostrict.ContainsUnknown(definition.ProtoReflect()) {
 		t.Fatal("typed-nil singular field reported as an unknown field")
 	}
-	_, err := store.Create(context.Background(), AccessScope{OwnerID: "owner"}, definition)
+	_, err := store.Create(context.Background(), AccessScope{OwnerID: "owner", OrganizationID: "1"}, definition)
 	if !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Create() error = %v, want ErrInvalidArgument", err)
 	}
 
 	var typedNil *opensplunk.SavedSearchDefinition
 	if _, err := store.Create(
-		context.Background(), AccessScope{OwnerID: "owner"}, typedNil,
+		context.Background(), AccessScope{OwnerID: "owner", OrganizationID: "1"}, typedNil,
 	); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Create(typed nil) error = %v, want ErrInvalidArgument", err)
 	}

@@ -193,7 +193,7 @@ func TestSearchAttemptAuditListUsesAdministratorTenantAndExactFilters(
 				ID:   browserGateOwnerID,
 				Role: audit.ActorRoleAdministrator,
 			},
-			OwnerID:     "searched-owner",
+			OwnerID:     "1029",
 			SearchJobID: "search-job-9",
 		}},
 		NextPageToken:  "signed-next-page",
@@ -202,7 +202,7 @@ func TestSearchAttemptAuditListUsesAdministratorTenantAndExactFilters(
 	}}
 	handler := newSearchAttemptAuditTestHandler(t, service)
 	actorID := browserGateOwnerID
-	ownerID := "searched-owner"
+	ownerID := "1029"
 	input := &opensplunk.ListSearchAttemptAuditEventsRequest{
 		Page: &opensplunk.PageRequest{
 			PageSize:         new(uint32(1)),
@@ -350,7 +350,7 @@ func TestSearchAttemptAuditListRejectsMismatchedPrincipalsBeforeBodyOrStorage(
 		{
 			name:     "wrong-owner administrator",
 			tenantID: browserGateTenantID,
-			ownerID:  "other-owner",
+			ownerID:  "1007",
 			role:     auth.BrowserRoleAdministrator,
 		},
 	}
@@ -375,7 +375,7 @@ func TestSearchAttemptAuditListRejectsMismatchedPrincipalsBeforeBodyOrStorage(
 				SearchJobs:                 &fakeSearchJobs{},
 				Indexes:                    fakeIndexCatalog{},
 				SearchAttemptAuditEvents:   service,
-				BrowserAuthenticator:       authenticator,
+				IdentityAuthenticator:      adaptTestBrowserAuthenticator(authenticator),
 				WebUI:                      testUI(),
 				TenantID:                   browserGateTenantID,
 				OwnerID:                    browserGateOwnerID,
@@ -398,11 +398,15 @@ func TestSearchAttemptAuditListRejectsMismatchedPrincipalsBeforeBodyOrStorage(
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
 
-			if response.Code != http.StatusForbidden {
+			wantedStatus := http.StatusForbidden
+			if test.name == "wrong-owner administrator" {
+				wantedStatus = http.StatusUnsupportedMediaType
+			}
+			if response.Code != wantedStatus {
 				t.Fatalf(
 					"status = %d, want %d; body = %s",
 					response.Code,
-					http.StatusForbidden,
+					wantedStatus,
 					response.Body.String(),
 				)
 			}
@@ -437,11 +441,11 @@ func TestSearchAttemptAuditListRejectsOutOfContractServicePages(t *testing.T) {
 			ID:   browserGateOwnerID,
 			Role: audit.ActorRoleAdministrator,
 		},
-		OwnerID:     "owner-a",
+		OwnerID:     "1011",
 		SearchJobID: "search-job-3",
 	}
 	actorID := browserGateOwnerID
-	ownerID := "owner-a"
+	ownerID := "1011"
 	input := &opensplunk.ListSearchAttemptAuditEventsRequest{
 		ActorIdFilter: &actorID,
 		OwnerIdFilter: &ownerID,
@@ -454,7 +458,7 @@ func TestSearchAttemptAuditListRejectsOutOfContractServicePages(t *testing.T) {
 			page.Events[0].Actor.ID = "other-actor"
 		},
 		"wrong owner": func(page *searchaudit.ListPage) {
-			page.Events[0].OwnerID = "owner-b"
+			page.Events[0].OwnerID = "1104"
 		},
 		"unstable order": func(page *searchaudit.ListPage) {
 			second := page.Events[0]
@@ -481,12 +485,7 @@ func TestSearchAttemptAuditFeatureAndRouteFollowServiceConfiguration(t *testing.
 
 	service := &fakeSearchAttemptAudit{}
 	enabled := newSearchAttemptAuditTestHandler(t, service)
-	bootstrap := postProto(
-		t,
-		enabled,
-		"/api/system/bootstrap",
-		&opensplunk.GetSystemBootstrapRequest{},
-	)
+	bootstrap := postProtoHeaders(t, enabled, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 	var enabledResponse opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, bootstrap, &enabledResponse)
 	if !slices.Contains(
@@ -497,22 +496,17 @@ func TestSearchAttemptAuditFeatureAndRouteFollowServiceConfiguration(t *testing.
 	}
 
 	disabled := newTestHandler(t, Config{
-		SearchJobs:           &fakeSearchJobs{},
-		Indexes:              fakeIndexCatalog{},
-		BrowserAuthenticator: testSearchInspectionAuthenticator(t),
-		WebUI:                testUI(),
-		TenantID:             browserGateTenantID,
-		OwnerID:              browserGateOwnerID,
+		SearchJobs:            &fakeSearchJobs{},
+		Indexes:               fakeIndexCatalog{},
+		IdentityAuthenticator: adaptTestBrowserAuthenticator(testSearchInspectionAuthenticator(t)),
+		WebUI:                 testUI(),
+		TenantID:              browserGateTenantID,
+		OwnerID:               browserGateOwnerID,
 		Bootstrap: BootstrapConfig{Features: []opensplunk.ServerFeature{
 			opensplunk.ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT,
 		}},
 	})
-	disabledBootstrap := postProto(
-		t,
-		disabled,
-		"/api/system/bootstrap",
-		&opensplunk.GetSystemBootstrapRequest{},
-	)
+	disabledBootstrap := postProtoHeaders(t, disabled, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 	var disabledResponse opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, disabledBootstrap, &disabledResponse)
 	if slices.Contains(
@@ -612,7 +606,7 @@ func newSearchAttemptAuditTestHandler(
 		SearchJobs:                 &fakeSearchJobs{},
 		Indexes:                    fakeIndexCatalog{},
 		SearchAttemptAuditEvents:   service,
-		BrowserAuthenticator:       testSearchInspectionAuthenticator(t),
+		IdentityAuthenticator:      adaptTestBrowserAuthenticator(testSearchInspectionAuthenticator(t)),
 		WebUI:                      testUI(),
 		TenantID:                   browserGateTenantID,
 		OwnerID:                    browserGateOwnerID,

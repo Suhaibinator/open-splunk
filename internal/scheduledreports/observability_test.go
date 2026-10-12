@@ -21,9 +21,7 @@ func TestServiceObservesClaimsOutcomesAndRecoveryWithoutIdentityLabels(t *testin
 		t.Fatal(err)
 	}
 	if _, err := service.Configure(
-		context.Background(),
-		"owner-private",
-		"tenant-private",
+		context.Background(), AccessScope{OwnerID: "owner-private", OrganizationID: "1"}, "tenant-private",
 		"saved-observed",
 		0,
 		Configuration{Cron: "*/5 * * * *", Timezone: "UTC", Enabled: true},

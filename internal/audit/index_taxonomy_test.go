@@ -93,7 +93,7 @@ func TestAuditListAcceptsAllKnownActionFilters(t *testing.T) {
 	}
 }
 
-func TestIndexAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing.T) {
+func TestIndexAuditEventsPersistAndPostgreSQLRejectsTaxonomyForgeries(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -140,7 +140,7 @@ func TestIndexAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing.T) 
 		tenant_id, sequence, occurred_at_unix_micro,
 		actor_kind, actor_id, actor_role, action,
 		target_kind, target_id, target_version
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 	forgeries := []struct {
 		name       string
 		action     Action
@@ -172,9 +172,7 @@ func TestIndexAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing.T) 
 				"events",
 				forgery.version,
 			)
-			if err == nil {
-				t.Fatal("forged index audit event succeeded")
-			}
+			requireNativeAuditRejection(t, err, "forged index audit event")
 		})
 	}
 }

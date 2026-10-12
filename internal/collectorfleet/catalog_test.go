@@ -980,7 +980,7 @@ func TestCatalogForcedMarkerLossCannotRecreateRevisionOrAcceptCursor(
 	if err := database.SQLDB().QueryRowContext(ctx, `
 		SELECT count(*)
 		FROM collector_catalog_revisions
-		WHERE tenant_id = ?`,
+		WHERE tenant_id = $1`,
 		scope.TenantID,
 	).Scan(&markerCount); err != nil {
 		t.Fatalf("count revision markers: %v", err)
@@ -1522,7 +1522,7 @@ func TestCatalogFailsClosedForMissingOrCorruptFleetRuntimeState(t *testing.T) {
 		if _, err := database.SQLDB().ExecContext(
 			context.Background(),
 			`DELETE FROM collector_runtime
-			 WHERE tenant_id = ? AND collector_id = ?`,
+			 WHERE tenant_id = $1 AND collector_id = $2`,
 			fixture.lease.TenantID,
 			fixture.lease.CollectorID,
 		); err != nil {
@@ -1554,7 +1554,7 @@ func TestCatalogFailsClosedForMissingOrCorruptFleetRuntimeState(t *testing.T) {
 		installCatalogRuntimeCorruption(t, database, fixture.lease, `
 			UPDATE collector_runtime
 			SET queued_bytes = -1
-			WHERE tenant_id = ? AND collector_id = ?`)
+			WHERE tenant_id = $1 AND collector_id = $2`)
 		assertCatalogReadFailsClosed(
 			t,
 			catalog,
@@ -1600,21 +1600,21 @@ func TestCatalogFailsClosedForMissingOrCorruptFleetRuntimeState(t *testing.T) {
 			statement: `
 				UPDATE collector_catalog_revisions
 				SET revision = 0
-				WHERE tenant_id = ?`,
+				WHERE tenant_id = $1`,
 		},
 		{
 			name: "negative fleet runtime counts",
 			statement: `
 				UPDATE collector_catalog_revisions
 				SET fleet_count = -1, runtime_count = -1
-				WHERE tenant_id = ?`,
+				WHERE tenant_id = $1`,
 		},
 		{
 			name: "inconsistent fleet runtime counts",
 			statement: `
 				UPDATE collector_catalog_revisions
 				SET fleet_count = fleet_count + 1
-				WHERE tenant_id = ?`,
+				WHERE tenant_id = $1`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1647,7 +1647,7 @@ func TestCatalogFailsClosedForMissingOrCorruptFleetRuntimeState(t *testing.T) {
 	}
 }
 
-func TestCatalogListReadsCoherentHeartbeatSnapshotsUnderWAL(t *testing.T) {
+func TestCatalogListReadsCoherentHeartbeatSnapshots(t *testing.T) {
 	database, store := openTestStore(t)
 	catalog := newCatalogForTest(t, database)
 	scope := Scope{TenantID: "tenant-a"}
@@ -1962,7 +1962,7 @@ func readCatalogRevisionForTest(
 		context.Background(),
 		`SELECT revision
 		 FROM collector_catalog_revisions
-		 WHERE tenant_id = ?`,
+		 WHERE tenant_id = $1`,
 		tenantID,
 	).Scan(&revision); err != nil {
 		t.Fatalf("read catalog revision for %s: %v", tenantID, err)
@@ -2047,16 +2047,14 @@ func installCatalogRevisionCorruption(
 		t.Fatalf("acquire revision corruption connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(
-		ctx,
-		`PRAGMA ignore_check_constraints = ON`,
+	if _, err := collectorTestChecks(
+		ctx, connection, false,
 	); err != nil {
 		t.Fatalf("disable revision check constraints: %v", err)
 	}
 	defer func() {
-		_, _ = connection.ExecContext(
-			context.Background(),
-			`PRAGMA ignore_check_constraints = OFF`,
+		_, _ = collectorTestChecks(
+			context.Background(), connection, true,
 		)
 	}()
 	result, err := connection.ExecContext(
@@ -2074,9 +2072,8 @@ func installCatalogRevisionCorruption(
 	if rows != 1 {
 		t.Fatalf("revision corruption rows affected = %d, want 1", rows)
 	}
-	if _, err := connection.ExecContext(
-		ctx,
-		`PRAGMA ignore_check_constraints = OFF`,
+	if _, err := collectorTestChecks(
+		ctx, connection, true,
 	); err != nil {
 		t.Fatalf("restore revision check constraints: %v", err)
 	}
@@ -2095,16 +2092,14 @@ func installCatalogRuntimeCorruption(
 		t.Fatalf("acquire corruption connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(
-		ctx,
-		`PRAGMA ignore_check_constraints = ON`,
+	if _, err := collectorTestChecks(
+		ctx, connection, false,
 	); err != nil {
 		t.Fatalf("disable check constraints: %v", err)
 	}
 	defer func() {
-		_, _ = connection.ExecContext(
-			context.Background(),
-			`PRAGMA ignore_check_constraints = OFF`,
+		_, _ = collectorTestChecks(
+			context.Background(), connection, true,
 		)
 	}()
 	result, err := connection.ExecContext(
@@ -2123,9 +2118,8 @@ func installCatalogRuntimeCorruption(
 	if rows != 1 {
 		t.Fatalf("corruption rows affected = %d, want 1", rows)
 	}
-	if _, err := connection.ExecContext(
-		ctx,
-		`PRAGMA ignore_check_constraints = OFF`,
+	if _, err := collectorTestChecks(
+		ctx, connection, true,
 	); err != nil {
 		t.Fatalf("restore check constraints: %v", err)
 	}

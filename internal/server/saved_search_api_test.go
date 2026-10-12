@@ -105,8 +105,8 @@ func (store *fakeSavedSearches) callCount() int {
 
 func TestSavedSearchScheduleProjectionStaysOutsideBaseRepository(t *testing.T) {
 	t.Parallel()
-	handler := &apiHandler{ownerID: "owner-1"}
-	definition := savedSearchDefinition("owner-1", "search", "Scheduled")
+	handler := &apiHandler{ownerID: "1009"}
+	definition := savedSearchDefinition("1009", "search", "Scheduled")
 	definition.Schedule = &opensplunk.SavedSearchSchedule{
 		Enabled: true, Cron: "0 * * * *", Timezone: "UTC", DispatchTtl: "2p", ConfigVersion: 7,
 	}
@@ -122,7 +122,7 @@ func TestSavedSearchScheduleProjectionStaysOutsideBaseRepository(t *testing.T) {
 		t.Fatal("normalization mutated the caller's schedule projection")
 	}
 
-	record := savedSearchRecord("saved-1", 3, "owner-1", "search", "Scheduled")
+	record := savedSearchRecord("saved-1", 3, "1009", "search", "Scheduled")
 	record.Definition.Schedule = proto.Clone(definition.GetSchedule()).(*opensplunk.SavedSearchSchedule)
 	record.ScheduleStatus = &opensplunk.ScheduledSearchStatus{
 		LastOutcome: opensplunk.ScheduledSearchOutcome_SCHEDULED_SEARCH_OUTCOME_COMPLETED,
@@ -140,7 +140,7 @@ func TestSavedSearchScheduleProjectionStaysOutsideBaseRepository(t *testing.T) {
 }
 
 func TestSavedSearchRoutesRoundTripProtobuf(t *testing.T) {
-	ownerID := "owner-1"
+	ownerID := "1009"
 	appID := "app-main"
 	created := savedSearchRecord("saved-1", 1, ownerID, appID, "Errors")
 	updated := savedSearchRecord("saved-1", 2, ownerID, appID, "Errors Today")
@@ -322,7 +322,7 @@ func TestSavedSearchRoutesRoundTripProtobuf(t *testing.T) {
 
 func TestCommittedSavedSearchMutationsWinContextCancellationRace(t *testing.T) {
 	const (
-		ownerID = "owner-1"
+		ownerID = "1009"
 		appID   = "app-main"
 	)
 	definition := savedSearchDefinition(ownerID, appID, "Errors")
@@ -427,7 +427,7 @@ func TestCommittedSavedSearchMutationsWinContextCancellationRace(t *testing.T) {
 }
 
 func TestSavedSearchRoutesRejectInvalidAndUntrustedInputs(t *testing.T) {
-	ownerID := "owner-1"
+	ownerID := "1009"
 	validDefinition := savedSearchDefinition(ownerID, "app-main", "Errors")
 	clientRequestID := "not-durable"
 	emptyClientRequestID := ""
@@ -443,7 +443,7 @@ func TestSavedSearchRoutesRejectInvalidAndUntrustedInputs(t *testing.T) {
 		request proto.Message
 	}{
 		{name: "create missing definition", path: "/api/saved-searches/create", request: &opensplunk.CreateSavedSearchRequest{}},
-		{name: "create forged owner", path: "/api/saved-searches/create", request: &opensplunk.CreateSavedSearchRequest{Definition: savedSearchDefinition("other-owner", "app-main", "Errors")}},
+		{name: "create forged owner", path: "/api/saved-searches/create", request: &opensplunk.CreateSavedSearchRequest{Definition: savedSearchDefinition("1007", "app-main", "Errors")}},
 		{name: "create unsupported idempotency", path: "/api/saved-searches/create", request: &opensplunk.CreateSavedSearchRequest{Definition: validDefinition, ClientRequestId: &clientRequestID}},
 		{name: "create empty unsupported idempotency", path: "/api/saved-searches/create", request: &opensplunk.CreateSavedSearchRequest{Definition: validDefinition, ClientRequestId: &emptyClientRequestID}},
 		{name: "get missing ID", path: "/api/saved-searches/get", request: &opensplunk.GetSavedSearchRequest{}},
@@ -485,12 +485,12 @@ func TestSavedSearchRoutesRejectInvalidAndUntrustedInputs(t *testing.T) {
 
 func TestSavedSearchRoutesEnforceRequestSizeLimits(t *testing.T) {
 	store := &fakeSavedSearches{}
-	definition := savedSearchDefinition("owner-1", "app-main", "Errors")
+	definition := savedSearchDefinition("1009", "app-main", "Errors")
 	description := strings.Repeat("d", 512)
 	definition.Description = &description
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: store,
-		WebUI: testUI(), OwnerID: "owner-1", MaximumRequestBytes: 256,
+		WebUI: testUI(), OwnerID: "1009", MaximumRequestBytes: 256,
 	})
 	response := postProto(t, handler, "/api/saved-searches/create", &opensplunk.CreateSavedSearchRequest{Definition: definition})
 	if response.Code != http.StatusRequestEntityTooLarge {
@@ -502,7 +502,7 @@ func TestSavedSearchRoutesEnforceRequestSizeLimits(t *testing.T) {
 
 	handler = newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: store,
-		WebUI: testUI(), OwnerID: "owner-1",
+		WebUI: testUI(), OwnerID: "1009",
 	})
 	response = postProto(t, handler, "/api/saved-searches/get", &opensplunk.GetSavedSearchRequest{SavedSearchId: strings.Repeat("x", int(maximumSmallRequestBytes))})
 	if response.Code != http.StatusRequestEntityTooLarge {
@@ -585,7 +585,7 @@ func TestSavedSearchListClampsAdvertisedPageSizeToByteSafeRows(t *testing.T) {
 
 func TestSavedSearchOutputRejectsOversizedDefinition(t *testing.T) {
 	t.Parallel()
-	record := savedSearchRecord("saved-1", 1, "owner-1", "app-main", "Errors")
+	record := savedSearchRecord("saved-1", 1, "1009", "app-main", "Errors")
 	description := strings.Repeat("x", maximumSavedSearchDefinitionBytes)
 	record.Definition.Description = &description
 	store := &fakeSavedSearches{getFn: func(context.Context, savedobjects.AccessScope, string) (*opensplunk.SavedSearch, error) {
@@ -593,7 +593,7 @@ func TestSavedSearchOutputRejectsOversizedDefinition(t *testing.T) {
 	}}
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: store,
-		WebUI: testUI(), OwnerID: "owner-1",
+		WebUI: testUI(), OwnerID: "1009",
 	})
 	response := postProto(t, handler, "/api/saved-searches/get", &opensplunk.GetSavedSearchRequest{SavedSearchId: "saved-1"})
 	if response.Code != http.StatusInternalServerError {
@@ -634,18 +634,18 @@ func TestSavedSearchErrorMapping(t *testing.T) {
 
 func TestSavedSearchOutputCannotEscapeOwnerOrAppScope(t *testing.T) {
 	ownerStore := &fakeSavedSearches{getFn: func(context.Context, savedobjects.AccessScope, string) (*opensplunk.SavedSearch, error) {
-		return savedSearchRecord("saved-1", 1, "other-owner", "app-main", "Errors"), nil
+		return savedSearchRecord("saved-1", 1, "1007", "app-main", "Errors"), nil
 	}}
-	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: ownerStore, WebUI: testUI(), OwnerID: "owner-1"})
+	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: ownerStore, WebUI: testUI(), OwnerID: "1009", IdentityAuthenticator: serverFixtureUserIdentity(t, 1009)})
 	response := postProto(t, handler, "/api/saved-searches/get", &opensplunk.GetSavedSearchRequest{SavedSearchId: "saved-1"})
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("cross-owner status = %d, body = %s", response.Code, response.Body.String())
 	}
 
 	appStore := &fakeSavedSearches{listFn: func(context.Context, savedobjects.AccessScope, savedobjects.ListRequest) (savedobjects.ListResult, error) {
-		return savedobjects.ListResult{SavedSearches: []*opensplunk.SavedSearch{savedSearchRecord("saved-1", 1, "owner-1", "other-app", "Errors")}}, nil
+		return savedobjects.ListResult{SavedSearches: []*opensplunk.SavedSearch{savedSearchRecord("saved-1", 1, "1009", "other-app", "Errors")}}, nil
 	}}
-	handler = newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: appStore, WebUI: testUI(), OwnerID: "owner-1"})
+	handler = newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: appStore, WebUI: testUI(), OwnerID: "1009", IdentityAuthenticator: serverFixtureUserIdentity(t, 1009)})
 	appID := "app-main"
 	response = postProto(t, handler, "/api/saved-searches/list", &opensplunk.ListSavedSearchesRequest{AppIdFilter: &appID})
 	if response.Code != http.StatusInternalServerError {
@@ -654,12 +654,12 @@ func TestSavedSearchOutputCannotEscapeOwnerOrAppScope(t *testing.T) {
 }
 
 func TestNewHandlerRequiresSavedSearchService(t *testing.T) {
-	_, err := NewHandler(Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, WebUI: testUI()})
+	_, err := newAuthenticatedTestHandler(Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, WebUI: testUI()})
 	if err == nil || !strings.Contains(err.Error(), "saved search service is required") {
 		t.Fatalf("NewHandler error = %v", err)
 	}
 	var typedNil *fakeSavedSearches
-	_, err = NewHandler(Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: typedNil, WebUI: testUI()})
+	_, err = newAuthenticatedTestHandler(Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: typedNil, WebUI: testUI()})
 	if err == nil || !strings.Contains(err.Error(), "saved search service is required") {
 		t.Fatalf("NewHandler typed-nil error = %v", err)
 	}

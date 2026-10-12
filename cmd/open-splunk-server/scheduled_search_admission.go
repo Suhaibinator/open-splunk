@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/alerts"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/scheduledreports"
@@ -18,10 +20,11 @@ import (
 )
 
 type runtimeTrustedSearchAdmission struct {
-	jobs    *searchjobs.Manager
-	indexes *control.DB
-	apps    *runtimeAppCatalog
-	clock   func() time.Time
+	jobs     *searchjobs.Manager
+	indexes  *control.DB
+	apps     *runtimeAppCatalog
+	clock    func() time.Time
+	identity *runtimeIdentity
 }
 
 func (admission *runtimeTrustedSearchAdmission) AdmitScheduledReport(ctx context.Context, request scheduledreports.AdmissionRequest) (string, error) {
@@ -111,6 +114,32 @@ func (admission *runtimeTrustedSearchAdmission) admitTrustedSearch(
 	if appID != request.AppID {
 		return searchjobs.Job{}, false, server.ErrTrustedSearchAppUnavailable
 	}
+	if admission.identity == nil {
+		return searchjobs.Job{}, false, server.ErrTrustedSearchAuthorityUnavailable
+	}
+	organizationID := request.OrganizationID
+	if organizationID == "" {
+		if appID == "" {
+			return searchjobs.Job{}, false, server.ErrTrustedSearchAppUnavailable
+		}
+		var owningOrg int64
+		if err := admission.indexes.SQLDB().QueryRowContext(ctx, "SELECT organization_id FROM app_workspaces WHERE tenant_id=$1 AND app_id=$2", request.TenantID, appID).Scan(&owningOrg); err != nil {
+			return searchjobs.Job{}, false, server.ErrTrustedSearchAppUnavailable
+		}
+		organizationID = strconv.FormatInt(owningOrg, 10)
+	}
+	fresh, subject, err := admission.identity.freshAccessAndSubject(ctx, request.OwnerID, organizationID)
+	if err != nil {
+		return searchjobs.Job{}, false, err
+	}
+	if request.TenantID != fresh.TenantID {
+		return searchjobs.Job{}, false, authorization.ErrForbidden
+	}
+	org, _ := strconv.ParseInt(organizationID, 10, 64)
+	if caller, ok := authorization.FromContext(ctx); ok && caller.Subject.UserID != subject.UserID {
+		return searchjobs.Job{}, false, authorization.ErrForbidden
+	}
+	ctx = authorization.WithScope(ctx, authorization.Scope{Subject: subject, OrganizationID: org, PhysicalTenant: fresh.TenantID})
 	if appID != "" {
 		if err := authorizeRuntimeSearchApp(ctx, admission.apps, request.TenantID, appID); err != nil {
 			return searchjobs.Job{}, false, err
@@ -145,9 +174,12 @@ func (admission *runtimeTrustedSearchAdmission) admitTrustedSearch(
 		if record.Definition.Name != requested[index] || record.State != control.IndexStateActive || !record.Definition.SearchEnabled {
 			return searchjobs.Job{}, false, server.ErrTrustedSearchIndexUnavailable
 		}
+		if err := admission.identity.authorization.AuthorizeIndex(ctx, subject, org, record.ID, authorization.Search); err != nil {
+			return searchjobs.Job{}, false, err
+		}
 	}
 	create := searchjobs.CreateRequest{
-		SPL: request.SPL, OwnerID: request.OwnerID, TenantID: request.TenantID,
+		SPL: request.SPL, OwnerID: request.OwnerID, TenantID: request.TenantID, OrganizationID: organizationID,
 		AuthorizedIndexes: slices.Clone(requested), RequestedIndexes: requested,
 		TimeRange: request.TimeRange, AppID: appID, Source: request.Source,
 		RetentionLifetime: request.RetentionLifetime,
@@ -161,7 +193,7 @@ func (admission *runtimeTrustedSearchAdmission) admitTrustedSearch(
 
 func authorizeRuntimeSearchApp(ctx context.Context, apps *runtimeAppCatalog, tenantID, appID string) error {
 	app, err := apps.GetApp(ctx, server.AppAdministrationScope{
-		TenantID: tenantID,
+		TenantID: tenantID, OrganizationID: runtimeAppReadScope(ctx, tenantID).OrganizationID, SiteAdministrator: runtimeAppReadScope(ctx, tenantID).SiteAdministrator,
 	}, server.AppAdministrationSelector{AppID: appID})
 	if errors.Is(err, server.ErrAppAdministrationNotFound) {
 		return server.ErrTrustedSearchAppUnavailable

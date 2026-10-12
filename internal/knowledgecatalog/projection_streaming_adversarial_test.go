@@ -7,12 +7,13 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"gorm.io/gorm"
 )
 
 func TestProjectionIntegrityReadStopsAtAggregateBudgetPlusOne(t *testing.T) {
 	database, _ := newCatalogTestStore(t)
-	token, visits := newProjectionVisitCounter(t)
+	token, visits := newProjectionVisitCounter(t, database)
 	query := database.GORMDB().Raw(`
 		WITH RECURSIVE sequence(value) AS (
 			SELECT 1
@@ -21,26 +22,26 @@ func TestProjectionIntegrityReadStopsAtAggregateBudgetPlusOne(t *testing.T) {
 		)
 		SELECT
 			? AS tenant_id,
-			printf('ko-stream-%05d', value) AS knowledge_object_id,
+			'ko-stream-' || lpad((value)::text,5,'0') || '' AS knowledge_object_id,
 			1 AS object_version,
 			? AS app_id,
 			? AS owner_id,
 			'field_alias' AS object_type,
-			printf('stream-%05d', value) AS name,
+			'stream-' || lpad((value)::text,5,'0') || '' AS name,
 			'private' AS sharing_scope,
 			'active' AS state,
 			1 AS description_present,
-			CAST(zeroblob(?) AS TEXT) AS description,
+			repeat('x', (?)::integer) AS description,
 			0 AS index_selector_count,
 			0 AS host_selector_count,
 			0 AS source_selector_count,
 			0 AS sourcetype_selector_count,
 			0 AS selector_value_bytes,
 			0 AS canonical_selector_bytes,
-			? AS projection_bytes,
-			? AS seal_projection_bytes,
+			CAST(? AS BIGINT) AS projection_bytes,
+			CAST(? AS BIGINT) AS seal_projection_bytes,
 			0 AS seal_canonical_selector_bytes,
-			zeroblob(32) AS definition_digest,
+			decode(repeat('00', (32)::int), 'hex') AS definition_digest,
 			1 AS definition_bytes,
 			0 AS dependency_count,
 			1 AS created_at_unix_micro,
@@ -49,24 +50,24 @@ func TestProjectionIntegrityReadStopsAtAggregateBudgetPlusOne(t *testing.T) {
 			NULL AS quarantined_at_unix_micro,
 			NULL AS deleted_at_unix_micro,
 			NULL AS quarantine_reason,
-			length(CAST(printf('ko-stream-%05d', value) AS BLOB)) AS width_knowledge_object_id_bytes,
-			length(CAST(? AS BLOB)) AS width_tenant_id_bytes,
-			length(CAST(? AS BLOB)) AS width_app_id_bytes,
-			length(CAST(? AS BLOB)) AS width_owner_id_bytes,
+			octet_length('ko-stream-' || lpad((value)::text,5,'0') || '') AS width_knowledge_object_id_bytes,
+			length(convert_to((?)::text,'UTF8')) AS width_tenant_id_bytes,
+			length(convert_to((?)::text,'UTF8')) AS width_app_id_bytes,
+			length(convert_to((?)::text,'UTF8')) AS width_owner_id_bytes,
 			length('field_alias') AS width_object_type_bytes,
-			length(CAST(printf('stream-%05d', value) AS BLOB)) AS width_name_bytes,
+			octet_length('stream-' || lpad((value)::text,5,'0') || '') AS width_name_bytes,
 			length('private') AS width_sharing_scope_bytes,
 			length('active') AS width_state_bytes,
 			32 AS width_digest_bytes,
 			0 AS width_quarantine_reason_bytes,
-			? AS width_description_bytes,
+			CAST(? AS BIGINT) AS width_description_bytes,
 			0 AS width_selector_value_bytes,
-			? AS width_projection_bytes,
-			? AS width_seal_projection_bytes,
+			CAST(? AS BIGINT) AS width_projection_bytes,
+			CAST(? AS BIGINT) AS width_seal_projection_bytes,
 			0 AS width_canonical_selector_bytes,
 			0 AS width_seal_canonical_selector_bytes
 		FROM sequence
-		WHERE `+projectionVisitFunction+`(?, value)
+		WHERE `+projectionVisitFunction+`(?, value) = 1
 	`,
 		maximumObjectsPerTenant,
 		testTenant,
@@ -123,19 +124,24 @@ func TestBaseProjectionQueryNeverReturnsOversizedRawPayload(t *testing.T) {
 		t.Fatalf("acquire projection-corruption connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(context.Background(), connection, false); err != nil {
 		t.Fatalf("disable projection checks: %v", err)
+	}
+	// Suspend the description btree only to stage a payload that PostgreSQL
+	// normally refuses to index; the guarded read must clip the TOAST value.
+	if _, err := connection.ExecContext(t.Context(), `DROP INDEX knowledge_list_projection_description_idx`); err != nil {
+		t.Fatal(err)
 	}
 	const sentinel = "SECRET-PROJECTION-PAYLOAD"
 	const corruptBytes = 8 << 20
 	if _, err := connection.ExecContext(context.Background(), `
 		UPDATE knowledge_object_list_projections
-		SET description = ? || CAST(zeroblob(?) AS TEXT), description_present = 1
-		WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = 1
+		SET description = $1 || repeat('x', ($2)::integer), description_present = 1
+		WHERE tenant_id = $3 AND knowledge_object_id = $4 AND object_version = 1
 	`, sentinel, corruptBytes-len(sentinel), testTenant, "ko-oversized-projection"); err != nil {
 		t.Fatalf("inject oversized projection description: %v", err)
 	}
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = OFF`); err != nil {
+	if _, err := pgtest.Checks(context.Background(), connection, true); err != nil {
 		t.Fatalf("restore projection checks: %v", err)
 	}
 
@@ -166,9 +172,7 @@ func TestBaseProjectionQueryNeverReturnsOversizedRawPayload(t *testing.T) {
 func dropTableTriggers(t *testing.T, database *control.DB, table string) {
 	t.Helper()
 	rows, err := database.SQLDB().QueryContext(t.Context(), `
-		SELECT name FROM sqlite_schema
-		WHERE type = 'trigger' AND tbl_name = ?
-		ORDER BY name
+		SELECT t.tgname FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND r.relname=$1 AND NOT t.tgisinternal AND t.tgname<>'a000_control_write_lock' ORDER BY t.tgname
 	`, table)
 	if err != nil {
 		t.Fatalf("enumerate %s triggers: %v", table, err)
@@ -190,6 +194,8 @@ func dropTableTriggers(t *testing.T, database *control.DB, table string) {
 		t.Fatalf("close %s trigger enumeration: %v", table, err)
 	}
 	for _, name := range names {
-		dropTrigger(t, database, name)
+		if _, err := database.SQLDB().ExecContext(t.Context(), `DROP TRIGGER "`+strings.ReplaceAll(name, `"`, `""`)+`" ON "`+strings.ReplaceAll(table, `"`, `""`)+`"`); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

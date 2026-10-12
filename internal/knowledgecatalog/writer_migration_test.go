@@ -3,9 +3,13 @@ package knowledgecatalog_test
 import (
 	"io/fs"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/migrations"
@@ -22,40 +26,31 @@ func initializeReleasedWriterSchema(t *testing.T, database *control.DB) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	rows, err := conn.QueryContext(t.Context(), `SELECT type, name FROM sqlite_schema WHERE type IN ('trigger', 'table') AND name NOT LIKE 'sqlite_%' ORDER BY type DESC`)
-	if err != nil {
+	var schema string
+	if err := conn.QueryRowContext(t.Context(), "SELECT current_schema()").Scan(&schema); err != nil {
 		t.Fatal(err)
 	}
-	var drops []string
-	for rows.Next() {
-		var kind, name string
-		if err := rows.Scan(&kind, &name); err != nil {
-			t.Fatal(err)
-		}
-		drops = append(drops, "DROP "+kind+` "`+strings.ReplaceAll(name, `"`, `""`)+`";`)
+	if !strings.HasPrefix(schema, "os_test_") {
+		t.Fatal("released-schema reset requires an isolated test schema")
 	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if err := rows.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.ExecContext(t.Context(), "PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE;"+strings.Join(drops, "\n")+"COMMIT; PRAGMA foreign_keys = ON;"); err != nil {
+	quoted := pgx.Identifier{schema}.Sanitize()
+	if _, err := conn.ExecContext(t.Context(), "DROP SCHEMA "+quoted+" CASCADE; CREATE SCHEMA "+quoted); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.Close(); err != nil {
 		t.Fatal(err)
 	}
+
 	released := fstest.MapFS{}
-	entries, err := fs.ReadDir(migrations.SQLite(), ".")
+	entries, err := fs.ReadDir(migrations.PostgreSQL(), ".")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if entry.Name() >= "0012_" {
+		if entry.Name() >= "0007_" {
 			continue
 		}
-		data, err := fs.ReadFile(migrations.SQLite(), entry.Name())
+		data, err := fs.ReadFile(migrations.PostgreSQL(), entry.Name())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -80,7 +75,7 @@ func TestWriterReleasedSchemaUpgradePreservesAuditReferences(t *testing.T) {
 				"audit_events": 1, "knowledge_mutation_commit_authorities": 1, "knowledge_mutation_idempotency": 1,
 			})
 			events := knowledgeAuditEvents(t, harness)
-			migrationFS := migrations.SQLite()
+			migrationFS := migrations.PostgreSQL()
 			if failAfterRebuild {
 				broken := fstest.MapFS{}
 				entries, err := fs.ReadDir(migrationFS, ".")
@@ -94,16 +89,16 @@ func TestWriterReleasedSchemaUpgradePreservesAuditReferences(t *testing.T) {
 					}
 					broken[entry.Name()] = &fstest.MapFile{Data: data}
 				}
-				broken["0013_failure.sql"] = &fstest.MapFile{Data: []byte("CREATE TABL invalid;")}
+				broken["0008_failure.sql"] = &fstest.MapFile{Data: []byte("CREATE TABL invalid;")}
 				if err := control.ApplyMigrations(t.Context(), harness.database.SQLDB(), broken); err == nil {
 					t.Fatal("expected migration failure")
 				}
 				var version int
-				if err := harness.database.SQLDB().QueryRowContext(t.Context(), `SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil {
+				if err := harness.database.SQLDB().QueryRowContext(t.Context(), `SELECT max(version) FROM open_splunk_schema_migrations`).Scan(&version); err != nil {
 					t.Fatal(err)
 				}
-				if version != 11 {
-					t.Fatalf("rolled-back version = %d, want 11", version)
+				if version != 6 {
+					t.Fatalf("rolled-back version = %d, want 6", version)
 				}
 				if after := readWriterAuthoritySnapshot(t, harness.database); !reflect.DeepEqual(before, after) {
 					t.Fatal("rollback changed knowledge authority")
@@ -118,19 +113,23 @@ func TestWriterReleasedSchemaUpgradePreservesAuditReferences(t *testing.T) {
 			if after := knowledgeAuditEvents(t, harness); !reflect.DeepEqual(events, after) {
 				t.Fatal("upgrade changed audit events")
 			}
-			var violations, enabled, version int
-			if err := harness.database.SQLDB().QueryRowContext(t.Context(), `SELECT count(*) FROM pragma_foreign_key_check`).Scan(&violations); err != nil {
+			var version int
+			if err := harness.database.SQLDB().QueryRowContext(t.Context(), `SELECT max(version) FROM open_splunk_schema_migrations`).Scan(&version); err != nil {
 				t.Fatal(err)
 			}
-			if err := harness.database.SQLDB().QueryRowContext(t.Context(), `PRAGMA foreign_keys`).Scan(&enabled); err != nil {
+			entries, err := fs.ReadDir(migrationFS, ".")
+			if err != nil {
 				t.Fatal(err)
 			}
-			if err := harness.database.SQLDB().QueryRowContext(t.Context(), `SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil {
+			currentVersion, err := strconv.Atoi(strings.SplitN(entries[len(entries)-1].Name(), "_", 2)[0])
+			if err != nil {
 				t.Fatal(err)
 			}
-			if violations != 0 || enabled != 1 || version != 12 {
-				t.Fatalf("violations=%d foreign_keys=%d version=%d", violations, enabled, version)
+			if version != currentVersion {
+				t.Fatalf("migration version=%d, want%d", version, currentVersion)
 			}
+			pgtest.AssertIntegrity(t, harness.database.SQLDB())
+
 			replay, err := harness.writer.Create(harness.actorCtx, harness.writeScope, request)
 			if err != nil {
 				t.Fatal(err)

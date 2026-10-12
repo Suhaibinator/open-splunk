@@ -238,13 +238,13 @@ func applyListFilters(query *gorm.DB, request normalizedListRequest) *gorm.DB {
 func validateAbsentTenantBoundary(database *gorm.DB, tenantID string) error {
 	var eventExists int64
 	if err := database.Raw(`
-		SELECT EXISTS (
+		SELECT CASE WHEN EXISTS (
 			SELECT 1
 			FROM search_attempt_audit_events
 			WHERE tenant_id = ?
 			LIMIT 1
 		)
-	`, tenantID).Scan(&eventExists).Error; err != nil {
+	 THEN 1 ELSE 0 END`, tenantID).Scan(&eventExists).Error; err != nil {
 		return err
 	}
 	if eventExists != 0 {

@@ -88,7 +88,7 @@ type Manifest struct {
 	UIBuildID            string            `json:"ui_build_id"`
 	UI                   UIComponentDigest `json:"ui"`
 	ProtobufSchema       ComponentDigest   `json:"protobuf_schema"`
-	SQLiteMigrations     MigrationDigest   `json:"sqlite_migrations"`
+	PostgresMigrations   MigrationDigest   `json:"postgres_migrations"`
 	ClickHouseMigrations MigrationDigest   `json:"clickhouse_migrations"`
 }
 
@@ -182,9 +182,9 @@ func computeManifest(
 			)
 		}
 	}
-	sqlite, sqliteVersion, err := inventoryMigrations(filesystem, "migrations/sqlite")
+	postgres, postgresVersion, err := inventoryMigrations(filesystem, "migrations/postgres")
 	if err != nil {
-		return Manifest{}, fmt.Errorf("generate build manifest: inventory SQLite migrations: %w", err)
+		return Manifest{}, fmt.Errorf("generate build manifest: inventory PostgreSQL migrations: %w", err)
 	}
 	clickHouse, clickHouseVersion, err := inventoryMigrations(filesystem, "migrations/clickhouse")
 	if err != nil {
@@ -202,11 +202,11 @@ func computeManifest(
 			Files:     ui.files,
 		},
 		ProtobufSchema: protobuf.component,
-		SQLiteMigrations: MigrationDigest{
-			SHA256:        sqlite.component.SHA256,
-			FileCount:     sqlite.component.FileCount,
-			ByteCount:     sqlite.component.ByteCount,
-			LatestVersion: sqliteVersion,
+		PostgresMigrations: MigrationDigest{
+			SHA256:        postgres.component.SHA256,
+			FileCount:     postgres.component.FileCount,
+			ByteCount:     postgres.component.ByteCount,
+			LatestVersion: postgresVersion,
 		},
 		ClickHouseMigrations: MigrationDigest{
 			SHA256:        clickHouse.component.SHA256,
@@ -241,8 +241,8 @@ func Validate(filesystem fs.FS, manifest Manifest) error {
 	if recomputed.ProtobufSchema != manifest.ProtobufSchema {
 		return errors.New("validate build manifest: protobuf schema does not match the manifest")
 	}
-	if recomputed.SQLiteMigrations != manifest.SQLiteMigrations {
-		return errors.New("validate build manifest: SQLite migrations do not match the manifest")
+	if recomputed.PostgresMigrations != manifest.PostgresMigrations {
+		return errors.New("validate build manifest: PostgreSQL migrations do not match the manifest")
 	}
 	if recomputed.ClickHouseMigrations != manifest.ClickHouseMigrations {
 		return errors.New("validate build manifest: ClickHouse migrations do not match the manifest")
@@ -303,7 +303,7 @@ func Unmarshal(encoded []byte) (Manifest, error) {
 }
 
 func inventoryTree(filesystem fs.FS, root string, options inventoryOptions) (treeInventory, error) {
-	if !fs.ValidPath(root) || root == "." {
+	if !fs.ValidPath(root) {
 		return treeInventory{}, fmt.Errorf("invalid tree root %q", root)
 	}
 	rootInfo, err := fs.Lstat(filesystem, root)
@@ -325,7 +325,7 @@ func inventoryTree(filesystem fs.FS, root string, options inventoryOptions) (tre
 			return nil
 		}
 		relativePath := strings.TrimPrefix(filePath, root+"/")
-		if relativePath == filePath || !fs.ValidPath(relativePath) {
+		if (root != "." && relativePath == filePath) || !fs.ValidPath(relativePath) {
 			return fmt.Errorf("invalid relative path %q", filePath)
 		}
 		if err := validateGoEmbedPath(relativePath); err != nil {
@@ -494,6 +494,22 @@ func writeFramedPath(writer io.Writer, relativePath string, size uint64) error {
 	return nil
 }
 
+// DigestMigrations identifies a migration source corpus using the same bounded
+// file inventory as embedded release metadata. Its source digest is distinct
+// from the database's ordered migration-ledger digest.
+func DigestMigrations(filesystem fs.FS, root string) (MigrationDigest, error) {
+	inventory, version, err := inventoryMigrations(filesystem, root)
+	if err != nil {
+		return MigrationDigest{}, err
+	}
+	return MigrationDigest{
+		SHA256:        inventory.component.SHA256,
+		FileCount:     inventory.component.FileCount,
+		ByteCount:     inventory.component.ByteCount,
+		LatestVersion: version,
+	}, nil
+}
+
 func inventoryMigrations(filesystem fs.FS, root string) (treeInventory, uint32, error) {
 	inventory, err := inventoryTree(filesystem, root, inventoryOptions{
 		include: func(relativePath string) bool {
@@ -605,7 +621,7 @@ func validateManifestShape(manifest Manifest) (buildinfo.Identity, error) {
 	if err := validateComponent("protobuf schema", manifest.ProtobufSchema); err != nil {
 		return buildinfo.Identity{}, err
 	}
-	if err := validateMigrationComponent("SQLite migrations", manifest.SQLiteMigrations); err != nil {
+	if err := validateMigrationComponent("PostgreSQL migrations", manifest.PostgresMigrations); err != nil {
 		return buildinfo.Identity{}, err
 	}
 	if err := validateMigrationComponent("ClickHouse migrations", manifest.ClickHouseMigrations); err != nil {

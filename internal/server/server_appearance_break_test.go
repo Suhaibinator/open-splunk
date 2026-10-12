@@ -42,15 +42,15 @@ func (settings *countingServerSettings) updateCallCount() int {
 	return settings.updateCalls
 }
 
-func newAppearanceGateHandler(t *testing.T, authenticator auth.BrowserAuthenticator, settings Settings) *Handler {
+func newAppearanceGateHandler(t *testing.T, authenticator fixtureBrowserAuthenticator, settings Settings) *Handler {
 	t.Helper()
-	handler, err := NewHandler(Config{
+	handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:                 &fakeSearchJobs{},
 		Indexes:                    fakeIndexCatalog{},
 		IndexAdmin:                 &browserGateIndexAdministration{},
 		ServerSettings:             settings,
 		SavedSearches:              &fakeSavedSearches{},
-		BrowserAuthenticator:       authenticator,
+		IdentityAuthenticator:      adaptTestBrowserAuthenticator(authenticator),
 		WebUI:                      testUI(),
 		TenantID:                   browserGateTenantID,
 		OwnerID:                    browserGateOwnerID,
@@ -286,7 +286,7 @@ func TestAppearanceUpdateRejectsUnlistedPalettesBeforeTheStore(t *testing.T) {
 }
 
 // TestBootstrapServesTheLivePaletteWithoutAuthenticationOrRestart proves
-// the unauthenticated bootstrap route (what the sign-in page calls) reflects
+// the authenticated bootstrap route reflects
 // each administrator save on the very next request from the same handler,
 // and reports UNSPECIFIED when no settings service is configured.
 func TestBootstrapServesTheLivePaletteWithoutAuthenticationOrRestart(t *testing.T) {
@@ -299,7 +299,7 @@ func TestBootstrapServesTheLivePaletteWithoutAuthenticationOrRestart(t *testing.
 	handler := newAppearanceGateHandler(t, authenticator, settings)
 	bootstrap := func() opensplunk.UiPalette {
 		t.Helper()
-		response := postProto(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
+		response := postProtoHeaders(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 		if response.Code != http.StatusOK {
 			t.Fatalf("bootstrap status = %d, body = %s", response.Code, response.Body.String())
 		}
@@ -338,11 +338,11 @@ func TestBootstrapServesTheLivePaletteWithoutAuthenticationOrRestart(t *testing.
 	if got := bootstrap(); got != opensplunk.UiPalette_UI_PALETTE_EMBER {
 		t.Fatalf("bootstrap palette after rejected update = %v, want EMBER", got)
 	}
-	if authenticator.callCount() != 5 {
-		t.Fatalf("authenticator calls = %d, want 5 (bootstrap never authenticates)", authenticator.callCount())
+	if authenticator.callCount() != 11 {
+		t.Fatalf("authenticator calls = %d, want 11 (six bootstrap reads and five updates authenticate)", authenticator.callCount())
 	}
 
-	withoutSettings, err := NewHandler(Config{
+	withoutSettings, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:                 &fakeSearchJobs{},
 		Indexes:                    fakeIndexCatalog{},
 		SavedSearches:              &fakeSavedSearches{},
@@ -352,7 +352,7 @@ func TestBootstrapServesTheLivePaletteWithoutAuthenticationOrRestart(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := postProto(t, withoutSettings, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
+	response := postProtoHeaders(t, withoutSettings, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 	if response.Code != http.StatusOK {
 		t.Fatalf("bootstrap without settings status = %d, body = %s", response.Code, response.Body.String())
 	}

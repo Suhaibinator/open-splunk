@@ -221,6 +221,19 @@ export interface BrowserApiLimits {
   searchResultRetention: Duration | undefined;
   maximumTimelineBuckets: number;
   maximumFieldSummaryValues: number;
+  maximumCaptureRows: bigint;
+  maximumCaptureBytes: bigint;
+  organizationRetentionBytes: bigint;
+  globalRetentionBytes: bigint;
+}
+
+/** Current persisted and reserved captures/exports for the selected scope. */
+export interface RetainedStorageUsage {
+  organizationId: string;
+  organizationUsedBytes: bigint;
+  globalUsedBytes: bigint;
+  organizationLimitBytes: bigint;
+  globalLimitBytes: bigint;
 }
 
 /** POST /api/system/bootstrap */
@@ -244,6 +257,7 @@ export interface GetSystemBootstrapResponse {
    * configured; the client paints that as classic.
    */
   uiPalette: UiPalette;
+  retainedStorageUsage: RetainedStorageUsage | undefined;
 }
 
 function createBaseBrowserApiLimits(): BrowserApiLimits {
@@ -258,6 +272,10 @@ function createBaseBrowserApiLimits(): BrowserApiLimits {
     searchResultRetention: undefined,
     maximumTimelineBuckets: 0,
     maximumFieldSummaryValues: 0,
+    maximumCaptureRows: 0n,
+    maximumCaptureBytes: 0n,
+    organizationRetentionBytes: 0n,
+    globalRetentionBytes: 0n,
   };
 }
 
@@ -303,6 +321,32 @@ export const BrowserApiLimits: MessageFns<BrowserApiLimits> = {
     }
     if (message.maximumFieldSummaryValues !== 0) {
       writer.uint32(80).uint32(message.maximumFieldSummaryValues);
+    }
+    if (message.maximumCaptureRows !== 0n) {
+      if (BigInt.asUintN(64, message.maximumCaptureRows) !== message.maximumCaptureRows) {
+        throw new globalThis.Error("value provided for field message.maximumCaptureRows of type uint64 too large");
+      }
+      writer.uint32(88).uint64(message.maximumCaptureRows);
+    }
+    if (message.maximumCaptureBytes !== 0n) {
+      if (BigInt.asUintN(64, message.maximumCaptureBytes) !== message.maximumCaptureBytes) {
+        throw new globalThis.Error("value provided for field message.maximumCaptureBytes of type uint64 too large");
+      }
+      writer.uint32(96).uint64(message.maximumCaptureBytes);
+    }
+    if (message.organizationRetentionBytes !== 0n) {
+      if (BigInt.asUintN(64, message.organizationRetentionBytes) !== message.organizationRetentionBytes) {
+        throw new globalThis.Error(
+          "value provided for field message.organizationRetentionBytes of type uint64 too large",
+        );
+      }
+      writer.uint32(104).uint64(message.organizationRetentionBytes);
+    }
+    if (message.globalRetentionBytes !== 0n) {
+      if (BigInt.asUintN(64, message.globalRetentionBytes) !== message.globalRetentionBytes) {
+        throw new globalThis.Error("value provided for field message.globalRetentionBytes of type uint64 too large");
+      }
+      writer.uint32(112).uint64(message.globalRetentionBytes);
     }
     return writer;
   },
@@ -400,6 +444,38 @@ export const BrowserApiLimits: MessageFns<BrowserApiLimits> = {
             message.maximumFieldSummaryValues = reader.uint32();
             continue;
           }
+          case 11: {
+            if (tag !== 88) {
+              break;
+            }
+
+            message.maximumCaptureRows = reader.uint64() as bigint;
+            continue;
+          }
+          case 12: {
+            if (tag !== 96) {
+              break;
+            }
+
+            message.maximumCaptureBytes = reader.uint64() as bigint;
+            continue;
+          }
+          case 13: {
+            if (tag !== 104) {
+              break;
+            }
+
+            message.organizationRetentionBytes = reader.uint64() as bigint;
+            continue;
+          }
+          case 14: {
+            if (tag !== 112) {
+              break;
+            }
+
+            message.globalRetentionBytes = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -464,6 +540,26 @@ export const BrowserApiLimits: MessageFns<BrowserApiLimits> = {
         : isSet(object.maximum_field_summary_values)
         ? globalThis.Number(object.maximum_field_summary_values)
         : 0,
+      maximumCaptureRows: isSet(object.maximumCaptureRows)
+        ? BigInt(object.maximumCaptureRows)
+        : isSet(object.maximum_capture_rows)
+        ? BigInt(object.maximum_capture_rows)
+        : 0n,
+      maximumCaptureBytes: isSet(object.maximumCaptureBytes)
+        ? BigInt(object.maximumCaptureBytes)
+        : isSet(object.maximum_capture_bytes)
+        ? BigInt(object.maximum_capture_bytes)
+        : 0n,
+      organizationRetentionBytes: isSet(object.organizationRetentionBytes)
+        ? BigInt(object.organizationRetentionBytes)
+        : isSet(object.organization_retention_bytes)
+        ? BigInt(object.organization_retention_bytes)
+        : 0n,
+      globalRetentionBytes: isSet(object.globalRetentionBytes)
+        ? BigInt(object.globalRetentionBytes)
+        : isSet(object.global_retention_bytes)
+        ? BigInt(object.global_retention_bytes)
+        : 0n,
     };
   },
 
@@ -499,6 +595,18 @@ export const BrowserApiLimits: MessageFns<BrowserApiLimits> = {
     if (message.maximumFieldSummaryValues !== 0) {
       obj.maximumFieldSummaryValues = Math.round(message.maximumFieldSummaryValues);
     }
+    if (message.maximumCaptureRows !== 0n) {
+      obj.maximumCaptureRows = message.maximumCaptureRows.toString();
+    }
+    if (message.maximumCaptureBytes !== 0n) {
+      obj.maximumCaptureBytes = message.maximumCaptureBytes.toString();
+    }
+    if (message.organizationRetentionBytes !== 0n) {
+      obj.organizationRetentionBytes = message.organizationRetentionBytes.toString();
+    }
+    if (message.globalRetentionBytes !== 0n) {
+      obj.globalRetentionBytes = message.globalRetentionBytes.toString();
+    }
     return obj;
   },
 
@@ -529,6 +637,200 @@ export const BrowserApiLimits: MessageFns<BrowserApiLimits> = {
         : undefined;
     message.maximumTimelineBuckets = object.maximumTimelineBuckets ?? 0;
     message.maximumFieldSummaryValues = object.maximumFieldSummaryValues ?? 0;
+    message.maximumCaptureRows = (object.maximumCaptureRows !== undefined && object.maximumCaptureRows !== null)
+      ? BigInt(object.maximumCaptureRows)
+      : 0n;
+    message.maximumCaptureBytes = (object.maximumCaptureBytes !== undefined && object.maximumCaptureBytes !== null)
+      ? BigInt(object.maximumCaptureBytes)
+      : 0n;
+    message.organizationRetentionBytes =
+      (object.organizationRetentionBytes !== undefined && object.organizationRetentionBytes !== null)
+        ? BigInt(object.organizationRetentionBytes)
+        : 0n;
+    message.globalRetentionBytes = (object.globalRetentionBytes !== undefined && object.globalRetentionBytes !== null)
+      ? BigInt(object.globalRetentionBytes)
+      : 0n;
+    return message;
+  },
+};
+
+function createBaseRetainedStorageUsage(): RetainedStorageUsage {
+  return {
+    organizationId: "",
+    organizationUsedBytes: 0n,
+    globalUsedBytes: 0n,
+    organizationLimitBytes: 0n,
+    globalLimitBytes: 0n,
+  };
+}
+
+export const RetainedStorageUsage: MessageFns<RetainedStorageUsage> = {
+  encode(message: RetainedStorageUsage, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.organizationId !== "") {
+      writer.uint32(10).string(message.organizationId);
+    }
+    if (message.organizationUsedBytes !== 0n) {
+      if (BigInt.asUintN(64, message.organizationUsedBytes) !== message.organizationUsedBytes) {
+        throw new globalThis.Error("value provided for field message.organizationUsedBytes of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.organizationUsedBytes);
+    }
+    if (message.globalUsedBytes !== 0n) {
+      if (BigInt.asUintN(64, message.globalUsedBytes) !== message.globalUsedBytes) {
+        throw new globalThis.Error("value provided for field message.globalUsedBytes of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.globalUsedBytes);
+    }
+    if (message.organizationLimitBytes !== 0n) {
+      if (BigInt.asUintN(64, message.organizationLimitBytes) !== message.organizationLimitBytes) {
+        throw new globalThis.Error("value provided for field message.organizationLimitBytes of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.organizationLimitBytes);
+    }
+    if (message.globalLimitBytes !== 0n) {
+      if (BigInt.asUintN(64, message.globalLimitBytes) !== message.globalLimitBytes) {
+        throw new globalThis.Error("value provided for field message.globalLimitBytes of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.globalLimitBytes);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): RetainedStorageUsage {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseRetainedStorageUsage();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.organizationId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.organizationUsedBytes = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.globalUsedBytes = reader.uint64() as bigint;
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.organizationLimitBytes = reader.uint64() as bigint;
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.globalLimitBytes = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): RetainedStorageUsage {
+    return {
+      organizationId: isSet(object.organizationId)
+        ? globalThis.String(object.organizationId)
+        : isSet(object.organization_id)
+        ? globalThis.String(object.organization_id)
+        : "",
+      organizationUsedBytes: isSet(object.organizationUsedBytes)
+        ? BigInt(object.organizationUsedBytes)
+        : isSet(object.organization_used_bytes)
+        ? BigInt(object.organization_used_bytes)
+        : 0n,
+      globalUsedBytes: isSet(object.globalUsedBytes)
+        ? BigInt(object.globalUsedBytes)
+        : isSet(object.global_used_bytes)
+        ? BigInt(object.global_used_bytes)
+        : 0n,
+      organizationLimitBytes: isSet(object.organizationLimitBytes)
+        ? BigInt(object.organizationLimitBytes)
+        : isSet(object.organization_limit_bytes)
+        ? BigInt(object.organization_limit_bytes)
+        : 0n,
+      globalLimitBytes: isSet(object.globalLimitBytes)
+        ? BigInt(object.globalLimitBytes)
+        : isSet(object.global_limit_bytes)
+        ? BigInt(object.global_limit_bytes)
+        : 0n,
+    };
+  },
+
+  toJSON(message: RetainedStorageUsage): unknown {
+    const obj: any = {};
+    if (message.organizationId !== "") {
+      obj.organizationId = message.organizationId;
+    }
+    if (message.organizationUsedBytes !== 0n) {
+      obj.organizationUsedBytes = message.organizationUsedBytes.toString();
+    }
+    if (message.globalUsedBytes !== 0n) {
+      obj.globalUsedBytes = message.globalUsedBytes.toString();
+    }
+    if (message.organizationLimitBytes !== 0n) {
+      obj.organizationLimitBytes = message.organizationLimitBytes.toString();
+    }
+    if (message.globalLimitBytes !== 0n) {
+      obj.globalLimitBytes = message.globalLimitBytes.toString();
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RetainedStorageUsage>, I>>(base?: I): RetainedStorageUsage {
+    return RetainedStorageUsage.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RetainedStorageUsage>, I>>(object: I): RetainedStorageUsage {
+    const message = createBaseRetainedStorageUsage();
+    message.organizationId = object.organizationId ?? "";
+    message.organizationUsedBytes =
+      (object.organizationUsedBytes !== undefined && object.organizationUsedBytes !== null)
+        ? BigInt(object.organizationUsedBytes)
+        : 0n;
+    message.globalUsedBytes = (object.globalUsedBytes !== undefined && object.globalUsedBytes !== null)
+      ? BigInt(object.globalUsedBytes)
+      : 0n;
+    message.organizationLimitBytes =
+      (object.organizationLimitBytes !== undefined && object.organizationLimitBytes !== null)
+        ? BigInt(object.organizationLimitBytes)
+        : 0n;
+    message.globalLimitBytes = (object.globalLimitBytes !== undefined && object.globalLimitBytes !== null)
+      ? BigInt(object.globalLimitBytes)
+      : 0n;
     return message;
   },
 };
@@ -617,6 +919,7 @@ function createBaseGetSystemBootstrapResponse(): GetSystemBootstrapResponse {
     serverTime: undefined,
     build: undefined,
     uiPalette: 0,
+    retainedStorageUsage: undefined,
   };
 }
 
@@ -650,6 +953,9 @@ export const GetSystemBootstrapResponse: MessageFns<GetSystemBootstrapResponse> 
     }
     if (message.uiPalette !== 0) {
       writer.uint32(96).int32(message.uiPalette);
+    }
+    if (message.retainedStorageUsage !== undefined) {
+      RetainedStorageUsage.encode(message.retainedStorageUsage, writer.uint32(106).fork()).join();
     }
     return writer;
   },
@@ -749,6 +1055,14 @@ export const GetSystemBootstrapResponse: MessageFns<GetSystemBootstrapResponse> 
             message.uiPalette = reader.int32() as any;
             continue;
           }
+          case 13: {
+            if (tag !== 106) {
+              break;
+            }
+
+            message.retainedStorageUsage = RetainedStorageUsage.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -792,6 +1106,11 @@ export const GetSystemBootstrapResponse: MessageFns<GetSystemBootstrapResponse> 
         : isSet(object.ui_palette)
         ? uiPaletteFromJSON(object.ui_palette)
         : 0,
+      retainedStorageUsage: isSet(object.retainedStorageUsage)
+        ? RetainedStorageUsage.fromJSON(object.retainedStorageUsage)
+        : isSet(object.retained_storage_usage)
+        ? RetainedStorageUsage.fromJSON(object.retained_storage_usage)
+        : undefined,
     };
   },
 
@@ -824,6 +1143,9 @@ export const GetSystemBootstrapResponse: MessageFns<GetSystemBootstrapResponse> 
     if (message.uiPalette !== 0) {
       obj.uiPalette = uiPaletteToJSON(message.uiPalette);
     }
+    if (message.retainedStorageUsage !== undefined) {
+      obj.retainedStorageUsage = RetainedStorageUsage.toJSON(message.retainedStorageUsage);
+    }
     return obj;
   },
 
@@ -845,6 +1167,9 @@ export const GetSystemBootstrapResponse: MessageFns<GetSystemBootstrapResponse> 
       ? BuildMetadata.fromPartial(object.build)
       : undefined;
     message.uiPalette = object.uiPalette ?? 0;
+    message.retainedStorageUsage = (object.retainedStorageUsage !== undefined && object.retainedStorageUsage !== null)
+      ? RetainedStorageUsage.fromPartial(object.retainedStorageUsage)
+      : undefined;
     return message;
   },
 };

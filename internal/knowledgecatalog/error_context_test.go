@@ -140,7 +140,7 @@ func TestPublicScopeValidatorsReuseNormalizationWithoutMutation(t *testing.T) {
 	readApps := []string{testAppTwo, testApp, testAppTwo}
 	readBefore := slices.Clone(readApps)
 	if err := ValidateReadScope(ReadScope{
-		TenantID: testTenant, OwnerID: testOwner, ReadableAppIDs: readApps,
+		TenantID: testTenant, OwnerID: testOwner, ReadableAppIDs: readApps, OrganizationID: 1,
 	}); err != nil {
 		t.Fatalf("ValidateReadScope(valid): %v", err)
 	}
@@ -151,7 +151,7 @@ func TestPublicScopeValidatorsReuseNormalizationWithoutMutation(t *testing.T) {
 	writeApps := []string{testAppTwo, testApp, testAppTwo}
 	writeBefore := slices.Clone(writeApps)
 	if err := ValidateWriteScope(WriteScope{
-		TenantID: testTenant, OwnerID: testOwner, WritableAppIDs: writeApps,
+		TenantID: testTenant, OwnerID: testOwner, WritableAppIDs: writeApps, OrganizationID: 1,
 	}); err != nil {
 		t.Fatalf("ValidateWriteScope(valid): %v", err)
 	}
@@ -162,13 +162,13 @@ func TestPublicScopeValidatorsReuseNormalizationWithoutMutation(t *testing.T) {
 	// Preserve the existing intentional semantic difference: reads accept a
 	// bounded opaque app identity, while writes require the canonical app ID.
 	legacyRead := ReadScope{
-		TenantID: testTenant, OwnerID: testOwner, ReadableAppIDs: []string{"legacy-app"},
+		TenantID: testTenant, OwnerID: testOwner, ReadableAppIDs: []string{"legacy-app"}, OrganizationID: 1,
 	}
 	if err := ValidateReadScope(legacyRead); err != nil {
 		t.Fatalf("ValidateReadScope(opaque app): %v", err)
 	}
 	if err := ValidateWriteScope(WriteScope{
-		TenantID: testTenant, OwnerID: testOwner, WritableAppIDs: []string{"legacy-app"},
+		TenantID: testTenant, OwnerID: testOwner, WritableAppIDs: []string{"legacy-app"}, OrganizationID: 1,
 	}); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("ValidateWriteScope(opaque app) = %v, want ErrInvalidArgument", err)
 	}
@@ -176,19 +176,19 @@ func TestPublicScopeValidatorsReuseNormalizationWithoutMutation(t *testing.T) {
 	for name, validate := range map[string]func() error{
 		"read empty tenant": func() error {
 			return ValidateReadScope(ReadScope{
-				OwnerID: testOwner, ReadableAppIDs: []string{testApp},
+				OwnerID: testOwner, ReadableAppIDs: []string{testApp}, OrganizationID: 1,
 			})
 		},
 		"read empty apps": func() error {
-			return ValidateReadScope(ReadScope{TenantID: testTenant, OwnerID: testOwner})
+			return ValidateReadScope(ReadScope{TenantID: testTenant, OwnerID: testOwner, OrganizationID: 1})
 		},
 		"write empty owner": func() error {
 			return ValidateWriteScope(WriteScope{
-				TenantID: testTenant, WritableAppIDs: []string{testApp},
+				TenantID: testTenant, WritableAppIDs: []string{testApp}, OrganizationID: 1,
 			})
 		},
 		"write empty apps": func() error {
-			return ValidateWriteScope(WriteScope{TenantID: testTenant, OwnerID: testOwner})
+			return ValidateWriteScope(WriteScope{TenantID: testTenant, OwnerID: testOwner, OrganizationID: 1})
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -290,7 +290,7 @@ func TestStoreGetErrorContextUsesAuthorizedCurrentRegistry(t *testing.T) {
 	dropTrigger(t, database, "knowledge_object_version_update_is_forbidden")
 	mustExec(t, database, `UPDATE knowledge_object_versions
 		SET sharing_scope = 'app'
-		WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = 1`,
+		WHERE tenant_id = $1 AND knowledge_object_id = $2 AND object_version = 1`,
 		testTenant, "ko-error-context-history")
 	versionOne := uint64(1)
 	_, err = store.Get(
@@ -504,9 +504,9 @@ func TestWriterReplayErrorContextAndDisposition(t *testing.T) {
 	harness.writer.hook = nil
 	dropTrigger(t, harness.database, "knowledge_mutation_idempotency_update_is_forbidden")
 	mustExec(t, harness.database, `UPDATE knowledge_mutation_idempotency
-		SET outcome_proto = X'00'
-		WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
-		  AND route = ? AND client_request_id = ?`,
+		SET outcome_proto = decode('00','hex')
+		WHERE tenant_id = $1 AND actor_kind = $2 AND actor_id = $3
+		  AND route = $4 AND client_request_id = $5`,
 		writerFaultTenant,
 		"browser",
 		"writer-fault-administrator",
