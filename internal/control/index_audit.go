@@ -53,20 +53,22 @@ type IndexMutationAuditAppender interface {
 // an optional higher-level index-name validator. A nil Validator is safe only
 // when both sparse ACTIVE-knowledge drivers prove there is no ACTIVE object.
 type AuditedIndexAdministrationOptions struct {
-	TenantID  string
-	Appender  IndexMutationAuditAppender
-	Validator IndexNameAdmissionValidator
+	TenantID         string
+	Appender         IndexMutationAuditAppender
+	Validator        IndexNameAdmissionValidator
+	BindCreatedIndex func(context.Context, *gorm.DB, string) error
 }
 
 // AuditedIndexAdministration delegates index reads to DB and makes every
 // successful mutation contingent on publishing its audit event in the same
-// SQLite transaction. Raw DB methods remain available for internal setup and
+// PostgreSQL transaction. Raw DB methods remain available for internal setup and
 // tests that do not represent production administrative mutations.
 type AuditedIndexAdministration struct {
-	db        *DB
-	tenantID  string
-	appender  IndexMutationAuditAppender
-	validator IndexNameAdmissionValidator
+	db               *DB
+	tenantID         string
+	appender         IndexMutationAuditAppender
+	validator        IndexNameAdmissionValidator
+	bindCreatedIndex func(context.Context, *gorm.DB, string) error
 }
 
 // NewAuditedIndexAdministration constructs the fail-closed production index
@@ -100,10 +102,11 @@ func NewAuditedIndexAdministration(
 		)
 	}
 	return &AuditedIndexAdministration{
-		db:        db,
-		tenantID:  strings.Clone(options.TenantID),
-		appender:  options.Appender,
-		validator: options.Validator,
+		db:               db,
+		tenantID:         strings.Clone(options.TenantID),
+		appender:         options.Appender,
+		validator:        options.Validator,
+		bindCreatedIndex: options.BindCreatedIndex,
 	}, nil
 }
 
@@ -112,6 +115,11 @@ func (administration *AuditedIndexAdministration) publish(
 	tx *gorm.DB,
 	event IndexMutationAuditEvent,
 ) error {
+	if event.Action == IndexMutationAuditActionCreate && administration.bindCreatedIndex != nil {
+		if err := administration.bindCreatedIndex(ctx, tx, event.IndexID); err != nil {
+			return err
+		}
+	}
 	return administration.appender.AppendIndexMutationInTransaction(
 		ctx,
 		tx,

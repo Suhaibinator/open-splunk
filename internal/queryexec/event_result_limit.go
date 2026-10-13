@@ -23,8 +23,12 @@ func (executor *Executor) eventExecutionSurfaceContext(
 	if err := searchlimits.Validate(policy); err != nil {
 		return "", nil, err
 	}
+	rows := policy.MaxResultRows
+	if capture, ok := searchlimits.CaptureFromContext(ctx); ok {
+		rows = capture.Rows
+	}
 	limited, eligible, err := clickhouse.CompileEventResultLimitContext(
-		ctx, query, policy.MaxResultRows+1,
+		ctx, query, rows+1,
 	)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {

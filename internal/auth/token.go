@@ -20,15 +20,15 @@ import (
 	"unicode/utf8"
 
 	"fortio.org/safecast"
-	"gorm.io/gorm"
-
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/tokenconstraint"
+	"gorm.io/gorm"
 )
 
 const (
@@ -142,6 +142,8 @@ type HECTokenProfile struct {
 // CollectorToken contains safe token metadata. It never contains a secret or
 // digest.
 type CollectorToken struct {
+	OrganizationID       int64
+	IssuerUserID         uint64
 	ID                   string
 	Version              uint64
 	Name                 string
@@ -194,6 +196,8 @@ func (issued IssuedCollectorToken) GoString() string { return issued.String() }
 // CreateCollectorTokenRequest describes a collector token and its explicit
 // ingestion-index scope.
 type CreateCollectorTokenRequest struct {
+	OrganizationID       int64
+	IssuerUserID         uint64
 	Name                 string
 	Description          string
 	AllowedIndexNames    []string
@@ -209,6 +213,9 @@ type CreateCollectorTokenRequest struct {
 // UpdateCollectorTokenRequest replaces the mutable definition of an existing
 // collector token. The credential digest and safe prefix are immutable.
 type UpdateCollectorTokenRequest struct {
+	// Organization and issuer may be repeated by trusted adapters, but cannot change.
+	OrganizationID       int64
+	IssuerUserID         uint64
 	Name                 string
 	Description          string
 	AllowedIndexNames    []string
@@ -240,16 +247,20 @@ type AuthorizedIndexPolicy = indexpolicy.Policy
 // refreshed at each security boundary where index or credential changes need
 // to take effect.
 type Authentication struct {
-	TokenID              string
-	TokenVersion         uint64
-	TokenName            string
-	Purpose              IngestionTokenPurpose
-	HECProfile           HECTokenProfile
-	BoundCollectorID     string
-	TokenRateLimits      ingestquota.Limits
-	AuthorizedIndexes    []AuthorizedIndexPolicy
-	AllowedHostRegexes   []string
-	AllowedSourceRegexes []string
+	// OrganizationOwnershipRequired is derived from the configured server store, never request input.
+	OrganizationOwnershipRequired bool
+	OrganizationID                int64
+	IssuerUserID                  uint64
+	TokenID                       string
+	TokenVersion                  uint64
+	TokenName                     string
+	Purpose                       IngestionTokenPurpose
+	HECProfile                    HECTokenProfile
+	BoundCollectorID              string
+	TokenRateLimits               ingestquota.Limits
+	AuthorizedIndexes             []AuthorizedIndexPolicy
+	AllowedHostRegexes            []string
+	AllowedSourceRegexes          []string
 }
 
 // AuthorizedIndexNames returns a detached name projection in authoritative
@@ -266,24 +277,28 @@ func (authentication Authentication) AuthorizedIndexNames() []string {
 // Store owns collector credential creation, persistence, revocation, and
 // per-index authorization.
 type Store struct {
-	orm                       *gorm.DB
-	digestKey                 []byte
-	random                    io.Reader
-	now                       func() time.Time
-	retainedRevokedTokenLimit int
-	totalTokenRecordLimit     int
-	auditAppender             audit.TransactionAppender
-	auditTenantID             string
-	requireExplicitAuditActor bool
+	orm                          *gorm.DB
+	digestKey                    []byte
+	random                       io.Reader
+	now                          func() time.Time
+	retainedRevokedTokenLimit    int
+	totalTokenRecordLimit        int
+	auditAppender                audit.TransactionAppender
+	auditTenantID                string
+	requireExplicitAuditActor    bool
+	requireOrganizationOwnership bool
 }
 
 // StoreOptions configures bounded collector-token lifecycle behavior. Zero
 // values select production defaults.
 type StoreOptions struct {
-	RetainedRevokedTokenLimit int
-	TotalTokenRecordLimit     int
+	// RequireOrganizationOwnership checks every token index against its immutable organization
+	// in the same transaction. Production enables this after installing resource authorization.
+	RequireOrganizationOwnership bool
+	RetainedRevokedTokenLimit    int
+	TotalTokenRecordLimit        int
 	// AuditAppender records successful administrative token mutations inside
-	// the same SQLite transaction. Nil selects the control database's audit
+	// the same PostgreSQL transaction. Nil selects the control database's audit
 	// store. A typed nil is rejected.
 	AuditAppender audit.TransactionAppender
 	// AuditTenantID scopes every event emitted by this token store. Empty
@@ -362,15 +377,16 @@ func NewStoreWithOptions(db *control.DB, digestKey []byte, options StoreOptions)
 		)
 	}
 	return &Store{
-		orm:                       db.GORMDB(),
-		digestKey:                 append([]byte(nil), digestKey...),
-		random:                    rand.Reader,
-		now:                       time.Now,
-		retainedRevokedTokenLimit: retainedRevokedTokenLimit,
-		totalTokenRecordLimit:     totalTokenRecordLimit,
-		auditAppender:             auditAppender,
-		auditTenantID:             auditTenantID,
-		requireExplicitAuditActor: options.RequireExplicitAuditActor,
+		orm:                          db.GORMDB(),
+		digestKey:                    append([]byte(nil), digestKey...),
+		random:                       rand.Reader,
+		now:                          time.Now,
+		retainedRevokedTokenLimit:    retainedRevokedTokenLimit,
+		totalTokenRecordLimit:        totalTokenRecordLimit,
+		auditAppender:                auditAppender,
+		auditTenantID:                auditTenantID,
+		requireExplicitAuditActor:    options.RequireExplicitAuditActor,
+		requireOrganizationOwnership: options.RequireOrganizationOwnership,
 	}, nil
 }
 
@@ -415,6 +431,9 @@ func (store *Store) CreateCollectorTokenIdempotent(
 	request CreateCollectorTokenRequest,
 	intent requestidempotency.Intent,
 ) (IssuedCollectorToken, bool, error) {
+	if request.OrganizationID <= 0 || request.IssuerUserID == 0 || request.IssuerUserID > math.MaxInt64 {
+		return IssuedCollectorToken{}, false, fmt.Errorf("%w: token organization and issuer are required", control.ErrInvalidArgument)
+	}
 	if intent.TenantID != store.auditTenantID ||
 		intent.Route != requestidempotency.RouteCreateIngestionToken {
 		return IssuedCollectorToken{}, false, requestidempotency.ErrInvalid
@@ -430,6 +449,9 @@ func (store *Store) CreateCollectorTokenIdempotent(
 		current, err := store.GetCollectorToken(ctx, receipt.Target.ID)
 		if errors.Is(err, control.ErrNotFound) {
 			return IssuedCollectorToken{}, true, requestidempotency.ErrUnavailable
+		}
+		if err == nil && (current.OrganizationID != request.OrganizationID || current.IssuerUserID != request.IssuerUserID) {
+			return IssuedCollectorToken{}, true, requestidempotency.ErrConflict
 		}
 		return IssuedCollectorToken{Token: current}, true, err
 	}
@@ -457,6 +479,9 @@ func (store *Store) createCollectorToken(
 ) (issued IssuedCollectorToken, err error) {
 	if err := store.validateTokenMutationActor(ctx); err != nil {
 		return IssuedCollectorToken{}, err
+	}
+	if request.OrganizationID <= 0 || request.IssuerUserID == 0 || request.IssuerUserID > math.MaxInt64 {
+		return IssuedCollectorToken{}, fmt.Errorf("%w: token organization and issuer are required", control.ErrInvalidArgument)
 	}
 	now := databaseTime(store.now())
 	name, description, allowedNames, expiresAt, err := normalizeTokenDefinition(
@@ -500,14 +525,14 @@ func (store *Store) createCollectorToken(
 	digest := store.digest(plaintext)
 	prefix := plaintext[:len(collectorTokenPrefix)+8]
 
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "15:ingestion-credentials")
 	if tx.Error != nil {
 		return IssuedCollectorToken{}, fmt.Errorf("begin collector token creation: %w", tx.Error)
 	}
 	transactionFinished := false
 	defer finishTokenTransaction(tx, &transactionFinished, &err)
 
-	indexIDs, err := resolveCollectorTokenScopes(tx, allowedNames)
+	indexIDs, err := store.resolveTokenOrganizationScopes(tx, request.OrganizationID, allowedNames)
 	if errors.Is(err, errCollectorTokenScopeUnavailable) {
 		return IssuedCollectorToken{}, fmt.Errorf("%w: every token scope must name an active ingestion-enabled index", control.ErrInvalidArgument)
 	}
@@ -541,6 +566,8 @@ func (store *Store) createCollectorToken(
 		boundCollectorID = &value
 	}
 	record := collectorTokenRecord{
+		OrganizationID:                      request.OrganizationID,
+		IssuerUserID:                        int64(request.IssuerUserID),
 		IngestionTokenID:                    tokenID,
 		Version:                             1,
 		Name:                                name,
@@ -558,7 +585,7 @@ func (store *Store) createCollectorToken(
 	}
 	if err := tx.Create(&record).Error; err != nil {
 		// No bound SQL value contains plaintext: only the HMAC digest is sent
-		// to SQLite, so wrapping a driver error cannot disclose the token.
+		// to PostgreSQL, so wrapping a driver error cannot disclose the token.
 		return IssuedCollectorToken{}, fmt.Errorf("store collector token digest: %w", err)
 	}
 	memberships := make([]collectorTokenIndexRecord, len(indexIDs))
@@ -649,7 +676,9 @@ func (store *Store) createCollectorToken(
 	}
 
 	metadata := CollectorToken{
-		ID: tokenID, Version: 1, Name: name, Description: description,
+		OrganizationID: request.OrganizationID,
+		IssuerUserID:   request.IssuerUserID,
+		ID:             tokenID, Version: 1, Name: name, Description: description,
 		Prefix: prefix, State: CollectorTokenStateActive,
 		Purpose:              purpose,
 		HECProfile:           hecProfile,
@@ -678,7 +707,7 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 		return CollectorToken{}, fmt.Errorf("%w: expected token version is outside the supported range", control.ErrInvalidArgument)
 	}
 	now := databaseTime(store.now())
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "15:ingestion-credentials")
 	if tx.Error != nil {
 		return CollectorToken{}, fmt.Errorf("begin collector token update: %w", tx.Error)
 	}
@@ -691,6 +720,9 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 	}
 	if err != nil {
 		return CollectorToken{}, fmt.Errorf("read collector token for update: %w", err)
+	}
+	if request.OrganizationID != 0 && request.OrganizationID != current.OrganizationID || request.IssuerUserID != 0 && request.IssuerUserID != current.IssuerUserID {
+		return CollectorToken{}, fmt.Errorf("%w: token organization and issuer are immutable", control.ErrInvalidArgument)
 	}
 	if current.Version != expectedVersion {
 		return CollectorToken{}, control.ErrVersionConflict
@@ -732,7 +764,7 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 		return CollectorToken{}, fmt.Errorf("%w: token expiration must be after its creation time", control.ErrInvalidArgument)
 	}
 
-	indexIDs, err := resolveCollectorTokenScopes(tx, allowedNames)
+	indexIDs, err := store.resolveTokenOrganizationScopes(tx, current.OrganizationID, allowedNames)
 	if errors.Is(err, errCollectorTokenScopeUnavailable) {
 		return CollectorToken{}, fmt.Errorf("%w: every token scope must name an active ingestion-enabled index", control.ErrInvalidArgument)
 	}
@@ -916,7 +948,7 @@ func (store *Store) Authorize(ctx context.Context, plaintext, indexName string) 
 	digest := store.digest(plaintext)
 	now := databaseTime(store.now())
 	var principal Principal
-	result := store.orm.WithContext(ctx).
+	query := store.orm.WithContext(ctx).
 		Table("ingestion_tokens AS token").
 		Select(`
 			token.ingestion_token_id AS token_id,
@@ -942,8 +974,11 @@ func (store *Store) Authorize(ctx context.Context, plaintext, indexName string) 
 			now.UnixMicro(),
 			normalizedIndex,
 			control.IndexStateActive,
-		).
-		Take(&principal)
+		)
+	if store.requireOrganizationOwnership {
+		query = query.Joins("JOIN os_index_organizations AS owned ON owned.index_id = target.index_id AND owned.organization_id = token.organization_id").Where(`NOT EXISTS (SELECT 1 FROM ingestion_token_indexes AS all_scope LEFT JOIN os_index_organizations AS all_owned ON all_owned.index_id = all_scope.index_id WHERE all_scope.ingestion_token_id = token.ingestion_token_id AND (all_owned.organization_id IS NULL OR all_owned.organization_id <> token.organization_id))`)
+	}
+	result := query.Take(&principal)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return Principal{}, ErrUnauthorized
 	}
@@ -969,7 +1004,7 @@ func (store *Store) Authenticate(
 	if ctx == nil {
 		return Authentication{}, fmt.Errorf("%w: nil context", control.ErrInvalidArgument)
 	}
-	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(store.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return Authentication{}, fmt.Errorf(
 			"begin collector token authentication: %w",
@@ -999,14 +1034,14 @@ func (store *Store) Authenticate(
 
 // hecLastUseRefreshInterval bounds how stale a HEC token's last-use
 // observation may become. HEC authenticates every request, so recording each
-// use would put a SQLite writer on the hot path and starve administrative
+// use would put a PostgreSQL writer on the hot path and starve administrative
 // writes of the write lock under sustained ingest.
 const hecLastUseRefreshInterval = time.Minute
 
 // AuthenticateHEC validates one HEC credential, resolves its versioned
 // profile and complete current ingestion-policy snapshot, and keeps a
 // monotonic last-use observation at most hecLastUseRefreshInterval stale.
-// Authentication reads a snapshot without the SQLite write lock; only a stale
+// Authentication reads a snapshot without the PostgreSQL write lock; only a stale
 // or missing observation re-authenticates and records use in a write
 // transaction. Unknown, wrong-purpose, expired, revoked, and scope-less
 // credentials return ErrUnauthorized. A structurally valid, unexpired HEC
@@ -1031,7 +1066,7 @@ func (store *Store) AuthenticateHEC(
 }
 
 // authenticateHECSnapshot authenticates in a read-only transaction, which the
-// SQLite driver begins as DEFERRED so it never waits for the write lock. It
+// PostgreSQL driver begins as DEFERRED so it never waits for the write lock. It
 // reports whether the stored last-use observation is recent enough to skip
 // recording this use.
 func (store *Store) authenticateHECSnapshot(
@@ -1043,7 +1078,7 @@ func (store *Store) authenticateHECSnapshot(
 	useIsCurrent bool,
 	returnedErr error,
 ) {
-	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(store.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return Authentication{}, false, fmt.Errorf(
 			"begin HEC token authentication snapshot: %w",
@@ -1092,7 +1127,7 @@ func (store *Store) authenticateHECAndRecordUse(
 	authentication Authentication,
 	returnedErr error,
 ) {
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "15:ingestion-credentials")
 	if tx.Error != nil {
 		return Authentication{}, classifyHECAuthenticationError(fmt.Errorf(
 			"begin HEC token authentication: %w",
@@ -1166,6 +1201,8 @@ func (store *Store) authenticateWithIndexAuthority(
 		Table("ingestion_tokens AS token").
 		Select(`
 			token.ingestion_token_id,
+			token.organization_id,
+			token.issuer_user_id,
 			token.version,
 			token.name,
 			token.bound_collector_id,
@@ -1176,8 +1213,7 @@ func (store *Store) authenticateWithIndexAuthority(
 			 AND token.state = ?
 			 AND token.purpose = ?
 			 AND token.bound_collector_id IS NOT NULL
-			 AND length(CAST(token.ingestion_token_id AS BLOB)) BETWEEN 1 AND ?
-			 AND instr(token.ingestion_token_id, char(0)) = 0
+			 AND octet_length(token.ingestion_token_id) BETWEEN 1 AND ?
 			 AND (token.expires_at_unix_micro IS NULL OR token.expires_at_unix_micro > ?)`,
 			digest,
 			CollectorTokenStateActive,
@@ -1230,7 +1266,7 @@ func (store *Store) authenticateWithIndexAuthority(
 		BoundCollectorID: row.BoundCollectorID,
 		TokenRateLimits:  tokenRateLimits,
 	}
-	return hydrateTokenAuthenticationAuthority(
+	return store.hydrateTokenAuthenticationAuthority(
 		database,
 		authentication,
 		now,
@@ -1276,7 +1312,7 @@ func (store *Store) authenticateHEC(
 	var widths collectorTokenHECAuthenticationWidths
 	widthResult := base().
 		Select(`
-			length(CAST(token.ingestion_token_id AS BLOB))
+			octet_length(token.ingestion_token_id)
 				AS ingestion_token_id_bytes,
 			token.version,
 			CASE
@@ -1284,7 +1320,7 @@ func (store *Store) authenticateHEC(
 				WHEN token.state = 'disabled' THEN 2
 				ELSE 0
 			END AS state_kind,
-			length(CAST(token.name AS BLOB)) AS name_bytes,
+			octet_length(token.name) AS name_bytes,
 			CASE WHEN token.bound_collector_id IS NULL THEN 0 ELSE 1 END
 				AS bound_collector_id_present,
 			CASE WHEN hec_profile.ingestion_token_id IS NULL THEN 0 ELSE 1 END
@@ -1295,15 +1331,15 @@ func (store *Store) authenticateHEC(
 				  OR hec_default_scope.index_id IS NULL THEN -1
 				ELSE 1
 			END AS hec_default_index_target_present,
-			length(CAST(hec_default_index.name AS BLOB))
+			octet_length(hec_default_index.name)
 				AS hec_default_index_name_bytes,
-			length(CAST(hec_profile.default_host AS BLOB))
+			octet_length(hec_profile.default_host)
 				AS hec_default_host_bytes,
-			length(CAST(hec_profile.default_source AS BLOB))
+			octet_length(hec_profile.default_source)
 				AS hec_default_source_bytes,
-			length(CAST(hec_profile.default_sourcetype AS BLOB))
+			octet_length(hec_profile.default_sourcetype)
 				AS hec_default_sourcetype_bytes,
-			hec_profile.indexer_acknowledgment
+			CASE WHEN hec_profile.indexer_acknowledgment IS NULL THEN NULL WHEN hec_profile.indexer_acknowledgment THEN 1 ELSE 0 END
 				AS hec_indexer_acknowledgment,
 			token.max_ingest_events_per_second,
 			token.max_ingest_uncompressed_bytes_per_second`).
@@ -1331,13 +1367,15 @@ func (store *Store) authenticateHEC(
 	rowResult := base().
 		Select(`
 			token.ingestion_token_id,
+			token.organization_id,
+			token.issuer_user_id,
 			token.version,
 			token.name,
 			hec_default_index.name AS hec_default_index_name,
 			hec_profile.default_host AS hec_default_host,
 			hec_profile.default_source AS hec_default_source,
 			hec_profile.default_sourcetype AS hec_default_sourcetype,
-			hec_profile.indexer_acknowledgment
+			CASE WHEN hec_profile.indexer_acknowledgment IS NULL THEN NULL WHEN hec_profile.indexer_acknowledgment THEN 1 ELSE 0 END
 				AS hec_indexer_acknowledgment,
 			token.max_ingest_events_per_second,
 			token.max_ingest_uncompressed_bytes_per_second`).
@@ -1355,7 +1393,7 @@ func (store *Store) authenticateHEC(
 	if err != nil {
 		return Authentication{}, fmt.Errorf("authenticate HEC token: %w", err)
 	}
-	return hydrateTokenAuthenticationAuthority(
+	return store.hydrateTokenAuthenticationAuthority(
 		database,
 		authentication,
 		now,
@@ -1481,12 +1519,33 @@ func hecAuthenticationFromRow(
 	}, nil
 }
 
-func hydrateTokenAuthenticationAuthority(
+func (store *Store) hydrateTokenAuthenticationAuthority(
 	database *gorm.DB,
 	authentication Authentication,
 	now time.Time,
 	deferAuthorityErrors bool,
 ) (Authentication, error) {
+	var ownership struct {
+		OrganizationID int64
+		IssuerUserID   int64
+	}
+	if err := database.Table("ingestion_tokens").Select("organization_id, issuer_user_id").Where("ingestion_token_id = ?", authentication.TokenID).Take(&ownership).Error; err != nil {
+		return Authentication{}, fmt.Errorf("authenticate token organization: %w", err)
+	}
+	if ownership.OrganizationID <= 0 || ownership.IssuerUserID <= 0 {
+		return Authentication{}, ErrUnauthorized
+	}
+	authentication.OrganizationID, authentication.IssuerUserID = ownership.OrganizationID, uint64(ownership.IssuerUserID)
+	authentication.OrganizationOwnershipRequired = store.requireOrganizationOwnership
+	if store.requireOrganizationOwnership {
+		var invalid int64
+		if err := database.Table("ingestion_token_indexes AS scope").Joins("LEFT JOIN os_index_organizations AS owned ON owned.index_id = scope.index_id").Where("scope.ingestion_token_id = ? AND (owned.organization_id IS NULL OR owned.organization_id <> ?)", authentication.TokenID, ownership.OrganizationID).Count(&invalid).Error; err != nil {
+			return Authentication{}, fmt.Errorf("authenticate token index organization: %w", err)
+		}
+		if invalid != 0 {
+			return Authentication{}, ErrUnauthorized
+		}
+	}
 	constraintTokens, constraintErr := hydrateCollectorTokenConstraints(
 		database,
 		[]CollectorToken{{ID: authentication.TokenID}},
@@ -1520,10 +1579,10 @@ func hydrateTokenAuthenticationAuthority(
 	widthResult := database.
 		Table("ingestion_token_indexes AS scope").
 		Select(
-			"target.index_id IS NOT NULL AS target_present",
-			"length(CAST(target.name AS BLOB)) AS name_bytes",
-			"length(CAST(target.default_sourcetype AS BLOB)) AS default_sourcetype_bytes",
-			"length(CAST(target.state AS BLOB)) AS state_bytes",
+			"CASE WHEN target.index_id IS NOT NULL THEN 1 ELSE 0 END AS target_present",
+			"octet_length(target.name) AS name_bytes",
+			"octet_length(target.default_sourcetype) AS default_sourcetype_bytes",
+			"octet_length(target.state) AS state_bytes",
 		).
 		Joins("LEFT JOIN indexes AS target ON target.index_id = scope.index_id").
 		Where("scope.ingestion_token_id = ?", authentication.TokenID).
@@ -1570,7 +1629,7 @@ func hydrateTokenAuthenticationAuthority(
 	scopeResult := database.
 		Table("ingestion_token_indexes AS scope").
 		Select(
-			"target.index_id IS NOT NULL AS target_present",
+			"CASE WHEN target.index_id IS NOT NULL THEN 1 ELSE 0 END AS target_present",
 			"COALESCE(target.name, '') AS name",
 			"COALESCE(target.version, 0) AS version",
 			"COALESCE(target.retention_nanoseconds, -1) AS retention_nanoseconds",
@@ -1767,9 +1826,9 @@ func recordIngestionTokenUse(
 			gorm.Expr(`
 				CASE
 					WHEN last_used_at_unix_micro IS NULL
-					THEN MAX(created_at_unix_micro, ?)
+					THEN GREATEST(created_at_unix_micro, ?)
 					WHEN last_used_at_unix_micro < ?
-					THEN MAX(created_at_unix_micro, ?)
+					THEN GREATEST(created_at_unix_micro, ?)
 					ELSE last_used_at_unix_micro
 				END`,
 				acceptedAtUnixMicro,
@@ -1796,7 +1855,7 @@ func (store *Store) GetCollectorToken(
 	result CollectorToken,
 	returnedErr error,
 ) {
-	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(store.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return CollectorToken{}, fmt.Errorf(
 			"begin collector token get: %w",
@@ -1955,7 +2014,7 @@ func collectorTokenScopeDistribution(
 		Group("token.ingestion_token_id").
 		Order("state_kind DESC").
 		Order("token.revoked_at_unix_micro DESC").
-		Order("token.ingestion_token_id DESC").
+		Order(`token.ingestion_token_id COLLATE "C" DESC`).
 		Limit(maximumTotalTokenRecordLimit + 1).
 		Scan(&rows)
 	if query.Error != nil {
@@ -2168,7 +2227,7 @@ func (store *Store) ListCollectorTokens(
 	tokens []CollectorToken,
 	returnedErr error,
 ) {
-	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(store.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return nil, fmt.Errorf("begin collector token list: %w", tx.Error)
 	}
@@ -2216,7 +2275,7 @@ func (store *Store) SetCollectorTokenEnabled(
 	}
 
 	now := databaseTime(store.now())
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "15:ingestion-credentials")
 	if tx.Error != nil {
 		return CollectorToken{}, fmt.Errorf(
 			"begin collector token state update: %w",
@@ -2326,7 +2385,7 @@ func (store *Store) RevokeCollectorToken(ctx context.Context, tokenID string, ex
 	if expectedVersion == 0 || expectedVersion > math.MaxInt64 {
 		return CollectorToken{}, fmt.Errorf("%w: expected token version is outside the supported range", control.ErrInvalidArgument)
 	}
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "15:ingestion-credentials")
 	if tx.Error != nil {
 		return CollectorToken{}, fmt.Errorf("begin collector token revocation: %w", tx.Error)
 	}
@@ -2448,7 +2507,7 @@ func revokedCollectorTokenVictimQuery(
 		Select("ingestion_token_id").
 		Where("state = ?", CollectorTokenStateRevoked).
 		Order("revoked_at_unix_micro DESC").
-		Order("ingestion_token_id DESC")
+		Order(`ingestion_token_id COLLATE "C" DESC`)
 	if currentTokenID != "" {
 		victims = victims.Where(
 			"ingestion_token_id != ?",
@@ -2488,6 +2547,8 @@ func collectorTokenParentProjectionQuery(database *gorm.DB) *gorm.DB {
 		Table("ingestion_tokens AS token").
 		Select(`
 			token.ingestion_token_id,
+			token.organization_id,
+			token.issuer_user_id,
 			token.version,
 			token.name,
 			token.description,
@@ -2511,7 +2572,7 @@ func collectorTokenParentProjectionQuery(database *gorm.DB) *gorm.DB {
 			hec_profile.default_host AS hec_default_host,
 			hec_profile.default_source AS hec_default_source,
 			hec_profile.default_sourcetype AS hec_default_sourcetype,
-			hec_profile.indexer_acknowledgment AS hec_indexer_acknowledgment,
+			CASE WHEN hec_profile.indexer_acknowledgment IS NULL THEN NULL WHEN hec_profile.indexer_acknowledgment THEN 1 ELSE 0 END AS hec_indexer_acknowledgment,
 			token.max_ingest_events_per_second,
 			token.max_ingest_uncompressed_bytes_per_second`).
 		Joins(`
@@ -2526,21 +2587,21 @@ func collectorTokenProjectionWidthQuery(database *gorm.DB) *gorm.DB {
 	return database.
 		Table("ingestion_tokens AS token").
 		Select(`
-			length(CAST(token.ingestion_token_id AS BLOB))
+			octet_length(token.ingestion_token_id)
 				AS ingestion_token_id_bytes,
-			length(CAST(token.name AS BLOB)) AS name_bytes,
-			length(CAST(token.description AS BLOB)) AS description_bytes,
-			length(CAST(token.token_prefix AS BLOB)) AS token_prefix_bytes,
-			length(CAST(token.bound_collector_id AS BLOB))
+			octet_length(token.name) AS name_bytes,
+			octet_length(token.description) AS description_bytes,
+			octet_length(token.token_prefix) AS token_prefix_bytes,
+			octet_length(token.bound_collector_id)
 				AS bound_collector_id_bytes,
-			length(CAST(token.purpose AS BLOB)) AS purpose_bytes,
-			length(CAST(hec_default_index.name AS BLOB))
+			octet_length(token.purpose) AS purpose_bytes,
+			octet_length(hec_default_index.name)
 				AS hec_default_index_name_bytes,
-			length(CAST(hec_profile.default_host AS BLOB))
+			octet_length(hec_profile.default_host)
 				AS hec_default_host_bytes,
-			length(CAST(hec_profile.default_source AS BLOB))
+			octet_length(hec_profile.default_source)
 				AS hec_default_source_bytes,
-			length(CAST(hec_profile.default_sourcetype AS BLOB))
+			octet_length(hec_profile.default_sourcetype)
 				AS hec_default_sourcetype_bytes`).
 		Joins(`
 			LEFT JOIN ingestion_token_hec_profiles AS hec_profile
@@ -2658,7 +2719,7 @@ func listCollectorTokenMetadata(
 	var rows []collectorTokenMetadataRow
 	parentQuery := collectorTokenParentProjectionQuery(database).
 		Order("token.created_at_unix_micro").
-		Order("token.ingestion_token_id").
+		Order(`token.ingestion_token_id COLLATE "C"`).
 		Limit(maximumTotalTokenRecordLimit + 1).
 		Scan(&rows)
 	if parentQuery.Error != nil {
@@ -2832,9 +2893,9 @@ func hydrateCollectorTokenScopes(
 	widthQuery := database.
 		Table("ingestion_token_indexes AS scope").
 		Select(`
-			length(CAST(scope.ingestion_token_id AS BLOB))
+			octet_length(scope.ingestion_token_id)
 				AS ingestion_token_id_bytes,
-			length(CAST(target.name AS BLOB)) AS index_name_bytes`).
+			octet_length(target.name) AS index_name_bytes`).
 		Joins("LEFT JOIN indexes AS target ON target.index_id = scope.index_id").
 		Where("scope.ingestion_token_id IN ?", parentIDs).
 		Limit(aggregateLimit + 1).
@@ -2993,11 +3054,11 @@ func hydrateCollectorTokenConstraints(
 	widthQuery := database.
 		Table("ingestion_token_constraints AS constraint_row").
 		Select(`
-			length(CAST(constraint_row.ingestion_token_id AS BLOB))
+			octet_length(constraint_row.ingestion_token_id)
 				AS ingestion_token_id_bytes,
-			length(CAST(constraint_row.constraint_kind AS BLOB))
+			octet_length(constraint_row.constraint_kind)
 				AS constraint_kind_bytes,
-			length(CAST(constraint_row.pattern AS BLOB)) AS pattern_bytes`).
+			octet_length(constraint_row.pattern) AS pattern_bytes`).
 		Where("constraint_row.ingestion_token_id IN ?", parentIDs).
 		Limit(aggregateLimit + 1).
 		Scan(&widths)
@@ -3039,7 +3100,7 @@ func hydrateCollectorTokenConstraints(
 			"constraint_row.pattern",
 		).
 		Where("constraint_row.ingestion_token_id IN ?", parentIDs).
-		Order("constraint_row.ingestion_token_id").
+		Order(`constraint_row.ingestion_token_id COLLATE "C"`).
 		Order("constraint_row.constraint_kind").
 		Order("constraint_row.ordinal").
 		Limit(aggregateLimit + 1).
@@ -3111,6 +3172,9 @@ func collectorTokenFromMetadataRow(
 	row collectorTokenMetadataRow,
 	now time.Time,
 ) (CollectorToken, error) {
+	if row.OrganizationID <= 0 || row.IssuerUserID <= 0 {
+		return CollectorToken{}, fmt.Errorf("%w: invalid token organization or issuer", errCollectorTokenCatalogInconsistent)
+	}
 	if !validAuthenticationTokenID(row.IngestionTokenID) {
 		return CollectorToken{}, fmt.Errorf(
 			"%w: invalid collector token ID in control-plane database",
@@ -3197,6 +3261,8 @@ func collectorTokenFromMetadataRow(
 	}
 
 	token := CollectorToken{
+		OrganizationID:      row.OrganizationID,
+		IssuerUserID:        uint64(row.IssuerUserID),
 		ID:                  row.IngestionTokenID,
 		Version:             uint64(row.Version),
 		Name:                row.Name,

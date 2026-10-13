@@ -42,7 +42,7 @@ const (
     "file_count": 1,
     "byte_count": 40
   },
-  "sqlite_migrations": {
+  "postgres_migrations": {
     "sha256": "80b910820be2c9a6c0375361f38e5e4e177d49a31576b682c62ae1023faa9dfb",
     "file_count": 2,
     "byte_count": 90,
@@ -72,10 +72,10 @@ func validFixture() fstest.MapFS {
 		"proto/open_splunk/system_api.proto": {
 			Data: []byte("syntax = \"proto3\";\npackage open_splunk;\n"),
 		},
-		"migrations/sqlite/0001_control.sql": {
+		"migrations/postgres/0001_control.sql": {
 			Data: []byte("CREATE TABLE control (id TEXT PRIMARY KEY);\n"),
 		},
-		"migrations/sqlite/0002_indexes.sql": {
+		"migrations/postgres/0002_indexes.sql": {
 			Data: []byte("CREATE TABLE indexes (name TEXT PRIMARY KEY);\n"),
 		},
 		"migrations/clickhouse/0001_events.sql": {
@@ -172,11 +172,11 @@ func TestGenerateProducesCanonicalComponentBoundManifest(t *testing.T) {
 		t.Fatalf("UI files are not canonically ordered: %+v", manifest.UI.Files)
 	}
 	if manifest.ProtobufSchema.FileCount != 1 ||
-		manifest.SQLiteMigrations.LatestVersion != 2 ||
+		manifest.PostgresMigrations.LatestVersion != 2 ||
 		manifest.ClickHouseMigrations.LatestVersion != 1 {
 		t.Fatalf("component summaries = %+v %+v %+v",
 			manifest.ProtobufSchema,
-			manifest.SQLiteMigrations,
+			manifest.PostgresMigrations,
 			manifest.ClickHouseMigrations,
 		)
 	}
@@ -325,10 +325,10 @@ func TestGenerateBindsEachComponentWithoutCrossComponentDrift(t *testing.T) {
 			},
 		},
 		{
-			name: "SQLite migration",
-			path: "migrations/sqlite/0002_indexes.sql",
+			name: "PostgreSQL migration",
+			path: "migrations/postgres/0002_indexes.sql",
 			wantChanged: func(manifest Manifest) string {
-				return manifest.SQLiteMigrations.SHA256
+				return manifest.PostgresMigrations.SHA256
 			},
 		},
 		{
@@ -354,9 +354,9 @@ func TestGenerateBindsEachComponentWithoutCrossComponentDrift(t *testing.T) {
 			if test.name != "protobuf" && changed.ProtobufSchema.SHA256 != baseline.ProtobufSchema.SHA256 {
 				t.Fatal("unrelated protobuf digest changed")
 			}
-			if test.name != "SQLite migration" &&
-				changed.SQLiteMigrations.SHA256 != baseline.SQLiteMigrations.SHA256 {
-				t.Fatal("unrelated SQLite digest changed")
+			if test.name != "PostgreSQL migration" &&
+				changed.PostgresMigrations.SHA256 != baseline.PostgresMigrations.SHA256 {
+				t.Fatal("unrelated PostgreSQL digest changed")
 			}
 			if test.name != "ClickHouse migration" &&
 				changed.ClickHouseMigrations.SHA256 != baseline.ClickHouseMigrations.SHA256 {
@@ -441,7 +441,7 @@ func TestGenerateRejectsInvalidOrIncompleteInputs(t *testing.T) {
 			name:     "migration gap",
 			revision: testSourceRevision,
 			mutate: func(files fstest.MapFS) {
-				delete(files, "migrations/sqlite/0001_control.sql")
+				delete(files, "migrations/postgres/0001_control.sql")
 			},
 			wantDetail: "contiguous",
 		},
@@ -486,7 +486,7 @@ func TestGenerateRejectsSymlinkedTreeRoot(t *testing.T) {
 	writeTestFile(filepath.Join(root, ".next", "BUILD_ID"), testUIBuildID)
 	writeTestFile(filepath.Join(externalUI, "index.html"), "<!doctype html>")
 	writeTestFile(filepath.Join(root, "proto", "open_splunk", "system.proto"), "syntax = \"proto3\";\n")
-	writeTestFile(filepath.Join(root, "migrations", "sqlite", "0001_control.sql"), "SELECT 1;\n")
+	writeTestFile(filepath.Join(root, "migrations", "postgres", "0001_control.sql"), "SELECT 1;\n")
 	writeTestFile(filepath.Join(root, "migrations", "clickhouse", "0001_events.sql"), "SELECT 1;\n")
 	if err := os.Symlink(externalUI, filepath.Join(root, "out")); err != nil {
 		t.Skipf("symbolic links are unavailable: %v", err)
@@ -559,11 +559,11 @@ func TestValidateRejectsTamperingMissingAndExtraFiles(t *testing.T) {
 			wantDetail: "protobuf",
 		},
 		{
-			name: "tampered SQLite migration",
+			name: "tampered PostgreSQL migration",
 			mutate: func(files fstest.MapFS) {
-				files["migrations/sqlite/0001_control.sql"].Data = []byte("changed")
+				files["migrations/postgres/0001_control.sql"].Data = []byte("changed")
 			},
-			wantDetail: "SQLite",
+			wantDetail: "PostgreSQL",
 		},
 		{
 			name: "tampered ClickHouse migration",
@@ -637,5 +637,21 @@ func TestUnmarshalRejectsUnknownNoncanonicalAndTrailingData(t *testing.T) {
 				t.Fatal("Unmarshal error = nil")
 			}
 		})
+	}
+}
+
+func TestMigrationSourceDigestMatchesReleaseFromRootedFilesystem(t *testing.T) {
+	fixture := validFixture()
+	release := mustGenerate(t, fixture)
+	rooted, err := fs.Sub(fixture, "migrations/postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := DigestMigrations(rooted, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source != release.PostgresMigrations {
+		t.Fatalf("rooted migration corpus differs from embedded release: got %+v want %+v", source, release.PostgresMigrations)
 	}
 }

@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 type integrationRevisionHead struct {
@@ -49,7 +51,7 @@ func TestIntegrationRevisionHeadRejectsCursorFromDivergentRestoreBranch(t *testi
 			restoreHead.revision, len(restoreHead.token), atRestore.CatalogRevision)
 	}
 
-	backupPath := filepath.Join(t.TempDir(), "revision-head-restore.sqlite")
+	backupPath := filepath.Join(t.TempDir(), "branch.pgdump")
 	if err := database.BackupTo(context.Background(), backupPath); err != nil {
 		t.Fatalf("BackupTo(restore point): %v", err)
 	}
@@ -81,10 +83,7 @@ func TestIntegrationRevisionHeadRejectsCursorFromDivergentRestoreBranch(t *testi
 			branchAHead.revision, !bytes.Equal(branchAHead.token, restoreHead.token), restoreHead.revision)
 	}
 
-	restored, err := control.Open(context.Background(), backupPath)
-	if err != nil {
-		t.Fatalf("control.Open(restored branch point): %v", err)
-	}
+	restored := restoreCatalogSnapshot(t, database, backupPath, false)
 	t.Cleanup(func() {
 		if err := restored.Close(); err != nil {
 			t.Errorf("close restored branch: %v", err)
@@ -186,7 +185,7 @@ func TestIntegrationRevisionZeroIsAuthorizedVisibilityBoundary(t *testing.T) {
 		authorized := ReadScope{
 			TenantID:       testTenant,
 			OwnerID:        "owner-b",
-			ReadableAppIDs: []string{testApp},
+			ReadableAppIDs: []string{testApp}, OrganizationID: 1,
 		}
 		object, getErr := store.Get(
 			context.Background(), authorized, "ko-revision-zero-hidden", nil,
@@ -260,7 +259,7 @@ func TestIntegrationRevisionHeadCorruptionIsGenericAndBodyless(t *testing.T) {
 
 func ensureIntegrationRevisionZeroTenant(t *testing.T, database *control.DB) integrationRevisionHead {
 	t.Helper()
-	tx, err := database.SQLDB().BeginTx(context.Background(), nil)
+	tx, err := pgmeta.BeginSQL(context.Background(), database.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin revision-zero tenant fixture: %v", err)
 	}
@@ -282,7 +281,7 @@ func readIntegrationRevisionHead(t *testing.T, database *control.DB) integration
 	if err := database.SQLDB().QueryRowContext(context.Background(), `
 		SELECT catalog_revision, state_token
 		FROM knowledge_catalog_revision_heads
-		WHERE tenant_id = ?
+		WHERE tenant_id = $1
 	`, testTenant).Scan(&head.revision, &head.token); err != nil {
 		t.Fatalf("read integration revision head: %v", err)
 	}
@@ -306,7 +305,7 @@ func corruptIntegrationRevisionZeroState(
 		assignment += ", " + extraTenantAssignment
 	}
 	result, err := connection.ExecContext(context.Background(),
-		"UPDATE knowledge_catalog_tenants SET "+assignment+" WHERE tenant_id = ?",
+		"UPDATE knowledge_catalog_tenants SET "+assignment+" WHERE tenant_id = $1",
 		testTenant,
 	)
 	if err != nil {
@@ -315,8 +314,8 @@ func corruptIntegrationRevisionZeroState(
 	assertIntegrationRowsAffected(t, result, "reset corrupt tenant to revision zero")
 	result, err = connection.ExecContext(context.Background(), `
 		UPDATE knowledge_catalog_revision_heads
-		SET catalog_revision = 0, state_token = ?
-		WHERE tenant_id = ?
+		SET catalog_revision = 0, state_token = $1
+		WHERE tenant_id = $2
 	`, emptyHead.token, testTenant)
 	if err != nil {
 		t.Fatalf("restore valid empty revision head: %v", err)
@@ -349,17 +348,17 @@ func corruptIntegrationRevisionHead(
 	switch corruption {
 	case integrationRevisionHeadMissing:
 		result, err = connection.ExecContext(context.Background(), `
-			DELETE FROM knowledge_catalog_revision_heads WHERE tenant_id = ?
+			DELETE FROM knowledge_catalog_revision_heads WHERE tenant_id = $1
 		`, testTenant)
 	case integrationRevisionHeadMalformed:
 		result, err = connection.ExecContext(context.Background(), `
-			UPDATE knowledge_catalog_revision_heads SET state_token = ? WHERE tenant_id = ?
+			UPDATE knowledge_catalog_revision_heads SET state_token = $1 WHERE tenant_id = $2
 		`, []byte(integrationMalformedRevisionHeadSentinel), testTenant)
 	case integrationRevisionHeadRevisionMismatch:
 		result, err = connection.ExecContext(context.Background(), `
 			UPDATE knowledge_catalog_revision_heads
 			SET catalog_revision = catalog_revision + 1
-			WHERE tenant_id = ?
+			WHERE tenant_id = $1
 		`, testTenant)
 	default:
 		t.Fatalf("unknown revision-head corruption %d", corruption)
@@ -373,9 +372,7 @@ func corruptIntegrationRevisionHead(
 func dropIntegrationTableTriggers(t *testing.T, database *control.DB, table string) {
 	t.Helper()
 	rows, err := database.SQLDB().QueryContext(context.Background(), `
-		SELECT name FROM sqlite_schema
-		WHERE type = 'trigger' AND tbl_name = ?
-		ORDER BY name
+		SELECT t.tgname FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND r.relname=$1 AND NOT t.tgisinternal AND t.tgname<>'a000_control_write_lock' ORDER BY t.tgname
 	`, table)
 	if err != nil {
 		t.Fatalf("list %s triggers: %v", table, err)
@@ -398,7 +395,7 @@ func dropIntegrationTableTriggers(t *testing.T, database *control.DB, table stri
 	}
 	for _, name := range names {
 		quoted := `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
-		if _, err := database.SQLDB().ExecContext(context.Background(), "DROP TRIGGER "+quoted); err != nil {
+		if _, err := database.SQLDB().ExecContext(context.Background(), "DROP TRIGGER "+quoted+` ON "`+strings.ReplaceAll(table, `"`, `""`)+`"`); err != nil {
 			t.Fatalf("drop %s trigger %q: %v", table, name, err)
 		}
 	}
@@ -410,11 +407,11 @@ func integrationCorruptionConnection(t *testing.T, database *control.DB) *sql.Co
 	if err != nil {
 		t.Fatalf("acquire revision-head corruption connection: %v", err)
 	}
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(context.Background(), connection); err != nil {
 		_ = connection.Close()
 		t.Fatalf("disable revision-head fixture foreign keys: %v", err)
 	}
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(context.Background(), connection, false); err != nil {
 		_ = connection.Close()
 		t.Fatalf("disable revision-head fixture checks: %v", err)
 	}
@@ -423,10 +420,10 @@ func integrationCorruptionConnection(t *testing.T, database *control.DB) *sql.Co
 
 func closeIntegrationCorruptionConnection(t *testing.T, connection *sql.Conn) {
 	t.Helper()
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = OFF`); err != nil {
+	if _, err := pgtest.Checks(context.Background(), connection, true); err != nil {
 		t.Errorf("restore revision-head fixture checks: %v", err)
 	}
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`); err != nil {
+	if _, err := pgtest.RestoreForeignKeys(context.Background(), connection); err != nil {
 		t.Errorf("restore revision-head fixture foreign keys: %v", err)
 	}
 	if err := connection.Close(); err != nil {

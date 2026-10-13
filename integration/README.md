@@ -13,6 +13,34 @@ the shared dropdown's filtering, keyboard, and nested-dialog behavior.
 at desktop and mobile widths. Install the pinned browser with
 `npx --no-install playwright install chromium` before these suites.
 
+## Native integration prerequisites
+
+The backend, HEC, load, deletion, palette, and browser harnesses require an
+isolated PostgreSQL database and an isolated MinIO endpoint in addition to their
+ClickHouse or Chromium requirements. Set `OPEN_SPLUNK_TEST_POSTGRES_DSN`,
+`OPEN_SPLUNK_TEST_MINIO_ENDPOINT`, `OPEN_SPLUNK_TEST_MINIO_ACCESS_KEY`, and
+`OPEN_SPLUNK_TEST_MINIO_SECRET_KEY` before running them. Each test creates its
+own PostgreSQL schema and private versioned bucket and removes only those
+resources during cleanup. Use disposable test services, never production data.
+
+Linux CI prepares these services before native tests using
+`scripts/start-ci-native-services.sh`. Repository Actions variable
+`OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE` must contain an approved exact MinIO
+image tag or digest; an unset value fails immediately. The helper runs a pinned
+PostgreSQL 18 image and provides matching `pg_dump`/`pg_restore` clients extracted
+from that image through `GITHUB_PATH`. Their host wrappers retain the inherited
+archive descriptor used by native restore inspection. Local native backup tests also require matching
+PostgreSQL backup clients on `PATH`.
+
+The test-only fixture creates a persisted Google OAuth account, promotes that
+existing user to site administrator, creates an organization with an explicit
+owner membership, and mints the stock GoCommon session cookie. Shipped server
+processes authenticate that cookie using the normal identity runtime. No
+independent administrator token or production bootstrap account is created.
+Browser tests receive `OPEN_SPLUNK_BROWSER_SESSION_COOKIE` and
+`OPEN_SPLUNK_BROWSER_ORGANIZATION_ID` from the Go harness; the session remains
+in an HttpOnly cookie.
+
 ## Development workflow smoke test
 
 The opt-in development workflow gate generates a Git-independent development
@@ -34,7 +62,8 @@ host files during cleanup.
 1. build the static UI in backend mode;
 2. start pinned, ephemeral ClickHouse on a random loopback port;
 3. build and start `open-splunk-server` from an empty working directory with
-   temporary SQLite/key files and no executable runtime on `PATH`;
+   an isolated PostgreSQL schema, private versioned MinIO bucket, a server key,
+   and no executable runtime on `PATH`;
 4. provision an index, app-scoped immutable lookup, saved lookup search, and
    one-time ingestion token over protobuf HTTP;
 5. build and start `open-splunk-collector` against an empty `app.log`, append
@@ -64,9 +93,9 @@ host files during cleanup.
    traffic, confirm the final event rows land collapsed, expand the page from
    the Rows menu, and verify the expanded rows contain the typed lookup
    enrichment;
-13. create and poll a JSON Lines export, redeem its one-time bearer grant over
-   the raw download route, validate lookup-enriched artifact headers/content,
-   and reject grant replay;
+13. create and poll a JSON Lines export, download its pinned artifact through
+   the authenticated user route, validate lookup-enriched headers/content,
+   and reject a bearer-only request without the session cookie;
 14. provision a separate `gradethis` index and index-scoped token, run the
    shipped `configs/examples/collector.yaml` through `collector validate`, and
    start that exact configuration against an empty synthetic GradeThis log;
@@ -81,8 +110,10 @@ host files during cleanup.
    requests, path/status counts, mixed Go duration units (`µs`, `ms`, `s`), and
    top messages. This path starts no OpenTelemetry collector;
 17. insert a deterministic 10,001-row fixture into a separately provisioned
-   index, prove the interactive snapshot reports its 10,000-row truncation,
-   and prove bounded export re-execution downloads all 10,001 unique rows.
+   index, prove the preview stops at 10,000 rows while the sealed capture
+   retains all 10,001 rows, and download those exact captured rows after
+   inserting a decoy event. The export consumes the sealed capture without
+   re-executing the query.
 
 The WebSocket subscription uses `after_sequence = 0`, so the test accepts the
 current terminal snapshot when the small search finishes before the upgrade.
@@ -111,7 +142,7 @@ OPEN_SPLUNK_FEATURE_COMPLETION_INTEGRATION=1 \
   go test ./integration -run '^TestBackendVertical$' -count=3 -timeout=25m -v
 ```
 
-This additionally checks the 10,000-row retained Patterns relation and its exact
+This additionally checks the complete 10,001-row retained Patterns relation and its exact
 summary/member exports, Nearby search and Back navigation, Private/Global/App
 saved-search scope persistence, the HEC settings surface, and bundled Help
 navigation/search. It uses the production APIs without mocked responses. The
@@ -312,20 +343,20 @@ OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
 
 ## Physical index deletion API lifecycle
 
-`backend_index_data_deletion_test.go` exercises administrator `DELETE_DATA`
-admission through the compiled server and its real SQLite/ClickHouse
+`backend_index_data_deletion_test.go` exercises authorized user `DELETE_DATA`
+admission through the compiled server and its real PostgreSQL/ClickHouse
 dependencies. It rejects malformed, unauthorized, missing, stale, active, and
 misconfirmed requests without durable or physical effects; then issues 16
 concurrent exact admissions and requires one stable operation and one
 correlated ClickHouse mutation.
 
 The test uses `SYSTEM STOP MERGES` to hold that mutation deterministically,
-hard-kills the server, reopens SQLite to prove the pending operation and
+hard-kills the server, reopens PostgreSQL to prove the pending operation and
 mutation attempt are durable, restarts the server, and retries through the
 normalized name selector. After merges resume, only the trusted tenant/index
 rows disappear: same-name rows for a foreign tenant and neighboring-index rows
 for the trusted tenant survive. A terminal hard stop followed by repeated
-SQLite reopen verifies the immutable completion audit, consumed work records,
+PostgreSQL reopen verifies the immutable completion audit, consumed work records,
 retained deleting generation, tombstone, and permanent name reservation.
 Stable operation-ID replay is intentionally bounded to the outstanding
 operation: once terminal completion hides the catalog entry, the exact same
@@ -367,9 +398,9 @@ screenshots are written beneath
 ## Instance palette browser smoke
 
 `palette_smoke_test.go` proves the two halves of the administrator-selectable
-palette meet without Docker, ClickHouse, or a compiled server binary. It
-stages and builds the backend-mode static export, opens a real SQLite control
-plane in a temporary directory with the real audit journal and the real
+palette meet without ClickHouse or a compiled server binary. It
+stages and builds the backend-mode static export, opens a real PostgreSQL control
+plane and private MinIO storage with the real audit journal and the real
 `server_search_settings` / `server_appearance_settings` singleton stores, and
 mounts the production browser API handler over that export on a random
 loopback port. The search-job manager is backed by a fixed executor that
@@ -378,7 +409,7 @@ palette needs it.
 
 `palette-smoke/instance-palette.spec.ts`, run through
 `playwright.palette-smoke.config.ts`, then drives Chromium against that origin
-with an administrator bearer the Go test minted:
+with a native Google session for a persisted site administrator:
 
 1. a fresh browser loads `/signin/`, paints `data-palette="classic"`, and
    caches it once `/api/system/bootstrap` answers;
@@ -566,7 +597,7 @@ production crash flag is added. It seeds an app, index, saved search, HEC token,
 three events and a retained terminal result through the real HTTPS APIs, then
 uses the real pending-attempt store for a stopped-server pending fixture.
 It executes the production backup and offline verify commands, switches to
-fresh SQLite/ClickHouse volumes with a shared read-only archive, and kills a
+fresh PostgreSQL/MinIO/ClickHouse volumes with a shared read-only archive, and kills a
 helper process after canonical receipt publication but before control-plane
 publication. The identical production restore retry must preserve both the
 receipt/physical identity and the count of native RESTORE operations. Restart

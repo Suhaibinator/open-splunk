@@ -105,6 +105,9 @@ func (service *fakeExports) CreateDownloadGrant(ctx context.Context, scope searc
 	fn := service.grantFn
 	service.mu.Unlock()
 	if fn == nil {
+		if service.redeemFn != nil {
+			return exportjobs.DownloadGrant{Token: id, ExpiresAt: testNow.Add(time.Minute)}, nil
+		}
 		return exportjobs.DownloadGrant{}, errors.New("unexpected export download grant")
 	}
 	return fn(ctx, scope, id)
@@ -192,7 +195,7 @@ func (download *memoryArtifactDownload) closeCount() int {
 }
 
 func TestExportRoutesRoundTripProtobufAndScope(t *testing.T) {
-	ownerID, tenantID := "owner-export", "tenant-export"
+	ownerID, tenantID := "1107", "tenant-export"
 	queued := testExportJob("export-create", exportjobs.FormatCSV, exportjobs.StateQueued)
 	completed := testExportJob("export-get", exportjobs.FormatJSONLines, exportjobs.StateCompleted)
 	completed.SearchJobID = "search-get"
@@ -276,10 +279,8 @@ func TestExportRoutesRoundTripProtobufAndScope(t *testing.T) {
 		got.GetExportJob().GetArtifact().GetSizeBytes() != 321 || got.GetExportJob().GetArtifact().GetRowCount() != 7 {
 		t.Fatalf("get job = %+v", got.GetExportJob())
 	}
-	if got.GetDownloadGrant().GetDownloadPath() != exportDownloadPath ||
-		got.GetDownloadGrant().GetDownloadToken() != "one-time-secret" ||
-		!got.GetDownloadGrant().GetExpiresAt().AsTime().Equal(grantExpiresAt) {
-		t.Fatalf("download grant = %+v", got.GetDownloadGrant())
+	if got.GetDownloadGrant() != nil {
+		t.Fatal("cookie API exposed an internal download capability")
 	}
 
 	response = postProto(t, handler, "/api/search/exports/cancel", &opensplunk.CancelExportJobRequest{ExportJobId: " export-cancel "})
@@ -294,7 +295,7 @@ func TestExportRoutesRoundTripProtobufAndScope(t *testing.T) {
 	}
 
 	createCalls, getCalls, cancelCalls, grantCalls, redeemCalls := service.callCounts()
-	if createCalls != 1 || getCalls != 1 || cancelCalls != 1 || grantCalls != 1 || redeemCalls != 0 {
+	if createCalls != 1 || getCalls != 1 || cancelCalls != 1 || grantCalls != 0 || redeemCalls != 0 {
 		t.Fatalf("service calls = create %d get %d cancel %d grant %d redeem %d", createCalls, getCalls, cancelCalls, grantCalls, redeemCalls)
 	}
 }
@@ -414,7 +415,9 @@ func TestExportDownloadGrantFailureDoesNotReturnPartialJob(t *testing.T) {
 		},
 	}
 	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI()})
-	response := postProto(t, handler, "/api/search/exports/get", &opensplunk.GetExportJobRequest{ExportJobId: "export-1", IssueDownloadGrant: true})
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, exportDownloadPath+"?export_job_id=export-1", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -443,9 +446,9 @@ func TestExportDownloadGrantStateErrorsDescribeArtifacts(t *testing.T) {
 				},
 			}
 			handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI()})
-			response := postProto(t, handler, "/api/search/exports/get", &opensplunk.GetExportJobRequest{
-				ExportJobId: "export-1", IssueDownloadGrant: true,
-			})
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, exportDownloadPath+"?export_job_id=export-1", nil)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
 			if response.Code != test.want || !strings.Contains(response.Body.String(), "export artifact") || strings.Contains(response.Body.String(), "search result") {
 				t.Fatalf("response = %d %s", response.Code, response.Body.String())
 			}
@@ -542,7 +545,7 @@ func TestExportRoutesAreExactConditionalAndAdvertised(t *testing.T) {
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("disabled list route status = %d", response.Code)
 	}
-	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath+"?export_job_id=download-token", nil)
 	response = httptest.NewRecorder()
 	disabled.ServeHTTP(response, request)
 	if response.Code != http.StatusNotFound {
@@ -557,7 +560,7 @@ func TestExportRoutesAreExactConditionalAndAdvertised(t *testing.T) {
 	}
 
 	var typedNil *fakeExports
-	if _, err := NewHandler(Config{
+	if _, err := newAuthenticatedTestHandler(Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: &fakeSavedSearches{}, Exports: typedNil, WebUI: testUI(),
 	}); err != nil {
 		t.Fatalf("typed-nil optional exports: %v", err)
@@ -586,7 +589,7 @@ func TestExportDownloadReturnsRawArtifactWithSecureHeaders(t *testing.T) {
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI(), RouteTimeout: time.Millisecond,
 	})
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath+"?export_job_id=download-token", nil)
 	request.Header.Set("Authorization", "Bearer download-token")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -631,7 +634,7 @@ func TestExportDownloadKeepsDeadlineThroughServerFinalFlush(t *testing.T) {
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI(),
 	})
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath+"?export_job_id=download-token", nil)
 	request.Header.Set("Authorization", "Bearer download-token")
 	response := &deadlineResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
 	handler.ServeHTTP(response, request)
@@ -659,7 +662,7 @@ func TestExportDownloadFlushesBeforeReleasingArtifactLease(t *testing.T) {
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI(),
 		MaximumConcurrentDownloads: 1,
 	})
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath+"?export_job_id=download-token", nil)
 	request.Header.Set("Authorization", "Bearer download-token")
 	response := &flushResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
 	response.onFlush = func() {
@@ -738,7 +741,7 @@ func TestExportAPIRoutesRejectDNSRebindingBeforeServiceOrGrantUse(t *testing.T) 
 		)
 	}
 
-	rawRequest := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
+	rawRequest := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath+"?export_job_id=still-valid", nil)
 	rawRequest.Host = "attacker.example"
 	rawRequest.Header.Set("Origin", "http://attacker.example")
 	rawRequest.Header.Set("Authorization", "Bearer still-valid")
@@ -777,7 +780,7 @@ func TestExportAPIRoutesRejectDNSRebindingBeforeServiceOrGrantUse(t *testing.T) 
 		)
 	}
 
-	rawRequest = httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
+	rawRequest = httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath+"?export_job_id=still-valid", nil)
 	rawRequest.Host = "example.com"
 	rawRequest.Header.Set("Origin", "http://example.com")
 	rawRequest.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -823,7 +826,7 @@ func TestSlowDownloadsCannotStarveTypedAPICapacity(t *testing.T) {
 
 	firstResult := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath+"?export_job_id=first-token", nil)
 		request.Header.Set("Authorization", "Bearer first-token")
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
@@ -842,7 +845,7 @@ func TestSlowDownloadsCannotStarveTypedAPICapacity(t *testing.T) {
 		t.Fatalf("typed API was starved by slow download: %d %s", bootstrap.Code, bootstrap.Body.String())
 	}
 
-	secondRequest := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
+	secondRequest := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath+"?export_job_id=second-token", nil)
 	secondRequest.Header.Set("Authorization", "Bearer second-token")
 	secondResponse := httptest.NewRecorder()
 	handler.ServeHTTP(secondResponse, secondRequest)
@@ -877,14 +880,11 @@ func TestExportDownloadRejectsMalformedRequestsBeforeRedemption(t *testing.T) {
 		configure  func(*http.Request)
 		wantStatus int
 	}{
-		{name: "missing authorization", configure: func(*http.Request) {}, wantStatus: http.StatusUnauthorized},
-		{name: "basic authorization", configure: func(request *http.Request) { request.Header.Set("Authorization", "Basic abc") }, wantStatus: http.StatusUnauthorized},
-		{name: "empty bearer", configure: func(request *http.Request) { request.Header.Set("Authorization", "Bearer ") }, wantStatus: http.StatusUnauthorized},
-		{name: "bearer with whitespace", configure: func(request *http.Request) { request.Header.Set("Authorization", "Bearer token extra") }, wantStatus: http.StatusUnauthorized},
-		{name: "duplicate authorization", configure: func(request *http.Request) {
-			request.Header["Authorization"] = []string{"Bearer token", "Bearer other"}
-		}, wantStatus: http.StatusUnauthorized},
-		{name: "query string", configure: func(request *http.Request) { request.URL.RawQuery = "token=secret" }},
+		{name: "missing export ID", configure: func(r *http.Request) { r.URL.RawQuery = "" }, wantStatus: http.StatusBadRequest},
+		{name: "empty export ID", configure: func(r *http.Request) { r.URL.RawQuery = "export_job_id=" }, wantStatus: http.StatusBadRequest},
+		{name: "duplicate export ID", configure: func(r *http.Request) { r.URL.RawQuery = "export_job_id=one&export_job_id=two" }, wantStatus: http.StatusBadRequest},
+		{name: "unexpected authority", configure: func(r *http.Request) { r.URL.RawQuery = "export_job_id=one&token=secret" }, wantStatus: http.StatusBadRequest},
+		{name: "malformed query", configure: func(r *http.Request) { r.URL.RawQuery = "export_job_id=%zz" }, wantStatus: http.StatusBadRequest},
 		{name: "range", configure: func(request *http.Request) { request.Header.Set("Range", "bytes=0-1") }},
 		{name: "request body", configure: func(request *http.Request) {
 			request.Body = io.NopCloser(strings.NewReader("x"))
@@ -897,7 +897,7 @@ func TestExportDownloadRejectsMalformedRequestsBeforeRedemption(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
+			request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath+"?export_job_id=download-token", nil)
 			if test.wantStatus == 0 {
 				request.Header.Set("Authorization", "Bearer valid-token")
 			}
@@ -938,8 +938,8 @@ func TestExportDownloadGrantIsOneTimeAndFailuresAreNonDisclosing(t *testing.T) {
 	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI()})
 
 	download := func(token string) *httptest.ResponseRecorder {
-		request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
-		request.Header.Set("Authorization", "Bearer "+token)
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath+"?export_job_id=download-token", nil)
+		request.URL.RawQuery = "export_job_id=" + token
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
 		return response
@@ -952,8 +952,8 @@ func TestExportDownloadGrantIsOneTimeAndFailuresAreNonDisclosing(t *testing.T) {
 		if response.Code != http.StatusUnauthorized {
 			t.Fatalf("invalid token %q status = %d, body = %s", token, response.Code, response.Body.String())
 		}
-		if response.Header().Get("WWW-Authenticate") == "" {
-			t.Fatalf("invalid token %q omitted WWW-Authenticate", token)
+		if response.Header().Get("WWW-Authenticate") != "" {
+			t.Fatal("cookie download advertised a bearer authentication scheme")
 		}
 		if strings.Contains(response.Body.String(), token) || strings.Contains(response.Body.String(), "replay") || strings.Contains(response.Body.String(), "unknown") {
 			t.Fatalf("invalid-token detail leaked: %s", response.Body.String())
@@ -986,7 +986,7 @@ func TestExportDownloadRejectsUnsafeArtifactMetadata(t *testing.T) {
 				return download, nil
 			}}
 			handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI()})
-			request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
+			request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath+"?export_job_id=download-token", nil)
 			request.Header.Set("Authorization", "Bearer one-time-token")
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)

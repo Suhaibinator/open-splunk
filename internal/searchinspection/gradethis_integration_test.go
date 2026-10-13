@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
@@ -212,7 +212,7 @@ func TestGradeThisInspectionServiceAgainstClickHouse(t *testing.T) {
 	}
 	controlDB, err := control.Open(
 		ctx,
-		filepath.Join(t.TempDir(), "visibility.sqlite"),
+		pgtest.DSN(t),
 	)
 	if err != nil {
 		_ = storeConnection.Close()
@@ -223,7 +223,7 @@ func TestGradeThisInspectionServiceAgainstClickHouse(t *testing.T) {
 			t.Errorf("close GradeThis inspection control DB: %v", err)
 		}
 	})
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		_ = storeConnection.Close()
 		t.Fatal(err)

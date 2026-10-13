@@ -93,9 +93,7 @@ func (manager *Manager) listPageFor(ctx context.Context, access AccessScope, req
 	}
 	var exactEntries []retainedJobListEntry
 	if normalized.includeTotal {
-		root := manager.jobsByScope[normalizedAccess]
-		exactEntries = make([]retainedJobListEntry, 0, jobListIndexSize(root))
-		jobListIndexCollectBefore(root, nil, &exactEntries, jobListIndexSize(root))
+		exactEntries = manager.collectJobListEntriesLocked(normalizedAccess, nil, manager.maxJobs)
 	}
 	manager.mu.RUnlock()
 
@@ -130,7 +128,7 @@ func (manager *Manager) listPageFor(ctx context.Context, access AccessScope, req
 			}
 			entry := retained.entry
 			entry.mu.Lock()
-			if entry.job.TenantID != normalizedAccess.TenantID || entry.job.OwnerID != normalizedAccess.OwnerID {
+			if entry.job.TenantID != normalizedAccess.TenantID || (!normalizedAccess.SiteAdministrator && (entry.job.OwnerID != normalizedAccess.OwnerID || (normalizedAccess.OrganizationID != "" && entry.job.OrganizationID != normalizedAccess.OrganizationID))) {
 				entry.mu.Unlock()
 				continue
 			}
@@ -140,6 +138,14 @@ func (manager *Manager) listPageFor(ctx context.Context, access AccessScope, req
 			snapshot := shallowJobListSnapshot(entry.job)
 			entry.mu.Unlock()
 
+			if manager.authorizeJob != nil {
+				if err := manager.authorizeJob(ctx, normalizedAccess, snapshot); err != nil {
+					if ctx.Err() != nil {
+						return false, ctx.Err()
+					}
+					continue
+				}
+			}
 			if !jobMatchesListMetadata(snapshot, normalized) {
 				continue
 			}
@@ -247,8 +253,7 @@ func (manager *Manager) jobListIndexChunk(access AccessScope, before *jobListBou
 	if manager.closed {
 		return nil, false, ErrClosed
 	}
-	result := make([]retainedJobListEntry, 0, jobListIndexChunkSize+1)
-	jobListIndexCollectBefore(manager.jobsByScope[access], before, &result, jobListIndexChunkSize+1)
+	result := manager.collectJobListEntriesLocked(access, before, jobListIndexChunkSize+1)
 	more := len(result) > jobListIndexChunkSize
 	if more {
 		result = result[:jobListIndexChunkSize]
@@ -299,8 +304,10 @@ func normalizeJobListRequest(access AccessScope, request JobListRequest) (Access
 		return invalid("owner ID is invalid")
 	}
 	access = AccessScope{
-		TenantID: strings.Clone(access.TenantID),
-		OwnerID:  strings.Clone(access.OwnerID),
+		TenantID:          strings.Clone(access.TenantID),
+		OwnerID:           strings.Clone(access.OwnerID),
+		OrganizationID:    strings.Clone(access.OrganizationID),
+		SiteAdministrator: access.SiteAdministrator,
 	}
 	pageSize := request.PageSize
 	if pageSize == 0 {
@@ -402,6 +409,7 @@ func shallowJobListSnapshot(source Job) Job {
 
 func cloneJobListItem(source Job) JobListItem {
 	result := JobListItem{
+		OrganizationID:    source.OrganizationID,
 		ID:                source.ID,
 		Version:           source.Version,
 		OwnerID:           source.OwnerID,
@@ -423,10 +431,11 @@ func cloneJobListItem(source Job) JobListItem {
 		RowCount:          source.RowCount,
 		ResultBytes:       source.ResultBytes,
 		ResultsTruncated:  source.ResultsTruncated,
-		CreatedAt:         source.CreatedAt,
-		StartedAt:         source.StartedAt,
-		FinishedAt:        source.FinishedAt,
-		ExpiresAt:         source.ExpiresAt,
+		CaptureComplete:   source.CaptureComplete, PreviewTruncated: source.PreviewTruncated, CaptureRows: source.CaptureRows, CaptureBytes: source.CaptureBytes,
+		CreatedAt:  source.CreatedAt,
+		StartedAt:  source.StartedAt,
+		FinishedAt: source.FinishedAt,
+		ExpiresAt:  source.ExpiresAt,
 	}
 	if source.Failure != nil {
 		result.Failure = &JobListFailure{
@@ -470,4 +479,31 @@ func jobListFollowsCursor(job Job, cursor jobListCursor) bool {
 	createdAt := cursor.lastCreatedAt()
 	return job.CreatedAt.Before(createdAt) ||
 		(job.CreatedAt.Equal(createdAt) && job.ID < cursor.LastID)
+}
+
+// collectJobListEntriesLocked merges owner indexes for a site administrator.
+// Each merge retains at most one bounded page; exact totals are bounded by MaxJobs.
+func (manager *Manager) collectJobListEntriesLocked(access AccessScope, before *jobListBoundary, limit int) []retainedJobListEntry {
+	result := make([]retainedJobListEntry, 0, limit)
+	for scope, root := range manager.jobsByScope {
+		if scope.TenantID != access.TenantID || (!access.SiteAdministrator && scope.OwnerID != access.OwnerID) {
+			continue
+		}
+		next := make([]retainedJobListEntry, 0, limit)
+		jobListIndexCollectBefore(root, before, &next, limit)
+		result = append(result, next...)
+		slices.SortFunc(result, func(a, b retainedJobListEntry) int {
+			if jobListKeyComesBefore(a.key, b.key) {
+				return 1
+			}
+			if jobListKeyComesBefore(b.key, a.key) {
+				return -1
+			}
+			return 0
+		})
+		if len(result) > limit {
+			result = result[:limit]
+		}
+	}
+	return result
 }

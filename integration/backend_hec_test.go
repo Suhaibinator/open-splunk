@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
@@ -99,8 +101,9 @@ func TestBackendHECVertical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlDBPath := filepath.Join(work, "control.sqlite")
-	administratorTokenPath, administratorToken := provisionAdministratorToken(t, work)
+	controlDSN := pgtest.DSN(t)
+	googleIdentity, googleSession := provisionGoogleSession(t, work, controlDSN)
+	controlDSN = googleIdentity.PostgresDSN
 	assertEmptyDirectory(t, serverRuntimeDir)
 	serverEnvironment := clickHouseServerEnvironment(os.Environ(), clickHouse)
 	serverEnvironment = environmentWithValue(
@@ -113,9 +116,9 @@ func TestBackendHECVertical(t *testing.T) {
 		"-http-listen-address=" + httpAddress,
 		"-http-tls-certificate-file=" + httpTLSIdentity.CertificateFile,
 		"-http-tls-private-key-file=" + httpTLSIdentity.PrivateKeyFile,
-		"-control-database-file=" + controlDBPath,
+		"-postgres-dsn=" + controlDSN,
 		"-master-key-file=" + filepath.Join(work, "server.key"),
-		"-administrator-token-file=" + administratorTokenPath,
+
 		"-collector-grpc-listen-address=" + collectorAddress,
 		"-collector-grpc-plaintext-enabled",
 		"-tenant-id=" + backendHECTenantID,
@@ -138,7 +141,7 @@ func TestBackendHECVertical(t *testing.T) {
 		httpClient,
 		baseURL,
 		serverProcess,
-		administratorToken,
+		googleSession,
 		clickHouse.Password,
 		clickHouse.MigrationPassword,
 		clickHouse.RuntimePassword,
@@ -149,12 +152,12 @@ func TestBackendHECVertical(t *testing.T) {
 	assertPlaintextCannotReachHTTPSHealth(t, ctx, httpAddress)
 
 	var createdIndex opensplunk.CreateIndexResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		httpClient,
 		baseURL+"/api/indexes/create",
-		administratorToken,
+		googleSession,
 		&opensplunk.CreateIndexRequest{Definition: &opensplunk.IndexDefinition{
 			Name:            backendHECIndexName,
 			DisplayName:     "Backend HEC vertical integration",
@@ -174,10 +177,10 @@ func TestBackendHECVertical(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 	)
 	protectedValues := []string{
-		administratorToken,
+		googleSession,
 		plaintextToken,
 		tokenMetadata.GetTokenPrefix(),
 		clickHouse.Password,
@@ -194,6 +197,13 @@ func TestBackendHECVertical(t *testing.T) {
 		backendHECRawPayloadOne,
 		backendHECRawPayloadTwo,
 	}
+	defer func() {
+		if t.Failed() {
+			for _, process := range serverProcesses {
+				t.Logf("failed HEC server logs:\n%s", redactForFailure(process.Logs(), protectedValues...))
+			}
+		}
+	}()
 
 	storage, err := clickhousedriver.Open(&clickhousedriver.Options{
 		Addr: []string{clickHouse.Address},
@@ -388,7 +398,7 @@ func TestBackendHECVertical(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		plaintextToken,
 		protectedValues,
 	)
@@ -721,7 +731,7 @@ func backendHECCreateToken(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 ) (string, *opensplunk.IngestionToken) {
 	t.Helper()
 	defaultIndex := backendHECIndexName
@@ -729,12 +739,12 @@ func backendHECCreateToken(
 	defaultSource := backendHECDefaultSource
 	defaultSourcetype := backendHECDefaultSourcetype
 	var created opensplunk.CreateIngestionTokenResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/ingestion-tokens/create",
-		administratorToken,
+		googleSession,
 		&opensplunk.CreateIngestionTokenRequest{
 			Definition: &opensplunk.IngestionTokenDefinition{
 				Name:    "Backend HEC vertical token",
@@ -773,12 +783,12 @@ func backendHECCreateToken(
 	}
 
 	var got opensplunk.GetIngestionTokenResponse
-	getWire := postAdministratorProto(
+	getWire := postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/ingestion-tokens/get",
-		administratorToken,
+		googleSession,
 		&opensplunk.GetIngestionTokenRequest{IngestionTokenId: metadata.GetIngestionTokenId()},
 		&got,
 	)
@@ -788,12 +798,12 @@ func backendHECCreateToken(
 		t.Fatal("HEC token readback disclosed plaintext or changed token identity")
 	}
 	var listed opensplunk.ListIngestionTokensResponse
-	listWire := postAdministratorProto(
+	listWire := postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/ingestion-tokens/list",
-		administratorToken,
+		googleSession,
 		&opensplunk.ListIngestionTokensRequest{},
 		&listed,
 	)
@@ -1343,18 +1353,18 @@ func backendHECAssertAuditRedaction(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 	plaintextToken string,
 	protectedValues []string,
 ) {
 	t.Helper()
 	var listed opensplunk.ListAuditEventsResponse
-	wire := postAdministratorProto(
+	wire := postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/audit/events/list",
-		administratorToken,
+		googleSession,
 		&opensplunk.ListAuditEventsRequest{
 			Page: &opensplunk.PageRequest{IncludeTotalSize: true},
 		},

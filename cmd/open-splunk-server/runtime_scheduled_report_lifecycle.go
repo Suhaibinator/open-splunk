@@ -32,7 +32,7 @@ func (lifecycle *runtimeScheduledReportLifecycle) Configure(
 	admission *runtimeTrustedSearchAdmission,
 	observer *runtimeFeatureOperations,
 ) error {
-	repository, err := scheduledreports.NewRepository(controlDB.GORMDB(), scheduledreports.RepositoryOptions{})
+	repository, err := scheduledreports.NewRepository(controlDB.GORMDB(), scheduledreports.RepositoryOptions{ResolveSourceScope: admission.identity.scheduledSourceScope})
 	if err != nil {
 		return fmt.Errorf("open scheduled reports: %w", err)
 	}

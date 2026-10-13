@@ -158,7 +158,7 @@ func validServiceBuildMetadata(t *testing.T) *opensplunk.BuildMetadata {
 		UiBuildId:                  uiBuildID,
 		UiSha256:                   strings.Repeat("1", 64),
 		ProtobufSchemaSha256:       strings.Repeat("2", 64),
-		SqliteMigrationsSha256:     strings.Repeat("3", 64),
+		PostgresMigrationsSha256:   strings.Repeat("3", 64),
 		ClickhouseMigrationsSha256: strings.Repeat("4", 64),
 	}
 }

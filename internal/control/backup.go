@@ -5,412 +5,317 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
-	"modernc.org/sqlite"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	pgx "github.com/jackc/pgx/v5"
 )
 
-const sqliteBackupStepPages int32 = 256
-
-type backupHooks struct {
-	afterStep func(more bool)
+// ConnectionString is the configured PostgreSQL connection string. It may
+// contain credentials and must never be logged or included in a manifest.
+func (db *DB) ConnectionString() string {
+	if db == nil || db.connectionConfig == nil {
+		return ""
+	}
+	return db.connectionConfig.ConnString()
 }
 
-type nativeSQLiteBackuper interface {
-	NewBackup(string) (*sqlite.Backup, error)
-}
-
-// BackupTo creates a transactionally consistent SQLite backup at destination.
-// The destination and its SQLite sidecar paths must not already exist. Backup
-// pages are copied in bounded batches so cancellation is observed promptly.
-func (db *DB) BackupTo(ctx context.Context, destination string) error {
-	return db.backupTo(ctx, destination, backupHooks{})
-}
-
-func (db *DB) backupTo(
-	ctx context.Context,
-	destination string,
-	hooks backupHooks,
-) (err error) {
-	if ctx == nil || db == nil || db.sql == nil {
-		return fmt.Errorf("%w: backup context and database are required", ErrInvalidArgument)
+// BackupTo creates a private, transactionally consistent pg_dump custom archive
+// of the shared control/identity schema. Callers coordinate its generation with
+// MinIO and ClickHouse through the deployment recovery write freeze.
+func (db *DB) BackupTo(ctx context.Context, destination string) (err error) {
+	if ctx == nil || db == nil || db.connectionConfig == nil || strings.TrimSpace(destination) == "" {
+		return ErrInvalidArgument
 	}
-	if strings.TrimSpace(destination) == "" || destination == ":memory:" {
-		return fmt.Errorf("%w: backup destination must name a persistent file", ErrInvalidArgument)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	absDestination, err := filepath.Abs(destination)
-	if err != nil {
-		return fmt.Errorf("resolve SQLite backup destination: %w", err)
-	}
-	if err := requireAbsentSQLiteDestination(absDestination); err != nil {
-		return err
-	}
-	parent := filepath.Dir(absDestination)
-	parentInfo, err := os.Stat(parent)
-	if err != nil {
-		return fmt.Errorf("inspect SQLite backup directory: %w", err)
-	}
-	if !parentInfo.IsDir() {
-		return errors.New("create SQLite backup: destination parent is not a directory")
-	}
-
-	temporary, err := os.CreateTemp(parent, "."+filepath.Base(absDestination)+"-backup-*")
-	if err != nil {
-		return fmt.Errorf("create temporary SQLite backup: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	temporaryOpen := true
-	temporaryExists := true
-	destinationCreated := false
-	var completedIdentity os.FileInfo
-	completed := false
-	defer func() {
-		if completed {
-			return
+	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
+		if err == nil {
+			return ErrAlreadyExists
 		}
-		if temporaryOpen {
-			closeErr := temporary.Close()
-			temporaryOpen = false
-			if closeErr != nil {
-				err = errors.Join(err, fmt.Errorf("close temporary SQLite backup: %w", closeErr))
-			}
-		}
-		if temporaryExists {
-			err = errors.Join(err, removeBackupOwnedSQLiteFiles(temporaryPath))
-		}
-		if destinationCreated {
-			err = errors.Join(err, removeCreatedBackup(absDestination, completedIdentity))
-		}
-		if temporaryExists || destinationCreated {
-			err = errors.Join(err, syncDirectory(parent))
-		}
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		return fmt.Errorf("secure temporary SQLite backup: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary SQLite backup: %w", err)
-	}
-	temporaryOpen = false
-
-	if err := backupSQLiteToPath(ctx, db.sql, temporaryPath, hooks); err != nil {
 		return err
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := normalizeSQLiteBackup(ctx, temporaryPath); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := ensureNoSQLiteSidecars(temporaryPath); err != nil {
-		return err
-	}
-	completedIdentity, err = syncRegularFile(temporaryPath)
+	file, err := os.CreateTemp(filepath.Dir(destination), ".open-splunk-pg-backup-*")
 	if err != nil {
 		return err
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := requireAbsentSQLiteDestination(absDestination); err != nil {
-		return err
-	}
-	if err := os.Link(temporaryPath, absDestination); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("%w: SQLite backup destination appeared while publishing", ErrAlreadyExists)
-		}
-		return fmt.Errorf("publish SQLite backup: %w", err)
-	}
-	destinationCreated = true
-	destinationInfo, err := os.Lstat(absDestination)
-	if err != nil {
-		return fmt.Errorf("inspect published SQLite backup: %w", err)
-	}
-	if !destinationInfo.Mode().IsRegular() || !os.SameFile(completedIdentity, destinationInfo) {
-		return errors.New("publish SQLite backup: destination identity changed")
-	}
-	if err := ensureNoSQLiteSidecars(absDestination); err != nil {
-		return err
-	}
-	if err := os.Remove(temporaryPath); err != nil {
-		return fmt.Errorf("remove temporary SQLite backup link: %w", err)
-	}
-	temporaryExists = false
-	if err := syncDirectory(parent); err != nil {
-		return err
-	}
-	completed = true
-	return nil
-}
-
-func backupSQLiteToPath(
-	ctx context.Context,
-	database *sql.DB,
-	destination string,
-	hooks backupHooks,
-) (err error) {
-	conn, err := database.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire SQLite backup connection: %w", err)
-	}
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close SQLite backup connection: %w", closeErr))
-		}
-	}()
-
-	if _, err := conn.ExecContext(ctx, `BEGIN`); err != nil {
-		return fmt.Errorf("begin SQLite backup snapshot: %w", err)
-	}
-	transactionOpen := true
-	defer func() {
-		if !transactionOpen {
-			return
-		}
-		if _, rollbackErr := conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`); rollbackErr != nil {
-			err = errors.Join(err, fmt.Errorf("close SQLite backup snapshot: %w", rollbackErr))
-		}
-	}()
-	var schemaVersion int64
-	if err := conn.QueryRowContext(ctx, `PRAGMA schema_version`).Scan(&schemaVersion); err != nil {
-		return fmt.Errorf("establish SQLite backup snapshot: %w", err)
-	}
-
-	if err := conn.Raw(func(driverConnection any) error {
-		backuper, ok := driverConnection.(nativeSQLiteBackuper)
-		if !ok {
-			return errors.New("SQLite driver does not support native online backup")
-		}
-		return runNativeSQLiteBackup(ctx, backuper, sqliteBackupDSN(destination), hooks)
-	}); err != nil {
-		return fmt.Errorf("copy SQLite backup: %w", err)
-	}
-	if _, err := conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`); err != nil {
-		return fmt.Errorf("close SQLite backup snapshot: %w", err)
-	}
-	transactionOpen = false
-	return nil
-}
-
-func runNativeSQLiteBackup(
-	ctx context.Context,
-	backuper nativeSQLiteBackuper,
-	destinationDSN string,
-	hooks backupHooks,
-) (err error) {
-	backup, err := backuper.NewBackup(destinationDSN)
-	if err != nil {
-		return fmt.Errorf("start native SQLite backup: %w", err)
-	}
-	finished := false
-	defer func() {
-		if finished {
-			return
-		}
-		if finishErr := backup.Finish(); finishErr != nil {
-			err = errors.Join(err, fmt.Errorf("finish native SQLite backup: %w", finishErr))
-		}
-	}()
-
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		more, err := backup.Step(sqliteBackupStepPages)
-		if err != nil {
-			return fmt.Errorf("step native SQLite backup: %w", err)
-		}
-		if hooks.afterStep != nil {
-			hooks.afterStep(more)
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if !more {
-			break
-		}
-	}
-	if err := backup.Finish(); err != nil {
-		finished = true
-		return fmt.Errorf("finish native SQLite backup: %w", err)
-	}
-	finished = true
-	return nil
-}
-
-func requireAbsentSQLiteDestination(path string) error {
-	for _, candidate := range sqliteFileCandidates(path) {
-		_, err := os.Lstat(candidate)
-		switch {
-		case err == nil:
-			return fmt.Errorf("%w: SQLite backup path %q exists", ErrAlreadyExists, filepath.Base(candidate))
-		case errors.Is(err, os.ErrNotExist):
-			continue
-		default:
-			return fmt.Errorf("inspect SQLite backup path %q: %w", filepath.Base(candidate), err)
-		}
-	}
-	return nil
-}
-
-func ensureNoSQLiteSidecars(path string) error {
-	for _, candidate := range sqliteFileCandidates(path)[1:] {
-		_, err := os.Lstat(candidate)
-		switch {
-		case err == nil:
-			return fmt.Errorf("finalize SQLite backup: sidecar %q remains", filepath.Base(candidate))
-		case errors.Is(err, os.ErrNotExist):
-			continue
-		default:
-			return fmt.Errorf("inspect SQLite backup sidecar %q: %w", filepath.Base(candidate), err)
-		}
-	}
-	return nil
-}
-
-func removeBackupOwnedSQLiteFiles(path string) error {
-	var cleanupErr error
-	for _, candidate := range sqliteFileCandidates(path) {
-		if err := os.Remove(candidate); err != nil && !errors.Is(err, os.ErrNotExist) {
-			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove temporary SQLite backup %q: %w", filepath.Base(candidate), err))
-		}
-	}
-	return cleanupErr
-}
-
-func removeCreatedBackup(path string, expected os.FileInfo) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect incomplete SQLite backup: %w", err)
-	}
-	if expected == nil || !info.Mode().IsRegular() || !os.SameFile(expected, info) {
-		return errors.New("incomplete SQLite backup identity changed; refusing cleanup")
-	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove incomplete SQLite backup: %w", err)
-	}
-	return nil
-}
-
-func sqliteFileCandidates(path string) []string {
-	return []string{path, path + "-wal", path + "-shm", path + "-journal"}
-}
-
-func sqliteBackupDSN(path string) string {
-	u := &url.URL{Scheme: "file", Path: path}
-	query := u.Query()
-	query.Set("mode", "rw")
-	query.Set("_dqs", "0")
-	u.RawQuery = query.Encode()
-	return u.String()
-}
-
-func normalizeSQLiteBackup(ctx context.Context, path string) (err error) {
-	database, err := sql.Open("sqlite", sqliteBackupDSN(path))
-	if err != nil {
-		return fmt.Errorf("open completed SQLite backup for normalization: %w", err)
-	}
-	database.SetMaxOpenConns(1)
-	database.SetMaxIdleConns(1)
-	defer func() {
-		if closeErr := database.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close normalized SQLite backup: %w", closeErr))
-		}
-	}()
-
-	var journalMode string
-	if err := database.QueryRowContext(ctx, `PRAGMA journal_mode = DELETE`).Scan(&journalMode); err != nil {
-		return fmt.Errorf("normalize SQLite backup journal mode: %w", err)
-	}
-	if !strings.EqualFold(journalMode, "delete") {
-		return fmt.Errorf("normalize SQLite backup journal mode: selected %q", journalMode)
-	}
-	return nil
-}
-
-func syncRegularFile(path string) (os.FileInfo, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, fmt.Errorf("inspect completed SQLite backup: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("finalize SQLite backup: output is not a regular file")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open completed SQLite backup: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("sync completed SQLite backup: %w", err)
+	name := file.Name()
+	defer os.Remove(name)
+	if err := file.Chmod(0o600); err != nil {
+		return errors.Join(err, file.Close())
 	}
 	if err := file.Close(); err != nil {
-		return nil, fmt.Errorf("close completed SQLite backup: %w", err)
+		return err
 	}
-	after, err := os.Lstat(path)
+	var schema string
+	if err := db.sql.QueryRowContext(ctx, "SELECT current_schema()").Scan(&schema); err != nil {
+		return err
+	}
+	command, err := postgresCommand(ctx, false, "--format=custom", "--no-owner", "--no-acl", "--schema="+schema, "--exclude-table-data="+schema+".control_recovery_publication", "--file="+name)
 	if err != nil {
-		return nil, fmt.Errorf("reinspect completed SQLite backup: %w", err)
+		return err
 	}
-	if !after.Mode().IsRegular() || !os.SameFile(info, after) {
-		return nil, errors.New("finalize SQLite backup: output identity changed")
+	command.Env = postgresToolEnv(db.connectionConfig)
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("PostgreSQL backup failed: %w: %s", err, redactToolOutput(output, db.connectionConfig))
 	}
-	return after, nil
+	archive, err := os.OpenFile(name, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	info, err := archive.Stat()
+	if err == nil && (!info.Mode().IsRegular() || info.Size() == 0) {
+		err = errors.New("PostgreSQL backup is empty or not a regular file")
+	}
+	if err == nil {
+		err = archive.Sync()
+	}
+	err = errors.Join(err, archive.Close())
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// A hard link publishes without overwriting a destination created concurrently.
+	if err := os.Link(name, destination); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return ErrAlreadyExists
+		}
+		return err
+	}
+	directory, err := os.Open(filepath.Dir(destination))
+	if err != nil {
+		return err
+	}
+	return errors.Join(directory.Sync(), directory.Close())
 }
 
-func syncDirectory(path string) error {
-	directory, err := os.Open(path)
+// RestoreFrom restores a custom archive into an empty PostgreSQL schema. It
+// never cleans, overwrites or adopts a populated target. Archive schema identity
+// must match the target; production uses one stable control schema.
+func RestoreFrom(ctx context.Context, dsn, source string) error {
+	lease, err := AcquireMaintenanceLease(ctx, dsn)
 	if err != nil {
-		return fmt.Errorf("open SQLite backup directory: %w", err)
+		return err
 	}
-	if err := directory.Sync(); err != nil {
-		_ = directory.Close()
-		return fmt.Errorf("sync SQLite backup directory: %w", err)
+	defer lease.Close()
+	return RestoreFromWithLease(ctx, dsn, source, lease)
+}
+
+// RestoreFromWithLease composes PostgreSQL restore with the caller's existing
+// deployment recovery lease; it never reacquires an advisory lock on another session.
+func RestoreFromWithLease(ctx context.Context, dsn, source string, lease *MaintenanceLease) error {
+	archive, err := os.Open(source)
+	if err != nil {
+		return err
 	}
-	if err := directory.Close(); err != nil {
-		return fmt.Errorf("close SQLite backup directory: %w", err)
+	defer archive.Close()
+	return RestorePinnedFromWithLease(ctx, dsn, archive, lease)
+}
+
+// RestorePinnedFromWithLease reads the exact descriptor validated by recovery.
+// Both archive inspection and restore inherit that descriptor, preventing a
+// pathname replacement between manifest verification and pg_restore.
+func RestorePinnedFromWithLease(ctx context.Context, dsn string, archive *os.File, lease *MaintenanceLease) error {
+	if err := lease.Validate(dsn); err != nil {
+		return err
+	}
+	if ctx == nil || archive == nil || strings.TrimSpace(dsn) == "" {
+		return ErrInvalidArgument
+	}
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return fmt.Errorf("%w: invalid PostgreSQL target", ErrInvalidArgument)
+	}
+	info, err := archive.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		return errors.New("PostgreSQL archive must be a nonempty regular file")
+	}
+	source := "/dev/fd/3"
+	conn := lease.conn
+
+	var schema string
+	var populated bool
+	if err := conn.QueryRowContext(ctx, "SELECT current_schema(), EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relkind IN ('r','p','v','m','S','f'))").Scan(&schema, &populated); err != nil {
+		return err
+	}
+	if populated {
+		return errors.New("PostgreSQL restore target schema must be empty")
+	}
+	list, err := PostgresRestoreListCommand(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := archive.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	list.ExtraFiles = []*os.File{archive}
+	list.Env = postgresToolEnv(cfg)
+	contents, err := list.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("inspect PostgreSQL archive: %w: %s", err, redactToolOutput(contents, cfg))
+	}
+	lines := strings.Split(string(contents), "\n")
+	for index, line := range lines {
+		if strings.HasPrefix(line, ";") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 6 && fields[3] == "SCHEMA" && fields[4] == "-" {
+			if fields[5] != schema {
+				return errors.New("PostgreSQL archive schema differs from restore target")
+			}
+			// The empty target schema already exists. Keep its namespace identity and
+			// restore only its contents rather than issuing a conflicting CREATE SCHEMA.
+			lines[index] = ";" + line
+		}
+	}
+	toc, err := os.CreateTemp("", "open-splunk-restore-toc-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(toc.Name())
+	if _, err := toc.WriteString(strings.Join(lines, "\n")); err != nil {
+		return errors.Join(err, toc.Close())
+	}
+	if err := toc.Close(); err != nil {
+		return err
+	}
+	command, err := postgresCommand(ctx, true, "--single-transaction", "--exit-on-error", "--no-owner", "--no-acl", "--dbname="+cfg.Database, "--use-list="+toc.Name(), source)
+	if _, err := archive.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	command.ExtraFiles = []*os.File{archive}
+	command.Env = postgresToolEnv(cfg)
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("PostgreSQL restore failed: %w: %s", err, redactToolOutput(output, cfg))
 	}
 	return nil
 }
 
-// VerifyIntegrity runs SQLite's structural and foreign-key integrity checks.
+func postgresToolEnv(cfg *pgx.ConnConfig) []string {
+	env := make([]string, 0, len(os.Environ())+10)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if !strings.HasPrefix(key, "PG") {
+			env = append(env, entry)
+		}
+	}
+	settings := postgresTLSSettings(cfg.ConnString())
+	mode := settings["sslmode"]
+	if mode == "" {
+		mode = "prefer"
+	}
+	env = append(env, "PGHOST="+cfg.Host, "PGPORT="+strconv.Itoa(int(cfg.Port)), "PGUSER="+cfg.User, "PGDATABASE="+cfg.Database, "PGPASSWORD="+cfg.Password, "PGSSLMODE="+mode)
+	for key, value := range map[string]string{"sslrootcert": "PGSSLROOTCERT", "sslcert": "PGSSLCERT", "sslkey": "PGSSLKEY"} {
+		if setting := settings[key]; setting != "" {
+			env = append(env, value+"="+setting)
+		}
+	}
+	return env
+}
+
+// postgresTLSSettings preserves libpq TLS policy for both URI and keyword DSNs.
+// Passwords are neither returned nor passed as subprocess arguments.
+func postgresTLSSettings(source string) map[string]string {
+	result := make(map[string]string)
+	wanted := func(key string) bool {
+		return key == "sslmode" || key == "sslrootcert" || key == "sslcert" || key == "sslkey"
+	}
+	if parsed, err := url.Parse(source); err == nil && (parsed.Scheme == "postgres" || parsed.Scheme == "postgresql") {
+		for key, values := range parsed.Query() {
+			if wanted(key) && len(values) > 0 {
+				result[key] = values[len(values)-1]
+			}
+		}
+		return result
+	}
+	for index := 0; index < len(source); {
+		for index < len(source) && (source[index] == ' ' || source[index] == '\t' || source[index] == '\n') {
+			index++
+		}
+		start := index
+		for index < len(source) && source[index] != '=' && source[index] != ' ' && source[index] != '\t' {
+			index++
+		}
+		key := source[start:index]
+		for index < len(source) && (source[index] == ' ' || source[index] == '\t') {
+			index++
+		}
+		if index >= len(source) || source[index] != '=' {
+			break
+		}
+		index++
+		for index < len(source) && (source[index] == ' ' || source[index] == '\t') {
+			index++
+		}
+		quoted := index < len(source) && source[index] == '\''
+		if quoted {
+			index++
+		}
+		var value strings.Builder
+		for index < len(source) {
+			character := source[index]
+			index++
+			if character == '\\' && index < len(source) {
+				value.WriteByte(source[index])
+				index++
+				continue
+			}
+			if (quoted && character == '\'') || (!quoted && (character == ' ' || character == '\t' || character == '\n')) {
+				break
+			}
+			value.WriteByte(character)
+		}
+		if wanted(key) {
+			result[key] = value.String()
+		}
+	}
+	return result
+}
+
+func redactToolOutput(output []byte, cfg *pgx.ConnConfig) string {
+	result := string(output)
+	if cfg.Password != "" {
+		result = strings.ReplaceAll(result, cfg.Password, "[redacted]")
+	}
+	result = strings.ReplaceAll(result, cfg.ConnString(), "[redacted connection]")
+	return strings.TrimSpace(result)
+}
+
+// VerifyIntegrity checks PostgreSQL schema validation and the bounded index
+// catalog. PostgreSQL enforces foreign keys and checks on every write; domain
+// repositories additionally validate their immutable journals during bootstrap.
 func (db *DB) VerifyIntegrity(ctx context.Context) error {
 	if ctx == nil || db == nil || db.sql == nil {
-		return fmt.Errorf("%w: integrity context and database are required", ErrInvalidArgument)
+		return ErrInvalidArgument
 	}
-	var result string
-	if err := db.sql.QueryRowContext(ctx, `PRAGMA integrity_check(1)`).Scan(&result); err != nil {
-		return fmt.Errorf("run SQLite integrity check: %w", err)
-	}
-	if result != "ok" {
-		return errors.New("SQLite integrity check failed")
-	}
-	rows, err := db.sql.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	tx, err := pgmeta.BeginSQL(ctx, db.sql, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 	if err != nil {
-		return fmt.Errorf("run SQLite foreign-key check: %w", err)
+		return err
 	}
-	violation := rows.Next()
-	iterationErr := rows.Err()
-	closeErr := rows.Close()
-	if iterationErr != nil {
-		return fmt.Errorf("iterate SQLite foreign-key check: %w", iterationErr)
+	defer func() { _ = tx.Rollback() }()
+	var invalid bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace WHERE n.nspname=current_schema() AND NOT c.convalidated)
+ OR EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND (NOT i.indisvalid OR NOT i.indisready))`).Scan(&invalid); err != nil {
+		return err
 	}
-	if closeErr != nil {
-		return fmt.Errorf("close SQLite foreign-key check: %w", closeErr)
+	if invalid {
+		return errors.New("PostgreSQL control schema has unvalidated constraints or invalid indexes")
 	}
-	if violation {
-		return errors.New("SQLite foreign-key integrity check failed")
+	if err := tx.Commit(); err != nil {
+		return err
 	}
-	return nil
+	_, err = readIndexCatalogIntegrity(db.orm.WithContext(ctx))
+	return err
 }

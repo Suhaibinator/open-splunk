@@ -21,7 +21,7 @@ import (
 const (
 	knowledgeBoundaryToken    = "0123456789abcdefghijklmnopqrstuv"
 	knowledgeBoundaryTenantID = "tenant-knowledge-boundary"
-	knowledgeBoundaryOwnerID  = "owner-knowledge-boundary"
+	knowledgeBoundaryOwnerID  = "1109"
 )
 
 var knowledgeBoundaryNow = time.Date(
@@ -174,7 +174,7 @@ func knowledgeBoundaryPrincipal(
 	role auth.BrowserRole,
 ) auth.BrowserPrincipal {
 	t.Helper()
-	authenticator, err := auth.NewBearerTokenAuthenticator(
+	authenticator, err := newTestBearerTokenAuthenticator(
 		[]byte(knowledgeBoundaryToken),
 		knowledgeBoundaryTenantID,
 		knowledgeBoundaryOwnerID,
@@ -200,9 +200,9 @@ func newKnowledgeBoundaryHandler(
 ) *apiHandler {
 	t.Helper()
 	return &apiHandler{
-		browserAuthenticator: &knowledgeBoundaryAuthenticator{
+		identityAuthenticator: adaptTestBrowserAuthenticator(&knowledgeBoundaryAuthenticator{
 			principal: knowledgeBoundaryPrincipal(t, role),
-		},
+		}),
 		knowledgeAttempts:    appender,
 		tenantID:             knowledgeBoundaryTenantID,
 		ownerID:              knowledgeBoundaryOwnerID,
@@ -313,13 +313,13 @@ func TestKnowledgeAttemptBoundaryRecognizesOnlyExactPostRoutes(t *testing.T) {
 				principal: knowledgeBoundaryPrincipal(t, auth.BrowserRoleAdministrator),
 			}
 			handler := &apiHandler{
-				browserAuthenticator: authenticator,
-				knowledgeAttempts:    appender,
-				tenantID:             knowledgeBoundaryTenantID,
-				ownerID:              knowledgeBoundaryOwnerID,
-				routeTimeout:         time.Second,
-				knowledgeAttemptGate: make(chan struct{}, 1),
-				now:                  func() time.Time { return knowledgeBoundaryNow },
+				identityAuthenticator: adaptTestBrowserAuthenticator(authenticator),
+				knowledgeAttempts:     appender,
+				tenantID:              knowledgeBoundaryTenantID,
+				ownerID:               knowledgeBoundaryOwnerID,
+				routeTimeout:          time.Second,
+				knowledgeAttemptGate:  make(chan struct{}, 1),
+				now:                   func() time.Time { return knowledgeBoundaryNow },
 			}
 			response := httptest.NewRecorder()
 			handler.protectKnowledgeManagementRoutes(http.HandlerFunc(
@@ -356,10 +356,10 @@ func TestKnowledgeAttemptBoundaryAuthenticatesBeforeReadingBody(t *testing.T) {
 		},
 	}
 	handler := &apiHandler{
-		browserAuthenticator: &knowledgeBoundaryAuthenticator{
+		identityAuthenticator: adaptTestBrowserAuthenticator(&knowledgeBoundaryAuthenticator{
 			principal: knowledgeBoundaryPrincipal(t, auth.BrowserRoleAdministrator),
 			hook:      func() { record("authenticate") },
-		},
+		}),
 		knowledgeAttempts:    appender,
 		tenantID:             knowledgeBoundaryTenantID,
 		ownerID:              knowledgeBoundaryOwnerID,

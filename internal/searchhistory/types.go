@@ -51,8 +51,10 @@ const (
 // AccessScope is the authenticated tenant/owner boundary. Every user-facing
 // lookup is scoped so history IDs cannot disclose records across identities.
 type AccessScope struct {
-	TenantID string
-	OwnerID  string
+	OrganizationID    string
+	SiteAdministrator bool
+	TenantID          string
+	OwnerID           string
 }
 
 // SearchAttemptAuditEvent is the payload-free projection emitted when one
@@ -88,7 +90,7 @@ type Options struct {
 	// one owner while every admitted attempt is still pending recovery.
 	MaximumEntriesPerOwner int
 	// AuditAppender records each newly admitted search attempt inside the same
-	// SQLite transaction as its pending history row. Nil keeps direct and test
+	// PostgreSQL transaction as its pending history row. Nil keeps direct and test
 	// construction backward-compatible unless RequireSearchAttemptAudit is set.
 	// A typed nil is always rejected.
 	AuditAppender SearchAttemptAuditAppender
@@ -163,7 +165,7 @@ type ListRequest struct {
 
 // ListResult is detached from persistent storage. TotalSize is present only
 // when requested; it is exact for its individual count query, while separate
-// page calls are intentionally not a cross-request SQLite snapshot.
+// page calls are intentionally not a cross-request PostgreSQL snapshot.
 type ListResult struct {
 	Entries        []*opensplunk.SearchHistoryEntry
 	NextPageToken  *string

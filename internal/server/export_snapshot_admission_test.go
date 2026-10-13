@@ -43,7 +43,7 @@ func TestPatternExportResolvesSnapshotOnlyForFreshAdmission(t *testing.T) {
 			handler.exports = exports
 			handler.now = func() time.Time { return testNow }
 			exports.createFn = func(_ context.Context, access searchjobs.AccessScope, request exportjobs.CreateRequest) (exportjobs.Job, error) {
-				assertExportScope(t, access, "tenant-1", "owner-1")
+				assertExportScope(t, access, "tenant-1", "1009")
 				exports.request = request
 				job := testExportJob("export", exportjobs.FormatCSV, exportjobs.StateQueued)
 				job.SourceKind, job.Pattern = request.SourceKind, request.Pattern
@@ -59,7 +59,7 @@ func TestPatternExportResolvesSnapshotOnlyForFreshAdmission(t *testing.T) {
 			if keyed {
 				input.ClientRequestId = new("logical-export-action")
 			}
-			ctx, err := audit.WithActor(context.Background(), audit.Actor{Kind: audit.ActorKindBrowser, ID: "administrator", Role: audit.ActorRoleAdministrator})
+			ctx, err := audit.WithActor(serverFixtureScope(context.Background(), 1009), audit.Actor{Kind: audit.ActorKindBrowser, ID: "1009", Role: audit.ActorRoleAdministrator})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -93,7 +93,7 @@ func TestPatternExportReceiptSurvivesPublicSnapshotKeyRotation(t *testing.T) {
 	handler.now = func() time.Time { return testNow }
 	definition := csvExportDefinition(job.SearchJobID)
 	definition.Source = &opensplunk.ExportDefinition_PatternMembers{PatternMembers: &opensplunk.PatternMemberExportSource{SearchJobId: job.SearchJobID, SnapshotRef: job.Pattern.SnapshotRef, Sensitivity: opensplunk.PatternSensitivity_PATTERN_SENSITIVITY_PRECISE, PatternId: job.Pattern.PatternID}}
-	ctx, err := audit.WithActor(context.Background(), audit.Actor{Kind: audit.ActorKindBrowser, ID: "administrator", Role: audit.ActorRoleAdministrator})
+	ctx, err := audit.WithActor(serverFixtureScope(context.Background(), 1009), audit.Actor{Kind: audit.ActorKindBrowser, ID: "1009", Role: audit.ActorRoleAdministrator})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
@@ -627,8 +629,9 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlDBPath := filepath.Join(work, "control.sqlite")
-	administratorTokenPath, administratorToken := provisionAdministratorToken(t, work)
+	controlDSN := pgtest.DSN(t)
+	googleIdentity, googleSession := provisionGoogleSession(t, work, controlDSN)
+	controlDSN = googleIdentity.PostgresDSN
 	assertEmptyDirectory(t, serverRuntimeDir)
 	serverEnvironment := clickHouseServerEnvironment(os.Environ(), clickHouse)
 	serverEnvironment = environmentWithValue(
@@ -651,9 +654,9 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 		"-http-listen-address=" + httpAddress,
 		"-http-tls-certificate-file=" + httpTLSIdentity.CertificateFile,
 		"-http-tls-private-key-file=" + httpTLSIdentity.PrivateKeyFile,
-		"-control-database-file=" + controlDBPath,
+		"-postgres-dsn=" + controlDSN,
 		"-master-key-file=" + filepath.Join(work, "server.key"),
-		"-administrator-token-file=" + administratorTokenPath,
+
 		"-collector-grpc-listen-address=" + collectorAddress,
 		"-collector-grpc-plaintext-enabled",
 		"-tenant-id=" + backendHECTenantID,
@@ -675,7 +678,7 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 		httpClient,
 		baseURL,
 		serverProcess,
-		administratorToken,
+		googleSession,
 		clickHouse.Password,
 		clickHouse.MigrationPassword,
 		clickHouse.RuntimePassword,
@@ -691,7 +694,7 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		backendHECIndexName,
 		"Durable HEC load integration",
 		plan.indexRetention(),
@@ -701,14 +704,14 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 	)
 	pressureSecret, pressureToken := backendHECLoadCreatePressureToken(
 		t,
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 	)
 
 	collectorStateDir := filepath.Join(work, "collector-state")
@@ -738,7 +741,7 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		backendHECIndexName,
 		collectorID,
 	)
@@ -793,7 +796,7 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 	}
 
 	protectedValues := []string{
-		administratorToken,
+		googleSession,
 		hecToken,
 		hecMetadata.GetTokenPrefix(),
 		pressureSecret,
@@ -838,7 +841,7 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 			pressureContext,
 			httpClient,
 			baseURL,
-			administratorToken,
+			googleSession,
 			pressureToken.GetIngestionTokenId(),
 			pressureToken.GetVersion(),
 			plan.controlInterval(),
@@ -851,7 +854,7 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 			monitorContext,
 			httpClient,
 			baseURL,
-			administratorToken,
+			googleSession,
 			serverProcess,
 			plan.monitorInterval(),
 			plan.longRunning(),
@@ -880,7 +883,7 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 			ctx,
 			httpClient,
 			baseURL,
-			administratorToken,
+			googleSession,
 		)
 		if err != nil {
 			t.Fatalf("read qualified HEC starting operations: %v", err)
@@ -905,7 +908,7 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 			ctx,
 			httpClient,
 			baseURL,
-			administratorToken,
+			googleSession,
 		)
 		if err != nil {
 			t.Fatalf("read qualified HEC ending operations: %v", err)
@@ -930,7 +933,7 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		serverProcess,
 		loadDone,
 		outageEnds,
@@ -953,7 +956,7 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 			ctx,
 			httpClient,
 			baseURL,
-			administratorToken,
+			googleSession,
 		)
 		t.Fatalf(
 			"durable HEC traffic: %v; operations_error=%v; operations=%+v",
@@ -980,7 +983,7 @@ func runBackendHECDurableLoad(t *testing.T, plan backendHECLoadPlan) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		serverProcess,
 		protectedValues...,
 	)
@@ -1203,7 +1206,7 @@ func backendHECLoadCreatePressureToken(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 ) (string, *opensplunk.IngestionToken) {
 	t.Helper()
 	defaultIndex := backendHECIndexName
@@ -1211,12 +1214,12 @@ func backendHECLoadCreatePressureToken(
 	defaultSource := "hec-load-control-source"
 	defaultSourcetype := "hec-load-control-type"
 	var response opensplunk.CreateIngestionTokenResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		client,
 		baseURL+"/api/ingestion-tokens/create",
-		administratorToken,
+		googleSession,
 		&opensplunk.CreateIngestionTokenRequest{Definition: &opensplunk.IngestionTokenDefinition{
 			Name:    "HEC load control-plane pressure",
 			Purpose: opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
@@ -1712,7 +1715,7 @@ func runBackendHECLoadControlPressure(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 	tokenID string,
 	version uint64,
 	interval time.Duration,
@@ -1729,11 +1732,11 @@ func runBackendHECLoadControlPressure(
 		}
 		enabled = !enabled
 		var response opensplunk.SetIngestionTokenEnabledResponse
-		_, err := postProtoRequestWithBearer(
+		_, err := postProtoRequestWithSession(
 			ctx,
 			client,
 			baseURL+"/api/ingestion-tokens/state/set",
-			administratorToken,
+			googleSession,
 			&opensplunk.SetIngestionTokenEnabledRequest{
 				IngestionTokenId: tokenID,
 				ExpectedVersion:  result.version,
@@ -1780,7 +1783,7 @@ func monitorBackendHECLoadOperations(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 	server *managedProcess,
 	interval time.Duration,
 	observeProcessResources bool,
@@ -1793,7 +1796,7 @@ func monitorBackendHECLoadOperations(
 			ctx,
 			client,
 			baseURL,
-			administratorToken,
+			googleSession,
 		)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -1928,14 +1931,14 @@ func readBackendHECLoadOperations(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 ) (*opensplunk.GetHECOperationalSnapshotResponse, error) {
 	var response opensplunk.GetHECOperationalSnapshotResponse
-	_, err := postProtoRequestWithBearer(
+	_, err := postProtoRequestWithSession(
 		ctx,
 		client,
 		baseURL+"/api/hec/operations/get",
-		administratorToken,
+		googleSession,
 		&opensplunk.GetHECOperationalSnapshotRequest{},
 		&response,
 	)
@@ -2000,7 +2003,7 @@ func waitForBackendHECLoadOutageBacklog(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 	server *managedProcess,
 	load <-chan backendHECLoadResult,
 	deadline time.Time,
@@ -2032,7 +2035,7 @@ func waitForBackendHECLoadOutageBacklog(
 			waitContext,
 			client,
 			baseURL,
-			administratorToken,
+			googleSession,
 		)
 		if lastErr == nil {
 			if exceeded := backendHECLoadBacklogOverMaximum(last); exceeded != "" {
@@ -2102,7 +2105,7 @@ func waitForBackendHECLoadDrain(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 	server *managedProcess,
 	protectedValues ...string,
 ) *opensplunk.GetHECOperationalSnapshotResponse {
@@ -2118,7 +2121,7 @@ func waitForBackendHECLoadDrain(
 			waitContext,
 			client,
 			baseURL,
-			administratorToken,
+			googleSession,
 		)
 		if lastErr == nil && last.GetDurable().GetPendingOutboxReservations() == 0 &&
 			last.GetAcknowledgments().GetPendingRows() == 0 &&

@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
@@ -756,15 +759,18 @@ func TestWriterValidateFreshIdentityAuthorityFailsClosedAndClipsWidths(t *testin
 		if err != nil {
 			t.Fatalf("reserve corruption connection: %v", err)
 		}
-		if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); err != nil {
+		if _, err := pgtest.DropForeignKeys(t.Context(), connection); err != nil {
 			t.Fatalf("disable fixture foreign keys: %v", err)
 		}
-		if _, err := connection.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+		if _, err := pgtest.Checks(t.Context(), connection, false); err != nil {
 			t.Fatalf("disable fixture checks: %v", err)
 		}
+		if err := pgtest.AllowOversizedIndexedValue(t.Context(), connection, "knowledge_objects", "knowledge_object_id"); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := connection.ExecContext(t.Context(), `UPDATE knowledge_objects
-			SET knowledge_object_id = ?
-			WHERE tenant_id = ? AND knowledge_object_id = ?`,
+			SET knowledge_object_id = $1
+			WHERE tenant_id = $2 AND knowledge_object_id = $3`,
 			sentinel, testTenant, "ko-validation-width",
 		); err != nil {
 			t.Fatalf("install oversized fixture identity: %v", err)
@@ -773,7 +779,7 @@ func TestWriterValidateFreshIdentityAuthorityFailsClosedAndClipsWidths(t *testin
 			t.Fatalf("release corruption connection: %v", err)
 		}
 
-		tx := writer.orm.WithContext(t.Context()).Begin()
+		tx := pgmeta.Begin(writer.orm.WithContext(t.Context()))
 		if tx.Error != nil {
 			t.Fatalf("begin fresh-ID width test: %v", tx.Error)
 		}
@@ -863,8 +869,8 @@ func TestWriterValidateTerminalLifecycleOrdering(t *testing.T) {
 		})
 		dropTrigger(t, database, "knowledge_definition_blob_update_is_forbidden")
 		mustExec(t, database, `UPDATE knowledge_definition_blobs
-			SET definition_proto = zeroblob(definition_bytes)
-			WHERE tenant_id = ?`, testTenant)
+			SET definition_proto = decode(repeat('00', (definition_bytes)::int), 'hex')
+			WHERE tenant_id = $1`, testTenant)
 		before := readValidationPersistenceSnapshot(t, database)
 		candidateSecret := "candidate-quarantine-secret"
 		for _, intent := range []opensplunk.KnowledgeValidationIntent{
@@ -1090,7 +1096,7 @@ func TestValidationBoundaryErrorTaxonomy(t *testing.T) {
 
 func TestFinishValidationTransactionRejectsPreEndedTransaction(t *testing.T) {
 	database, _, _ := newWriterValidationHarness(t, false)
-	tx := database.GORMDB().WithContext(t.Context()).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(t.Context()))
 	if tx.Error != nil {
 		t.Fatalf("begin pre-ended validation transaction: %v", tx.Error)
 	}
@@ -1115,7 +1121,7 @@ func archiveValidationApp(t *testing.T, database *control.DB, appID string) {
 	}
 	workspace, err := appCatalog.GetApp(
 		t.Context(),
-		control.AppAccessScope{TenantID: testTenant},
+		control.AppAccessScope{TenantID: testTenant, OrganizationID: 1},
 		control.AppSelector{AppID: appID},
 	)
 	if err != nil {
@@ -1123,7 +1129,7 @@ func archiveValidationApp(t *testing.T, database *control.DB, appID string) {
 	}
 	if _, err := appCatalog.SetAppState(
 		t.Context(),
-		control.AppAccessScope{TenantID: testTenant},
+		control.AppAccessScope{TenantID: testTenant, OrganizationID: 1},
 		control.AppSelector{AppID: appID},
 		workspace.Version,
 		control.AppStateArchived,

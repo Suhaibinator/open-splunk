@@ -40,7 +40,7 @@ func FuzzCatalogFingerprintCanonicalizesSetLikeInputs(f *testing.F) {
 			SortBy:              sorts[int(sortSeed)%len(sorts)],
 			SortDirection:       directions[int(sortSeed)%len(directions)],
 		}
-		scope := ReadScope{TenantID: "tenant", OwnerID: "owner", ReadableAppIDs: apps}
+		scope := ReadScope{TenantID: "tenant", OwnerID: "owner", ReadableAppIDs: apps, OrganizationID: 1}
 		one, err := normalizeListRequest(scope, request)
 		if err != nil {
 			t.Fatalf("normalize original: %v", err)
@@ -61,7 +61,7 @@ func FuzzCatalogFingerprintCanonicalizesSetLikeInputs(f *testing.F) {
 		permuted.StateFilters = []State{request.StateFilters[0], request.StateFilters[0]}
 		permuted.SharingScopeFilters = []SharingScope{request.SharingScopeFilters[0], request.SharingScopeFilters[0]}
 		two, err := normalizeListRequest(ReadScope{
-			TenantID: scope.TenantID, OwnerID: scope.OwnerID, ReadableAppIDs: permutedApps,
+			TenantID: scope.TenantID, OwnerID: scope.OwnerID, ReadableAppIDs: permutedApps, OrganizationID: 1,
 		}, permuted)
 		if err != nil {
 			t.Fatalf("normalize permutation: %v", err)

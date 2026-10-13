@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"fortio.org/safecast"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
-	"modernc.org/sqlite"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
@@ -37,9 +37,9 @@ const (
 	// definition-decoding operation behind the admitted work.
 	MaximumConcurrentResolutions = 32
 	// MaximumResolutionDuration is the complete per-call budget, including
-	// normalization, SQLite retries, catalog hydration, and precedence work.
+	// normalization, PostgreSQL retries, catalog hydration, and precedence work.
 	MaximumResolutionDuration = 250 * time.Millisecond
-	// MaximumResolutionAttempts includes the initial SQLite attempt. Only
+	// MaximumResolutionAttempts includes the initial PostgreSQL attempt. Only
 	// SQLITE_BUSY and SQLITE_LOCKED may consume a later attempt.
 	MaximumResolutionAttempts = 3
 	// MaximumResolutionCandidates is the migration-owned tenant active-object
@@ -59,6 +59,8 @@ const (
 // derived by the server after authentication and index authorization; no
 // protobuf request body may directly populate it.
 type ResolutionScope struct {
+	OrganizationID             int64
+	SiteAdministrator          bool
 	TenantID                   string
 	PrincipalID                string
 	AppID                      string
@@ -66,10 +68,12 @@ type ResolutionScope struct {
 }
 
 type normalizedResolutionScope struct {
-	tenantID    string
-	principalID string
-	appID       string
-	indexes     []string
+	organizationID    int64
+	siteAdministrator bool
+	tenantID          string
+	principalID       string
+	appID             string
+	indexes           []string
 }
 
 // ResolverOptions is reserved for bounded cache or instrumentation additions.
@@ -178,7 +182,7 @@ func (resolution Resolution) Finalize(compiled clickhouse.CompiledQuery) (knowle
 }
 
 // Resolve returns the complete old-or-new catalog authority observed by one
-// SQLite read snapshot. It never mixes revisions and never reads object bodies
+// PostgreSQL read snapshot. It never mixes revisions and never reads object bodies
 // before app and object authorization have selected a bounded candidate set.
 func (resolver *Resolver) Resolve(
 	ctx context.Context,
@@ -216,7 +220,7 @@ func (resolver *Resolver) Resolve(
 		if err := limited.Err(); err != nil {
 			return Resolution{}, copyCatalogErrorMetadata(err, resolveErr)
 		}
-		if attempt == MaximumResolutionAttempts || !resolverSQLiteBusyOrLocked(resolveErr) {
+		if attempt == MaximumResolutionAttempts || !resolverPostgresRetryable(resolveErr) {
 			return Resolution{}, resolveErr
 		}
 		if err := resolver.backoff(limited, resolutionRetryDelay(attempt)); err != nil {
@@ -250,19 +254,19 @@ func (resolver *Resolver) resolveOnce(
 	ctx context.Context,
 	scope normalizedResolutionScope,
 ) (resolved Resolution, returnedErr error) {
-	tx := resolver.store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(resolver.store.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return Resolution{}, mapError(ctx.Err(), "begin resolution", tx.Error)
 	}
 	defer finishReadTransaction(tx, &returnedErr)
 
-	// This is deliberately the first SQLite read: it establishes the WAL
+	// This is deliberately the first PostgreSQL read: it establishes the WAL
 	// snapshot whose exact raw state commitment is re-read at the end.
 	catalog, err := readCatalogState(tx, scope.tenantID)
 	if err != nil {
 		return Resolution{}, mapError(ctx.Err(), "read resolution catalog authority", err)
 	}
-	app, found, err := readActiveResolutionApp(tx, scope.tenantID, scope.appID)
+	app, found, err := readActiveResolutionApp(tx, scope.tenantID, scope.appID, scope.organizationID)
 	if err != nil {
 		return Resolution{}, mapError(ctx.Err(), "authorize resolution app", err)
 	}
@@ -278,9 +282,11 @@ func (resolver *Resolver) resolveOnce(
 	}
 
 	readScope := normalizedScope{
-		tenantID:       scope.tenantID,
-		ownerID:        scope.principalID,
-		readableAppIDs: []string{scope.appID},
+		tenantID:          scope.tenantID,
+		organizationID:    scope.organizationID,
+		siteAdministrator: scope.siteAdministrator,
+		ownerID:           scope.principalID,
+		readableAppIDs:    []string{scope.appID},
 	}
 	activeCount, err := readBoundedActiveResolutionCount(tx, readScope)
 	if err != nil {
@@ -337,7 +343,7 @@ func (resolver *Resolver) resolveOnce(
 		return Resolution{}, fmt.Errorf("%w: independently derived static charges disagree", ErrCorrupt)
 	}
 
-	finalApp, found, err := readActiveResolutionApp(tx, scope.tenantID, scope.appID)
+	finalApp, found, err := readActiveResolutionApp(tx, scope.tenantID, scope.appID, scope.organizationID)
 	if err != nil {
 		return Resolution{}, mapError(ctx.Err(), "re-read resolution app authority", err)
 	}
@@ -375,6 +381,7 @@ type resolutionAppAuthority struct {
 func readActiveResolutionApp(
 	database *gorm.DB,
 	tenantID, appID string,
+	organizationID int64,
 ) (resolutionAppAuthority, bool, error) {
 	var records []struct {
 		AppID         string        `gorm:"column:app_id"`
@@ -388,14 +395,14 @@ func readActiveResolutionApp(
 	err := database.Table("app_workspaces AS app").
 		Joins(`LEFT JOIN app_catalog_revisions AS authority
 			ON authority.tenant_id = app.tenant_id`).
-		Where("app.app_id = ? AND app.tenant_id = ?", appID, tenantID).
+		Where("app.app_id = ? AND app.tenant_id = ? AND app.organization_id = ?", appID, tenantID, organizationID).
 		Select(`
-			CASE WHEN length(CAST(app.app_id AS BLOB)) BETWEEN 1 AND ? THEN app.app_id ELSE '' END AS app_id,
-			CASE WHEN length(CAST(app.tenant_id AS BLOB)) BETWEEN 1 AND ? THEN app.tenant_id ELSE '' END AS tenant_id,
-			CASE WHEN length(CAST(app.state AS BLOB)) BETWEEN 1 AND ? THEN app.state ELSE '' END AS state,
-			length(CAST(app.app_id AS BLOB)) AS app_id_bytes,
-			length(CAST(app.tenant_id AS BLOB)) AS tenant_id_bytes,
-			length(CAST(app.state AS BLOB)) AS state_bytes,
+			CASE WHEN octet_length(app.app_id) BETWEEN 1 AND ? THEN app.app_id ELSE '' END AS app_id,
+			CASE WHEN octet_length(app.tenant_id) BETWEEN 1 AND ? THEN app.tenant_id ELSE '' END AS tenant_id,
+			CASE WHEN octet_length(app.state) BETWEEN 1 AND ? THEN app.state ELSE '' END AS state,
+			octet_length(app.app_id) AS app_id_bytes,
+			octet_length(app.tenant_id) AS tenant_id_bytes,
+			octet_length(app.state) AS state_bytes,
 			authority.revision AS revision
 		`, maximumAppIDBytes, maximumTenantIDBytes, len("archived")).
 		Limit(2).
@@ -424,25 +431,25 @@ func readActiveResolutionApp(
 func readBoundedActiveResolutionCount(database *gorm.DB, scope normalizedScope) (int64, error) {
 	driver := fmt.Sprintf(`(
 		SELECT 1
-		FROM knowledge_objects INDEXED BY knowledge_objects_authorized_global_idx
-		WHERE tenant_id = ? AND sharing_scope = 'global' AND state = 'active'
+		FROM knowledge_objects
+		WHERE tenant_id = ? AND organization_id = ? AND app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = knowledge_objects.organization_id) AND sharing_scope = 'global' AND state = 'active'
 		UNION ALL
 		SELECT 1
-		FROM knowledge_objects INDEXED BY knowledge_objects_authorized_app_idx
-		WHERE tenant_id = ? AND sharing_scope = 'app' AND app_id IN ? AND state = 'active'
+		FROM knowledge_objects
+		WHERE tenant_id = ? AND organization_id = ? AND app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = knowledge_objects.organization_id) AND sharing_scope = 'app' AND app_id IN ? AND state = 'active'
 		UNION ALL
 		SELECT 1
-		FROM knowledge_objects INDEXED BY knowledge_objects_authorized_private_idx
-		WHERE tenant_id = ? AND sharing_scope = 'private'
-		  AND owner_id = ? AND app_id IN ? AND state = 'active'
+		FROM knowledge_objects
+		WHERE tenant_id = ? AND organization_id = ? AND app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = knowledge_objects.organization_id) AND sharing_scope = 'private'
+		  AND (owner_id = ? OR ?) AND app_id IN ? AND state = 'active'
 		LIMIT %d
 	) AS bounded_active_resolution_objects`, MaximumResolutionCandidates+1)
 	var count int64
 	if err := database.Table(
 		driver,
-		scope.tenantID,
-		scope.tenantID, scope.readableAppIDs,
-		scope.tenantID, scope.ownerID, scope.readableAppIDs,
+		scope.tenantID, scope.organizationID,
+		scope.tenantID, scope.organizationID, scope.readableAppIDs,
+		scope.tenantID, scope.organizationID, scope.ownerID, scope.siteAdministrator, scope.readableAppIDs,
 	).Count(&count).Error; err != nil {
 		return 0, err
 	}
@@ -462,32 +469,35 @@ func applyActiveResolutionProjectionAuthorization(
 	// definition hydration into an existence oracle.
 	driver := fmt.Sprintf(`(
 		SELECT candidate.tenant_id, candidate.knowledge_object_id, candidate.object_version
-		FROM knowledge_objects AS authorized_registry INDEXED BY knowledge_objects_authorized_global_idx
-		CROSS JOIN app_workspaces AS defining_app
-		  ON defining_app.tenant_id = authorized_registry.tenant_id
+		FROM knowledge_objects AS authorized_registry
+		JOIN app_workspaces AS defining_app ON defining_app.tenant_id = authorized_registry.tenant_id
 		 AND defining_app.app_id = authorized_registry.app_id
 		 AND defining_app.state = 'active'
-		CROSS JOIN knowledge_object_list_projections AS candidate ON %s
-		WHERE authorized_registry.tenant_id = ?
+		JOIN LATERAL (SELECT candidate.* FROM knowledge_object_list_projections AS candidate WHERE %s LIMIT 1) AS candidate ON true
+		WHERE authorized_registry.tenant_id = ? AND authorized_registry.organization_id = ? AND authorized_registry.app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = authorized_registry.organization_id)
 		  AND authorized_registry.sharing_scope = 'global' AND authorized_registry.state = 'active'
 		UNION ALL
 		SELECT candidate.tenant_id, candidate.knowledge_object_id, candidate.object_version
-		FROM knowledge_objects AS authorized_registry INDEXED BY knowledge_objects_authorized_app_idx
-		CROSS JOIN knowledge_object_list_projections AS candidate ON %s
-		WHERE authorized_registry.tenant_id = ?
+		FROM knowledge_objects AS authorized_registry
+		JOIN LATERAL (SELECT candidate.* FROM knowledge_object_list_projections AS candidate WHERE %s LIMIT 1) AS candidate ON true
+		WHERE authorized_registry.tenant_id = ? AND authorized_registry.organization_id = ? AND authorized_registry.app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = authorized_registry.organization_id)
 		  AND authorized_registry.sharing_scope = 'app' AND authorized_registry.app_id IN ?
 		  AND authorized_registry.state = 'active'
 		UNION ALL
 		SELECT candidate.tenant_id, candidate.knowledge_object_id, candidate.object_version
-		FROM knowledge_objects AS authorized_registry INDEXED BY knowledge_objects_authorized_private_idx
-		CROSS JOIN knowledge_object_list_projections AS candidate ON %s
-		WHERE authorized_registry.tenant_id = ?
+		FROM knowledge_objects AS authorized_registry
+		JOIN LATERAL (SELECT candidate.* FROM knowledge_object_list_projections AS candidate WHERE %s LIMIT 1) AS candidate ON true
+		WHERE authorized_registry.tenant_id = ? AND authorized_registry.organization_id = ? AND authorized_registry.app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = authorized_registry.organization_id)
 		  AND authorized_registry.sharing_scope = 'private'
-		  AND authorized_registry.owner_id = ? AND authorized_registry.app_id IN ?
+		  AND (authorized_registry.owner_id = ? OR ?) AND authorized_registry.app_id IN ?
 		  AND authorized_registry.state = 'active'
 		LIMIT %d
 	) AS authorized_active_resolution_projection
-	CROSS JOIN knowledge_object_list_projections AS projection`,
+	JOIN LATERAL (SELECT projection.* FROM knowledge_object_list_projections AS projection
+	 WHERE projection.tenant_id = authorized_active_resolution_projection.tenant_id
+	 AND projection.knowledge_object_id = authorized_active_resolution_projection.knowledge_object_id
+	 AND projection.object_version = authorized_active_resolution_projection.object_version
+	 LIMIT 1) AS projection ON true`,
 		exactAuthorizedProjectionJoinSQL,
 		exactAuthorizedProjectionJoinSQL,
 		exactAuthorizedProjectionJoinSQL,
@@ -495,9 +505,9 @@ func applyActiveResolutionProjectionAuthorization(
 	)
 	return query.Table(
 		driver,
-		scope.tenantID,
-		scope.tenantID, scope.readableAppIDs,
-		scope.tenantID, scope.ownerID, scope.readableAppIDs,
+		scope.tenantID, scope.organizationID,
+		scope.tenantID, scope.organizationID, scope.readableAppIDs,
+		scope.tenantID, scope.organizationID, scope.ownerID, scope.siteAdministrator, scope.readableAppIDs,
 	).Where(`authorized_active_resolution_projection.tenant_id = projection.tenant_id
 		AND authorized_active_resolution_projection.knowledge_object_id = projection.knowledge_object_id
 		AND authorized_active_resolution_projection.object_version = projection.object_version`).
@@ -967,7 +977,7 @@ func resolutionVersionMatchesCandidate(version versionRecord, candidate resoluti
 func resolutionPrecedenceRank(scope normalizedResolutionScope, object Object) (uint8, error) {
 	switch object.SharingScope {
 	case SharingScopePrivate:
-		if object.AppID != scope.appID || object.OwnerID != scope.principalID {
+		if object.AppID != scope.appID || (!scope.siteAdministrator && object.OwnerID != scope.principalID) {
 			return 0, fmt.Errorf("%w: private resolution candidate escaped authorization", ErrCorrupt)
 		}
 		return 3, nil
@@ -1047,7 +1057,7 @@ func resolutionSnapshotObject(object Object) (knowledgesnapshot.Object, error) {
 }
 
 func normalizeResolutionScope(scope ResolutionScope) (normalizedResolutionScope, error) {
-	if !validIdentity(scope.TenantID, maximumTenantIDBytes) ||
+	if scope.OrganizationID <= 0 || !validIdentity(scope.TenantID, maximumTenantIDBytes) ||
 		!validIdentity(scope.PrincipalID, maximumOwnerIDBytes) ||
 		!validIdentity(scope.AppID, maximumAppIDBytes) {
 		return normalizedResolutionScope{}, fmt.Errorf("%w: knowledge resolution scope is invalid", control.ErrInvalidArgument)
@@ -1057,26 +1067,19 @@ func normalizeResolutionScope(scope ResolutionScope) (normalizedResolutionScope,
 		return normalizedResolutionScope{}, fmt.Errorf("%w: knowledge resolution index scope is invalid", control.ErrInvalidArgument)
 	}
 	return normalizedResolutionScope{
-		tenantID:    strings.Clone(indexScope.TenantID),
-		principalID: strings.Clone(scope.PrincipalID),
-		appID:       strings.Clone(scope.AppID),
-		indexes:     slices.Clone(indexScope.IndexNames),
+		tenantID:          strings.Clone(indexScope.TenantID),
+		organizationID:    scope.OrganizationID,
+		siteAdministrator: scope.SiteAdministrator,
+		principalID:       strings.Clone(scope.PrincipalID),
+		appID:             strings.Clone(scope.AppID),
+		indexes:           slices.Clone(indexScope.IndexNames),
 	}, nil
 }
 
-func resolverSQLiteBusyOrLocked(err error) bool {
-	var sqliteErr *sqlite.Error
-	if !errors.As(err, &sqliteErr) {
+func resolverPostgresRetryable(err error) bool {
+	var state interface{ SQLState() string }
+	if !errors.As(err, &state) {
 		return false
 	}
-	return resolverSQLiteResultCodeBusyOrLocked(sqliteErr.Code())
-}
-
-func resolverSQLiteResultCodeBusyOrLocked(code int) bool {
-	switch code & 0xff {
-	case 5, 6:
-		return true
-	default:
-		return false
-	}
+	return state.SQLState() == "40001" || state.SQLState() == "40P01" || state.SQLState() == "55P03"
 }

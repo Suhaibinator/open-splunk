@@ -122,6 +122,8 @@ var (
 	// ErrStorageUnavailable may be wrapped by an Executor. The manager maps it
 	// to a retryable safe failure and never exposes the wrapped storage details.
 	ErrStorageUnavailable = errors.New("search storage unavailable")
+	// ErrSourceForbidden means fresh source authorization failed before a read.
+	ErrSourceForbidden = errors.New("search source access is unavailable")
 	// ErrUnsupportedValue may be wrapped by an Executor when a supported SPL
 	// command encounters a runtime field value it cannot faithfully process.
 	// The manager maps it to a safe, non-retryable unsupported-SPL failure.
@@ -224,10 +226,12 @@ type KnowledgeResolver interface {
 // so compilation can bind one immutable version to every logical stage without
 // consulting mutable state.
 type LookupAdmissionResolutionScope struct {
-	TenantID    string
-	PrincipalID string
-	AppID       string
-	Names       []string
+	OrganizationID    int64
+	SiteAdministrator bool
+	TenantID          string
+	PrincipalID       string
+	AppID             string
+	Names             []string
 }
 
 // LookupAdmissionResolution is one catalog-snapshot authority for every
@@ -257,10 +261,15 @@ type LookupResolver interface {
 // defaults. A negative CleanupInterval disables the background cleanup loop,
 // which is useful with an injected deterministic clock in tests.
 type Config struct {
-	Executor    Executor
-	Snapshotter Snapshotter
-	Journal     JobJournal
-	Compiler    clickhouse.Compiler
+	// ResolveAdmissionScope refreshes native identity and membership before any
+	// planning or source lookup. Its site flag is never supplied by a request.
+	ResolveAdmissionScope func(context.Context, AccessScope) (AccessScope, error)
+	CaptureFactory        CaptureFactory
+	AuthorizeJob          func(context.Context, AccessScope, Job) error
+	Executor              Executor
+	Snapshotter           Snapshotter
+	Journal               JobJournal
+	Compiler              clickhouse.Compiler
 	// KnowledgeResolver enables sealed pre-journal admission only for requests
 	// with a nonempty AppID. App-less searches deliberately remain legacy.
 	KnowledgeResolver KnowledgeResolver
@@ -271,6 +280,7 @@ type Config struct {
 	LookupResolver LookupResolver
 	// MaxConcurrent bounds workers and, independently, synchronous validations.
 	MaxConcurrent          int
+	MaxConcurrentPerUser   int
 	MaxConcurrentReads     int
 	MaxConcurrentSnapshots int
 	// MaxResultLeases bounds pinned result iterators across the manager;
@@ -332,6 +342,9 @@ type Manager struct {
 	nextCapacityCleanup time.Time
 
 	executor                 Executor
+	captureFactory           CaptureFactory
+	authorizeJob             func(context.Context, AccessScope, Job) error
+	resolveAdmissionScope    func(context.Context, AccessScope) (AccessScope, error)
 	snapshotter              Snapshotter
 	journal                  JobJournal
 	journalTimeout           time.Duration
@@ -395,10 +408,13 @@ type Manager struct {
 	pendingFailure       *FailureNotification
 	coalescedFailures    uint64
 	activeExecutions     uint32
+	activeByUser         map[AccessScope]int
+	maxConcurrentPerUser int
 }
 
 type jobEntry struct {
-	mu sync.RWMutex
+	capturing bool
+	mu        sync.RWMutex
 
 	job                      Job
 	authorizedIndexes        []string
@@ -601,8 +617,16 @@ func New(config Config) (*Manager, error) {
 		listCursorEpoch,
 	)
 
+	perUser := config.MaxConcurrentPerUser
+	if perUser == 0 {
+		perUser = 2
+	}
+	if perUser < 1 || perUser > maximumConcurrent {
+		return nil, errors.New("invalid per-user search concurrency")
+	}
 	managerContext, cancel := context.WithCancelCause(context.Background())
 	manager := &Manager{
+		activeByUser: make(map[AccessScope]int), maxConcurrentPerUser: perUser,
 		jobs:                     make(map[string]*jobEntry),
 		jobsByScope:              make(map[AccessScope]*jobListIndexNode),
 		reservedIDs:              make(map[string]struct{}),
@@ -610,6 +634,9 @@ func New(config Config) (*Manager, error) {
 		snapshotter:              config.Snapshotter,
 		journal:                  config.Journal,
 		journalTimeout:           journalTimeout,
+		authorizeJob:             config.AuthorizeJob,
+		resolveAdmissionScope:    config.ResolveAdmissionScope,
+		captureFactory:           config.CaptureFactory,
 		onJournalError:           config.OnJournalError,
 		onFailure:                config.OnFailure,
 		journalErrorHookGate:     make(chan struct{}, 1),
@@ -797,6 +824,18 @@ func (manager *Manager) create(
 		return Job{}, err
 	}
 	request = normalizedRequest
+	request.siteAdministrator = false
+	if manager.resolveAdmissionScope != nil {
+		expected := AccessScope{TenantID: request.TenantID, OwnerID: request.OwnerID, OrganizationID: request.OrganizationID}
+		fresh, err := manager.resolveAdmissionScope(ctx, expected)
+		if err != nil {
+			return Job{}, err
+		}
+		if fresh.TenantID != expected.TenantID || fresh.OwnerID != expected.OwnerID || fresh.OrganizationID != expected.OrganizationID {
+			return Job{}, ErrKnowledgeUnavailable
+		}
+		request.siteAdministrator = fresh.SiteAdministrator
+	}
 	admittedLimits := manager.currentLimits()
 	if request.RetentionLifetime > 0 {
 		admittedLimits.ResultRetention = request.RetentionLifetime
@@ -911,6 +950,8 @@ func (manager *Manager) create(
 			SPL:               sourceSPL,
 			NormalizedSPL:     strings.TrimSpace(sourceSPL),
 			TenantID:          strings.Clone(request.TenantID),
+			OrganizationID:    strings.Clone(request.OrganizationID),
+			SitePrivilegeUsed: request.siteAdministrator,
 			RequestedIndexes:  cloneStrings(request.RequestedIndexes),
 			TimeRange:         timeIntent,
 			AppID:             request.AppID,
@@ -933,6 +974,7 @@ func (manager *Manager) create(
 	if prepared != nil {
 		entry.job.EffectiveIndexes = cloneStrings(prepared.effective)
 		entry.job.KnowledgeSnapshot = cloneKnowledgeSnapshotSummary(prepared.summary)
+		entry.job.KnowledgeObjectIDs = prepared.snapshot.ObjectIDs()
 		compiled := prepared.compiled
 		entry.preparedCompiled = &compiled
 		entry.knowledgeSnapshot = prepared.snapshot
@@ -1200,8 +1242,9 @@ func (manager *Manager) finalizeJournal(job Job) {
 func (manager *Manager) finalizeJournalWithContext(ctx context.Context, job Job) {
 	if completed, ok := manager.journal.(completedPublicationJournal); ok && job.State == StateCompleted {
 		lease, err := manager.AcquireResultsFor(ctx, AccessScope{
-			TenantID: job.TenantID,
-			OwnerID:  job.OwnerID,
+			TenantID:       job.TenantID,
+			OwnerID:        job.OwnerID,
+			OrganizationID: job.OrganizationID,
 		}, job.ID)
 		if err != nil {
 			manager.reportJournalError(JournalOperationFinalizeResults, job, err)
@@ -1456,6 +1499,9 @@ func (manager *Manager) GetFor(access AccessScope, id string) (Job, error) {
 	if entry == nil || !entry.matches(access) {
 		return Job{}, ErrNotFound
 	}
+	if err := manager.authorizeEntry(context.Background(), access, entry); err != nil {
+		return Job{}, err
+	}
 	return manager.getEntry(entry)
 }
 
@@ -1498,7 +1544,7 @@ func (manager *Manager) GetForContext(ctx context.Context, access AccessScope, i
 		entry.mu.Unlock()
 		return Job{}, err
 	}
-	if entry.job.TenantID != access.TenantID || entry.job.OwnerID != access.OwnerID {
+	if entry.job.TenantID != access.TenantID || (!access.SiteAdministrator && entry.job.OwnerID != access.OwnerID) {
 		entry.mu.Unlock()
 		return Job{}, ErrNotFound
 	}
@@ -1512,6 +1558,11 @@ func (manager *Manager) GetForContext(ctx context.Context, access AccessScope, i
 	result := cloneJob(source)
 	if err := manager.operationContextError(ctx); err != nil {
 		return Job{}, err
+	}
+	if manager.authorizeJob != nil {
+		if err := manager.authorizeJob(ctx, access, result); err != nil {
+			return Job{}, err
+		}
 	}
 	return result, nil
 }
@@ -1603,10 +1654,20 @@ func (manager *Manager) ResultsFor(access AccessScope, id string, request PageRe
 	if entry == nil || !entry.matches(access) {
 		return ResultPage{}, ErrNotFound
 	}
+	if err := manager.authorizeEntry(context.Background(), access, entry); err != nil {
+		return ResultPage{}, err
+	}
 	return manager.resultsEntry(id, entry, limit, request.Cursor)
 }
 
 func (manager *Manager) resultsEntry(id string, entry *jobEntry, limit int, cursorToken string) (ResultPage, error) {
+	entry.mu.RLock()
+	captured := entry.job.CaptureComplete
+	access := AccessScope{TenantID: entry.job.TenantID, OwnerID: entry.job.OwnerID, OrganizationID: entry.job.OrganizationID}
+	entry.mu.RUnlock()
+	if captured {
+		return manager.capturePage(manager.ctx, access, id, limit, cursorToken)
+	}
 	manager.acquireRead()
 	defer manager.releaseRead()
 	manager.maybeExpire(entry, manager.nowUTC())
@@ -1716,6 +1777,9 @@ func (manager *Manager) CancelFor(access AccessScope, id string) error {
 	entry := manager.lookup(id)
 	if entry == nil || !entry.matches(access) {
 		return ErrNotFound
+	}
+	if err := manager.authorizeEntry(context.Background(), access, entry); err != nil {
+		return err
 	}
 	return manager.cancelEntry(id, entry)
 }
@@ -1847,7 +1911,21 @@ func (manager *Manager) lockEntryForAccess(
 	id string,
 	requireOpen bool,
 	contextError func() error,
+	contexts ...context.Context,
 ) (*jobEntry, error) {
+	authorizeContext := context.Background()
+	if len(contexts) > 0 && contexts[0] != nil {
+		authorizeContext = contexts[0]
+	}
+	if manager.authorizeJob != nil {
+		candidate := manager.lookup(id)
+		if candidate == nil || !candidate.matches(access) {
+			return nil, ErrNotFound
+		}
+		if err := manager.authorizeEntry(authorizeContext, access, candidate); err != nil {
+			return nil, err
+		}
+	}
 	manager.mu.RLock()
 	if requireOpen && manager.closed {
 		manager.mu.RUnlock()
@@ -1866,7 +1944,7 @@ func (manager *Manager) lockEntryForAccess(
 			return nil, err
 		}
 	}
-	if entry.job.TenantID != access.TenantID || entry.job.OwnerID != access.OwnerID {
+	if entry.job.TenantID != access.TenantID || (!access.SiteAdministrator && (entry.job.OwnerID != access.OwnerID || (access.OrganizationID != "" && access.OrganizationID != entry.job.OrganizationID))) {
 		entry.mu.Unlock()
 		return nil, ErrNotFound
 	}
@@ -1879,7 +1957,7 @@ func (manager *Manager) lockEntryForAccess(
 
 func (entry *jobEntry) matches(access AccessScope) bool {
 	entry.mu.RLock()
-	matches := entry.job.TenantID == access.TenantID && entry.job.OwnerID == access.OwnerID
+	matches := entry.job.TenantID == access.TenantID && (access.SiteAdministrator || (entry.job.OwnerID == access.OwnerID && (access.OrganizationID == "" || access.OrganizationID == entry.job.OrganizationID)))
 	entry.mu.RUnlock()
 	return matches
 }
@@ -1888,26 +1966,40 @@ func (manager *Manager) worker() {
 	defer manager.wg.Done()
 	for {
 		manager.mu.Lock()
-		for !manager.closed && (manager.queueCount == 0 ||
-			(manager.limitSource != nil && manager.activeExecutions >= manager.limitSource.Snapshot().MaxConcurrent)) {
+		var entry *jobEntry
+		for !manager.closed {
+			if manager.limitSource == nil || manager.activeExecutions < manager.limitSource.Snapshot().MaxConcurrent {
+				for candidate := manager.queueHead; candidate != nil; candidate = candidate.queueNext {
+					scope := AccessScope{TenantID: candidate.job.TenantID, OwnerID: candidate.job.OwnerID}
+					if manager.activeByUser[scope] < manager.maxConcurrentPerUser {
+						entry = candidate
+						break
+					}
+				}
+			}
+			if entry != nil {
+				break
+			}
 			manager.queueCond.Wait()
 		}
 		if manager.closed {
 			manager.mu.Unlock()
 			return
 		}
-		entry := manager.dequeueLocked()
-		if manager.limitSource != nil {
-			manager.activeExecutions++
-		}
+		manager.removeQueuedLocked(entry)
+		scope := AccessScope{TenantID: entry.job.TenantID, OwnerID: entry.job.OwnerID}
+		manager.activeByUser[scope]++
+		manager.activeExecutions++
 		manager.mu.Unlock()
 		manager.runSafely(entry)
-		if manager.limitSource != nil {
-			manager.mu.Lock()
-			manager.activeExecutions--
-			manager.queueCond.Broadcast()
-			manager.mu.Unlock()
+		manager.mu.Lock()
+		manager.activeExecutions--
+		manager.activeByUser[scope]--
+		if manager.activeByUser[scope] == 0 {
+			delete(manager.activeByUser, scope)
 		}
+		manager.queueCond.Broadcast()
+		manager.mu.Unlock()
 	}
 }
 
@@ -1944,14 +2036,6 @@ func (manager *Manager) enqueueLocked(entry *jobEntry) {
 	manager.queueCount++
 }
 
-func (manager *Manager) dequeueLocked() *jobEntry {
-	entry := manager.queueHead
-	if entry != nil {
-		manager.removeQueuedLocked(entry)
-	}
-	return entry
-}
-
 func (manager *Manager) clearQueueLocked() {
 	for manager.queueHead != nil {
 		manager.removeQueuedLocked(manager.queueHead)
@@ -1974,6 +2058,16 @@ func (manager *Manager) runSafely(entry *jobEntry) {
 }
 
 func (manager *Manager) run(entry *jobEntry) {
+	if manager.authorizeJob != nil {
+		entry.mu.RLock()
+		job := cloneJob(entry.job)
+		entry.mu.RUnlock()
+		access := AccessScope{TenantID: job.TenantID, OwnerID: job.OwnerID, OrganizationID: job.OrganizationID}
+		if err := manager.authorizeJob(entry.ctx, access, job); err != nil {
+			manager.failOrCancelWithCause(entry, Failure{Code: FailureIndexForbidden, Message: "search source access is unavailable"}, FailureCauseUnknown, err, manager.nowUTC())
+			return
+		}
+	}
 	if !manager.advance(entry, StateQueued, StateParsing, nil) {
 		return
 	}
@@ -2027,12 +2121,15 @@ func (manager *Manager) run(entry *jobEntry) {
 		IndexTimeCutoff:   entry.job.IndexTimeCutoff,
 		VisibilityCutoff:  &visibilityCutoff,
 	}
+	planningJob := cloneJob(entry.job)
 	entry.mu.RUnlock()
 	logical, compiled, wildcardExpansion, runtimeBudget, err := manager.prepareAndCompileStatsWildcard(
 		entry.ctx,
 		parsed,
 		scope,
 		entry.limits,
+		planningJob,
+		entry,
 	)
 	if err != nil {
 		if _, ok := errors.AsType[*plan.Diagnostic](err); ok {
@@ -2131,6 +2228,37 @@ func (manager *Manager) executeCompiled(
 		limits:         entry.limits,
 	}
 	sink.ctx = executionContext
+	if manager.captureFactory != nil {
+		releaseMemory, reserved := manager.reserveCaptureMemory(64 << 20)
+		if !reserved {
+			manager.executionFailed(entry, ErrCapacity)
+			return
+		}
+		defer releaseMemory()
+		entry.mu.RLock()
+		captureJob := cloneJob(entry.job)
+		generation := entry.generation
+		entry.mu.RUnlock()
+		capture, err := manager.captureFactory.BeginCapture(executionContext, captureJob, retained, generation)
+		if err != nil {
+			manager.executionFailed(entry, err)
+			return
+		}
+		sink.capture = capture
+		entry.mu.Lock()
+		entry.capturing = true
+		entry.mu.Unlock()
+		rows, bytes := capture.Limits()
+		executionContext = searchlimits.WithCaptureEnvelope(executionContext, rows, bytes)
+		sink.ctx = executionContext
+		defer func() {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(executionContext), 30*time.Second)
+			defer cancel()
+			if err := capture.Abort(cleanup); err != nil {
+				manager.reportJournalError(JournalOperationFinalizeResults, captureJob, err)
+			}
+		}()
+	}
 	defer sink.close()
 	// The executor receives its own fully detached clone. Compare it with the
 	// pristine local authority both before and after the call: by-value field
@@ -2146,6 +2274,13 @@ func (manager *Manager) executeCompiled(
 		manager.executionFailed(entry, ErrInvalidResult)
 		return
 	}
+	entry.mu.RLock()
+	executionJob := cloneJob(entry.job)
+	entry.mu.RUnlock()
+	if err := manager.authorizeSourceJob(executionContext, executionJob, executionJob.EffectiveIndexes); err != nil {
+		manager.executionFailed(entry, err)
+		return
+	}
 	executionErr := manager.executor.Execute(executionContext, executable, sink)
 	equal, equalErr = executable.EqualForExecutionContext(executionContext, retained)
 	if equalErr != nil {
@@ -2154,13 +2289,17 @@ func (manager *Manager) executeCompiled(
 		executionErr = ErrInvalidResult
 	}
 	executionContextErr := executionContext.Err()
-	if executionErr == nil && executionContextErr == nil && sink.atomicResult {
+	if executionErr == nil && executionContextErr == nil && sink.atomicResult && sink.capture == nil {
 		if commitErr := sink.commitAtomic(); commitErr != nil {
 			executionErr = commitErr
 		}
 	}
 	sink.close()
-	cancelExecution()
+	// Private uploads and their metadata publication share the execution
+	// deadline. Keep that context alive until the sealed capture is committed.
+	if sink.capture == nil {
+		cancelExecution()
+	}
 	truncationErr, sinkErr := sink.outcome()
 	resultsTruncated := false
 	if executionContextErr != nil {
@@ -2188,6 +2327,12 @@ func (manager *Manager) executeCompiled(
 			nil,
 			manager.nowUTC(),
 		)
+		return
+	}
+	if sink.capture != nil {
+		if err := manager.finishCaptured(entry, sink); err != nil {
+			manager.executionFailed(entry, err)
+		}
 		return
 	}
 	manager.finishCompleted(entry, manager.nowUTC(), resultsTruncated, sink.nearbyEventProvenance())
@@ -2259,6 +2404,8 @@ func (manager *Manager) executionFailed(entry *jobEntry, err error) {
 	}
 	var failure Failure
 	switch {
+	case errors.Is(err, ErrSourceForbidden):
+		failure = Failure{Code: FailureIndexForbidden, Message: "search source access is unavailable"}
 	case errors.Is(err, context.DeadlineExceeded):
 		failure = Failure{Code: FailureTimeout, Message: "search execution timed out", Retryable: true}
 	case errors.Is(err, indexread.ErrUnavailable):
@@ -2718,6 +2865,10 @@ func planningFailure(err error) Failure {
 }
 
 type resultSink struct {
+	capture           CaptureTransaction
+	capturedRows      uint64
+	capturedBytes     uint64
+	previewStopped    bool
 	manager           *Manager
 	entry             *jobEntry
 	ctx               context.Context
@@ -2839,6 +2990,11 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 	}
 	if schemaErr != nil {
 		return sink.rememberLocked(schemaErr)
+	}
+	if sink.capture != nil {
+		if err := sink.capture.SetSchema(schema); err != nil {
+			return sink.rememberLocked(err)
+		}
 	}
 	sink.nearbyProvenance = nil
 	if sink.nearbyEvent != nil {
@@ -2965,6 +3121,9 @@ func (sink *resultSink) addRow(values []Value, bounds *TimeBucketBounds) error {
 	if !sink.receivedSchema || (!sink.atomicResult && entry.job.Schema == nil) ||
 		(sink.atomicResult && sink.atomicSchema == nil) {
 		return sink.rememberLocked(fmt.Errorf("%w: row was emitted before schema", ErrInvalidResult))
+	}
+	if sink.capture != nil {
+		return sink.addCaptureRowLocked(values, bounds)
 	}
 	if sink.atomicResult {
 		return sink.stageAtomicRowLocked(values, bounds)
@@ -3503,4 +3662,14 @@ func validateChartSchema(schema Schema, expected []string, output clickhouse.Cha
 		}
 	}
 	return nil
+}
+
+func (manager *Manager) authorizeEntry(ctx context.Context, access AccessScope, entry *jobEntry) error {
+	if manager.authorizeJob == nil {
+		return nil
+	}
+	entry.mu.RLock()
+	job := cloneJob(entry.job)
+	entry.mu.RUnlock()
+	return manager.authorizeJob(ctx, access, job)
 }

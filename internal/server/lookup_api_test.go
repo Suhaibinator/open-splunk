@@ -81,7 +81,7 @@ func (service *lookupHTTPService) Delete(_ context.Context, scope lookupservice.
 func (service *lookupHTTPService) Preview(_ context.Context, scope lookupservice.Scope, _ *opensplunk.PreviewLookupRequest) (*opensplunk.PreviewLookupResponse, error) {
 	service.record(scope)
 	return &opensplunk.PreviewLookupResponse{
-		Columns: []string{"service_id", "owner"}, Rows: []*opensplunk.LookupPreviewRow{{Values: []string{"api", "alice"}}},
+		Columns: []string{"service_id", "1008"}, Rows: []*opensplunk.LookupPreviewRow{{Values: []string{"api", "alice"}}},
 		TotalRows: 1, SourceSha256: make([]byte, 32), ContentSha256: make([]byte, 32),
 	}, nil
 }
@@ -90,9 +90,9 @@ func TestLookupRoutesAreOneAuthenticatedExactFamily(t *testing.T) {
 	service := &lookupHTTPService{ready: true}
 	config := knowledgeConfigBase(t)
 	config.LookupManagement = service
-	handler, err := NewHandler(config)
+	handler, err := newAuthenticatedTestHandler(config)
 	if err != nil {
-		t.Fatalf("NewHandler(): %v", err)
+		t.Fatalf("newAuthenticatedTestHandler(): %v", err)
 	}
 	paths := []string{lookupCreatePath, lookupGetPath, lookupListPath, lookupReplacePath, lookupSetStatePath, lookupDeletePath, lookupPreviewPath}
 	for _, path := range paths {
@@ -105,7 +105,7 @@ func TestLookupRoutesAreOneAuthenticatedExactFamily(t *testing.T) {
 	service.mu.Lock()
 	gotScope := service.scope
 	service.mu.Unlock()
-	if gotScope != (lookupservice.Scope{TenantID: knowledgeBoundaryTenantID, OwnerID: knowledgeBoundaryOwnerID}) {
+	if gotScope != (lookupservice.Scope{OrganizationID: 1, SiteAdministrator: true, TenantID: knowledgeBoundaryTenantID, OwnerID: knowledgeBoundaryOwnerID}) {
 		t.Fatalf("service scope = %#v", gotScope)
 	}
 
@@ -138,15 +138,15 @@ func TestLookupRoutesAreOneAuthenticatedExactFamily(t *testing.T) {
 func TestLookupConfigurationAndErrorsFailClosed(t *testing.T) {
 	config := knowledgeConfigBase(t)
 	config.LookupManagement = &lookupHTTPService{}
-	if _, err := NewHandler(config); err == nil || !strings.Contains(err.Error(), "lookup management service is not ready") {
-		t.Fatalf("unready NewHandler() error=%v", err)
+	if _, err := newAuthenticatedTestHandler(config); err == nil || !strings.Contains(err.Error(), "lookup management service is not ready") {
+		t.Fatalf("unready newAuthenticatedTestHandler() error=%v", err)
 	}
 	var typedNil *lookupHTTPService
 	config = knowledgeConfigBase(t)
 	config.LookupManagement = typedNil
-	handler, err := NewHandler(config)
+	handler, err := newAuthenticatedTestHandler(config)
 	if err != nil {
-		t.Fatalf("typed-nil NewHandler(): %v", err)
+		t.Fatalf("typed-nil newAuthenticatedTestHandler(): %v", err)
 	}
 	response := knowledgeHTTPPost(t, handler, lookupGetPath, &opensplunk.GetLookupRequest{LookupId: "lookup-1"})
 	if response.Code != http.StatusNotFound {
@@ -156,9 +156,9 @@ func TestLookupConfigurationAndErrorsFailClosed(t *testing.T) {
 	service := &lookupHTTPService{ready: true}
 	config = knowledgeConfigBase(t)
 	config.LookupManagement = service
-	handler, err = NewHandler(config)
+	handler, err = newAuthenticatedTestHandler(config)
 	if err != nil {
-		t.Fatalf("configured NewHandler(): %v", err)
+		t.Fatalf("configured newAuthenticatedTestHandler(): %v", err)
 	}
 	tests := []struct {
 		err  error
@@ -186,9 +186,9 @@ func TestLookupHandlerRejectsInvalidTrustedProjection(t *testing.T) {
 	service := &lookupHTTPService{ready: true}
 	config := knowledgeConfigBase(t)
 	config.LookupManagement = service
-	handler, err := NewHandler(config)
+	handler, err := newAuthenticatedTestHandler(config)
 	if err != nil {
-		t.Fatalf("NewHandler(): %v", err)
+		t.Fatalf("newAuthenticatedTestHandler(): %v", err)
 	}
 	service.mu.Lock()
 	service.getErr = nil
@@ -204,7 +204,7 @@ func TestLookupHandlerRejectsInvalidTrustedProjection(t *testing.T) {
 }
 
 func TestLookupTrustedProjectionValidationPinsBoundsAndLifecycle(t *testing.T) {
-	scope := lookupservice.Scope{TenantID: knowledgeBoundaryTenantID, OwnerID: knowledgeBoundaryOwnerID}
+	scope := lookupservice.Scope{OrganizationID: 1, SiteAdministrator: true, TenantID: knowledgeBoundaryTenantID, OwnerID: knowledgeBoundaryOwnerID}
 	projection := lookupHTTPProjection(scope, "lookup-1", lookupHTTPDefinition("catalog"), 1, opensplunk.LookupState_LOOKUP_STATE_ACTIVE)
 	if !validLookupProjection(projection, scope) {
 		t.Fatal("valid lookup projection was rejected")
@@ -292,7 +292,7 @@ func lookupHTTPDefinition(name string) *opensplunk.LookupDefinition {
 	return &opensplunk.LookupDefinition{
 		AppId: "search", Name: name, SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 		KeyMappings:       []*opensplunk.LookupFieldMapping{{LookupField: "service_id", EventField: "service_id"}},
-		OutputMappings:    []*opensplunk.LookupFieldMapping{{LookupField: "owner", EventField: "service_owner"}},
+		OutputMappings:    []*opensplunk.LookupFieldMapping{{LookupField: "1008", EventField: "service_owner"}},
 		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 	}
 }
@@ -300,7 +300,7 @@ func lookupHTTPDefinition(name string) *opensplunk.LookupDefinition {
 func lookupHTTPProjection(scope lookupservice.Scope, id string, definition *opensplunk.LookupDefinition, version uint64, state opensplunk.LookupState) *opensplunk.Lookup {
 	return &opensplunk.Lookup{
 		LookupId: id, TenantId: scope.TenantID, OwnerId: scope.OwnerID, Version: version, State: state,
-		Definition: proto.Clone(definition).(*opensplunk.LookupDefinition), Columns: []string{"service_id", "owner"}, RowCount: 1,
+		Definition: proto.Clone(definition).(*opensplunk.LookupDefinition), Columns: []string{"service_id", "1008"}, RowCount: 1,
 		CanonicalSizeBytes: 32, SourceSha256: make([]byte, 32), ContentSha256: make([]byte, 32),
 		CreatedAt: timestamppb.New(knowledgeBoundaryNow), UpdatedAt: timestamppb.New(knowledgeBoundaryNow),
 	}

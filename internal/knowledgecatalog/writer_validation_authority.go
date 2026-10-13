@@ -378,13 +378,12 @@ func matchValidationCatalogBookend(tx *gorm.DB, tenantID string, initial catalog
 			Present int64 `gorm:"column:present"`
 		}
 		if err := tx.Raw(`
-			SELECT EXISTS (
+			SELECT CASE WHEN EXISTS (
 				SELECT 1
 				FROM knowledge_objects
 				WHERE tenant_id = ?
 				LIMIT 1
-			) AS present
-		`, tenantID).Scan(&records).Error; err != nil {
+			) THEN 1 ELSE 0 END AS present`, tenantID).Scan(&records).Error; err != nil {
 			return err
 		}
 		if len(records) != 1 || records[0].Present != 0 {
@@ -418,9 +417,9 @@ func selectValidationCandidateID(tx *gorm.DB, tenantID string) (string, error) {
 	}
 	var records []identityRecord
 	if err := tx.Table("knowledge_objects").Select(fmt.Sprintf(`
-		CASE WHEN length(CAST(knowledge_object_id AS BLOB)) BETWEEN 1 AND %[1]d
+		CASE WHEN octet_length(knowledge_object_id) BETWEEN 1 AND %[1]d
 			THEN knowledge_object_id ELSE '' END AS knowledge_object_id,
-		length(CAST(knowledge_object_id AS BLOB)) AS knowledge_object_id_bytes`,
+		octet_length(knowledge_object_id) AS knowledge_object_id_bytes`,
 		maximumObjectIDBytes,
 	)).Where("tenant_id = ?", tenantID).
 		Order("knowledge_object_id ASC").

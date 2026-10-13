@@ -4,100 +4,24 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"io/fs"
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"testing/fstest"
-	"time"
 
-	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/migrations"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
-	_ "modernc.org/sqlite"
 )
 
-func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
+func TestOpenConfiguresGORMOnTheExistingPostgreSQLPool(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "control.sqlite")
-	db, err := Open(ctx, path)
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-
-	assertPragmaValue(t, db.SQLDB(), "journal_mode", "wal")
-	assertPragmaValue(t, db.SQLDB(), "foreign_keys", "1")
-	assertPragmaValue(t, db.SQLDB(), "busy_timeout", fmt.Sprint(defaultBusyTimeout.Milliseconds()))
-	assertPragmaValue(t, db.SQLDB(), "synchronous", "2") // SQLite FULL
-
-	var migrationCount int
-	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
-		t.Fatalf("count schema migrations: %v", err)
-	}
-	if migrationCount != 12 {
-		t.Fatalf("schema migration count = %d, want 12", migrationCount)
-	}
-
-	// Foreign keys are connection-local in SQLite. Force database/sql to open
-	// several connections and verify the DSN configures every one.
-	connections := make([]*sql.Conn, 4)
-	for i := range connections {
-		connections[i], err = db.SQLDB().Conn(ctx)
-		if err != nil {
-			t.Fatalf("Conn(%d): %v", i, err)
-		}
-		defer connections[i].Close()
-
-		var enabled int
-		if err := connections[i].QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&enabled); err != nil {
-			t.Fatalf("foreign_keys on connection %d: %v", i, err)
-		}
-		if enabled != 1 {
-			t.Fatalf("foreign_keys on connection %d = %d, want 1", i, enabled)
-		}
-	}
-	for _, conn := range connections {
-		if err := conn.Close(); err != nil {
-			t.Fatalf("close connection: %v", err)
-		}
-	}
-
-	_, err = db.SQLDB().ExecContext(ctx, `
-		INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
-		VALUES ('missing-token', 'missing-index')`)
-	if err == nil {
-		t.Fatal("foreign-key violating insert unexpectedly succeeded")
-	}
-
-	if err := db.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-
-	// Reopening is the ordinary idempotence path: already-applied migrations
-	// are verified but never executed or recorded a second time.
-	db, err = Open(ctx, path)
-	if err != nil {
-		t.Fatalf("second Open() error = %v", err)
-	}
-	defer db.Close()
-	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
-		t.Fatalf("count schema migrations after reopen: %v", err)
-	}
-	if migrationCount != 12 {
-		t.Fatalf("schema migration count after reopen = %d, want 12", migrationCount)
-	}
-}
-
-func TestOpenConfiguresGORMOnTheExistingSQLitePool(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	db, err := Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	db, err := Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -129,11 +53,11 @@ func TestOpenConfiguresGORMOnTheExistingSQLitePool(t *testing.T) {
 	}
 }
 
-func TestIndexRecordMatchesMigratedSQLiteColumns(t *testing.T) {
+func TestIndexRecordMatchesMigratedPostgreSQLColumns(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	db, err := Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	db, err := Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -145,9 +69,7 @@ func TestIndexRecordMatchesMigratedSQLiteColumns(t *testing.T) {
 	}
 
 	rows, err := db.SQLDB().QueryContext(ctx, `
-		SELECT name
-		FROM pragma_table_info('indexes')
-		ORDER BY cid`)
+		SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='indexes' ORDER BY ordinal_position`)
 	if err != nil {
 		t.Fatalf("read migrated index columns: %v", err)
 	}
@@ -183,11 +105,11 @@ func TestIndexRecordMatchesMigratedSQLiteColumns(t *testing.T) {
 	}
 }
 
-func TestIndexDeletionTombstoneRecordMatchesMigratedSQLiteColumns(t *testing.T) {
+func TestIndexDeletionTombstoneRecordMatchesMigratedPostgreSQLColumns(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	db, err := Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	db, err := Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -199,9 +121,7 @@ func TestIndexDeletionTombstoneRecordMatchesMigratedSQLiteColumns(t *testing.T) 
 	}
 
 	rows, err := db.SQLDB().QueryContext(ctx, `
-		SELECT name
-		FROM pragma_table_info('index_deletion_tombstones')
-		ORDER BY cid`)
+		SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='index_deletion_tombstones' ORDER BY ordinal_position`)
 	if err != nil {
 		t.Fatalf("read migrated index-deletion tombstone columns: %v", err)
 	}
@@ -232,11 +152,11 @@ func TestIndexDeletionTombstoneRecordMatchesMigratedSQLiteColumns(t *testing.T) 
 	}
 }
 
-func TestIndexDeletionOperationRecordMatchesMigratedSQLiteColumns(t *testing.T) {
+func TestIndexDeletionOperationRecordMatchesMigratedPostgreSQLColumns(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	db, err := Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	db, err := Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -248,9 +168,7 @@ func TestIndexDeletionOperationRecordMatchesMigratedSQLiteColumns(t *testing.T) 
 	}
 
 	rows, err := db.SQLDB().QueryContext(ctx, `
-		SELECT name
-		FROM pragma_table_info('index_deletion_operations')
-		ORDER BY cid`)
+		SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='index_deletion_operations' ORDER BY ordinal_position`)
 	if err != nil {
 		t.Fatalf("read migrated index-deletion operation columns: %v", err)
 	}
@@ -292,9 +210,7 @@ func TestIndexDeletionOperationRecordMatchesMigratedSQLiteColumns(t *testing.T) 
 	}
 
 	indexRows, err := db.SQLDB().QueryContext(ctx, `
-		SELECT name
-		FROM pragma_index_info('index_deletion_operations_created_id_idx')
-		ORDER BY seqno`)
+		SELECT a.attname FROM pg_index i JOIN pg_class ix ON ix.oid=i.indexrelid JOIN pg_class tb ON tb.oid=i.indrelid JOIN pg_namespace ns ON ns.oid=tb.relnamespace JOIN unnest(i.indkey) WITH ORDINALITY k(attnum,ord) ON TRUE JOIN pg_attribute a ON a.attrelid=tb.oid AND a.attnum=k.attnum WHERE ns.nspname=current_schema() AND ix.relname='index_deletion_operations_created_id_idx' ORDER BY k.ord`)
 	if err != nil {
 		t.Fatalf("read index-deletion operation restart index: %v", err)
 	}
@@ -320,11 +236,11 @@ func TestIndexDeletionOperationRecordMatchesMigratedSQLiteColumns(t *testing.T) 
 	}
 }
 
-func TestIndexDeletionMutationAttemptRecordMatchesMigratedSQLiteColumns(t *testing.T) {
+func TestIndexDeletionMutationAttemptRecordMatchesMigratedPostgreSQLColumns(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	db, err := Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	db, err := Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -336,9 +252,7 @@ func TestIndexDeletionMutationAttemptRecordMatchesMigratedSQLiteColumns(t *testi
 	}
 
 	rows, err := db.SQLDB().QueryContext(ctx, `
-		SELECT name
-		FROM pragma_table_info('index_deletion_mutation_attempts')
-		ORDER BY cid`)
+		SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='index_deletion_mutation_attempts' ORDER BY ordinal_position`)
 	if err != nil {
 		t.Fatalf("read migrated index-deletion mutation-attempt columns: %v", err)
 	}
@@ -376,11 +290,11 @@ func TestIndexDeletionMutationAttemptRecordMatchesMigratedSQLiteColumns(t *testi
 	}
 }
 
-func TestIndexDataDeletionCompletionRecordMatchesMigratedSQLiteColumns(t *testing.T) {
+func TestIndexDataDeletionCompletionRecordMatchesMigratedPostgreSQLColumns(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	db, err := Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	db, err := Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -392,9 +306,7 @@ func TestIndexDataDeletionCompletionRecordMatchesMigratedSQLiteColumns(t *testin
 	}
 
 	rows, err := db.SQLDB().QueryContext(ctx, `
-		SELECT name
-		FROM pragma_table_info('index_data_deletion_completions')
-		ORDER BY cid`)
+		SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='index_data_deletion_completions' ORDER BY ordinal_position`)
 	if err != nil {
 		t.Fatalf("read migrated index-data-deletion completion columns: %v", err)
 	}
@@ -440,14 +352,14 @@ func TestApplyMigrationsIsVersionedAndDetectsDrift(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migrations.sqlite")+"?_txlock=immediate")
+	raw, err := openTestRawDB(t)
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
 	}
 	defer raw.Close()
 
 	initial := fstest.MapFS{
-		"0001_first.sql":  &fstest.MapFile{Data: []byte(`CREATE TABLE example (value TEXT NOT NULL) STRICT;`)},
+		"0001_first.sql":  &fstest.MapFile{Data: []byte(`CREATE TABLE example (value TEXT NOT NULL);`)},
 		"0002_second.sql": &fstest.MapFile{Data: []byte(`CREATE INDEX example_value_idx ON example (value);`)},
 	}
 	if err := ApplyMigrations(ctx, raw, initial); err != nil {
@@ -458,7 +370,7 @@ func TestApplyMigrationsIsVersionedAndDetectsDrift(t *testing.T) {
 	}
 
 	var count int
-	if err := raw.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
+	if err := raw.QueryRowContext(ctx, `SELECT count(*) FROM open_splunk_schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
 	if count != 2 {
@@ -466,7 +378,7 @@ func TestApplyMigrationsIsVersionedAndDetectsDrift(t *testing.T) {
 	}
 
 	drifted := fstest.MapFS{
-		"0001_first.sql":  &fstest.MapFile{Data: []byte(`CREATE TABLE example (different TEXT NOT NULL) STRICT;`)},
+		"0001_first.sql":  &fstest.MapFile{Data: []byte(`CREATE TABLE example (different TEXT NOT NULL);`)},
 		"0002_second.sql": initial["0002_second.sql"],
 	}
 	err = ApplyMigrations(ctx, raw, drifted)
@@ -474,522 +386,12 @@ func TestApplyMigrationsIsVersionedAndDetectsDrift(t *testing.T) {
 		t.Fatalf("ApplyMigrations(drifted) error = %v, want ErrMigrationDrift", err)
 	}
 
-	if _, err := raw.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 1`); err != nil {
+	if _, err := raw.ExecContext(ctx, `DELETE FROM open_splunk_schema_migrations WHERE version = 1`); err != nil {
 		t.Fatalf("corrupt migration history: %v", err)
 	}
 	err = ApplyMigrations(ctx, raw, initial)
 	if !errors.Is(err, ErrMigrationDrift) {
 		t.Fatalf("ApplyMigrations(gapped history) error = %v, want ErrMigrationDrift", err)
-	}
-}
-
-func TestApplyMigrationsAdoptsFoldedIngestBaseline(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "folded.sqlite")+"?_txlock=immediate&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer raw.Close()
-	legacyMigrations := fstest.MapFS{}
-	entries, err := fs.ReadDir(migrations.SQLite(), ".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || entry.Name() >= "0012_" {
-			continue
-		}
-		data, readErr := fs.ReadFile(migrations.SQLite(), entry.Name())
-		if readErr != nil {
-			t.Fatal(readErr)
-		}
-		legacyMigrations[entry.Name()] = &fstest.MapFile{Data: data}
-	}
-	if err := ApplyMigrations(ctx, raw, legacyMigrations); err != nil {
-		t.Fatalf("apply canonical migration history: %v", err)
-	}
-	// The folded release predates appearance, principal, and rejection accounting.
-	if _, err := raw.ExecContext(ctx, `
-		DROP TABLE server_appearance_settings;
-		DELETE FROM schema_migrations WHERE version >= 9;
-		UPDATE schema_migrations
-		SET checksum = X'23e85b8b288addf86eda7f848e2b087a40194f8c5281459a9f0f8c1d215e1d64'
-		WHERE version = 1;`); err != nil {
-		t.Fatalf("represent folded release history: %v", err)
-	}
-
-	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
-		t.Fatalf("upgrade folded release history: %v", err)
-	}
-	var migrationCount int
-	if err := raw.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
-		t.Fatal(err)
-	}
-	if migrationCount != 12 {
-		t.Fatalf("folded migration count = %d, want 12", migrationCount)
-	}
-	var storedBaselineSHA256 string
-	if err := raw.QueryRowContext(ctx, `
-		SELECT lower(hex(checksum)) FROM schema_migrations WHERE version = 1
-	`).Scan(&storedBaselineSHA256); err != nil {
-		t.Fatal(err)
-	}
-	if storedBaselineSHA256 != foldedIngestWriteGroupsSQLiteBaselineSHA256 {
-		t.Fatalf("folded baseline checksum = %q", storedBaselineSHA256)
-	}
-}
-
-func TestApplyMigrationsReportsPendingScriptAndRollsBack(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "broken-migration.sqlite")+"?_txlock=immediate")
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	defer raw.Close()
-
-	migrationFS := fstest.MapFS{
-		"0001_baseline.sql": &fstest.MapFile{Data: []byte(`CREATE TABLE example (value TEXT NOT NULL) STRICT;`)},
-		"0002_broken.sql":   &fstest.MapFile{Data: []byte(`CREATE TABL broken (value TEXT);`)},
-	}
-	err = ApplyMigrations(ctx, raw, migrationFS)
-	if err == nil || !strings.Contains(err.Error(), "apply SQLite migration 0002_broken.sql") {
-		t.Fatalf("ApplyMigrations() error = %v, want pending migration name", err)
-	}
-
-	var schemaCount int
-	if err := raw.QueryRowContext(ctx, `
-		SELECT count(*) FROM sqlite_schema
-		WHERE name IN ('schema_migrations', 'example')
-	`).Scan(&schemaCount); err != nil {
-		t.Fatalf("inspect rolled-back schema: %v", err)
-	}
-	if schemaCount != 0 {
-		t.Fatalf("failed migration left %d schema objects, want 0", schemaCount)
-	}
-}
-
-func TestServerSettingsMigrationPreservesExistingAuditLedger(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "upgrade.sqlite")+"?_txlock=immediate&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer raw.Close()
-	baseline, err := fs.ReadFile(migrations.SQLite(), "0001_baseline.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	versionOne := fstest.MapFS{
-		"0001_baseline.sql": &fstest.MapFile{Data: baseline},
-	}
-	if err := ApplyMigrations(ctx, raw, versionOne); err != nil {
-		t.Fatalf("apply baseline migration: %v", err)
-	}
-	if _, err := raw.ExecContext(ctx, `
-		INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count)
-		VALUES ('upgrade-tenant', 1, 0);
-		INSERT INTO audit_events (
-			tenant_id, sequence, occurred_at_unix_micro,
-			actor_kind, actor_id, actor_role,
-			action, target_kind, target_id, target_version
-		) VALUES (
-			'upgrade-tenant', 1, 1,
-			'system', 'upgrade-test', 'system',
-			'index.create', 'index', 'before-upgrade', 1
-		);`); err != nil {
-		t.Fatalf("seed pre-upgrade audit event: %v", err)
-	}
-	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
-		t.Fatalf("apply server-settings migration: %v", err)
-	}
-	ledgerRows, err := raw.QueryContext(ctx, `
-		SELECT version, name FROM schema_migrations ORDER BY version
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ledger []string
-	for ledgerRows.Next() {
-		var version int
-		var name string
-		if err := ledgerRows.Scan(&version, &name); err != nil {
-			t.Fatal(err)
-		}
-		if version != len(ledger)+1 {
-			t.Fatalf("post-upgrade migration version = %d at row %d", version, len(ledger)+1)
-		}
-		ledger = append(ledger, name)
-	}
-	if err := ledgerRows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if err := ledgerRows.Close(); err != nil {
-		t.Fatal(err)
-	}
-	wantLedger := []string{
-		"0001_baseline.sql",
-		"0002_server_search_settings.sql",
-		"0003_durable_search_jobs.sql",
-		"0004_saved_search_schedules.sql",
-		"0005_alerts.sql",
-		"0006_feature_operation_audit.sql",
-		"0007_lookup_mutation_audit.sql",
-		"0008_rolling_feature_operation_audit.sql",
-		"0009_ingest_reservation_accounting.sql",
-		"0010_ingest_write_groups.sql",
-		"0011_server_appearance_settings.sql",
-		"0012_ingest_budgets_and_api_receipts.sql",
-	}
-	if strings.Join(ledger, ",") != strings.Join(wantLedger, ",") {
-		t.Fatalf("post-upgrade migration ledger = %v, want %v", ledger, wantLedger)
-	}
-	var settingsStrict, settingsWithoutRowID int
-	if err := raw.QueryRowContext(ctx, `
-		SELECT strict, wr FROM pragma_table_list
-		WHERE schema = 'main' AND name = 'server_search_settings'
-	`).Scan(&settingsStrict, &settingsWithoutRowID); err != nil {
-		t.Fatal(err)
-	}
-	if settingsStrict != 1 || settingsWithoutRowID != 1 {
-		t.Fatalf("post-upgrade server settings table = strict %d without-rowid %d", settingsStrict, settingsWithoutRowID)
-	}
-	var auditTableSQL string
-	if err := raw.QueryRowContext(ctx, `
-		SELECT sql FROM sqlite_schema
-		WHERE type = 'table' AND name = 'audit_events'
-	`).Scan(&auditTableSQL); err != nil {
-		t.Fatal(err)
-	}
-	for _, marker := range []string{"'server_settings.update'", "'server_settings'"} {
-		if !strings.Contains(auditTableSQL, marker) {
-			t.Fatalf("post-upgrade audit schema does not contain %s", marker)
-		}
-	}
-	if _, err := raw.ExecContext(ctx, `
-		INSERT INTO audit_events (
-			tenant_id, sequence, occurred_at_unix_micro,
-			actor_kind, actor_id, actor_role,
-			action, target_kind, target_id, target_version
-		) VALUES (
-			'upgrade-tenant', 2, 2,
-			'system', 'upgrade-test', 'system',
-			'index.create', 'index', 'after-upgrade', 1
-		);`); err != nil {
-		t.Fatalf("append post-upgrade audit event: %v", err)
-	}
-	var eventCount, nextSequence, auditRows int
-	if err := raw.QueryRowContext(ctx, `
-		SELECT event_count, next_sequence
-		FROM audit_tenant_state
-		WHERE tenant_id = 'upgrade-tenant'`).Scan(&eventCount, &nextSequence); err != nil {
-		t.Fatal(err)
-	}
-	if eventCount != 2 || nextSequence != 3 {
-		t.Fatalf("post-upgrade audit state = count %d, next %d; want 2/3", eventCount, nextSequence)
-	}
-	if err := raw.QueryRowContext(ctx, `
-		SELECT count(*) FROM audit_events WHERE tenant_id = 'upgrade-tenant'
-	`).Scan(&auditRows); err != nil {
-		t.Fatal(err)
-	}
-	if auditRows != 2 {
-		t.Fatalf("post-upgrade audit rows = %d, want 2", auditRows)
-	}
-	rows, err := raw.QueryContext(ctx, `PRAGMA foreign_key_check`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	if rows.Next() {
-		t.Fatal("server-settings migration introduced a foreign-key violation")
-	}
-}
-
-func TestDurableSearchUpgradePreservesExplicitResultRetention(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	raw, err := sql.Open(
-		"sqlite",
-		filepath.Join(t.TempDir(), "retention-upgrade.sqlite")+"?_txlock=immediate&_pragma=foreign_keys(1)",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer raw.Close()
-
-	prefix := fstest.MapFS{}
-	for _, name := range []string{
-		"0001_baseline.sql",
-		"0002_server_search_settings.sql",
-	} {
-		contents, err := fs.ReadFile(migrations.SQLite(), name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		prefix[name] = &fstest.MapFile{Data: contents}
-	}
-	if err := ApplyMigrations(ctx, raw, prefix); err != nil {
-		t.Fatalf("apply pre-durable migration prefix: %v", err)
-	}
-
-	limits := searchlimits.Default()
-	explicitRetention := 15 * time.Minute
-	if _, err := raw.ExecContext(ctx, `
-		INSERT INTO server_search_settings (
-			singleton_id, version, maximum_runtime_nanoseconds,
-			maximum_memory_bytes, maximum_rows_to_read,
-			maximum_bytes_to_read, maximum_grouped_rows, maximum_threads,
-			maximum_result_rows, maximum_result_bytes,
-			maximum_total_result_bytes, maximum_concurrent_searches,
-			result_retention_nanoseconds, updated_at_unix_micro
-		) VALUES (1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-		int64(limits.MaxRuntime), limits.MaxMemoryBytes, limits.MaxRowsToRead,
-		limits.MaxBytesToRead, limits.MaxGroupedRows, limits.MaxThreads,
-		limits.MaxResultRows, limits.MaxResultBytes, limits.MaxTotalResultBytes,
-		limits.MaxConcurrent, int64(explicitRetention),
-	); err != nil {
-		t.Fatalf("seed explicit pre-upgrade retention: %v", err)
-	}
-
-	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
-		t.Fatalf("apply durable-search migration suffix: %v", err)
-	}
-	var version int64
-	var retainedNanoseconds int64
-	if err := raw.QueryRowContext(ctx, `
-		SELECT version, result_retention_nanoseconds
-		FROM server_search_settings
-		WHERE singleton_id = 1`,
-	).Scan(&version, &retainedNanoseconds); err != nil {
-		t.Fatalf("read upgraded search settings: %v", err)
-	}
-	if version != 1 || time.Duration(retainedNanoseconds) != explicitRetention {
-		t.Fatalf(
-			"upgraded search settings = version %d, retention %s; want 1/%s",
-			version,
-			time.Duration(retainedNanoseconds),
-			explicitRetention,
-		)
-	}
-}
-
-func TestApplyMigrationsRejectsLedgerlessExistingSchema(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	raw, err := sql.Open(
-		"sqlite",
-		filepath.Join(t.TempDir(), "ledgerless.sqlite")+"?_txlock=immediate",
-	)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	defer raw.Close()
-	if _, err := raw.ExecContext(
-		ctx,
-		`CREATE TABLE rogue (value TEXT NOT NULL) STRICT`,
-	); err != nil {
-		t.Fatalf("create unrecognized schema: %v", err)
-	}
-
-	migrationFS := fstest.MapFS{
-		"0001_first.sql": &fstest.MapFile{
-			Data: []byte(`CREATE TABLE example (value TEXT NOT NULL) STRICT;`),
-		},
-	}
-	if err := ApplyMigrations(ctx, raw, migrationFS); !errors.Is(
-		err,
-		ErrMigrationDrift,
-	) {
-		t.Fatalf(
-			"ApplyMigrations(ledgerless schema) error = %v, want ErrMigrationDrift",
-			err,
-		)
-	}
-
-	var ledgerCount, rogueCount int
-	if err := raw.QueryRowContext(ctx, `
-		SELECT
-			COUNT(*) FILTER (
-				WHERE type = 'table' AND name = 'schema_migrations'
-			),
-			COUNT(*) FILTER (
-				WHERE type = 'table' AND name = 'rogue'
-			)
-		FROM sqlite_schema`).Scan(&ledgerCount, &rogueCount); err != nil {
-		t.Fatalf("inspect rejected ledgerless schema: %v", err)
-	}
-	if ledgerCount != 0 || rogueCount != 1 {
-		t.Fatalf(
-			"rejected schema ledger/rogue counts = %d/%d, want 0/1",
-			ledgerCount,
-			rogueCount,
-		)
-	}
-}
-
-func TestApplyMigrationsRetriesBusyStartupLock(t *testing.T) {
-	t.Parallel()
-
-	migrationFS := fstest.MapFS{
-		"0001_first.sql": &fstest.MapFile{
-			Data: []byte(`CREATE TABLE example (value TEXT NOT NULL) STRICT;`),
-		},
-	}
-
-	t.Run("released", func(t *testing.T) {
-		waiter, lock := openLockedMigrationDatabases(t)
-		released := make(chan error, 1)
-		go func() {
-			timer := time.NewTimer(50 * time.Millisecond)
-			defer timer.Stop()
-			<-timer.C
-			_, err := lock.ExecContext(context.Background(), `ROLLBACK`)
-			released <- err
-		}()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		migrationErr := ApplyMigrations(ctx, waiter, migrationFS)
-		if releaseErr := <-released; releaseErr != nil {
-			t.Fatalf("release migration lock: %v", releaseErr)
-		}
-		if migrationErr != nil {
-			t.Fatalf("ApplyMigrations() with released lock: %v", migrationErr)
-		}
-
-		var count int
-		if err := waiter.QueryRowContext(
-			ctx,
-			`SELECT count(*) FROM schema_migrations`,
-		).Scan(&count); err != nil {
-			t.Fatalf("count migrations: %v", err)
-		}
-		if count != 1 {
-			t.Fatalf("migration count = %d, want 1", count)
-		}
-	})
-
-	t.Run("canceled", func(t *testing.T) {
-		waiter, lock := openLockedMigrationDatabases(t)
-		defer func() {
-			if _, err := lock.ExecContext(context.Background(), `ROLLBACK`); err != nil {
-				t.Errorf("release migration lock: %v", err)
-			}
-		}()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		defer cancel()
-		err := ApplyMigrations(ctx, waiter, migrationFS)
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf(
-				"ApplyMigrations() with canceled lock wait error = %v, want context deadline",
-				err,
-			)
-		}
-	})
-}
-
-func TestRetrySQLiteBusySuccessfulOperationWinsCancellation(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	err := retrySQLiteBusy(ctx, time.Second, func() error {
-		cancel()
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("retrySQLiteBusy() successful operation error = %v", err)
-	}
-}
-
-func openLockedMigrationDatabases(t *testing.T) (*sql.DB, *sql.Conn) {
-	t.Helper()
-
-	path := filepath.Join(t.TempDir(), "locked-migrations.sqlite")
-	dsn := path + "?_pragma=busy_timeout(1)&_txlock=immediate"
-	holder, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		t.Fatalf("open migration lock holder: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := holder.Close(); err != nil {
-			t.Errorf("close migration lock holder: %v", err)
-		}
-	})
-	waiter, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		t.Fatalf("open waiting migration database: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := waiter.Close(); err != nil {
-			t.Errorf("close waiting migration database: %v", err)
-		}
-	})
-
-	lock, err := holder.Conn(context.Background())
-	if err != nil {
-		t.Fatalf("acquire migration lock connection: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := lock.Close(); err != nil {
-			t.Errorf("close migration lock connection: %v", err)
-		}
-	})
-	if _, err := lock.ExecContext(context.Background(), `BEGIN IMMEDIATE`); err != nil {
-		t.Fatalf("hold migration write lock: %v", err)
-	}
-	return waiter, lock
-}
-
-func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
-	t.Parallel()
-
-	const openers = 6
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "concurrent.sqlite")
-	start := make(chan struct{})
-	errorsByOpener := make(chan error, openers)
-	var wait sync.WaitGroup
-	wait.Add(openers)
-	for range openers {
-		go func() {
-			defer wait.Done()
-			<-start
-			db, err := Open(ctx, path)
-			if err == nil {
-				err = db.Close()
-			}
-			errorsByOpener <- err
-		}()
-	}
-	close(start)
-	wait.Wait()
-	close(errorsByOpener)
-	for err := range errorsByOpener {
-		if err != nil {
-			t.Errorf("concurrent Open() error = %v", err)
-		}
-	}
-
-	db, err := Open(ctx, path)
-	if err != nil {
-		t.Fatalf("final Open(): %v", err)
-	}
-	defer db.Close()
-	var count int
-	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
-		t.Fatalf("count schema migrations: %v", err)
-	}
-	if count != 12 {
-		t.Fatalf("schema migration count = %d, want 12", count)
 	}
 }
 
@@ -1022,20 +424,20 @@ func TestApplyMigrationsRejectsNewerDatabase(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "newer.sqlite")+"?_txlock=immediate")
+	raw, err := openTestRawDB(t)
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
 	}
 	defer raw.Close()
 	migrations := fstest.MapFS{
-		"0001_first.sql": &fstest.MapFile{Data: []byte(`CREATE TABLE example (value TEXT) STRICT;`)},
+		"0001_first.sql": &fstest.MapFile{Data: []byte(`CREATE TABLE example (value TEXT);`)},
 	}
 	if err := ApplyMigrations(ctx, raw, migrations); err != nil {
 		t.Fatalf("ApplyMigrations(): %v", err)
 	}
 	if _, err := raw.ExecContext(ctx, `
-		INSERT INTO schema_migrations (version, name, checksum, applied_at_unix_micro)
-		VALUES (2, '0002_future.sql', zeroblob(32), 1)`); err != nil {
+		INSERT INTO open_splunk_schema_migrations (version, name, checksum, applied_at_unix_micro)
+		VALUES (2, '0002_future.sql', decode(repeat('00',32),'hex'), 1)`); err != nil {
 		t.Fatalf("insert future migration: %v", err)
 	}
 	if err := ApplyMigrations(ctx, raw, migrations); !errors.Is(err, ErrDatabaseTooNew) {
@@ -1047,25 +449,24 @@ func TestConcurrentOldAndNewMigrationSetsSerializeVersionCheck(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "mixed-versions.sqlite")
-	dsn := path + "?_pragma=busy_timeout(5000)&_txlock=immediate"
-	oldDB, err := sql.Open("sqlite", dsn)
+	dsn := pgtest.DSN(t)
+	oldDB, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatalf("sql.Open(old): %v", err)
 	}
 	defer oldDB.Close()
-	newDB, err := sql.Open("sqlite", dsn)
+	newDB, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatalf("sql.Open(new): %v", err)
 	}
 	defer newDB.Close()
 
 	oldMigrations := fstest.MapFS{
-		"0001_first.sql": &fstest.MapFile{Data: []byte(`CREATE TABLE first (value TEXT) STRICT;`)},
+		"0001_first.sql": &fstest.MapFile{Data: []byte(`CREATE TABLE first (value TEXT);`)},
 	}
 	newMigrations := fstest.MapFS{
 		"0001_first.sql":  oldMigrations["0001_first.sql"],
-		"0002_second.sql": &fstest.MapFile{Data: []byte(`CREATE TABLE second (value TEXT) STRICT;`)},
+		"0002_second.sql": &fstest.MapFile{Data: []byte(`CREATE TABLE second (value TEXT);`)},
 	}
 	start := make(chan struct{})
 	oldResult := make(chan error, 1)
@@ -1091,7 +492,7 @@ func TestConcurrentOldAndNewMigrationSetsSerializeVersionCheck(t *testing.T) {
 		t.Fatalf("old ApplyMigrations() after migration 2 error = %v, want ErrDatabaseTooNew", err)
 	}
 	var count int
-	if err := newDB.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
+	if err := newDB.QueryRowContext(ctx, `SELECT count(*) FROM open_splunk_schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
 	if count != 2 {
@@ -1118,14 +519,94 @@ func TestOpenRejectsNonPersistentPaths(t *testing.T) {
 	}
 }
 
-func assertPragmaValue(t *testing.T, db *sql.DB, pragma, want string) {
-	t.Helper()
-
-	var got string
-	if err := db.QueryRowContext(context.Background(), `PRAGMA `+pragma).Scan(&got); err != nil {
-		t.Fatalf("PRAGMA %s: %v", pragma, err)
+func openTestRawDB(t *testing.T) (*sql.DB, error) { t.Helper(); return sql.Open("pgx", pgtest.DSN(t)) }
+func TestPostgreSQLOpenMigratesAndLeasesSharedPool(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dsn := pgtest.DSN(t)
+	db, err := Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got != want {
-		t.Fatalf("PRAGMA %s = %q, want %q", pragma, got, want)
+	defer db.Close()
+	var count int
+	if err := db.SQLDB().QueryRowContext(ctx, "SELECT count(*) FROM open_splunk_schema_migrations").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 9 {
+		t.Fatalf("migration count=%d", count)
+	}
+	if _, err := db.SQLDB().ExecContext(ctx, "INSERT INTO ingestion_token_indexes VALUES('missing','missing')"); err == nil {
+		t.Fatal("foreign key violation accepted")
+	}
+	other, err := Open(ctx, dsn)
+	if other != nil {
+		_ = other.Close()
+	}
+	if !errors.Is(err, ErrServerAlreadyRunning) {
+		t.Fatalf("second server=%v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if !db.SameDatabase(reopened) {
+		t.Fatal("canonical PostgreSQL identity changed")
+	}
+	if _, err := reopened.VerifyCurrentMigrations(ctx, migrations.PostgreSQL()); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestPostgreSQLMigrationsRollbackAndRejectLedgerlessSchema(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	raw := pgtest.Open(t)
+	broken := fstest.MapFS{"0001_first.sql": {Data: []byte("CREATE TABLE example(value TEXT NOT NULL);")}, "0002_broken.sql": {Data: []byte("not SQL;")}}
+	if err := ApplyMigrations(ctx, raw, broken); err == nil || !strings.Contains(err.Error(), "0002_broken.sql") {
+		t.Fatalf("broken migration=%v", err)
+	}
+	var tables int
+	if err := raw.QueryRowContext(ctx, "SELECT count(*) FROM pg_tables WHERE schemaname=current_schema()").Scan(&tables); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 0 {
+		t.Fatal("failed migration left schema behind")
+	}
+	if _, err := raw.ExecContext(ctx, "CREATE TABLE rogue(value TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMigrations(ctx, raw, fstest.MapFS{"0001_first.sql": broken["0001_first.sql"]}); !errors.Is(err, ErrMigrationDrift) {
+		t.Fatalf("ledgerless schema=%v", err)
+	}
+}
+func TestPostgreSQLAdditionalMigrationIsImmutable(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	ctx := context.Background()
+	schema := "CREATE TABLE application_extra(value TEXT NOT NULL);"
+	if err := db.ApplyAdditionalMigration(ctx, "identity-v1", schema); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ApplyAdditionalMigration(ctx, "identity-v1", schema); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ApplyAdditionalMigration(ctx, "identity-v1", schema+"\n"); !errors.Is(err, ErrMigrationDrift) {
+		t.Fatalf("drift=%v", err)
+	}
+}
+func TestPostgreSQLContentionSQLStates(t *testing.T) {
+	for _, code := range []string{"40001", "40P01", "55P03"} {
+		if !IsDatabaseContention(&pgconn.PgError{Code: code}) {
+			t.Fatal(code)
+		}
+	}
+	for _, code := range []string{"23505", "23514", "08006"} {
+		if IsDatabaseContention(&pgconn.PgError{Code: code}) {
+			t.Fatal(code)
+		}
 	}
 }

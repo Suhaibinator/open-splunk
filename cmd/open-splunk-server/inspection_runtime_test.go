@@ -259,7 +259,7 @@ func TestRuntimeSearchInspectionClosesServiceBeforeExplainer(t *testing.T) {
 	explainer.onClose = func() {
 		_, inspectErr := inspection.service.Inspect(
 			context.Background(),
-			searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"},
+			searchjobs.AccessScope{TenantID: "tenant", OwnerID: "1"},
 			searchinspection.Request{SearchJobID: "job"},
 		)
 		if !errors.Is(inspectErr, searchjobs.ErrClosed) {
@@ -321,7 +321,7 @@ func TestRuntimeSearchInspectionCloseCancelsActiveServiceBeforeExplainer(
 	go func() {
 		_, inspectErr := inspection.service.Inspect(
 			context.Background(),
-			searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"},
+			searchjobs.AccessScope{TenantID: "tenant", OwnerID: "1"},
 			searchinspection.Request{SearchJobID: "job"},
 		)
 		inspectDone <- inspectErr

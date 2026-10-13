@@ -35,7 +35,7 @@ func (handler *apiHandler) getSearchTimeline(request *http.Request, input *opens
 		analysisRequest.PreferredBucketWidthSeconds = new(preferred.GetSeconds())
 	}
 
-	result, err := handler.searchTimelines.Get(request.Context(), handler.accessScope(), analysisRequest)
+	result, err := handler.searchTimelines.Get(request.Context(), handler.accessScope(request.Context()), analysisRequest)
 	if err := mapSearchTimelineCallError(request.Context(), err); err != nil {
 		return nil, err
 	}

@@ -462,7 +462,7 @@ func TestPreviewKnowledgeObjectRequestCodecRemainsUnregistered(t *testing.T) {
 	if response.Code != http.StatusNotFound || body.reads() != 0 {
 		t.Fatalf("Preview route status = %d / reads = %d", response.Code, body.reads())
 	}
-	authenticator := handler.browserAuthenticator.(*knowledgeBoundaryAuthenticator)
+	authenticator := handler.identityAuthenticator.(*testBrowserIdentityAdapter).legacy.(*knowledgeBoundaryAuthenticator)
 	if authenticator.callCount() != 0 || len(attempts.snapshot()) != 0 {
 		t.Fatalf("unregistered Preview auth = %d / attempts = %+v", authenticator.callCount(), attempts.snapshot())
 	}

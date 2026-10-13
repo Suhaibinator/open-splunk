@@ -298,35 +298,6 @@ func policyForIdentity(identity FileIdentity) (privatefs.FilePolicy, error) {
 	}, nil
 }
 
-func cleanupKnownFiles(
-	directory *privatefs.Directory,
-	names []string,
-) error {
-	if directory == nil {
-		return nil
-	}
-	var result error
-	for _, name := range names {
-		file, err := directory.OpenRegular(name, anySizePrivateFilePolicy)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			result = errors.Join(result, err)
-			continue
-		}
-		unlinkErr := directory.UnlinkPinnedRegular(name, file)
-		closeErr := file.Close()
-		if unlinkErr != nil && !errors.Is(unlinkErr, os.ErrNotExist) {
-			result = errors.Join(result, unlinkErr)
-		}
-		if closeErr != nil {
-			result = errors.Join(result, closeErr)
-		}
-	}
-	return result
-}
-
 type pinnedCleanupFile struct {
 	name string
 	file *os.File
@@ -366,7 +337,7 @@ func prepareExactBundleCleanup(
 			err,
 		)
 	}
-	entries, err := child.List(len(bundleStageCleanupNames))
+	entries, err := child.List(len(bundleStageCleanupNames) + 1)
 	if err != nil {
 		return nil, nil, fmt.Errorf(
 			"prepare created control-plane bundle removal: inventory child: %w",
@@ -389,7 +360,7 @@ func prepareExactBundleCleanup(
 			if openErr != nil {
 				return nil, nil, errors.Join(openErr, closePinnedCleanupFiles(files))
 			}
-			if _, _, inspectErr := inspectSearchArtifactDirectory(
+			if _, _, inspectErr := inspectObjectDirectory(
 				context.Background(),
 				artifactDirectory,
 				false,
@@ -475,7 +446,7 @@ func ValidateCreatedBundleForRemoval(
 
 // RemoveCreatedBundle removes one controlbackup-owned child from an already
 // pinned owner-private parent. It knows the complete bundle and interrupted
-// SQLite sidecar namespace, removes only those exact regular-file names, and
+// PostgreSQL archive and private object namespace, removes exact member names, and
 // never recursively traverses an unexpected object.
 func RemoveCreatedBundle(
 	parent *privatefs.Directory,
@@ -494,7 +465,7 @@ func RemoveCreatedBundle(
 		returnedErr = errors.Join(returnedErr, closePinnedCleanupFiles(files), artifactCloseErr)
 	}()
 	if artifacts != nil {
-		if err := removeSearchArtifactDirectory(child, searchArtifactsFilename, artifacts); err != nil {
+		if err := removeObjectDirectory(child, searchArtifactsFilename, artifacts); err != nil {
 			return fmt.Errorf("remove created control-plane bundle: remove search artifacts: %w", err)
 		}
 	}

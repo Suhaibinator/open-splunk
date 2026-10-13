@@ -4,18 +4,18 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
-
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 var searchAuditTestTime = time.Date(
@@ -35,7 +35,7 @@ func searchAuditTestCursorKey() []byte {
 
 func openSearchAuditTestDatabase(t *testing.T) *control.DB {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "control.db")
+	path := pgtest.DSN(t)
 	database, err := control.Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("control.Open: %v", err)
@@ -84,7 +84,7 @@ func appendSearchAuditTestEvent(
 	definition searchhistory.SearchAttemptAuditEvent,
 ) {
 	t.Helper()
-	tx := database.GORMDB().WithContext(ctx).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 	if tx.Error != nil {
 		t.Fatalf("begin append transaction: %v", tx.Error)
 	}
@@ -147,7 +147,7 @@ func TestAppendUsesCallerTransactionAndSafeActorProjection(t *testing.T) {
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 3)
 	ctx := context.Background()
 
-	tx := database.GORMDB().WithContext(ctx).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 	if tx.Error != nil {
 		t.Fatal(tx.Error)
 	}
@@ -272,9 +272,9 @@ func TestExistingTenantAppendUsesBoundedStatementBudget(t *testing.T) {
 	)
 
 	counter := &searchAuditStatementCounter{}
-	tx := database.GORMDB().WithContext(ctx).Session(&gorm.Session{
+	tx := pgmeta.Begin(database.GORMDB().WithContext(ctx).Session(&gorm.Session{
 		Logger: countingSearchAuditLogger{counter: counter},
-	}).Begin()
+	}))
 	if tx.Error != nil {
 		t.Fatal(tx.Error)
 	}
@@ -332,7 +332,7 @@ func TestAppendRejectsMissingRetainedBoundaryBeforeMutation(t *testing.T) {
 				"search_attempt_audit_event_delete_requires_rolling_prune",
 				"search_attempt_audit_event_prune_advances_state",
 			} {
-				if err := database.GORMDB().Exec("DROP TRIGGER " + trigger).Error; err != nil {
+				if err := database.GORMDB().Exec("DROP TRIGGER " + trigger + " ON search_attempt_audit_events").Error; err != nil {
 					t.Fatalf("drop %s: %v", trigger, err)
 				}
 			}
@@ -343,7 +343,7 @@ func TestAppendRejectsMissingRetainedBoundaryBeforeMutation(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			tx := database.GORMDB().WithContext(ctx).Begin()
+			tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 			if tx.Error != nil {
 				t.Fatal(tx.Error)
 			}
@@ -394,13 +394,13 @@ func TestAppendRejectsRowsBehindEmptyStateBeforeMutation(t *testing.T) {
 	triggerSQL := make([]string, len(triggerNames))
 	for index, trigger := range triggerNames {
 		if err := database.GORMDB().Raw(`
-			SELECT sql
-			FROM sqlite_schema
-			WHERE type = 'trigger' AND name = ?
+			SELECT pg_get_triggerdef(oid)
+			FROM pg_trigger
+			WHERE tgrelid = 'search_attempt_audit_events'::regclass AND tgname = ?
 		`, trigger).Scan(&triggerSQL[index]).Error; err != nil || triggerSQL[index] == "" {
 			t.Fatalf("read %s SQL: %q, %v", trigger, triggerSQL[index], err)
 		}
-		if err := database.GORMDB().Exec("DROP TRIGGER " + trigger).Error; err != nil {
+		if err := database.GORMDB().Exec("DROP TRIGGER " + trigger + " ON search_attempt_audit_events").Error; err != nil {
 			t.Fatalf("drop %s: %v", trigger, err)
 		}
 	}
@@ -422,7 +422,7 @@ func TestAppendRejectsRowsBehindEmptyStateBeforeMutation(t *testing.T) {
 		}
 	}
 
-	tx := database.GORMDB().WithContext(ctx).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 	if tx.Error != nil {
 		t.Fatal(tx.Error)
 	}
@@ -499,7 +499,7 @@ func TestAppendRejectsInvalidAndForeignTransactionInputs(t *testing.T) {
 		t.Fatalf("autocommit append error = %v", err)
 	}
 	foreign := openSearchAuditTestDatabase(t)
-	foreignTx := foreign.GORMDB().WithContext(ctx).Begin()
+	foreignTx := pgmeta.Begin(foreign.GORMDB().WithContext(ctx))
 	if foreignTx.Error != nil {
 		t.Fatal(foreignTx.Error)
 	}
@@ -509,7 +509,7 @@ func TestAppendRejectsInvalidAndForeignTransactionInputs(t *testing.T) {
 	}
 	_ = foreignTx.Rollback().Error
 
-	tx := database.GORMDB().WithContext(ctx).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 	if tx.Error != nil {
 		t.Fatal(tx.Error)
 	}

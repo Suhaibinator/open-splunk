@@ -99,7 +99,7 @@ func TestIndexFieldsConfigurationAndRouteRegistration(t *testing.T) {
 			Indexes:                    administration,
 			IndexAdmin:                 administration,
 			SavedSearches:              &fakeSavedSearches{},
-			BrowserAuthenticator:       authenticator,
+			IdentityAuthenticator:      adaptTestBrowserAuthenticator(authenticator),
 			WebUI:                      testUI(),
 			TenantID:                   browserGateTenantID,
 			OwnerID:                    browserGateOwnerID,
@@ -107,7 +107,7 @@ func TestIndexFieldsConfigurationAndRouteRegistration(t *testing.T) {
 		}
 	}
 
-	without, err := NewHandler(base())
+	without, err := newAuthenticatedTestHandler(base())
 	if err != nil {
 		t.Fatalf("NewHandler without index fields: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestIndexFieldsConfigurationAndRouteRegistration(t *testing.T) {
 
 	config := base()
 	config.IndexFields = service
-	with, err := NewHandler(config)
+	with, err := newAuthenticatedTestHandler(config)
 	if err != nil {
 		t.Fatalf("NewHandler with index fields: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestIndexFieldsConfigurationAndRouteRegistration(t *testing.T) {
 	var typedNil *recordingIndexFields
 	config = base()
 	config.IndexFields = typedNil
-	if _, err := NewHandler(config); err != nil {
+	if _, err := newAuthenticatedTestHandler(config); err != nil {
 		t.Fatalf("NewHandler typed-nil index fields: %v", err)
 	}
 
@@ -179,12 +179,12 @@ func TestIndexFieldsConfigurationAndRouteRegistration(t *testing.T) {
 		{
 			name: "without index administration",
 			config: Config{
-				SearchJobs:           &fakeSearchJobs{},
-				Indexes:              fakeIndexCatalog{},
-				IndexFields:          service,
-				SavedSearches:        &fakeSavedSearches{},
-				BrowserAuthenticator: authenticator,
-				WebUI:                testUI(),
+				SearchJobs:            &fakeSearchJobs{},
+				Indexes:               fakeIndexCatalog{},
+				IndexFields:           service,
+				SavedSearches:         &fakeSavedSearches{},
+				IdentityAuthenticator: adaptTestBrowserAuthenticator(authenticator),
+				WebUI:                 testUI(),
 			},
 			needle: "index fields require index administration",
 		},
@@ -227,7 +227,7 @@ func TestIndexFieldsConfigurationAndRouteRegistration(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := NewHandler(test.config); err == nil ||
+			if _, err := newAuthenticatedTestHandler(test.config); err == nil ||
 				!strings.Contains(err.Error(), test.needle) {
 				t.Fatalf(
 					"NewHandler error = %v, want containing %q",
@@ -260,7 +260,8 @@ func TestIndexFieldsAuthenticatesBeforeBodyOrDependencyWork(t *testing.T) {
 			role:          auth.BrowserRoleUser,
 			tenantID:      browserGateTenantID,
 			authorization: "Bearer " + adminIntegrationBearerToken,
-			wantStatus:    http.StatusForbidden,
+			// Viewers may search; content type is rejected before index decoding.
+			wantStatus: http.StatusUnsupportedMediaType,
 		},
 		{
 			name:          "other tenant administrator",
@@ -844,7 +845,7 @@ func newIndexFieldsTestHandler(
 	indexes IndexCatalog,
 	administration IndexAdministration,
 	fields IndexFields,
-	authenticator auth.BrowserAuthenticator,
+	authenticator fixtureBrowserAuthenticator,
 	overrides Config,
 ) *Handler {
 	t.Helper()
@@ -853,12 +854,12 @@ func newIndexFieldsTestHandler(
 	overrides.IndexAdmin = administration
 	overrides.IndexFields = fields
 	overrides.SavedSearches = &fakeSavedSearches{}
-	overrides.BrowserAuthenticator = authenticator
+	overrides.IdentityAuthenticator = adaptTestBrowserAuthenticator(authenticator)
 	overrides.WebUI = testUI()
 	overrides.TenantID = browserGateTenantID
 	overrides.OwnerID = browserGateOwnerID
 	overrides.AdministrativeAllowedHosts = []string{"example.com"}
-	handler, err := NewHandler(overrides)
+	handler, err := newAuthenticatedTestHandler(overrides)
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}

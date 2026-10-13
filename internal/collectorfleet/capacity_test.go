@@ -284,7 +284,7 @@ func readCapacityMarker(
 		context.Background(),
 		`SELECT revision, fleet_count, runtime_count
 		 FROM collector_catalog_revisions
-		 WHERE tenant_id = ?`,
+		 WHERE tenant_id = $1`,
 		tenantID,
 	).Scan(&revision, &fleetCount, &runtimeCount); err != nil {
 		t.Fatalf("read capacity marker: %v", err)
@@ -304,17 +304,17 @@ func assertCapacityCollectorAbsent(
 		context.Background(),
 		`SELECT
 			(SELECT count(*) FROM collector_fleet
-			 WHERE tenant_id = ? AND collector_id = ?),
+			 WHERE tenant_id = $1 AND collector_id = $2),
 			(SELECT count(*) FROM collector_runtime
-			 WHERE tenant_id = ? AND collector_id = ?),
+			 WHERE tenant_id = $3 AND collector_id = $4),
 			(SELECT count(*) FROM collector_capabilities
-			 WHERE tenant_id = ? AND collector_id = ?),
+			 WHERE tenant_id = $5 AND collector_id = $6),
 			(SELECT count(*) FROM collector_authorized_indexes
-			 WHERE tenant_id = ? AND collector_id = ?),
+			 WHERE tenant_id = $7 AND collector_id = $8),
 			(SELECT count(*) FROM collector_inputs
-			 WHERE tenant_id = ? AND collector_id = ?),
+			 WHERE tenant_id = $9 AND collector_id = $10),
 			(SELECT count(*) FROM collector_input_health
-			 WHERE tenant_id = ? AND collector_id = ?)`,
+			 WHERE tenant_id = $11 AND collector_id = $12)`,
 		tenantID,
 		collectorID,
 		tenantID,

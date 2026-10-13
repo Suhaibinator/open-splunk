@@ -1001,18 +1001,18 @@ func newIndexListStatisticsTestHandler(
 	now func() time.Time,
 ) *Handler {
 	t.Helper()
-	handler, err := NewHandler(Config{
+	handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:                 &fakeSearchJobs{},
 		Indexes:                    database,
 		IndexAdmin:                 database,
 		IndexStatistics:            statistics,
 		IndexStatisticsSnapshotter: snapshotter,
 		SavedSearches:              &fakeSavedSearches{},
-		BrowserAuthenticator: indexStatisticsAuthenticator(
+		IdentityAuthenticator: adaptTestBrowserAuthenticator(indexStatisticsAuthenticator(
 			t,
 			browserGateTenantID,
 			auth.BrowserRoleAdministrator,
-		),
+		)),
 		WebUI:                      testUI(),
 		TenantID:                   browserGateTenantID,
 		OwnerID:                    browserGateOwnerID,

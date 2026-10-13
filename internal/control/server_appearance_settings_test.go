@@ -3,24 +3,23 @@ package control
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/uipalette"
 	"gorm.io/gorm"
 )
 
 func TestServerAppearanceSettingsDefaultPersistenceConflictAndRollback(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "control.sqlite")
+	path := pgtest.DSN(t)
 	database, err := Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var settingsStrict, settingsWithoutRowID int
 	if err := database.SQLDB().QueryRowContext(ctx, `
-		SELECT strict, wr FROM pragma_table_list
-		WHERE schema = 'main' AND name = 'server_appearance_settings'
+		SELECT 1,1 FROM pg_tables WHERE schemaname=current_schema() AND tablename='server_appearance_settings'
 	`).Scan(&settingsStrict, &settingsWithoutRowID); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +119,7 @@ func TestServerAppearanceSettingsDefaultPersistenceConflictAndRollback(t *testin
 
 func TestServerAppearanceSettingsStoreRejectsMissingDependencies(t *testing.T) {
 	ctx := context.Background()
-	database, err := Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}

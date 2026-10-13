@@ -8,6 +8,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -80,13 +82,13 @@ func NewWithContext(
 	if explicit {
 		var mismatch int64
 		query := database.GORMDB().WithContext(ctx).Raw(`
-			SELECT EXISTS (
+			SELECT CASE WHEN EXISTS (
 				SELECT 1
 				FROM search_attempt_audit_tenant_state
 				WHERE maximum_retained_attempts <> ?
 				LIMIT 1
 			)
-		`, maximum).Scan(&mismatch)
+		 THEN 1 ELSE 0 END`, maximum).Scan(&mismatch)
 		if query.Error != nil {
 			return nil, mapStoreError(
 				ctx,
@@ -120,7 +122,7 @@ func beginReadOnly(
 	operation string,
 	returnedErr *error,
 ) (tx *gorm.DB, markFinished func(), rollbackGuard func(), err error) {
-	tx = database.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx = pgmeta.Begin(database.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return nil, nil, nil, mapStoreError(ctx, "begin "+operation, tx.Error)
 	}
@@ -287,34 +289,15 @@ func (store *Store) ensureTenantState(
 	database *gorm.DB,
 	tenantID string,
 ) (searchAttemptTenantStateRecord, error) {
-	inserted := database.Exec(`
-		INSERT INTO search_attempt_audit_tenant_state (
-			tenant_id,
-			first_sequence,
-			next_sequence,
-			retained_count,
-			maximum_retained_attempts
-		)
-		SELECT ?, 1, 1, 0, ?
-		WHERE NOT EXISTS (
-			SELECT 1
-			FROM search_attempt_audit_tenant_state
-			WHERE tenant_id = ?
-		)
-	`, tenantID, store.maximumRetainedAttempts, tenantID)
-	if inserted.Error != nil {
-		return searchAttemptTenantStateRecord{}, inserted.Error
+	var state searchAttemptTenantStateRecord
+	read := database.Raw("SELECT * FROM os_prepare_search_attempt_tenant(?,?)", tenantID, store.maximumRetainedAttempts).Scan(&state)
+	if read.Error != nil {
+		return searchAttemptTenantStateRecord{}, read.Error
 	}
-	if inserted.RowsAffected < 0 || inserted.RowsAffected > 1 {
-		return searchAttemptTenantStateRecord{}, fmt.Errorf(
-			"%w: search-attempt audit tenant initialization affected an invalid row count",
-			ErrCorrupt,
-		)
+	if read.RowsAffected != 1 || !validTenantState(state, tenantID) {
+		return searchAttemptTenantStateRecord{}, fmt.Errorf("%w: search-attempt audit authority is missing", ErrCorrupt)
 	}
-	state, err := readTenantState(database, tenantID)
-	if err != nil {
-		return searchAttemptTenantStateRecord{}, err
-	}
+
 	if store.maximumRetainedWasExplicit &&
 		state.MaximumRetainedAttempts != int64(store.maximumRetainedAttempts) {
 		return searchAttemptTenantStateRecord{}, fmt.Errorf(
@@ -409,7 +392,7 @@ func validateTenantAppendBoundary(
 			expectedBoundaryRows = 1
 		}
 	}
-	var boundaryIsValid int64
+	var boundaryIsValid bool
 	if err := database.Raw(`
 		SELECT CASE
 			WHEN ? = 0 THEN NOT EXISTS (
@@ -435,7 +418,7 @@ func validateTenantAppendBoundary(
 	).Scan(&boundaryIsValid).Error; err != nil {
 		return err
 	}
-	if boundaryIsValid != 1 {
+	if !boundaryIsValid {
 		return fmt.Errorf(
 			"%w: search-attempt audit retained boundary does not match state",
 			ErrCorrupt,

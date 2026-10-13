@@ -6,8 +6,8 @@ import (
 	"fmt"
 
 	"fortio.org/safecast"
-
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 )
 
 // List returns one bounded, detached current-object page. Authorization and all
@@ -45,7 +45,7 @@ func (store *Store) List(
 		}
 	}
 
-	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(store.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return ListPage{}, mapError(ctx.Err(), "begin list", tx.Error)
 	}

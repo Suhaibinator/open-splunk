@@ -80,6 +80,8 @@ type timechartGridSink struct {
 	occupancy *timechartGridRows
 }
 
+func (sink *timechartGridSink) UnderlyingResultSink() searchjobs.ResultSink { return sink.ResultSink }
+
 func (sink *timechartGridSink) AddRow(values []searchjobs.Value) error {
 	if len(values) == 0 {
 		return fmt.Errorf("%w: timechart row is empty", searchjobs.ErrInvalidResult)

@@ -29,13 +29,13 @@ type eventSizeRecord struct {
 func validateAllTenantIntegrity(database *gorm.DB) error {
 	var invalidTenantWidth int64
 	if err := database.Raw(`
-		SELECT EXISTS (
+		SELECT CASE WHEN EXISTS (
 			SELECT 1 FROM knowledge_attempt_audit_tenant_state
-			WHERE typeof(tenant_id) <> 'text'
-			   OR length(CAST(tenant_id AS BLOB)) NOT BETWEEN 1 AND ?
+			WHERE pg_typeof(tenant_id)::text <> 'text'
+			   OR octet_length(tenant_id) NOT BETWEEN 1 AND ?
 			LIMIT 1
 		)
-	`, maximumTenantIDBytes).Scan(&invalidTenantWidth).Error; err != nil {
+	 THEN 1 ELSE 0 END`, maximumTenantIDBytes).Scan(&invalidTenantWidth).Error; err != nil {
 		return err
 	}
 	if invalidTenantWidth != 0 {
@@ -43,14 +43,14 @@ func validateAllTenantIntegrity(database *gorm.DB) error {
 	}
 	var orphaned int64
 	if err := database.Raw(`
-		SELECT EXISTS (
+		SELECT CASE WHEN EXISTS (
 			SELECT 1
 			FROM knowledge_attempt_audit_events AS event
 			LEFT JOIN knowledge_attempt_audit_tenant_state AS state
 			  ON state.tenant_id = event.tenant_id
 			WHERE state.tenant_id IS NULL LIMIT 1
 		)
-	`).Scan(&orphaned).Error; err != nil {
+	 THEN 1 ELSE 0 END`).Scan(&orphaned).Error; err != nil {
 		return err
 	}
 	if orphaned != 0 {
@@ -120,14 +120,14 @@ func validateTenantIntegrity(database *gorm.DB, state tenantStateRecord) error {
 	}
 	var outsideWindow int64
 	if err := database.Raw(`
-		SELECT EXISTS (
+		SELECT CASE WHEN EXISTS (
 			SELECT 1 FROM knowledge_attempt_audit_events
 			WHERE tenant_id = ? AND sequence < ? LIMIT 1
 		) OR EXISTS (
 			SELECT 1 FROM knowledge_attempt_audit_events
 			WHERE tenant_id = ? AND sequence >= ? LIMIT 1
 		)
-	`, state.TenantID, state.FirstSequence,
+	 THEN 1 ELSE 0 END`, state.TenantID, state.FirstSequence,
 		state.TenantID, state.NextSequence,
 	).Scan(&outsideWindow).Error; err != nil {
 		return err
@@ -145,17 +145,17 @@ func readPreflightedRecords(query *gorm.DB, limit int) ([]eventRecord, error) {
 	var sizes []eventSizeRecord
 	preflight := query.Session(&gorm.Session{}).Select(`
 		sequence,
-		length(CAST(tenant_id AS BLOB)) AS tenant_id_bytes,
-		length(CAST(actor_kind AS BLOB)) AS actor_kind_bytes,
-		length(CAST(actor_id AS BLOB)) AS actor_id_bytes,
-		length(CAST(actor_role AS BLOB)) AS actor_role_bytes,
-		length(CAST(action AS BLOB)) AS action_bytes,
-		length(CAST(result AS BLOB)) AS result_bytes,
-		length(CAST(reason AS BLOB)) AS reason_bytes,
-		coalesce(length(CAST(app_id AS BLOB)), 0) AS app_id_bytes,
-		coalesce(length(CAST(knowledge_object_id AS BLOB)), 0) AS knowledge_object_id_bytes,
-		coalesce(length(CAST(object_type AS BLOB)), 0) AS object_type_bytes,
-		coalesce(length(CAST(sharing_scope AS BLOB)), 0) AS sharing_scope_bytes
+		octet_length(tenant_id) AS tenant_id_bytes,
+		octet_length(actor_kind) AS actor_kind_bytes,
+		octet_length(actor_id) AS actor_id_bytes,
+		octet_length(actor_role) AS actor_role_bytes,
+		octet_length(action) AS action_bytes,
+		octet_length(result) AS result_bytes,
+		octet_length(reason) AS reason_bytes,
+		coalesce(octet_length(app_id), 0) AS app_id_bytes,
+		coalesce(octet_length(knowledge_object_id), 0) AS knowledge_object_id_bytes,
+		coalesce(octet_length(object_type), 0) AS object_type_bytes,
+		coalesce(octet_length(sharing_scope), 0) AS sharing_scope_bytes
 	`).Limit(limit).Find(&sizes)
 	if preflight.Error != nil {
 		return nil, preflight.Error

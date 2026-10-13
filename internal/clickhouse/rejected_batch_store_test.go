@@ -5,20 +5,19 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"google.golang.org/protobuf/encoding/protowire"
-	"google.golang.org/protobuf/proto"
-
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestRejectBatchPersistsOnlyTerminalMetadata(t *testing.T) {
@@ -109,17 +108,17 @@ func TestRejectBatchQuotaDenialDoesNotWakeMaintenance(t *testing.T) {
 	}
 }
 
-func TestRejectBatchReplaysAcrossSQLiteOwnerRestartWithoutPendingUsage(t *testing.T) {
+func TestRejectBatchReplaysAcrossPostgreSQLOwnerRestartWithoutPendingUsage(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "control.sqlite")
+	path := pgtest.DSN(t)
 	input := validStoreBatchRejection()
 
 	db, err := control.Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sequencer, err := visibility.NewSQLite(ctx, db)
+	sequencer, err := visibility.NewPostgreSQL(ctx, db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +154,7 @@ func TestRejectBatchReplaysAcrossSQLiteOwnerRestartWithoutPendingUsage(t *testin
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	reopenedSequencer, err := visibility.NewSQLite(ctx, reopened)
+	reopenedSequencer, err := visibility.NewPostgreSQL(ctx, reopened)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,12 +185,12 @@ func TestRejectedAndAcceptedBatchOutcomesAreFirstWriterWins(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			db, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+			db, err := control.Open(ctx, pgtest.DSN(t))
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = db.Close() })
-			sequencer, err := visibility.NewSQLite(ctx, db)
+			sequencer, err := visibility.NewPostgreSQL(ctx, db)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -284,12 +283,12 @@ func TestRejectBatchDoesNotOverwritePendingClickHouseOutcome(t *testing.T) {
 func TestResumeBatchReturnsRejectionAfterSafePendingAbandonment(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	db, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, db)
+	sequencer, err := visibility.NewPostgreSQL(ctx, db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,12 +358,12 @@ func TestResumeBatchReturnsRejectionAfterSafePendingAbandonment(t *testing.T) {
 func TestResumeBatchAfterObservedPendingAbandonmentReturnsGoneWithoutRecreation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	db, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, db)
+	sequencer, err := visibility.NewPostgreSQL(ctx, db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -515,12 +514,12 @@ func TestRejectBatchCountsOnlyNewTerminalRejection(t *testing.T) {
 func TestRejectBatchConflictsAcrossBothStableIdentities(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	db, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, db)
+	sequencer, err := visibility.NewPostgreSQL(ctx, db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -579,7 +578,7 @@ func TestRejectBatchMapsVisibilityFailureAndIdentityConflict(t *testing.T) {
 		transient bool
 		conflict  bool
 	}{
-		{name: "unavailable", err: errors.New("SQLite unavailable"), transient: true},
+		{name: "unavailable", err: errors.New("PostgreSQL unavailable"), transient: true},
 		{name: "identity conflict", err: visibility.ErrConflict, conflict: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -606,7 +605,7 @@ func TestRejectBatchVisibilityFailureSchedulesMaintenance(t *testing.T) {
 	pruned := make(chan struct{}, 2)
 	sequencer := &rejectingVisibilitySequencer{
 		fakeVisibilitySequencer: &fakeVisibilitySequencer{pruneNotify: pruned},
-		rejectErr:               errors.New("ambiguous SQLite commit"),
+		rejectErr:               errors.New("ambiguous PostgreSQL commit"),
 	}
 	store := mustTestStoreWithVisibility(
 		t,

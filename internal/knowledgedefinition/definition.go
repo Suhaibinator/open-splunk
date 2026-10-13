@@ -25,7 +25,7 @@ import (
 
 const (
 	// MaximumCanonicalBytes is the hard stored-definition ceiling shared with
-	// the SQLite definition-blob schema and immutable snapshot contract.
+	// the PostgreSQL definition-blob schema and immutable snapshot contract.
 	MaximumCanonicalBytes = 4 << 20
 	// MaximumDescriptionBytes is the normalized optional-description ceiling.
 	MaximumDescriptionBytes = 16 << 10

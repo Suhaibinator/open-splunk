@@ -31,7 +31,7 @@ func TestServiceReturnsClippedContinuousTimelineFromImmutableSnapshot(t *testing
 	service := newTimelineTestService(t, Config{Searches: searches, Compiler: compiler, Executor: executor})
 	maxBuckets := uint32(3)
 	preferred := int64(60)
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 
 	result, err := service.Get(context.Background(), access, Request{
 		SearchJobID: snapshot.ID,
@@ -85,7 +85,7 @@ func TestServiceRebuildsIdentityPreservingPipelineTimelinePipeline(t *testing.T)
 
 	result, err := service.Get(
 		context.Background(),
-		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
+		searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
 		Request{SearchJobID: snapshot.ID},
 	)
 	if err != nil {
@@ -140,7 +140,7 @@ func TestServiceValidatesRequestsAndTimelineEligibilityBeforeExecution(t *testin
 			service := newTimelineTestService(t, Config{
 				Searches: &fakeCompletedSearches{snapshot: candidate}, Compiler: compiler, Executor: executor,
 			})
-			_, err := service.Get(context.Background(), searchjobs.AccessScope{TenantID: candidate.TenantID, OwnerID: candidate.OwnerID}, test.request)
+			_, err := service.Get(context.Background(), searchjobs.AccessScope{OrganizationID: candidate.OrganizationID, TenantID: candidate.TenantID, OwnerID: candidate.OwnerID}, test.request)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("Get() error = %v, want %v", err, test.want)
 			}
@@ -153,7 +153,7 @@ func TestServiceValidatesRequestsAndTimelineEligibilityBeforeExecution(t *testin
 
 func TestServicePropagatesLifecycleStorageAndCancellationErrors(t *testing.T) {
 	snapshot := timelineTestSnapshot()
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	for _, operationErr := range []error{
 		searchjobs.ErrNotFound,
 		searchjobs.ErrResultsNotReady,
@@ -210,7 +210,7 @@ func TestServiceThreadsCancelableExecutionContextIntoTimelineCompiler(t *testing
 	})
 	_, err := service.Get(
 		callerContext,
-		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
+		searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
 		Request{SearchJobID: snapshot.ID},
 	)
 	if !errors.Is(err, context.Canceled) {
@@ -223,7 +223,7 @@ func TestServiceThreadsCancelableExecutionContextIntoTimelineCompiler(t *testing
 
 func TestServiceRejectsMalformedExecutorSequence(t *testing.T) {
 	snapshot := timelineTestSnapshot()
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	service := newTimelineTestService(t, Config{
 		Searches: &fakeCompletedSearches{snapshot: snapshot}, Compiler: &fakeTimelineCompiler{},
 		Executor: &fakeTimelineExecutor{execute: func(_ context.Context, query clickhouse.CompiledTimeline) ([]queryexec.TimelineBucket, error) {
@@ -239,7 +239,7 @@ func TestServiceClassifiesCompilerDiagnosticsForTheAPIBoundary(t *testing.T) {
 	t.Parallel()
 
 	snapshot := timelineTestSnapshot()
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	for _, test := range []struct {
 		name string
 		code string
@@ -264,7 +264,7 @@ func TestServiceClassifiesCompilerDiagnosticsForTheAPIBoundary(t *testing.T) {
 
 func TestServiceBoundsConcurrentExecutionsAndReleasesCapacity(t *testing.T) {
 	snapshot := timelineTestSnapshot()
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once

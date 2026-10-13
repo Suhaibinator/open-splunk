@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+import "google/protobuf/timestamp.proto";
+
+// PaginationRequest provides standard pagination parameters for list endpoints
+message PaginationRequest {
+  uint32 page = 1;       // Page number (1-based, default: 1)
+  uint32 limit = 2;      // Items per page; 0 uses default_pagination_limit and larger than max_pagination_limit is rejected, unless the route documents its own keys
+  uint64 cursor = 3;     // Optional cursor for cursor-based pagination
+  bool include_total_count = 4; // Opt in to exact total count metadata where supported; default false
+}
+
+// PaginationResponse provides pagination metadata for list responses
+message PaginationResponse {
+  uint32 current_page = 1;    // Current page number
+  uint32 total_pages = 2;     // Exact total pages only when total_count_included is true
+  uint64 total_items = 3;     // Exact total items only when total_count_included is true
+  uint32 items_per_page = 4;  // Number of items per page
+  bool has_next_page = 5;     // Whether there are more pages
+  bool has_prev_page = 6;     // Whether there are previous pages
+  uint64 next_cursor = 7;     // Cursor for next page (if using cursor pagination)
+  uint64 prev_cursor = 8;     // Cursor for previous page (if using cursor pagination)
+  bool total_count_included = 9; // Whether total_items and total_pages are authoritative
+}
+
+// SortRequest provides standard sorting parameters
+message SortRequest {
+  reserved 1;
+  reserved "sort_by";
+  bool sort_desc = 2;      // Whether to sort descending (default: false)
+}
+
+// FilterRequest provides common filtering parameters
+message FilterRequest {
+  google.protobuf.Timestamp from_date = 1;  // Inclusive lower timestamp bound; the route chooses the timestamp field
+  google.protobuf.Timestamp to_date = 2;    // Inclusive upper timestamp bound; the route chooses the timestamp field
+  string search = 3;                        // General search term
+}

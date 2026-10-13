@@ -4,8 +4,8 @@
 // the boot script reads before the first paint.
 //
 // `integration/palette_smoke_test.go` starts the real browser API handler
-// over a real SQLite control plane and the real static export on a loopback
-// port, mints the administrator bearer, and runs this spec through
+// over a real PostgreSQL control plane and the real static export on a loopback
+// port, issues a native Google session, and runs this spec through
 // `playwright.palette-smoke.config.ts`. Like the other Playwright suites this
 // is a `.spec.ts`: `scripts/test-frontend.mjs` runs `.test.ts` files under
 // node, where a Playwright test cannot run.
@@ -20,8 +20,9 @@ import {
 } from "../../gen/ts/open_splunk/server_settings_api";
 import { PROTOBUF_CONTENT_TYPE } from "../../lib/api/protobuf-transport";
 import { PALETTE_STORAGE_KEY, THEME_STORAGE_KEY } from "../../lib/theme-preference";
+import { browserSessionHeaders, installBrowserSession } from "../browser-session";
 
-const administratorToken = requiredEnvironment("OPEN_SPLUNK_PALETTE_SMOKE_ADMINISTRATOR_TOKEN");
+const baseURL = requiredEnvironment("OPEN_SPLUNK_PALETTE_SMOKE_BASE_URL");
 
 const BOOTSTRAP_ROUTE = "**/api/system/bootstrap";
 const APPEARANCE_GET_PATH = "/api/server/appearance/get";
@@ -62,7 +63,7 @@ function requiredEnvironment(name: string): string {
 
 function administratorHeaders(): Record<string, string> {
   return {
-    Authorization: `Bearer ${administratorToken}`,
+    ...browserSessionHeaders(),
     "Content-Type": PROTOBUF_CONTENT_TYPE,
   };
 }
@@ -131,6 +132,7 @@ async function openUserMenu(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
+  await installBrowserSession(page.context(), baseURL);
   await page.addInitScript(() => {
     const record: FirstPaintRecord = { beforeBody: null, firstPalette: null, firstTheme: null };
     (window as unknown as FirstPaintWindow).openSplunkPaletteSmoke = record;

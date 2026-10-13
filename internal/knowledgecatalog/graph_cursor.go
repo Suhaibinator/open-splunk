@@ -29,6 +29,8 @@ type graphCursor struct {
 }
 
 type graphFingerprint struct {
+	OrganizationID          int64          `json:"org"`
+	SiteAdministrator       bool           `json:"admin"`
 	Version                 int            `json:"v"`
 	Direction               graphDirection `json:"d"`
 	TenantID                string         `json:"t"`
@@ -45,6 +47,8 @@ func graphRequestFingerprint(request normalizedDependencyListRequest) (string, e
 	payload, err := json.Marshal(graphFingerprint{
 		Version:                 graphCursorVersion,
 		Direction:               request.direction,
+		OrganizationID:          request.scope.organizationID,
+		SiteAdministrator:       request.scope.siteAdministrator,
 		TenantID:                request.scope.tenantID,
 		OwnerID:                 request.scope.ownerID,
 		ReadableAppIDs:          request.scope.readableAppIDs,

@@ -16,7 +16,7 @@ import (
 // and the source contracts whose digests are bound by its build manifest.
 // The supported release build regenerates all of them before compiling Go.
 //
-//go:embed all:out all:proto migrations/sqlite/*.sql migrations/clickhouse/*.sql
+//go:embed all:out all:proto migrations/postgres/*.sql migrations/clickhouse/*.sql
 var embeddedReleaseFiles embed.FS
 
 var embeddedReleaseCache struct {
@@ -55,7 +55,7 @@ type ReleaseMetadata struct {
 	UIBuildID            string
 	UI                   ComponentMetadata
 	ProtobufSchema       ComponentMetadata
-	SQLiteMigrations     MigrationMetadata
+	PostgresMigrations   MigrationMetadata
 	ClickHouseMigrations MigrationMetadata
 }
 
@@ -131,13 +131,13 @@ func loadRelease(filesystem fs.FS, expectedIdentity buildinfo.Identity) (Release
 				FileCount: manifest.ProtobufSchema.FileCount,
 				ByteCount: manifest.ProtobufSchema.ByteCount,
 			},
-			SQLiteMigrations: MigrationMetadata{
+			PostgresMigrations: MigrationMetadata{
 				ComponentMetadata: ComponentMetadata{
-					SHA256:    manifest.SQLiteMigrations.SHA256,
-					FileCount: manifest.SQLiteMigrations.FileCount,
-					ByteCount: manifest.SQLiteMigrations.ByteCount,
+					SHA256:    manifest.PostgresMigrations.SHA256,
+					FileCount: manifest.PostgresMigrations.FileCount,
+					ByteCount: manifest.PostgresMigrations.ByteCount,
 				},
-				LatestVersion: manifest.SQLiteMigrations.LatestVersion,
+				LatestVersion: manifest.PostgresMigrations.LatestVersion,
 			},
 			ClickHouseMigrations: MigrationMetadata{
 				ComponentMetadata: ComponentMetadata{

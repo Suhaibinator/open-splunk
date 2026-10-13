@@ -30,10 +30,14 @@ func TestCatalogWriterAuthorities(t *testing.T) {
 
 func reenableLifecycleContract(t *testing.T) {
 	harness := newWriterBlackboxHarness(t)
-	if _, err := harness.database.CreateIndex(t.Context(), control.IndexDefinition{
+	index, err := harness.database.CreateIndex(t.Context(), control.IndexDefinition{
 		Name: "main", SearchEnabled: true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("CreateIndex(main): %v", err)
+	}
+	if err := harness.database.GORMDB().Exec("INSERT INTO os_index_organizations(index_id,organization_id) VALUES (?,1)", index.ID).Error; err != nil {
+		t.Fatalf("bind fixture main index to organization: %v", err)
 	}
 	_, created := harness.createDraft(t, "compatibility-lifecycle", "compat-lifecycle-create-0001")
 	object := created.GetKnowledgeObject()

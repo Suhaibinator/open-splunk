@@ -35,7 +35,7 @@ func releaseFixture(t *testing.T) fstest.MapFS {
 		"proto/open_splunk/system.proto": {
 			Data: []byte("syntax = \"proto3\";\n"),
 		},
-		"migrations/sqlite/0001_baseline.sql": {
+		"migrations/postgres/0001_baseline.sql": {
 			Data: []byte("SELECT 1;\n"),
 		},
 		"migrations/clickhouse/0001_baseline.sql": {

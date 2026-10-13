@@ -1,208 +1,47 @@
 package server
 
 import (
-	"context"
-	"errors"
 	"net/http"
-	"strings"
 
-	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
-)
-
-const (
-	administratorAuthorizationScheme = "Bearer "
-	administratorAuthenticationRealm = `Bearer realm="open-splunk-admin"`
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 )
 
 type browserPrincipalContextKey struct{}
 
-// administratorPrincipal is the single administrator gate every scope
-// accessor shares. Each caller maps the principal onto its own scope type.
-func (handler *apiHandler) administratorPrincipal(
-	request *http.Request,
-) (auth.BrowserPrincipal, error) {
+func (handler *apiHandler) administratorPrincipal(request *http.Request) (auth.BrowserPrincipal, error) {
 	if handler == nil || request == nil {
-		return auth.BrowserPrincipal{}, forbiddenError(
-			"administrator access is required",
-		)
+		return auth.BrowserPrincipal{}, forbiddenError("administrator access is required")
 	}
 	principal, ok := browserPrincipalFromRequest(request)
-	if !ok ||
-		!principal.IsAdministrator() ||
-		principal.TenantID() != handler.tenantID ||
-		principal.OwnerID() != handler.ownerID {
-		return auth.BrowserPrincipal{}, forbiddenError(
-			"administrator access is required",
-		)
+	if !ok || !principal.IsAdministrator() {
+		return auth.BrowserPrincipal{}, forbiddenError("administrator access is required")
+	}
+	scope, valid := authorization.FromContext(request.Context())
+	if !valid || !scope.Subject.Valid() || scope.Subject.OwnerID() != principal.OwnerID() || scope.PhysicalTenant != handler.tenantID || principal.TenantID() != scope.PhysicalTenant || (!scope.Subject.IsSiteAdmin() && scope.OrganizationID <= 0) {
+		return auth.BrowserPrincipal{}, forbiddenError("authenticated administrator scope is required")
 	}
 	return principal, nil
 }
-
-func (handler *apiHandler) authorizeBrowserAdministrator(
-	response http.ResponseWriter,
-	request *http.Request,
-) (*http.Request, bool) {
-	authenticatedRequest, principal, authenticated := handler.authenticateBrowser(
-		response,
-		request,
-	)
-	if !authenticated {
-		return request, false
+func (handler *apiHandler) authenticateBrowser(response http.ResponseWriter, request *http.Request) (*http.Request, auth.BrowserPrincipal, bool) {
+	if handler == nil || isNilDependency(handler.identityAuthenticator) {
+		writeAPIError(response, http.StatusServiceUnavailable, "user authentication is unavailable")
+		return request, auth.BrowserPrincipal{}, false
 	}
-	if !principal.IsAdministrator() ||
-		principal.TenantID() != handler.tenantID ||
-		principal.OwnerID() != handler.ownerID {
-		writeAPIError(
-			response,
-			http.StatusForbidden,
-			"administrator access is required",
-		)
-		return request, false
+	if principal, ok := browserPrincipalFromRequest(request); ok {
+		return request, principal, true
 	}
-	return authenticatedRequest, true
-}
-
-func (handler *apiHandler) authenticateBrowser(
-	response http.ResponseWriter,
-	request *http.Request,
-) (*http.Request, auth.BrowserPrincipal, bool) {
-	token, ok := browserAuthorizationToken(request)
+	authenticated, ok := handler.authenticateIdentity(response, request)
 	if !ok {
-		writeAdministratorUnauthorized(response)
 		return request, auth.BrowserPrincipal{}, false
 	}
-	defer clear(token)
-
-	if handler == nil || isNilDependency(handler.browserAuthenticator) {
-		writeAPIError(
-			response,
-			http.StatusServiceUnavailable,
-			"administrator authentication is unavailable",
-		)
-		return request, auth.BrowserPrincipal{}, false
-	}
-	principal, err := handler.browserAuthenticator.Authenticate(
-		request.Context(),
-		token,
-	)
-	if err != nil {
-		switch {
-		case errors.Is(err, context.Canceled),
-			errors.Is(err, context.DeadlineExceeded):
-			writeAPIError(
-				response,
-				http.StatusRequestTimeout,
-				"administrator authentication timed out",
-			)
-		case errors.Is(err, auth.ErrBrowserUnauthorized):
-			writeAdministratorUnauthorized(response)
-		default:
-			writeAPIError(
-				response,
-				http.StatusServiceUnavailable,
-				"administrator authentication is unavailable",
-			)
-		}
-		return request, auth.BrowserPrincipal{}, false
-	}
-	if !principal.Valid() {
-		writeAPIError(
-			response,
-			http.StatusServiceUnavailable,
-			"administrator authentication is unavailable",
-		)
-		return request, auth.BrowserPrincipal{}, false
-	}
-
-	auditContext, err := audit.WithActor(request.Context(), audit.Actor{
-		Kind: audit.ActorKindBrowser,
-		ID:   principal.OwnerID(),
-		Role: audit.ActorRole(principal.Role().String()),
-	})
-	if err != nil {
-		writeAPIError(
-			response,
-			http.StatusServiceUnavailable,
-			"administrator authentication is unavailable",
-		)
-		return request, auth.BrowserPrincipal{}, false
-	}
-	ctx := context.WithValue(
-		auditContext,
-		browserPrincipalContextKey{},
-		principal,
-	)
-	authenticatedRequest := request.Clone(ctx)
-	// Route middleware and handlers consume the detached principal, never the
-	// reusable credential.
-	for name := range authenticatedRequest.Header {
-		if strings.EqualFold(name, "Authorization") {
-			delete(authenticatedRequest.Header, name)
-		}
-	}
-	return authenticatedRequest, principal, true
+	principal, valid := browserPrincipalFromRequest(authenticated)
+	return authenticated, principal, valid
 }
-
-func browserAuthorizationToken(request *http.Request) ([]byte, bool) {
-	if request == nil {
-		return nil, false
-	}
-	values, ok := exactAuthorizationHeaderValues(request.Header)
-	if !ok || len(values) != 1 ||
-		len(values[0]) >
-			len(administratorAuthorizationScheme)+
-				auth.MaximumBrowserBearerTokenBytes {
-		return nil, false
-	}
-	token, ok := strictBearerToken(values)
-	if !ok {
-		return nil, false
-	}
-	detached := []byte(token)
-	if err := auth.ValidateBrowserBearerToken(detached); err != nil {
-		clear(detached)
-		return nil, false
-	}
-	return detached, true
-}
-
-func exactAuthorizationHeaderValues(
-	header http.Header,
-) ([]string, bool) {
-	var result []string
-	for name, values := range header {
-		if !strings.EqualFold(name, "Authorization") {
-			continue
-		}
-		if len(values) != 1 || result != nil {
-			return nil, false
-		}
-		result = values
-	}
-	return result, true
-}
-
-func writeAdministratorUnauthorized(response http.ResponseWriter) {
-	response.Header().Set(
-		"WWW-Authenticate",
-		administratorAuthenticationRealm,
-	)
-	writeAPIError(
-		response,
-		http.StatusUnauthorized,
-		"administrator authentication is required",
-	)
-}
-
-func browserPrincipalFromRequest(
-	request *http.Request,
-) (auth.BrowserPrincipal, bool) {
+func browserPrincipalFromRequest(request *http.Request) (auth.BrowserPrincipal, bool) {
 	if request == nil {
 		return auth.BrowserPrincipal{}, false
 	}
-	principal, ok := request.Context().Value(
-		browserPrincipalContextKey{},
-	).(auth.BrowserPrincipal)
+	principal, ok := request.Context().Value(browserPrincipalContextKey{}).(auth.BrowserPrincipal)
 	return principal, ok && principal.Valid()
 }

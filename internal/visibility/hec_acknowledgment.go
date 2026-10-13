@@ -73,10 +73,10 @@ func persistHECAdmission(
 	createdAtMicros := request.CreatedAt.Round(0).UTC().UnixMicro()
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT OR IGNORE INTO hec_source_sequences (
+		INSERT INTO hec_source_sequences (
 			tenant_id, ingestion_token_id, next_request_sequence,
 			updated_at_unix_micro
-		) VALUES (?, ?, 1, ?)`,
+		) VALUES ($1, $2, 1, $3) ON CONFLICT DO NOTHING`,
 		request.TenantID,
 		request.TokenID,
 		createdAtMicros,
@@ -87,7 +87,7 @@ func persistHECAdmission(
 	if err := tx.QueryRowContext(ctx, `
 		SELECT next_request_sequence
 		FROM hec_source_sequences
-		WHERE tenant_id = ? AND ingestion_token_id = ?`,
+		WHERE tenant_id = $1 AND ingestion_token_id = $2`,
 		request.TenantID,
 		request.TokenID,
 	).Scan(&requestSequence); err != nil {
@@ -98,10 +98,10 @@ func persistHECAdmission(
 	}
 	sequenceResult, err := tx.ExecContext(ctx, `
 		UPDATE hec_source_sequences
-		SET next_request_sequence = ?, updated_at_unix_micro = ?
-		WHERE tenant_id = ?
-		  AND ingestion_token_id = ?
-		  AND next_request_sequence = ?`,
+		SET next_request_sequence = $1, updated_at_unix_micro = $2
+		WHERE tenant_id = $3
+		  AND ingestion_token_id = $4
+		  AND next_request_sequence = $5`,
 		requestSequence+1,
 		createdAtMicros,
 		request.TenantID,
@@ -119,7 +119,7 @@ func persistHECAdmission(
 			tenant_id, ingestion_token_id, request_sequence, request_id,
 			visibility_sequence, state, created_at_unix_micro,
 			terminal_at_unix_micro
-		) VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL)`,
+		) VALUES ($1, $2, $3, $4, $5, 'pending', $6, NULL)`,
 		request.TenantID,
 		request.TokenID,
 		requestSequence,
@@ -127,7 +127,7 @@ func persistHECAdmission(
 		visibilitySequence,
 		createdAtMicros,
 	); err != nil {
-		if sqliteConstraint(err) {
+		if postgresConstraint(err) {
 			return 0, 0, ErrConflict
 		}
 		return 0, 0, fmt.Errorf("persist staged HEC request: %w", err)
@@ -151,7 +151,7 @@ func persistHECAdmission(
 }
 
 // preflightHECAdmission closes authority and HEC-specific capacity before
-// quota planning or durable outbox allocation. Reserve retains one SQLite
+// quota planning or durable outbox allocation. Reserve retains one PostgreSQL
 // transaction across this preflight and persistence, so the observed bounds
 // cannot change between the two steps.
 func preflightHECAdmission(
@@ -164,10 +164,12 @@ func preflightHECAdmission(
 		return nil
 	}
 	authority := auth.HECAdmissionAuthority{
-		TokenID:               request.TokenID,
-		TokenVersion:          request.TokenVersion,
-		IndexerAcknowledgment: request.Acknowledgment,
-		Indexes:               make([]auth.HECIndexAuthoritySnapshot, len(request.AuthorizedIndexes)),
+		OrganizationID:               request.OrganizationID,
+		RequireOrganizationOwnership: request.RequireOrganizationOwnership,
+		TokenID:                      request.TokenID,
+		TokenVersion:                 request.TokenVersion,
+		IndexerAcknowledgment:        request.Acknowledgment,
+		Indexes:                      make([]auth.HECIndexAuthoritySnapshot, len(request.AuthorizedIndexes)),
 	}
 	for index, selected := range request.AuthorizedIndexes {
 		authority.Indexes[index] = auth.HECIndexAuthoritySnapshot{
@@ -190,7 +192,7 @@ func preflightHECAdmission(
 	if err := tx.QueryRowContext(ctx, `
 		SELECT count(*)
 		FROM hec_requests
-		WHERE tenant_id = ? AND ingestion_token_id = ?`,
+		WHERE tenant_id = $1 AND ingestion_token_id = $2`,
 		request.TenantID,
 		request.TokenID,
 	).Scan(&retainedRequests); err != nil {
@@ -206,7 +208,7 @@ func preflightHECAdmission(
 	if err := tx.QueryRowContext(ctx, `
 		SELECT count(*)
 		FROM hec_acknowledgments
-		WHERE tenant_id = ? AND ingestion_token_id = ?`,
+		WHERE tenant_id = $1 AND ingestion_token_id = $2`,
 		request.TenantID,
 		request.TokenID,
 	).Scan(&retainedAcknowledgments); err != nil {
@@ -217,13 +219,13 @@ func preflightHECAdmission(
 	}
 	var channelExists int
 	if err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS (
+		SELECT CASE WHEN EXISTS (
 			SELECT 1
 			FROM hec_channels
-			WHERE tenant_id = ?
-			  AND ingestion_token_id = ?
-			  AND channel_id = ?
-		)`,
+			WHERE tenant_id = $1
+			  AND ingestion_token_id = $2
+			  AND channel_id = $3
+		) THEN 1 ELSE 0 END`,
 		request.TenantID,
 		request.TokenID,
 		request.AcknowledgmentChannel,
@@ -237,7 +239,7 @@ func preflightHECAdmission(
 	if err := tx.QueryRowContext(ctx, `
 		SELECT count(*)
 		FROM hec_channels
-		WHERE tenant_id = ? AND ingestion_token_id = ?`,
+		WHERE tenant_id = $1 AND ingestion_token_id = $2`,
 		request.TenantID,
 		request.TokenID,
 	).Scan(&retainedChannels); err != nil {
@@ -261,7 +263,7 @@ func allocateHECAcknowledgment(
 	if err := tx.QueryRowContext(ctx, `
 		SELECT count(*)
 		FROM hec_acknowledgments
-		WHERE tenant_id = ? AND ingestion_token_id = ?`,
+		WHERE tenant_id = $1 AND ingestion_token_id = $2`,
 		request.TenantID,
 		request.TokenID,
 	).Scan(&retained); err != nil {
@@ -275,9 +277,9 @@ func allocateHECAcknowledgment(
 	err := tx.QueryRowContext(ctx, `
 		SELECT next_acknowledgment_id
 		FROM hec_channels
-		WHERE tenant_id = ?
-		  AND ingestion_token_id = ?
-		  AND channel_id = ?`,
+		WHERE tenant_id = $1
+		  AND ingestion_token_id = $2
+		  AND channel_id = $3`,
 		request.TenantID,
 		request.TokenID,
 		request.AcknowledgmentChannel,
@@ -287,7 +289,7 @@ func allocateHECAcknowledgment(
 		if countErr := tx.QueryRowContext(ctx, `
 			SELECT count(*)
 			FROM hec_channels
-			WHERE tenant_id = ? AND ingestion_token_id = ?`,
+			WHERE tenant_id = $1 AND ingestion_token_id = $2`,
 			request.TenantID,
 			request.TokenID,
 		).Scan(&channels); countErr != nil {
@@ -301,7 +303,7 @@ func allocateHECAcknowledgment(
 				tenant_id, ingestion_token_id, channel_id,
 				next_acknowledgment_id, created_at_unix_micro,
 				last_used_at_unix_micro
-			) VALUES (?, ?, ?, 1, ?, ?)`,
+			) VALUES ($1, $2, $3, 1, $4, $5)`,
 			request.TenantID,
 			request.TokenID,
 			request.AcknowledgmentChannel,
@@ -329,11 +331,11 @@ func allocateHECAcknowledgment(
 	}
 	acknowledgmentResult, err := tx.ExecContext(ctx, `
 		UPDATE hec_channels
-		SET next_acknowledgment_id = ?, last_used_at_unix_micro = ?
-		WHERE tenant_id = ?
-		  AND ingestion_token_id = ?
-		  AND channel_id = ?
-		  AND next_acknowledgment_id = ?`,
+		SET next_acknowledgment_id = $1, last_used_at_unix_micro = $2
+		WHERE tenant_id = $3
+		  AND ingestion_token_id = $4
+		  AND channel_id = $5
+		  AND next_acknowledgment_id = $6`,
 		allocationOrdinal+1,
 		createdAtMicros,
 		request.TenantID,
@@ -351,7 +353,7 @@ func allocateHECAcknowledgment(
 		INSERT INTO hec_acknowledgments (
 			tenant_id, ingestion_token_id, channel_id,
 			acknowledgment_id, request_sequence, created_at_unix_micro
-		) VALUES (?, ?, ?, ?, ?, ?)`,
+		) VALUES ($1, $2, $3, $4, $5, $6)`,
 		request.TenantID,
 		request.TokenID,
 		request.AcknowledgmentChannel,
@@ -372,10 +374,10 @@ func newKeyedHECAcknowledgmentIDSource() (*keyedHECAcknowledgmentIDSource, error
 	return source, nil
 }
 
-// ID returns an opaque positive value that fits SQLite's signed INTEGER domain,
+// ID returns an opaque positive value that fits PostgreSQL's signed INTEGER domain,
 // HEC's JSON integer wire contract, and JavaScript's exact integer range. A
 // process-random key namespaces the durable allocation ordinal, so restoring an
-// older SQLite snapshot under a new process does not deterministically reissue
+// older PostgreSQL snapshot under a new process does not deterministically reissue
 // a discarded branch's public ID. The source keeps constant memory regardless
 // of scope churn or process lifetime.
 func (source *keyedHECAcknowledgmentIDSource) ID(
@@ -444,14 +446,14 @@ func selectUniqueHECAcknowledgmentID(
 		}
 		var exists int
 		if err := tx.QueryRowContext(ctx, `
-			SELECT EXISTS (
+			SELECT CASE WHEN EXISTS (
 				SELECT 1
 				FROM hec_acknowledgments
-				WHERE tenant_id = ?
-				  AND ingestion_token_id = ?
-				  AND channel_id = ?
-				  AND acknowledgment_id = ?
-			)`,
+				WHERE tenant_id = $1
+				  AND ingestion_token_id = $2
+				  AND channel_id = $3
+				  AND acknowledgment_id = $4
+			) THEN 1 ELSE 0 END`,
 			request.TenantID,
 			request.TokenID,
 			request.AcknowledgmentChannel,
@@ -482,7 +484,7 @@ func requireExactlyOneRow(result sql.Result) error {
 
 // LookupHECAcknowledgments returns false for pending, failed, expired, and
 // unknown IDs without revealing rows from another token or channel.
-func (sequencer *SQLiteSequencer) LookupHECAcknowledgments(
+func (sequencer *PostgreSQLSequencer) LookupHECAcknowledgments(
 	ctx context.Context,
 	tenantID string,
 	tokenID string,
@@ -508,11 +510,11 @@ func (sequencer *SQLiteSequencer) LookupHECAcknowledgments(
 		  ON request.tenant_id = acknowledgment.tenant_id
 		 AND request.ingestion_token_id = acknowledgment.ingestion_token_id
 		 AND request.request_sequence = acknowledgment.request_sequence
-		WHERE acknowledgment.tenant_id = ?
-		  AND acknowledgment.ingestion_token_id = ?
-		  AND acknowledgment.channel_id = ?
+		WHERE acknowledgment.tenant_id = $1
+		  AND acknowledgment.ingestion_token_id = $2
+		  AND acknowledgment.channel_id = $3
 		  AND acknowledgment.acknowledgment_id IN (
-			SELECT CAST(value AS INTEGER) FROM json_each(?)
+			SELECT value::bigint FROM jsonb_array_elements_text($4::jsonb)
 		  )`,
 		tenantID,
 		tokenID,
@@ -580,7 +582,7 @@ func validateHECAcknowledgmentLookup(
 
 // PruneHECTerminalRequests deletes only terminal request rows older than the
 // supplied retention boundary. Pending acknowledgments are never deleted.
-func (sequencer *SQLiteSequencer) PruneHECTerminalRequests(
+func (sequencer *PostgreSQLSequencer) PruneHECTerminalRequests(
 	ctx context.Context,
 	terminalBefore time.Time,
 	limit uint32,
@@ -601,12 +603,12 @@ func (sequencer *SQLiteSequencer) PruneHECTerminalRequests(
 			SELECT tenant_id, ingestion_token_id, request_sequence
 			FROM hec_requests
 			WHERE state IN ('indexed', 'terminal_failure')
-			  AND terminal_at_unix_micro < ?
+			  AND terminal_at_unix_micro < $1
 			ORDER BY terminal_at_unix_micro,
 			         tenant_id,
 			         ingestion_token_id,
 			         request_sequence
-			LIMIT ?
+			LIMIT $2
 		)`,
 		terminalBefore.UTC().UnixMicro(),
 		limit,
@@ -621,4 +623,4 @@ func (sequencer *SQLiteSequencer) PruneHECTerminalRequests(
 	return safecast.MustConv[uint32](count), nil
 }
 
-var _ HECAcknowledgmentReader = (*SQLiteSequencer)(nil)
+var _ HECAcknowledgmentReader = (*PostgreSQLSequencer)(nil)

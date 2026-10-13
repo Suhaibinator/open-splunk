@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestRevalidateCollectorInTransactionDoesNotRecordTokenUse(t *testing.T) {
@@ -33,14 +35,14 @@ func TestRevalidateCollectorInTransactionDoesNotRecordTokenUse(t *testing.T) {
 		CreateCollectorTokenRequest{
 			Name:              "collector",
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		},
 	)
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
 	}
 
-	tx := database.GORMDB().WithContext(ctx).Begin(
+	tx := pgmeta.Begin(database.GORMDB().WithContext(ctx),
 		&sql.TxOptions{ReadOnly: true},
 	)
 	if tx.Error != nil {
@@ -116,6 +118,91 @@ func TestRevalidateCollectorInTransactionRequiresActiveTransaction(t *testing.T)
 	}
 }
 
+func TestAmbientCollectorAdmissionReadsScopeAfterCredentialMutation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	database := openControlDB(t)
+	for _, name := range []string{"main", "replacement"} {
+		if _, err := database.CreateIndex(ctx, activeIndex(name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := NewStore(database, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name: "scope-fence", AllowedIndexNames: []string{"main"},
+		BoundCollectorID: testCollectorID, OrganizationID: 1, IssuerUserID: 42,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := pgmeta.BeginCatalogReader(database.GORMDB().WithContext(ctx), "15:ingestion-credentials")
+	if writer.Error != nil {
+		t.Fatal(writer.Error)
+	}
+	defer func() { _ = writer.Rollback().Error }()
+	reader := pgmeta.Begin(database.GORMDB().WithContext(ctx))
+	if reader.Error != nil {
+		t.Fatal(reader.Error)
+	}
+	defer func() { _ = reader.Rollback().Error }()
+	var pid int
+	if err := reader.Raw("SELECT pg_backend_pid()").Scan(&pid).Error; err != nil {
+		t.Fatal(err)
+	}
+	type admissionResult struct {
+		authentication Authentication
+		err            error
+	}
+	result := make(chan admissionResult, 1)
+	go func() {
+		authentication, err := store.RevalidateAndRecordCollectorUseInTransaction(ctx, reader, issued.Secret.Plaintext(), time.Now().UTC())
+		result <- admissionResult{authentication: authentication, err: err}
+	}()
+	// The writer is still uncommitted. Wait until admission reaches its actual
+	// database fence, then change the scope before allowing admission to proceed.
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var waiting bool
+		if err := database.SQLDB().QueryRowContext(ctx, "SELECT COALESCE(wait_event='advisory',false) FROM pg_stat_activity WHERE pid=$1", pid).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		select {
+		case got := <-result:
+			t.Fatalf("admission did not wait for credential mutation: %+v", got)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-ticker.C:
+		}
+	}
+	if err := writer.Exec("DELETE FROM ingestion_token_indexes WHERE ingestion_token_id=?", issued.Token.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Exec("INSERT INTO ingestion_token_indexes(ingestion_token_id,index_id) SELECT ?,index_id FROM indexes WHERE name='replacement'", issued.Token.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Commit().Error; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-result:
+		if got.err != nil || !slices.Equal(got.authentication.AuthorizedIndexNames(), []string{"replacement"}) {
+			t.Fatalf("admission retained pre-mutation scope: %+v %v", got.authentication, got.err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := reader.Commit().Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLeaseRevalidationReturnsIdentityWithDeferredIndexAuthorityOnly(t *testing.T) {
 	t.Parallel()
 
@@ -142,8 +229,8 @@ func TestLeaseRevalidationReturnsIdentityWithDeferredIndexAuthorityOnly(t *testi
 			mutate: func(t *testing.T, ctx context.Context, database *control.DB, index control.Index) {
 				if _, err := database.SQLDB().ExecContext(ctx, `
 					UPDATE indexes
-					SET retention_nanoseconds = ?
-					WHERE index_id = ?`, int64(8_000_000_000*time.Second), index.ID); err != nil {
+					SET retention_nanoseconds = $1
+					WHERE index_id = $2`, int64(8_000_000_000*time.Second), index.ID); err != nil {
 					t.Fatalf("corrupt retention: %v", err)
 				}
 			},
@@ -157,16 +244,16 @@ func TestLeaseRevalidationReturnsIdentityWithDeferredIndexAuthorityOnly(t *testi
 					t.Fatalf("acquire corruption connection: %v", err)
 				}
 				defer connection.Close()
-				if _, err := connection.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+				if _, err := pgtest.DropForeignKeys(ctx, connection); err != nil {
 					t.Fatalf("disable test-only foreign keys: %v", err)
 				}
-				if _, err := connection.ExecContext(ctx, `DROP TRIGGER index_catalog_index_delete_is_forbidden`); err != nil {
+				if _, err := connection.ExecContext(ctx, `DROP TRIGGER index_catalog_index_delete_is_forbidden ON indexes`); err != nil {
 					t.Fatalf("disable test-only deletion guard: %v", err)
 				}
-				if _, err := connection.ExecContext(ctx, `DELETE FROM indexes WHERE index_id = ?`, index.ID); err != nil {
+				if _, err := connection.ExecContext(ctx, `DELETE FROM indexes WHERE index_id = $1`, index.ID); err != nil {
 					t.Fatalf("orphan token scope: %v", err)
 				}
-				if _, err := connection.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
+				if _, err := pgtest.RestoreForeignKeys(ctx, connection); err != nil {
 					t.Fatalf("restore foreign keys: %v", err)
 				}
 			},
@@ -204,14 +291,14 @@ func TestLeaseRevalidationReturnsIdentityWithDeferredIndexAuthorityOnly(t *testi
 			store.now = func() time.Time { return createdAt }
 			issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 				Name: "collector", AllowedIndexNames: []string{"main"}, BoundCollectorID: testCollectorID,
-				AllowedHostRegexes: []string{"^valid$"},
+				AllowedHostRegexes: []string{"^valid$"}, OrganizationID: 1, IssuerUserID: 42,
 			})
 			if err != nil {
 				t.Fatalf("CreateCollectorToken(): %v", err)
 			}
 			test.mutate(t, ctx, database, index)
 
-			tx := database.GORMDB().WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+			tx := pgmeta.Begin(database.GORMDB().WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 			if tx.Error != nil {
 				t.Fatalf("begin read transaction: %v", tx.Error)
 			}
@@ -232,7 +319,7 @@ func TestLeaseRevalidationReturnsIdentityWithDeferredIndexAuthorityOnly(t *testi
 				t.Fatalf("strict Authenticate = (%#v, %v), want zero authentication failure", strict, err)
 			}
 
-			write := database.GORMDB().WithContext(ctx).Begin()
+			write := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 			if write.Error != nil {
 				t.Fatalf("begin write transaction: %v", write.Error)
 			}

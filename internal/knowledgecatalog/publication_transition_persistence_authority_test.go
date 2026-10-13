@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"gorm.io/gorm"
 )
 
@@ -276,7 +277,7 @@ func TestPublicationTransitionPersistenceAuthorityClassifiesFactChanges(t *testi
 					replacement = bytes.Repeat([]byte{0x5a}, catalogStateTokenBytes)
 				}
 				execPublicationTransitionPersistenceAuthorityTest(
-					t, harness.tx, "DROP TRIGGER knowledge_catalog_revision_head_transition_is_exact",
+					t, harness.tx, "DROP TRIGGER knowledge_catalog_revision_head_transition_is_exact ON knowledge_catalog_revision_heads",
 				)
 				execPublicationTransitionPersistenceAuthorityTest(t, harness.tx, `
 					UPDATE knowledge_catalog_revision_heads
@@ -320,7 +321,7 @@ func TestPublicationTransitionPersistenceAuthorityClassifiesFactChanges(t *testi
 					SET catalog_revision = catalog_revision + 1
 					WHERE tenant_id = ?`, testTenant)
 				execPublicationTransitionPersistenceAuthorityTest(
-					t, harness.tx, "DROP TRIGGER knowledge_catalog_revision_head_transition_is_exact",
+					t, harness.tx, "DROP TRIGGER knowledge_catalog_revision_head_transition_is_exact ON knowledge_catalog_revision_heads",
 				)
 				execPublicationTransitionPersistenceAuthorityTest(t, harness.tx, `
 					UPDATE knowledge_catalog_revision_heads
@@ -353,7 +354,7 @@ func TestPublicationTransitionPersistenceAuthorityClassifiesFactChanges(t *testi
 			name: "index count changed without revision",
 			mutate: func(t *testing.T, harness *publicationTransitionPersistenceAuthorityTestHarness) {
 				execPublicationTransitionPersistenceAuthorityTest(
-					t, harness.tx, "DROP TRIGGER index_catalog_state_transition_is_valid",
+					t, harness.tx, "DROP TRIGGER index_catalog_state_transition_is_valid ON index_catalog_state",
 				)
 				execPublicationTransitionPersistenceAuthorityTest(t, harness.tx, `
 					UPDATE index_catalog_state
@@ -366,7 +367,7 @@ func TestPublicationTransitionPersistenceAuthorityClassifiesFactChanges(t *testi
 			name: "index count regressed with revision",
 			mutate: func(t *testing.T, harness *publicationTransitionPersistenceAuthorityTestHarness) {
 				execPublicationTransitionPersistenceAuthorityTest(
-					t, harness.tx, "DROP TRIGGER index_catalog_state_transition_is_valid",
+					t, harness.tx, "DROP TRIGGER index_catalog_state_transition_is_valid ON index_catalog_state",
 				)
 				execPublicationTransitionPersistenceAuthorityTest(t, harness.tx, `
 					UPDATE index_catalog_state
@@ -379,7 +380,7 @@ func TestPublicationTransitionPersistenceAuthorityClassifiesFactChanges(t *testi
 			name: "catalog head missing",
 			mutate: func(t *testing.T, harness *publicationTransitionPersistenceAuthorityTestHarness) {
 				execPublicationTransitionPersistenceAuthorityTest(
-					t, harness.tx, "DROP TRIGGER knowledge_catalog_revision_head_delete_is_forbidden",
+					t, harness.tx, "DROP TRIGGER knowledge_catalog_revision_head_delete_is_forbidden ON knowledge_catalog_revision_heads",
 				)
 				execPublicationTransitionPersistenceAuthorityTest(t, harness.tx, `
 					DELETE FROM knowledge_catalog_revision_heads WHERE tenant_id = ?`, testTenant)
@@ -390,7 +391,7 @@ func TestPublicationTransitionPersistenceAuthorityClassifiesFactChanges(t *testi
 			name: "app catalog missing",
 			mutate: func(t *testing.T, harness *publicationTransitionPersistenceAuthorityTestHarness) {
 				execPublicationTransitionPersistenceAuthorityTest(
-					t, harness.tx, "DROP TRIGGER app_catalog_revision_delete_is_forbidden",
+					t, harness.tx, "DROP TRIGGER app_catalog_revision_delete_is_forbidden ON app_catalog_revisions",
 				)
 				execPublicationTransitionPersistenceAuthorityTest(t, harness.tx, `
 					DELETE FROM app_catalog_revisions WHERE tenant_id = ?`, testTenant)
@@ -401,7 +402,7 @@ func TestPublicationTransitionPersistenceAuthorityClassifiesFactChanges(t *testi
 			name: "index catalog missing",
 			mutate: func(t *testing.T, harness *publicationTransitionPersistenceAuthorityTestHarness) {
 				execPublicationTransitionPersistenceAuthorityTest(
-					t, harness.tx, "DROP TRIGGER index_catalog_state_delete_is_forbidden",
+					t, harness.tx, "DROP TRIGGER index_catalog_state_delete_is_forbidden ON index_catalog_state",
 				)
 				execPublicationTransitionPersistenceAuthorityTest(
 					t, harness.tx, "DELETE FROM index_catalog_state WHERE singleton_id = 1",
@@ -413,7 +414,7 @@ func TestPublicationTransitionPersistenceAuthorityClassifiesFactChanges(t *testi
 			name: "app catalog regressed",
 			mutate: func(t *testing.T, harness *publicationTransitionPersistenceAuthorityTestHarness) {
 				execPublicationTransitionPersistenceAuthorityTest(
-					t, harness.tx, "DROP TRIGGER app_catalog_revision_transition_is_exact",
+					t, harness.tx, "DROP TRIGGER app_catalog_revision_transition_is_exact ON app_catalog_revisions",
 				)
 				execPublicationTransitionPersistenceAuthorityTest(t, harness.tx, `
 					UPDATE app_catalog_revisions
@@ -726,7 +727,7 @@ func beginPublicationTransitionPersistenceAuthorityTestTransaction(
 	database *control.DB,
 ) *gorm.DB {
 	t.Helper()
-	transaction := database.GORMDB().Begin()
+	transaction := pgmeta.Begin(database.GORMDB())
 	if transaction.Error != nil {
 		t.Fatalf("begin persistence authority test transaction: %v", transaction.Error)
 	}
@@ -746,7 +747,7 @@ func readPublicationTransitionPersistenceAuthorityTestInventory(
 	after publicationTransitionEndpoint,
 ) publicationActiveTransitionInventoryRead {
 	t.Helper()
-	read, err := store.readPublicationActiveTransitionInventory(tx, testTenant, before, after)
+	read, err := store.readPublicationActiveTransitionInventory(tx, testTenant, before, after, 1)
 	if err != nil {
 		t.Fatalf("read persistence authority inventory: %v", err)
 	}
@@ -775,6 +776,13 @@ func execPublicationTransitionPersistenceAuthorityTest(
 	arguments ...any,
 ) {
 	t.Helper()
+	if name, ok := strings.CutPrefix(query, "DROP TRIGGER "); ok && !strings.Contains(name, " ON ") {
+		statement, present := knowledgeCatalogTriggerDropStatements[name]
+		if !present {
+			t.Fatalf("unknown persistence fixture trigger %q", name)
+		}
+		query = statement
+	}
 	if err := tx.WithContext(t.Context()).Exec(query, arguments...).Error; err != nil {
 		t.Fatalf("execute persistence authority mutation: %v", err)
 	}

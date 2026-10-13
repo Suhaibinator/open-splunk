@@ -96,12 +96,14 @@ func TestAdmissionPreparerPrepareHECNormalizesAndPlansPolicy(t *testing.T) {
 	request.Authorization.AllowedHostRegexes = []string{`host-[ab]`}
 	request.Authorization.AllowedSourceRegexes = []string{`/var/log/.*`}
 	request.HECAdmission = &HECStageAdmission{
-		TokenID:               "hec-token-1",
-		TokenVersion:          9,
-		RequestID:             request.BatchID,
-		AcknowledgmentEnabled: true,
-		Channel:               "14c0d562-7a02-4b00-9b28-2e72a79bb28c",
-		CreatedAt:             validationTestNow,
+		OrganizationID:               19,
+		RequireOrganizationOwnership: true,
+		TokenID:                      "hec-token-1",
+		TokenVersion:                 9,
+		RequestID:                    request.BatchID,
+		AcknowledgmentEnabled:        true,
+		Channel:                      "14c0d562-7a02-4b00-9b28-2e72a79bb28c",
+		CreatedAt:                    validationTestNow,
 	}
 
 	mainEvent := request.Events[0].Event
@@ -136,6 +138,8 @@ func TestAdmissionPreparerPrepareHECNormalizesAndPlansPolicy(t *testing.T) {
 		t.Fatalf("prepared batch identity = %+v", batch)
 	}
 	if batch.HECAdmission == nil || batch.HECAdmission == request.HECAdmission ||
+		batch.HECAdmission.OrganizationID != request.HECAdmission.OrganizationID ||
+		!batch.HECAdmission.RequireOrganizationOwnership ||
 		batch.HECAdmission.TokenID != request.HECAdmission.TokenID ||
 		batch.HECAdmission.TokenVersion != request.HECAdmission.TokenVersion ||
 		len(batch.HECAdmission.AuthorizedIndexes) != 2 ||

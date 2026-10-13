@@ -127,7 +127,7 @@ func TestOpenRuntimeSecurityStoresSharesStableTenantBoundAuditStore(t *testing.T
 
 	ctx := context.Background()
 	directory := t.TempDir()
-	db, err := control.Open(ctx, filepath.Join(directory, "control.db"))
+	db, err := openTestControl(t, ctx, filepath.Join(directory, "control.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestOpenRuntimeSecurityStoresSharesStableTenantBoundAuditStore(t *testing.T
 	}
 	if _, err := first.ingestionTokens.CreateCollectorToken(
 		ctx,
-		auth.CreateCollectorTokenRequest{
+		auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 			Name:              "missing actor",
 			BoundCollectorID:  "collector-missing-actor",
 			AllowedIndexNames: []string{"main"},
@@ -167,7 +167,7 @@ func TestOpenRuntimeSecurityStoresSharesStableTenantBoundAuditStore(t *testing.T
 
 	administratorContext, err := audit.WithActor(ctx, audit.Actor{
 		Kind: audit.ActorKindBrowser,
-		ID:   "single-user",
+		ID:   "1",
 		Role: audit.ActorRoleAdministrator,
 	})
 	if err != nil {
@@ -182,7 +182,7 @@ func TestOpenRuntimeSecurityStoresSharesStableTenantBoundAuditStore(t *testing.T
 	} {
 		if _, err := first.ingestionTokens.CreateCollectorToken(
 			administratorContext,
-			auth.CreateCollectorTokenRequest{
+			auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 				Name:              definition.name,
 				BoundCollectorID:  definition.collectorID,
 				AllowedIndexNames: []string{"main"},
@@ -199,7 +199,7 @@ func TestOpenRuntimeSecurityStoresSharesStableTenantBoundAuditStore(t *testing.T
 	if len(firstPage.Events) != 1 || firstPage.NextPageToken == "" ||
 		firstPage.Events[0].Sequence != 2 ||
 		firstPage.Events[0].Actor.Kind != audit.ActorKindBrowser ||
-		firstPage.Events[0].Actor.ID != "single-user" ||
+		firstPage.Events[0].Actor.ID != "1" ||
 		firstPage.Events[0].Actor.Role != audit.ActorRoleAdministrator {
 		t.Fatalf("first audit page = %+v", firstPage)
 	}
@@ -225,7 +225,7 @@ func TestOpenSearchHistoryStoreUsesRegisteredStableMasterKey(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	directory := t.TempDir()
-	db, err := control.Open(ctx, filepath.Join(directory, "control.db"))
+	db, err := openTestControl(t, ctx, filepath.Join(directory, "control.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestOpenSecurityStoresKeepsCollectorCredentialsValidAcrossRestart(t *testin
 	t.Parallel()
 	ctx := context.Background()
 	directory := t.TempDir()
-	db, err := control.Open(ctx, filepath.Join(directory, "control.db"))
+	db, err := openTestControl(t, ctx, filepath.Join(directory, "control.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +275,7 @@ func TestOpenSecurityStoresKeepsCollectorCredentialsValidAcrossRestart(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	issued, err := firstTokens.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{
+	issued, err := firstTokens.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 		Name: "restart test", BoundCollectorID: "restart-collector",
 		AllowedIndexNames: []string{"main"},
 	})
@@ -317,7 +317,7 @@ func TestOpenSecurityStoresRefusesUnverifiableExistingTokens(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	directory := t.TempDir()
-	db, err := control.Open(ctx, filepath.Join(directory, "control.db"))
+	db, err := openTestControl(t, ctx, filepath.Join(directory, "control.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +335,7 @@ func TestOpenSecurityStoresRefusesUnverifiableExistingTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := legacyTokens.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{
+	if _, err := legacyTokens.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 		Name: "legacy", BoundCollectorID: "legacy-collector",
 		AllowedIndexNames: []string{"main"},
 	}); err != nil {

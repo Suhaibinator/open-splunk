@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"gorm.io/gorm"
 )
 
@@ -543,17 +545,17 @@ func assertIndexNameCount(t *testing.T, database *DB, name string, want int64) {
 
 func seedActiveKnowledgeAdmissionEvidence(t *testing.T, database *DB) {
 	t.Helper()
-	tx, err := database.SQLDB().BeginTx(t.Context(), nil)
+	tx, err := pgmeta.BeginSQL(t.Context(), database.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin active knowledge admission evidence: %v", err)
 	}
 	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO app_workspaces (
-			app_id, tenant_id, version, slug, display_name, description,
+			organization_id, app_id, tenant_id, version, slug, display_name, description,
 			default_time_range_present, state,
 			created_at_unix_micro, updated_at_unix_micro
 		) VALUES (
-			'app_AAAAAAAAAAAAAAAAAAAAAA', 'tenant-a', 1,
+			1, 'app_AAAAAAAAAAAAAAAAAAAAAA', 'tenant-a', 1,
 			'knowledge-admission', 'Knowledge admission', '', 0, 'active', 1, 1
 		);
 		INSERT INTO knowledge_catalog_tenants (tenant_id)
@@ -564,7 +566,7 @@ func seedActiveKnowledgeAdmissionEvidence(t *testing.T, database *DB) {
 		INSERT INTO knowledge_definition_blobs (
 			tenant_id, definition_digest, definition_proto,
 			definition_bytes, created_at_unix_micro
-		) VALUES ('tenant-a', zeroblob(32), X'01', 1, 1);
+		) VALUES ('tenant-a', decode(repeat('00',32),'hex'), decode('01','hex'), 1, 1);
 		INSERT INTO knowledge_projection_tenant_ledgers (tenant_id)
 		SELECT 'tenant-a'
 		WHERE NOT EXISTS (
@@ -579,7 +581,7 @@ func seedActiveKnowledgeAdmissionEvidence(t *testing.T, database *DB) {
 		) VALUES (
 			'tenant-a', 'ko-index-admission', 1,
 			'app_AAAAAAAAAAAAAAAAAAAAAA', 'owner-a', 'field_extraction',
-			'ko-index-admission', 'private', 'active', zeroblob(32), 0,
+			'ko-index-admission', 'private', 'active', decode(repeat('00',32),'hex'), 0,
 			'create', 10
 		);
 		INSERT INTO knowledge_object_dependency_seals (
@@ -607,13 +609,13 @@ func seedActiveKnowledgeAdmissionEvidence(t *testing.T, database *DB) {
 		     AND knowledge_object_id = 'ko-index-admission'
 		     AND object_version = 1;
 		INSERT INTO knowledge_objects (
-			tenant_id, knowledge_object_id, current_version,
+			organization_id, tenant_id, knowledge_object_id, current_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
 			definition_digest, created_at_unix_micro, updated_at_unix_micro
 		) VALUES (
-			'tenant-a', 'ko-index-admission', 1,
+			1, 'tenant-a', 'ko-index-admission', 1,
 			'app_AAAAAAAAAAAAAAAAAAAAAA', 'owner-a', 'field_extraction',
-			'ko-index-admission', 'private', 'active', zeroblob(32), 10, 10
+			'ko-index-admission', 'private', 'active', decode(repeat('00',32),'hex'), 10, 10
 		)`); err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("seed active knowledge admission evidence: %v", err)
@@ -640,10 +642,7 @@ func corruptActiveKnowledgeAdmissionEvidence(
 		t.Fatalf("acquire corruption connection: %v", err)
 	}
 	defer conn.Close()
-	if _, err := conn.ExecContext(
-		context.Background(),
-		"PRAGMA foreign_keys = OFF",
-	); err != nil {
+	if _, err := pgtest.DropForeignKeys(context.Background(), conn); err != nil {
 		t.Fatalf("disable fixture foreign keys: %v", err)
 	}
 	if !keepRegistry {
@@ -689,8 +688,7 @@ func corruptActiveKnowledgeAdmissionEvidence(
 func dropTableTriggersForIndexAdmission(t *testing.T, conn *sql.Conn, table string) {
 	t.Helper()
 	rows, err := conn.QueryContext(context.Background(), `
-		SELECT name FROM sqlite_schema
-		WHERE type = 'trigger' AND tbl_name = ?`, table)
+		SELECT t.tgname FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND NOT t.tgisinternal AND r.relname=$1`, table)
 	if err != nil {
 		t.Fatalf("list %s triggers: %v", table, err)
 	}
@@ -716,7 +714,7 @@ func dropTableTriggersForIndexAdmission(t *testing.T, conn *sql.Conn, table stri
 		quoted := `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 		if _, err := conn.ExecContext(
 			context.Background(),
-			"DROP TRIGGER "+quoted,
+			"DROP TRIGGER "+quoted+" ON "+table,
 		); err != nil {
 			t.Fatalf("drop %s trigger %q: %v", table, name, err)
 		}

@@ -178,9 +178,40 @@ func (manager *Manager) NearbyContextFor(
 	if !validAccessScope(access) || generation == 0 {
 		return NearbyContext{}, ErrNotFound
 	}
-	entry, err := manager.lockEntryForAccess(access, id, true, func() error { return ctx.Err() })
+	entry, err := manager.lockEntryForAccess(access, id, true, func() error { return ctx.Err() }, ctx)
 	if err != nil {
 		return NearbyContext{}, err
+	}
+	if entry.job.CaptureComplete {
+		if entry.resultGeneration != generation || entry.resultSchema == nil || entry.job.NearbyEventProvenance == nil || ordinal >= entry.job.RowCount {
+			entry.mu.Unlock()
+			return NearbyContext{}, ErrNearbyContextUnavailable
+		}
+		provenance := *entry.job.NearbyEventProvenance
+		schema := cloneSchema(*entry.resultSchema)
+		entry.mu.Unlock()
+		lease, err := manager.AcquireResultsFor(ctx, access, id)
+		if err != nil {
+			return NearbyContext{}, err
+		}
+		defer func() { _ = lease.Close() }()
+		seekable, ok := lease.(interface {
+			Seek(context.Context, uint64) error
+		})
+		if !ok {
+			return NearbyContext{}, ErrNearbyContextUnavailable
+		}
+		if err := seekable.Seek(ctx, ordinal); err != nil {
+			return NearbyContext{}, err
+		}
+		row, present, err := lease.Next(ctx)
+		if err != nil || !present {
+			if err != nil {
+				return NearbyContext{}, err
+			}
+			return NearbyContext{}, ErrNearbyContextUnavailable
+		}
+		return PrepareNearbyContext(&provenance, schema, row)
 	}
 	defer entry.mu.Unlock()
 	switch entry.job.State {

@@ -19,6 +19,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
@@ -55,7 +56,7 @@ func newReadyKnowledgeWriterWithOptions(
 	options knowledgecatalog.WriterOptions,
 ) *knowledgecatalog.Writer {
 	t.Helper()
-	database, err := control.Open(
+	database, err := openTestControl(t,
 		t.Context(),
 		filepath.Join(t.TempDir(), "control.sqlite"),
 	)
@@ -135,9 +136,9 @@ func knowledgeConfigBase(t *testing.T) Config {
 		OwnerID:                    knowledgeBoundaryOwnerID,
 		TenantID:                   knowledgeBoundaryTenantID,
 		AdministrativeAllowedHosts: []string{"example.com"},
-		BrowserAuthenticator: &knowledgeBoundaryAuthenticator{
+		IdentityAuthenticator: adaptTestBrowserAuthenticator(&knowledgeBoundaryAuthenticator{
 			principal: knowledgeBoundaryPrincipal(t, auth.BrowserRoleAdministrator),
-		},
+		}),
 	}
 }
 
@@ -158,7 +159,7 @@ func TestKnowledgeConfigRequiresOneCompleteDependencyUnit(t *testing.T) {
 			t.Parallel()
 			config := knowledgeConfigBase(t)
 			test.set(&config)
-			_, err := NewHandler(config)
+			_, err := newAuthenticatedTestHandler(config)
 			if err == nil || !strings.Contains(err.Error(), "knowledge management dependencies must be configured together") {
 				t.Fatalf("NewHandler error=%v", err)
 			}
@@ -172,9 +173,10 @@ func TestKnowledgeConfigRequiresOneCompleteDependencyUnit(t *testing.T) {
 		config.KnowledgeWriter = writer
 		config.KnowledgeApps = knowledgeHTTPApps()
 		config.KnowledgeAttempts = &knowledgeBoundaryAppender{}
-		config.BrowserAuthenticator = nil
+		config.IdentityAuthenticator = adaptTestBrowserAuthenticator(nil)
+		config.Authorization = testsupport.AuthorizationFixture(config.TenantID)
 		_, err := NewHandler(config)
-		if err == nil || !strings.Contains(err.Error(), "administrative services require browser authentication") {
+		if err == nil || !strings.Contains(err.Error(), "user identity and resource authorization are required") {
 			t.Fatalf("NewHandler error=%v", err)
 		}
 	})
@@ -192,12 +194,12 @@ func TestKnowledgeConfigNormalizesTypedNilDependencies(t *testing.T) {
 	config.KnowledgeWriter = writer
 	config.KnowledgeApps = apps
 	config.KnowledgeAttempts = attempts
-	if _, err := NewHandler(config); err != nil {
+	if _, err := newAuthenticatedTestHandler(config); err != nil {
 		t.Fatalf("all typed nil dependencies: %v", err)
 	}
 
 	config.KnowledgeWriter = &knowledgeHTTPWriter{}
-	_, err := NewHandler(config)
+	_, err := newAuthenticatedTestHandler(config)
 	if err == nil || !strings.Contains(err.Error(), "knowledge management dependencies must be configured together") {
 		t.Fatalf("partial typed nil error=%v", err)
 	}
@@ -220,7 +222,7 @@ func TestKnowledgeConfigRequiresExactCatalogWriter(t *testing.T) {
 			config.KnowledgeWriter = test.writer
 			config.KnowledgeApps = knowledgeHTTPApps()
 			config.KnowledgeAttempts = &knowledgeBoundaryAppender{}
-			_, err := NewHandler(config)
+			_, err := newAuthenticatedTestHandler(config)
 			if err == nil || !strings.Contains(err.Error(), "requires the concrete catalog writer") {
 				t.Fatalf("NewHandler error=%v", err)
 			}
@@ -233,7 +235,7 @@ func TestKnowledgeConfigRequiresExactCatalogWriter(t *testing.T) {
 	config.KnowledgeWriter = writer
 	config.KnowledgeApps = knowledgeHTTPApps()
 	config.KnowledgeAttempts = &knowledgeBoundaryAppender{}
-	if _, err := NewHandler(config); err != nil {
+	if _, err := newAuthenticatedTestHandler(config); err != nil {
 		t.Fatalf("concrete catalog writer: %v", err)
 	}
 }
@@ -248,12 +250,12 @@ func TestKnowledgeManagementRoutesFollowCompleteConfigurationAndRemainUnadvertis
 		appender := &knowledgeBoundaryAppender{}
 		apps := knowledgeHTTPApps()
 		config := knowledgeConfigBase(t)
-		authenticator := config.BrowserAuthenticator.(*knowledgeBoundaryAuthenticator)
+		authenticator := config.IdentityAuthenticator.(*testBrowserIdentityAdapter).legacy.(*knowledgeBoundaryAuthenticator)
 		config.KnowledgeCatalog = &knowledgeHTTPCatalog{}
 		config.KnowledgeWriter = writer
 		config.KnowledgeApps = apps
 		config.KnowledgeAttempts = appender
-		handler, err := NewHandler(config)
+		handler, err := newAuthenticatedTestHandler(config)
 		if err != nil {
 			t.Fatalf("NewHandler: %v", err)
 		}
@@ -287,7 +289,7 @@ func TestKnowledgeManagementRoutesFollowCompleteConfigurationAndRemainUnadvertis
 			t.Fatalf("auth=%d apps=%d attempts=%+v", authenticator.callCount(), apps.callCount(), appender.snapshot())
 		}
 
-		bootstrap := postProto(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
+		bootstrap := postProtoHeaders(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 		if bootstrap.Code != http.StatusOK {
 			t.Fatalf("bootstrap status=%d body=%q", bootstrap.Code, bootstrap.Body.String())
 		}
@@ -302,8 +304,8 @@ func TestKnowledgeManagementRoutesFollowCompleteConfigurationAndRemainUnadvertis
 
 	t.Run("unconfigured exact routes", func(t *testing.T) {
 		config := knowledgeConfigBase(t)
-		authenticator := config.BrowserAuthenticator.(*knowledgeBoundaryAuthenticator)
-		handler, err := NewHandler(config)
+		authenticator := config.IdentityAuthenticator.(*testBrowserIdentityAdapter).legacy.(*knowledgeBoundaryAuthenticator)
+		handler, err := newAuthenticatedTestHandler(config)
 		if err != nil {
 			t.Fatalf("NewHandler: %v", err)
 		}
@@ -353,8 +355,8 @@ func TestKnowledgePreviewRequiresCompleteFamilyAndRegistersOnlyWhenReady(t *test
 			config.KnowledgeAttempts = &knowledgeBoundaryAppender{}
 			config.KnowledgePreview = preview
 			test.drop(&config)
-			if handler, err := NewHandler(config); err == nil || handler != nil {
-				t.Fatalf("NewHandler(missing %s) = (%#v, %v), want no route-bearing handler", test.name, handler, err)
+			if handler, err := newAuthenticatedTestHandler(config); err == nil || handler != nil {
+				t.Fatalf("newAuthenticatedTestHandler(missing %s) = (%#v, %v), want no route-bearing handler", test.name, handler, err)
 			}
 		})
 	}
@@ -367,7 +369,7 @@ func TestKnowledgePreviewRequiresCompleteFamilyAndRegistersOnlyWhenReady(t *test
 		config.KnowledgeApps = knowledgeHTTPApps()
 		config.KnowledgeAttempts = &knowledgeBoundaryAppender{}
 		config.KnowledgePreview = typedNil
-		handler, err := NewHandler(config)
+		handler, err := newAuthenticatedTestHandler(config)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -388,7 +390,7 @@ func TestKnowledgePreviewRequiresCompleteFamilyAndRegistersOnlyWhenReady(t *test
 		attempts := &knowledgeBoundaryAppender{}
 		config.KnowledgeAttempts = attempts
 		config.KnowledgePreview = preview
-		handler, err := NewHandler(config)
+		handler, err := newAuthenticatedTestHandler(config)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -416,10 +418,10 @@ func TestKnowledgePreviewRequiresCompleteFamilyAndRegistersOnlyWhenReady(t *test
 		config.KnowledgeApps = knowledgeHTTPApps()
 		config.KnowledgeAttempts = attempts
 		config.KnowledgePreview = preview
-		config.BrowserAuthenticator = &knowledgeBoundaryAuthenticator{
+		config.IdentityAuthenticator = adaptTestBrowserAuthenticator(&knowledgeBoundaryAuthenticator{
 			principal: knowledgeBoundaryPrincipal(t, auth.BrowserRoleUser),
-		}
-		handler, err := NewHandler(config)
+		})
+		handler, err := newAuthenticatedTestHandler(config)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -449,8 +451,8 @@ func TestKnowledgePreviewRequiresCompleteFamilyAndRegistersOnlyWhenReady(t *test
 		config.KnowledgeApps = knowledgeHTTPApps()
 		config.KnowledgeAttempts = &knowledgeBoundaryAppender{}
 		config.KnowledgePreview = &knowledgepreview.Service{}
-		if handler, err := NewHandler(config); err == nil || handler != nil {
-			t.Fatalf("NewHandler(unready Preview) = (%#v, %v), want rejection", handler, err)
+		if handler, err := newAuthenticatedTestHandler(config); err == nil || handler != nil {
+			t.Fatalf("newAuthenticatedTestHandler(unready Preview) = (%#v, %v), want rejection", handler, err)
 		}
 	})
 }
@@ -486,16 +488,11 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 	}
 	advertised := func(t *testing.T, config Config) []opensplunk.ServerFeature {
 		t.Helper()
-		handler, err := NewHandler(config)
+		handler, err := newAuthenticatedTestHandler(config)
 		if err != nil {
 			t.Fatalf("NewHandler: %v", err)
 		}
-		response := postProto(
-			t,
-			handler,
-			"/api/system/bootstrap",
-			&opensplunk.GetSystemBootstrapRequest{},
-		)
+		response := postProtoHeaders(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 		if response.Code != http.StatusOK {
 			t.Fatalf("bootstrap status=%d body=%q", response.Code, response.Body.String())
 		}
@@ -558,7 +555,7 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 		t.Run("missing "+test.name, func(t *testing.T) {
 			config := complete(t)
 			test.mutate(&config)
-			handler, err := NewHandler(config)
+			handler, err := newAuthenticatedTestHandler(config)
 			if err != nil {
 				// Partial management and Preview configuration is rejected before a
 				// route-bearing handler can advertise anything.
@@ -567,12 +564,7 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 				}
 				return
 			}
-			response := postProto(
-				t,
-				handler,
-				"/api/system/bootstrap",
-				&opensplunk.GetSystemBootstrapRequest{},
-			)
+			response := postProtoHeaders(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{"Authorization": "Bearer " + adminIntegrationBearerToken})
 			decoded := &opensplunk.GetSystemBootstrapResponse{}
 			unmarshalResponse(t, response, decoded)
 			if slices.Contains(
@@ -625,12 +617,12 @@ func TestKnowledgeManagementProductionMiddlewareOrdering(t *testing.T) {
 	writer := newReadyKnowledgeWriter(t)
 	appender := &knowledgeBoundaryAppender{}
 	config := knowledgeConfigBase(t)
-	authenticator := config.BrowserAuthenticator.(*knowledgeBoundaryAuthenticator)
+	authenticator := config.IdentityAuthenticator.(*testBrowserIdentityAdapter).legacy.(*knowledgeBoundaryAuthenticator)
 	config.KnowledgeCatalog = &knowledgeHTTPCatalog{}
 	config.KnowledgeWriter = writer
 	config.KnowledgeApps = knowledgeHTTPApps()
 	config.KnowledgeAttempts = appender
-	handler, err := NewHandler(config)
+	handler, err := newAuthenticatedTestHandler(config)
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
@@ -676,7 +668,7 @@ func TestKnowledgeManagementProductionRejectsNestedDefinitionUnknowns(
 	config.KnowledgeWriter = writer
 	config.KnowledgeApps = apps
 	config.KnowledgeAttempts = appender
-	handler, err := NewHandler(config)
+	handler, err := newAuthenticatedTestHandler(config)
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
@@ -720,16 +712,17 @@ func TestKnowledgeHTTPPrincipalIdentityMismatchIsJournaledBeforeDecode(t *testin
 	appender := &knowledgeBoundaryAppender{}
 	handler, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, &knowledgeHTTPWriter{}, knowledgeHTTPApps(), appender)
 	handler.tenantID = "different-tenant"
+	handler.identityAuthenticator.(*testBrowserIdentityAdapter).tenant = handler.tenantID
 	body := newKnowledgeBoundaryObservedBody("not protobuf", nil)
 	request := knowledgeBoundaryRequest(context.Background(), knowledgeObjectsCreatePath, body)
 	request.Host = "example.com"
 	request.Header.Set("Origin", "http://example.com")
 	response := httptest.NewRecorder()
 	httpHandler.ServeHTTP(response, request)
+	// The session adapter rejects an untrusted identity before there is a
+	// trusted principal for a domain audit attempt or any body decoding.
 	calls := appender.snapshot()
-	if response.Code != http.StatusForbidden || body.reads() != 0 || len(calls) != 1 ||
-		calls[0].definition.Reason != knowledgeattemptaudit.ReasonNotFoundOrForbidden ||
-		calls[0].definition.AuthorizedContext != nil {
+	if response.Code != http.StatusForbidden || body.reads() != 0 || len(calls) != 0 {
 		t.Fatalf("status=%d body=%q reads=%d attempts=%+v", response.Code, response.Body.String(), body.reads(), calls)
 	}
 }

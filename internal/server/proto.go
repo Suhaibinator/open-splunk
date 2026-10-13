@@ -81,6 +81,7 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunk.SearchJob,
 		CreatedAt:         createdAt,
 		KnowledgeSnapshot: knowledgeSnapshot,
 	}
+	searchjobproto.ProjectCapture(job, result)
 	if job.Schema != nil {
 		result.ResultSchema, err = searchjobproto.Schema(job.ID, *job.Schema, resultShape)
 		if err != nil {
@@ -102,7 +103,7 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunk.SearchJob,
 		}
 		result.Warnings = append(result.Warnings, &opensplunk.ApiWarning{
 			Code:       "RESULTS_TRUNCATED",
-			Message:    "Retained search results reached the server row boundary; a bounded export can re-execute the same scoped query.",
+			Message:    "Result preview reached the row limit; use retained results or export after capture completes.",
 			OccurredAt: warningTime,
 		})
 	}

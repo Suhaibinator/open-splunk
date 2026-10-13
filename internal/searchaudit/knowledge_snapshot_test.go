@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -117,7 +119,7 @@ func TestAppendRejectsMalformedKnowledgeSnapshotReferenceBeforeMutation(t *testi
 			test.mutate(ref)
 			definition := searchAuditTestDefinition("owner", "job-"+test.name, 0)
 			definition.KnowledgeSnapshot = ref
-			tx := database.GORMDB().WithContext(ctx).Begin()
+			tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 			if tx.Error != nil {
 				t.Fatal(tx.Error)
 			}
@@ -228,7 +230,7 @@ func TestListCursorBindsKnowledgeSnapshotIdentity(t *testing.T) {
 		t.Fatalf("List(first) = (%+v, %v)", first, err)
 	}
 	if err := database.GORMDB().Exec(
-		"DROP TRIGGER search_attempt_audit_event_update_is_forbidden",
+		"DROP TRIGGER search_attempt_audit_event_update_is_forbidden ON search_attempt_audit_events",
 	).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +262,7 @@ func TestStartupIntegrityRejectsPartialKnowledgeSnapshotTuple(t *testing.T) {
 	}
 	defer func() { _ = connection.Close() }()
 	if _, err := connection.ExecContext(
-		ctx, "DROP TRIGGER search_attempt_audit_event_update_is_forbidden",
+		ctx, "DROP TRIGGER search_attempt_audit_event_update_is_forbidden ON search_attempt_audit_events",
 	); err != nil {
 		t.Fatal(err)
 	}

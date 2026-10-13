@@ -6,13 +6,10 @@ export {
 } from "./protobuf-transport";
 
 export {
-  clearAdministratorBearerToken,
-  currentAdministratorSessionRevision,
-  hasAdministratorBearerToken,
-  isValidAdministratorBearerToken,
-  setAdministratorBearerToken,
-  subscribeToAdministratorSessionRevision,
-} from "./administrator-session";
+  clearIdentitySession,
+  currentSessionRevision,
+  subscribeToSessionRevision,
+} from "./identity-session";
 export type { ProtobufRequestOptions } from "./protobuf-transport";
 
 export { OpenSplunkApiClient, createOpenSplunkApiClient } from "./open-splunk-client";

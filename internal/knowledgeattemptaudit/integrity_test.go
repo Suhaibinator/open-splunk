@@ -10,8 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"net/url"
+	"os"
+
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestMigrationRejectsDirectInvalidTaxonomyAndPrivacyShapes(t *testing.T) {
@@ -49,7 +53,7 @@ func TestMigrationRejectsDirectInvalidTaxonomyAndPrivacyShapes(t *testing.T) {
 			tenant_id, sequence, occurred_at_unix_micro,
 			actor_kind, actor_id, actor_role, action, result, reason,
 			app_id, knowledge_object_id, object_type, object_version, sharing_scope
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -86,7 +90,7 @@ func TestMigrationRejectsDirectInvalidTaxonomyAndPrivacyShapes(t *testing.T) {
 	}
 }
 
-func TestRollingCapEvictsOldestWithRecursiveTriggersOffAndOn(t *testing.T) {
+func TestRollingCapEvictsOldestAcrossNativeInserts(t *testing.T) {
 	database := openTestDatabase(t)
 	store := newTestStore(t, database)
 	admin := actorContext(t, audit.ActorRoleAdministrator, "administrator")
@@ -101,12 +105,6 @@ func TestRollingCapEvictsOldestWithRecursiveTriggersOffAndOn(t *testing.T) {
 			_ = conn.Close()
 		}
 	}()
-	if _, err := conn.ExecContext(ctx, `PRAGMA recursive_triggers = OFF`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
-		t.Fatal(err)
-	}
 	committed := false
 	defer func() {
 		if !committed {
@@ -120,22 +118,25 @@ func TestRollingCapEvictsOldestWithRecursiveTriggersOffAndOn(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.ExecContext(ctx, `
-		WITH RECURSIVE sequence(value) AS (
-			SELECT 1 UNION ALL SELECT value + 1 FROM sequence WHERE value < 100000
-		)
-		INSERT INTO knowledge_attempt_audit_events (
-			tenant_id, sequence, occurred_at_unix_micro,
-			actor_kind, actor_id, actor_role, action, result, reason,
-			app_id, knowledge_object_id, object_type, object_version, sharing_scope
-		)
-		SELECT 'tenant-cap', value, 1000000 + value,
-		       'browser', 'administrator', 'administrator',
-		       'validate', 'rejected', 'invalid_definition',
-		       NULL, NULL, NULL, NULL, NULL
-		FROM sequence ORDER BY value
-	`); err != nil {
+	// PostgreSQL runs AFTER ROW accounting after the whole INSERT statement;
+	// seed one guarded statement per sequence to exercise the real rolling journal.
+	// Committed chunks avoid a fixture-only 100,000-version tenant-state HOT chain;
+	// production also commits individual appends. Boundary mutations below share
+	// an explicit transaction with every accounting and rolling-prune guard active.
+	if _, err := conn.ExecContext(ctx, `DO $$ DECLARE value BIGINT; BEGIN
+ FOR value IN 1..100000 LOOP
+ INSERT INTO knowledge_attempt_audit_events (
+ tenant_id,sequence,occurred_at_unix_micro,actor_kind,actor_id,actor_role,
+ action,result,reason,app_id,knowledge_object_id,object_type,object_version,sharing_scope
+ ) VALUES ('tenant-cap',value,1000000+value,'browser','administrator','administrator',
+ 'validate','rejected','invalid_definition',NULL,NULL,NULL,NULL,NULL);
+ IF value % 512 = 0 THEN COMMIT; END IF;
+ END LOOP; END $$`); err != nil {
 		t.Fatalf("seed cap: %v", err)
+	}
+
+	if _, err := conn.ExecContext(ctx, `BEGIN`); err != nil {
+		t.Fatal(err)
 	}
 	assertRawState(t, conn, "tenant-cap", 1, 100001, 100000)
 
@@ -143,9 +144,6 @@ func TestRollingCapEvictsOldestWithRecursiveTriggersOffAndOn(t *testing.T) {
 	assertRawState(t, conn, "tenant-cap", 2, 100002, 100000)
 	assertRawSequenceAbsent(t, conn, "tenant-cap", 1)
 
-	if _, err := conn.ExecContext(ctx, `PRAGMA recursive_triggers = ON`); err != nil {
-		t.Fatal(err)
-	}
 	insertDirectAttempt(t, conn, "tenant-cap", 100002)
 	assertRawState(t, conn, "tenant-cap", 3, 100003, 100000)
 	assertRawSequenceAbsent(t, conn, "tenant-cap", 2)
@@ -183,7 +181,7 @@ func TestRollingCapEvictsOldestWithRecursiveTriggersOffAndOn(t *testing.T) {
 	assertRawEventSequenceCount(t, database, "tenant-cap", 100003, 0)
 }
 
-func TestORReplaceCannotBypassImmutabilityWithRecursiveTriggersOffAndOn(t *testing.T) {
+func TestNativeUpsertCannotBypassImmutability(t *testing.T) {
 	t.Parallel()
 	database := openTestDatabase(t)
 	store := newTestStore(t, database)
@@ -196,23 +194,17 @@ func TestORReplaceCannotBypassImmutabilityWithRecursiveTriggersOffAndOn(t *testi
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	for _, enabled := range []bool{false, true} {
-		value := "OFF"
-		if enabled {
-			value = "ON"
-		}
-		if _, err := conn.ExecContext(context.Background(), `PRAGMA recursive_triggers = `+value); err != nil {
-			t.Fatal(err)
-		}
+	for attempt := range 2 {
 		if _, err := conn.ExecContext(context.Background(), `
-			INSERT OR REPLACE INTO knowledge_attempt_audit_tenant_state (
+			INSERT INTO knowledge_attempt_audit_tenant_state (
 				tenant_id, first_sequence, next_sequence, retained_count
 			) VALUES ('tenant-replace', 1, 2, 1)
+ ON CONFLICT (tenant_id) DO UPDATE SET first_sequence=EXCLUDED.first_sequence,next_sequence=EXCLUDED.next_sequence,retained_count=EXCLUDED.retained_count
 		`); err == nil {
-			t.Fatalf("OR REPLACE state succeeded with recursive_triggers=%s", value)
+			t.Fatalf("native state upsert succeeded on attempt %d", attempt)
 		}
 		if _, err := conn.ExecContext(context.Background(), `
-			INSERT OR REPLACE INTO knowledge_attempt_audit_events (
+			INSERT INTO knowledge_attempt_audit_events (
 				tenant_id, sequence, occurred_at_unix_micro,
 				actor_kind, actor_id, actor_role, action, result, reason,
 				app_id, knowledge_object_id, object_type, object_version, sharing_scope
@@ -220,21 +212,21 @@ func TestORReplaceCannotBypassImmutabilityWithRecursiveTriggersOffAndOn(t *testi
 				'tenant-replace', 1, 1, 'browser', 'attacker', 'administrator',
 				'validate', 'rejected', 'invalid_definition',
 				NULL, NULL, NULL, NULL, NULL
-			)
+			) ON CONFLICT (tenant_id,sequence) DO UPDATE SET actor_id=EXCLUDED.actor_id
 		`); err == nil {
-			t.Fatalf("OR REPLACE event succeeded with recursive_triggers=%s", value)
+			t.Fatalf("native event upsert succeeded on attempt %d", attempt)
 		}
 		if _, err := conn.ExecContext(context.Background(), `
 			UPDATE knowledge_attempt_audit_events SET actor_id = 'attacker'
 			WHERE tenant_id = 'tenant-replace' AND sequence = 1
 		`); err == nil {
-			t.Fatalf("event update succeeded with recursive_triggers=%s", value)
+			t.Fatalf("event update succeeded on attempt %d", attempt)
 		}
 		if _, err := conn.ExecContext(context.Background(), `
 			DELETE FROM knowledge_attempt_audit_events
 			WHERE tenant_id = 'tenant-replace' AND sequence = 1
 		`); err == nil {
-			t.Fatalf("event delete succeeded with recursive_triggers=%s", value)
+			t.Fatalf("event delete succeeded on attempt %d", attempt)
 		}
 	}
 	events := readEvents(t, database, "tenant-replace")
@@ -255,12 +247,12 @@ func TestSequenceExhaustionFailsClosedWithoutWrapping(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.SQLDB().ExecContext(t.Context(), `DROP TRIGGER knowledge_attempt_audit_state_transition_is_valid`); err != nil {
+	if _, err := database.SQLDB().ExecContext(t.Context(), `DROP TRIGGER knowledge_attempt_audit_state_transition_is_valid ON knowledge_attempt_audit_tenant_state`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.SQLDB().ExecContext(t.Context(), `
 		UPDATE knowledge_attempt_audit_tenant_state
-		SET first_sequence = ?, next_sequence = ?
+		SET first_sequence = $1, next_sequence = $2
 		WHERE tenant_id = 'tenant-exhausted'
 	`, int64(math.MaxInt64), int64(math.MaxInt64)); err != nil {
 		t.Fatal(err)
@@ -291,10 +283,10 @@ func TestStartupDetectsTamperingWithoutReturningPartialState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(context.Background(), conn, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.ExecContext(context.Background(), `DROP TRIGGER knowledge_attempt_audit_event_update_is_forbidden`); err != nil {
+	if _, err := conn.ExecContext(context.Background(), `DROP TRIGGER knowledge_attempt_audit_event_update_is_forbidden ON knowledge_attempt_audit_events`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := conn.ExecContext(context.Background(), `UPDATE knowledge_attempt_audit_events SET actor_kind = 'system' WHERE tenant_id = 'tenant-tamper' AND sequence = 2`); err != nil {
@@ -317,11 +309,27 @@ func TestBackupRestorePreservesExactWindowAndIntegrity(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	destination := filepath.Join(t.TempDir(), "backup.db")
+	destination := filepath.Join(t.TempDir(), "backup.pgdump")
 	if err := database.BackupTo(context.Background(), destination); err != nil {
 		t.Fatalf("BackupTo: %v", err)
 	}
-	restored, err := control.OpenReadOnly(context.Background(), destination)
+	var sourceDatabase, sourceSchema string
+	if err := database.SQLDB().QueryRowContext(t.Context(), "SELECT current_database(),current_schema()").Scan(&sourceDatabase, &sourceSchema); err != nil {
+		t.Fatal(err)
+	}
+	source, err := url.Parse(os.Getenv("OPEN_SPLUNK_TEST_POSTGRES_DSN"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Path = "/" + sourceDatabase
+	parameters := source.Query()
+	parameters.Set("search_path", sourceSchema)
+	source.RawQuery = parameters.Encode()
+	target := pgtest.EmptyCopy(t, source.String())
+	if err := control.RestoreFrom(t.Context(), target, destination); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := control.OpenReadOnly(context.Background(), target)
 	if err != nil {
 		t.Fatalf("OpenReadOnly: %v", err)
 	}
@@ -343,7 +351,7 @@ func insertDirectAttempt(t *testing.T, conn *sql.Conn, tenantID string, sequence
 			tenant_id, sequence, occurred_at_unix_micro,
 			actor_kind, actor_id, actor_role, action, result, reason,
 			app_id, knowledge_object_id, object_type, object_version, sharing_scope
-		) VALUES (?, ?, ?, 'browser', 'administrator', 'administrator',
+		) VALUES ($1, $2, $3, 'browser', 'administrator', 'administrator',
 		          'validate', 'rejected', 'invalid_definition',
 		          NULL, NULL, NULL, NULL, NULL)
 	`, tenantID, sequence, sequence+1_000_000); err != nil {
@@ -356,7 +364,7 @@ func assertRawState(t *testing.T, conn *sql.Conn, tenantID string, first, next, 
 	var got tenantStateRecord
 	if err := conn.QueryRowContext(context.Background(), `
 		SELECT tenant_id, first_sequence, next_sequence, retained_count
-		FROM knowledge_attempt_audit_tenant_state WHERE tenant_id = ?
+		FROM knowledge_attempt_audit_tenant_state WHERE tenant_id = $1
 	`, tenantID).Scan(&got.TenantID, &got.FirstSequence, &got.NextSequence,
 		&got.RetainedCount); err != nil {
 		t.Fatal(err)
@@ -372,7 +380,7 @@ func assertRawSequenceAbsent(t *testing.T, conn *sql.Conn, tenantID string, sequ
 	var count int64
 	if err := conn.QueryRowContext(context.Background(), `
 		SELECT COUNT(*) FROM knowledge_attempt_audit_events
-		WHERE tenant_id = ? AND sequence = ?
+		WHERE tenant_id = $1 AND sequence = $2
 	`, tenantID, sequence).Scan(&count); err != nil {
 		t.Fatal(err)
 	}

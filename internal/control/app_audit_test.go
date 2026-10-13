@@ -31,7 +31,7 @@ func TestAuditedAppCatalogIdempotentCreateReplaysCurrentMetadata(t *testing.T) {
 	)
 	appender := &recordingAppMutationAuditAppender{}
 	audited := newTestAuditedAppCatalog(t, catalog, appender)
-	scope := AppAccessScope{TenantID: "tenant-a"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant-a"}
 	definition := appDefinitionWithIndexes("idempotent-app")
 	requestID := "app request 0001"
 	intent, err := requestidempotency.NewIntent(
@@ -81,7 +81,7 @@ func TestAuditedAppCatalogParallelIdempotentCreatesConverge(t *testing.T) {
 	)
 	appender := &recordingAppMutationAuditAppender{}
 	audited := newTestAuditedAppCatalog(t, catalog, appender)
-	scope := AppAccessScope{TenantID: "tenant-a"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant-a"}
 	definition := appDefinitionWithIndexes("parallel-idempotent-app")
 	intent, err := requestidempotency.NewIntent(
 		"tenant-a", "browser", "owner-a", requestidempotency.RouteCreateApp,
@@ -230,7 +230,7 @@ func TestAuditedAppCatalogPublishesSuccessfulLifecycleInMutationTransactions(
 	)
 	appender := &recordingAppMutationAuditAppender{}
 	audited := newTestAuditedAppCatalog(t, catalog, appender)
-	scope := AppAccessScope{TenantID: "tenant-a"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant-a"}
 
 	created, err := audited.CreateApp(
 		ctx,
@@ -380,7 +380,7 @@ func TestAuditedAppCatalogRollsBackEveryMutationWhenAuditFails(t *testing.T) {
 			firstIndex := mustCreateIndex(t, db, enabledIndex("app-audit-first"))
 			secondIndex := mustCreateIndex(t, db, enabledIndex("app-audit-second"))
 			catalog := newTestAppCatalog(t, db)
-			scope := AppAccessScope{TenantID: "tenant-a"}
+			scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant-a"}
 			var existing AppWorkspace
 			if action != AppMutationAuditActionCreate {
 				var err error
@@ -474,7 +474,7 @@ func TestAuditedAppCatalogDoesNotAuditRejectedMutationsOrReads(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	catalog := newTestAppCatalog(t, db)
-	scope := AppAccessScope{TenantID: "tenant-a"}
+	scope := AppAccessScope{OrganizationID: 1, TenantID: "tenant-a"}
 	existing, err := catalog.CreateApp(ctx, scope, validAppDefinition("rejected-audit"))
 	if err != nil {
 		t.Fatalf("seed CreateApp() error = %v", err)
@@ -558,7 +558,7 @@ func TestAuditedAppCatalogIDCollisionsPublishOnlyCommittedCreate(t *testing.T) {
 			)
 			if _, err := seed.CreateApp(
 				ctx,
-				AppAccessScope{TenantID: "seed-tenant"},
+				AppAccessScope{OrganizationID: 1, TenantID: "seed-tenant"},
 				validAppDefinition("collision-owner"),
 			); err != nil {
 				t.Fatalf("seed collision ID: %v", err)
@@ -587,7 +587,7 @@ func TestAuditedAppCatalogIDCollisionsPublishOnlyCommittedCreate(t *testing.T) {
 			audited := newTestAuditedAppCatalog(t, catalog, appender)
 			created, err := audited.CreateApp(
 				ctx,
-				AppAccessScope{TenantID: "tenant-a"},
+				AppAccessScope{OrganizationID: 1, TenantID: "tenant-a"},
 				validAppDefinition("collision-retry"),
 			)
 			if test.succeed {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/featureops"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
@@ -67,7 +68,7 @@ func (lease *sourceLease) Next(ctx context.Context) (searchjobs.ResultRow, bool,
 func TestStorePersistsSharesAndSlidesCompletedArtifacts(t *testing.T) {
 	ctx := context.Background()
 	directory := filepath.Join(t.TempDir(), "search-artifacts")
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,7 +590,7 @@ func TestDifferentJobsPublishArtifactsConcurrently(t *testing.T) {
 func TestExclusiveDirectoryLock(t *testing.T) {
 	ctx := context.Background()
 	directory := filepath.Join(t.TempDir(), "search-artifacts")
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -606,7 +607,7 @@ func TestExclusiveDirectoryLock(t *testing.T) {
 func newTestStore(t *testing.T, clock *testClock, maximumBytes uint64) (*Store, *control.DB, string) {
 	t.Helper()
 	directory := filepath.Join(t.TempDir(), "search-artifacts")
-	database, err := control.Open(context.Background(), filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := control.Open(context.Background(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -638,14 +639,15 @@ func testQueuedJob(t *testing.T, id string, created time.Time) searchjobs.Job {
 		t.Fatal(err)
 	}
 	return searchjobs.Job{
-		ID:        id,
-		Version:   1,
-		OwnerID:   "owner",
-		TenantID:  "tenant",
-		SPL:       "index=main",
-		TimeRange: rangeValue.Intent(),
-		State:     searchjobs.StateQueued,
-		CreatedAt: created,
+		OrganizationID: "1",
+		ID:             id,
+		Version:        1,
+		OwnerID:        "owner",
+		TenantID:       "tenant",
+		SPL:            "index=main",
+		TimeRange:      rangeValue.Intent(),
+		State:          searchjobs.StateQueued,
+		CreatedAt:      created,
 	}
 }
 

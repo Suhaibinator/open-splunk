@@ -46,10 +46,12 @@ func (resolver *runtimeLookupSearchResolver) ResolveLookupAdmission(
 		)
 	}
 	resolved, err := resolver.catalog.ResolveAdmission(ctx, lookupcatalog.ResolveScope{
-		TenantID:    scope.TenantID,
-		PrincipalID: scope.PrincipalID,
-		AppID:       scope.AppID,
-		Names:       slices.Clone(scope.Names),
+		OrganizationID:    scope.OrganizationID,
+		SiteAdministrator: scope.SiteAdministrator,
+		TenantID:          scope.TenantID,
+		PrincipalID:       scope.PrincipalID,
+		AppID:             scope.AppID,
+		Names:             slices.Clone(scope.Names),
 	})
 	if err != nil {
 		if errors.Is(err, lookupcatalog.ErrCapacity) {

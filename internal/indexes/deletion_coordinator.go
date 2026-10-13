@@ -140,7 +140,7 @@ const (
 )
 
 // NewIndexDataDeletionCoordinator starts one immediate, oldest-first recovery
-// scan. SQLite remains the durable wake source, so a lost Wake is recovered by
+// scan. PostgreSQL remains the durable wake source, so a lost Wake is recovered by
 // RecoveryInterval or process restart.
 func NewIndexDataDeletionCoordinator(
 	controlPlane DeletionControl,

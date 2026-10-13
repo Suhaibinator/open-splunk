@@ -3,7 +3,9 @@ package knowledgecatalog_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/audit"
@@ -70,7 +72,7 @@ func TestNewWriterRejectsTypedNilAuditAppender(t *testing.T) {
 func openWriterReadinessDatabase(t *testing.T) (*control.DB, func()) {
 	t.Helper()
 
-	database, err := control.Open(t.Context(), filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := control.Open(t.Context(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
 	}

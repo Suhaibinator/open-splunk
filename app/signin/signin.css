@@ -34,8 +34,6 @@
 .signin-capabilities b { font-size: var(--type-xs); }
 .signin-capabilities small { color: var(--fg-inverse-muted); font-size: var(--type-xs); line-height: 1.35; }
 .signin-story > footer { align-items: center; color: var(--fg-inverse-muted); display: flex; font-size: var(--type-xs); gap: 2px; position: relative; z-index: 2; }
-.signin-signal { align-items: end; bottom: 0; display: flex; gap: 7px; height: 180px; opacity: 0.17; position: absolute; right: 4%; transform: skewX(-10deg); width: 62%; }
-.signin-signal span { background: linear-gradient(to top, transparent, var(--accent-inverse)); height: var(--signal-height); width: 8%; }
 
 .signin-panel { align-items: center; display: flex; justify-content: center; padding: 36px; }
 .signin-card { max-width: 390px; width: 100%; }
@@ -44,15 +42,6 @@
 .signin-lock { align-items: center; background: var(--accent-soft); color: var(--accent); display: flex; font-size: var(--type-xxl); height: 42px; justify-content: center; margin-bottom: var(--space-4); width: 42px; }
 .signin-card h1 { color: var(--fg-text); font-size: var(--type-xxl); font-weight: 400; margin: 0 0 6px; }
 .signin-card header p { color: var(--fg-muted); font-size: var(--type-sm); margin: 0; }
-.signin-card form > label { color: var(--fg-text); display: block; font-size: var(--type-xs); font-weight: 600; margin: 13px 0 6px; }
-.signin-card form > input,
-.signin-password-field { background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); height: 40px; width: 100%; }
-.signin-card form > input { padding: 0 10px; }
-.signin-password-field { align-items: center; display: flex; }
-.signin-password-field[data-invalid="true"] { border-color: var(--status-error); box-shadow: 0 0 0 1px color-mix(in srgb, var(--status-error) 24%, transparent); }
-.signin-password-field:focus-within { border-color: var(--border-focus); box-shadow: 0 0 0 1px var(--border-focus); }
-.signin-password-field input { background: transparent; border: 0; height: 38px; min-width: 0; outline: 0; padding: 0 10px; width: 100%; }
-.signin-password-field button { background: transparent; border: 0; color: var(--fg-link); font-size: var(--type-xs); font-weight: 600; height: 38px; padding: 0 11px; }
 .signin-error { align-items: center; background: var(--status-error-soft); border: 1px solid var(--status-error-edge); color: var(--status-error-strong); display: flex; font-size: var(--type-xs); gap: 7px; margin-top: 10px; padding: var(--space-2); }
 .signin-error span { align-items: center; background: var(--status-error); border-radius: 50%; color: var(--fg-inverse); display: flex; flex: 0 0 16px; height: 16px; justify-content: center; width: 16px; }
 .signin-help-notice { align-items: center; background: var(--status-info-soft); border: 1px solid var(--status-info-edge); color: var(--fg-secondary); display: flex; font-size: var(--type-xs); gap: 7px; margin-top: 10px; padding: var(--space-2); }
@@ -89,9 +78,6 @@
   .signin-panel { align-items: flex-start; min-height: 100dvh; padding: max(28px, env(safe-area-inset-top)) 22px max(24px, env(safe-area-inset-bottom)); }
   .signin-card { margin: auto; max-width: 430px; }
   .signin-mobile-brand { display: flex; margin-bottom: 58px; }
-  .signin-card form > input,
-  .signin-password-field,
-  .signin-password-field input { font-size: var(--type-xl); height: 46px; }
   .signin-submit { min-height: 46px; }
 }
 

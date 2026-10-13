@@ -99,3 +99,39 @@ Before publishing a stable v1 release, the project must choose and implement:
 
 Until that work is complete, use [the roadmap](roadmap.md) as the source of
 truth and do not infer a v1 compatibility promise from a v0 release.
+
+
+## Pinned shared dependencies
+
+The release snapshot includes `third_party/go-common` and its per-file source
+provenance, plus the compiled GoCommon core frontend archive and lockfile
+integrity. Builds resolve the local Go module replacement from the committed
+snapshot; they do not require the unpushed integration changes to exist in an
+upstream release. Verify the Go snapshot with `node scripts/check-go-common.mjs`.
+Deliberate updates use `scripts/sync-go-common.mjs` and the frontend repacking
+script. Builder Go is pinned to 1.27.2 in the module, Makefile, CI and immutable
+Docker image reference. Scratch runtimes include CA trust for Google HTTPS.
+
+The pinned server image includes PostgreSQL 18 backup clients and their full
+dynamic library dependencies for each target architecture. OCI builds validate
+the tools in the normalized server filesystem; the native release job checks
+the published image commands before running its production recovery drill.
+Cross-architecture builds require registered binfmt/QEMU support because the
+PostgreSQL client stage executes for the target architecture.
+
+Every Linux CI job that executes native Go tests requires the repository Actions variable
+`OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE` to contain an approved exact MinIO
+server image, preferably a digest reference. `scripts/start-ci-native-services.sh`
+checks this requirement before pulling images, starts disposable loopback-only
+PostgreSQL 18 and MinIO services, and exports their isolated test configuration
+through `GITHUB_ENV`. It extracts `pg_dump`, `pg_restore`, and their full musl
+library closure from the pinned PostgreSQL 18 image. Thin host wrappers execute
+that loader directly, preserving inherited pinned archive descriptors and
+private fixture permissions. Backup client and server majors therefore match
+without depending on runner apt.
+The native release recovery drill creates its own isolated
+private bucket and PostgreSQL/ClickHouse volumes; it never uses production
+accounts or storage. Local operators supply the same environment variable (or
+`OPEN_SPLUNK_DEPLOY_MINIO_IMAGE`). An unset image fails qualification explicitly.
+A pinned source-built MinIO fixture image may be approved for this isolated test;
+that choice does not change the production Compose image requirement.

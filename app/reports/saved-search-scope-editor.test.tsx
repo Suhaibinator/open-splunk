@@ -68,6 +68,10 @@ function bootstrap(): SystemBootstrapModel {
     indexes: [],
     limits: {
       defaultSearchTimeoutMs: 0,
+      maximumCaptureRows: 0n,
+      maximumCaptureBytes: 0n,
+      organizationRetentionBytes: 0n,
+      globalRetentionBytes: 0n,
       maximumExportBytes: 0n,
       maximumExportRows: 0n,
       maximumFieldSummaryValues: 0,

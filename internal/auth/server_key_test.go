@@ -12,9 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"gorm.io/gorm"
-
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+	"gorm.io/gorm"
 )
 
 func TestServerKeyStateGORMModelMatchesMigratedSQLiteSchema(t *testing.T) {
@@ -40,7 +41,7 @@ func TestServerKeyStateGORMModelMatchesMigratedSQLiteSchema(t *testing.T) {
 			type,
 			"notnull" AS not_null,
 			pk AS primary_key
-		 FROM pragma_table_info('server_key_state')
+		 FROM (SELECT a.attname AS name,a.attnum-1 AS cid,CASE WHEN t.typname='int8' THEN 'BIGINT' ELSE upper(t.typname) END AS type,CASE WHEN a.attnotnull THEN 1 ELSE 0 END AS "notnull",COALESCE((SELECT array_position(c.conkey,a.attnum) FROM pg_constraint c WHERE c.conrelid=r.oid AND c.contype='p'),0) AS pk,CASE WHEN a.attgenerated='s' THEN 3 ELSE 0 END AS hidden FROM pg_attribute a JOIN pg_class r ON r.oid=a.attrelid JOIN pg_namespace n ON n.oid=r.relnamespace JOIN pg_type t ON t.oid=a.atttypid WHERE n.nspname=current_schema() AND r.relname='server_key_state' AND a.attnum>0 AND NOT a.attisdropped) AS column_metadata
 		 ORDER BY cid`,
 	).Scan(&migratedColumns)
 	if query.Error != nil {
@@ -56,8 +57,8 @@ func TestServerKeyStateGORMModelMatchesMigratedSQLiteSchema(t *testing.T) {
 	}
 	wantMigratedColumns := []columnRow{
 		{Name: "key_name", Type: "TEXT", NotNull: 1, PrimaryKey: 1},
-		{Name: "fingerprint", Type: "BLOB", NotNull: 1},
-		{Name: "created_at_unix_micro", Type: "INTEGER", NotNull: 1},
+		{Name: "fingerprint", Type: "BYTEA", NotNull: 1},
+		{Name: "created_at_unix_micro", Type: "BIGINT", NotNull: 1},
 	}
 	if !slices.Equal(migratedColumns, wantMigratedColumns) {
 		t.Fatalf(
@@ -110,25 +111,21 @@ func TestServerKeyStateGORMModelMatchesMigratedSQLiteSchema(t *testing.T) {
 	}
 	var definition definitionRow
 	query = database.GORMDB().WithContext(ctx).Raw(
-		`SELECT sql AS definition
-		 FROM sqlite_schema
-		 WHERE type = 'table' AND name = 'server_key_state'`,
+		`SELECT string_agg('CONSTRAINT ' || c.conname || ' ' || pg_get_constraintdef(c.oid), ' ') AS definition FROM pg_constraint c JOIN pg_class r ON r.oid=c.conrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND r.relname='server_key_state' AND c.contype='c'`,
 	).Scan(&definition)
 	if query.Error != nil {
 		t.Fatalf("read migrated server-key definition: %v", query.Error)
 	}
 	normalized := strings.Join(strings.Fields(definition.Definition), " ")
-	if !strings.Contains(normalized, ") STRICT") {
+	if normalized == "" {
 		t.Errorf("server_key_state is not STRICT: %s", normalized)
 	}
-	if !strings.Contains(
-		normalized,
-		"key_name TEXT PRIMARY KEY NOT NULL COLLATE BINARY",
-	) {
-		t.Errorf("server_key_state key collation drifted: %s", normalized)
+	var collation string
+	if err := database.SQLDB().QueryRowContext(ctx, `SELECT c.collname FROM pg_attribute a JOIN pg_class r ON r.oid=a.attrelid JOIN pg_namespace n ON n.oid=r.relnamespace JOIN pg_collation c ON c.oid=a.attcollation WHERE n.nspname=current_schema() AND r.relname='server_key_state' AND a.attname='key_name'`).Scan(&collation); err != nil || collation != "C" {
+		t.Errorf("native key collation = %q, %v", collation, err)
 	}
 	for _, expression := range wantChecks {
-		if !strings.Contains(normalized, "CHECK ("+expression+")") {
+		if !pgtest.ContainsCheck(normalized, expression) {
 			t.Errorf(
 				"migrated server-key definition does not contain check %q: %s",
 				expression,
@@ -377,7 +374,7 @@ func TestServerMasterKeyRegistrationRefusesExistingCollectorTokens(t *testing.T)
 	if _, err := tokens.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "unbound master-key test",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  "server-key-test-collector",
+		BoundCollectorID:  "server-key-test-collector", OrganizationID: 1, IssuerUserID: 42,
 	}); err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
 	}
@@ -412,7 +409,7 @@ func TestServerMasterKeyRegistrationSerializesWithTokenCreation(t *testing.T) {
 	t.Run("token transaction commits first", func(t *testing.T) {
 		ctx := context.Background()
 		database := openControlDB(t)
-		tx := database.GORMDB().WithContext(ctx).Begin()
+		tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 		if tx.Error != nil {
 			t.Fatalf("begin forced token-first transaction: %v", tx.Error)
 		}
@@ -433,7 +430,7 @@ func TestServerMasterKeyRegistrationSerializesWithTokenCreation(t *testing.T) {
 			State:              CollectorTokenStateActive,
 			CreatedAtUnixMicro: now,
 			UpdatedAtUnixMicro: now,
-			BoundCollectorID:   &binding,
+			BoundCollectorID:   &binding, OrganizationID: 1, IssuerUserID: 42,
 		}
 		if err := tx.Create(&record).Error; err != nil {
 			t.Fatalf("seed uncommitted collector token: %v", err)
@@ -486,7 +483,7 @@ func TestServerMasterKeyRegistrationSerializesWithTokenCreation(t *testing.T) {
 		}
 
 		fingerprint := bytes.Repeat([]byte{0x66}, sha256.Size)
-		tx := database.GORMDB().WithContext(ctx).Begin()
+		tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 		if tx.Error != nil {
 			t.Fatalf("begin forced registration-first transaction: %v", tx.Error)
 		}
@@ -513,7 +510,7 @@ func TestServerMasterKeyRegistrationSerializesWithTokenCreation(t *testing.T) {
 				CreateCollectorTokenRequest{
 					Name:              "registration first",
 					AllowedIndexNames: []string{"main"},
-					BoundCollectorID:  "registration-first-collector",
+					BoundCollectorID:  "registration-first-collector", OrganizationID: 1, IssuerUserID: 42,
 				},
 			)
 			tokenResult <- createErr
@@ -618,9 +615,9 @@ func replaceServerKeyStateWithUncheckedTable(
 	if err := database.GORMDB().WithContext(ctx).Exec(`
 		CREATE TABLE server_key_state (
 			key_name TEXT PRIMARY KEY NOT NULL,
-			fingerprint BLOB NOT NULL,
-			created_at_unix_micro INTEGER NOT NULL
-		) STRICT
+			fingerprint BYTEA NOT NULL,
+			created_at_unix_micro BIGINT NOT NULL
+		)
 	`).Error; err != nil {
 		t.Fatalf("create unchecked server-key table: %v", err)
 	}

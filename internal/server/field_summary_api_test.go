@@ -23,7 +23,7 @@ func TestSearchFieldSummaryRoundTripsExactTypedValuesAndScope(t *testing.T) {
 	distinct := uint64(3)
 	service := &fakeSearchFields{maximumFields: 100, maximumPage: 10, maximumSummary: 20}
 	service.summaryFn = func(_ context.Context, scope searchjobs.AccessScope, request searchanalysis.GetFieldSummaryRequest) (searchanalysis.FieldSummary, error) {
-		if scope.TenantID != "default" || scope.OwnerID != "single-user" || request.SearchJobID != "job-1" ||
+		if scope.TenantID != "default" || scope.OwnerID != "1030" || request.SearchJobID != "job-1" ||
 			request.FieldName != `labels.kubernetes\.io/app ` || request.MaxValues == nil || *request.MaxValues != 3 {
 			t.Fatalf("scope/request = %+v/%+v", scope, request)
 		}
@@ -284,7 +284,7 @@ func TestSearchFieldSummarySerializationCapacityIsNonblockingAndAcquiredAfterSer
 		}}, nil
 	}
 	handler := &apiHandler{
-		searchFields: service, ownerID: "owner", tenantID: "tenant",
+		searchFields: service, ownerID: "1008", tenantID: "tenant",
 		maximumFieldSummaryValues: 20, serializationGate: make(chan struct{}, 1),
 	}
 	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchFieldSummaryPath, nil)

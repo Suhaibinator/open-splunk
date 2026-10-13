@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,7 +18,7 @@ import (
 
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
-	db, err := control.Open(context.Background(), filepath.Join(t.TempDir(), "control.sqlite"))
+	db, err := control.Open(context.Background(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +57,7 @@ func testDefinition(name string) *opensplunk.DashboardDefinition {
 func TestStoreCRUDIsOwnerScopedAndVersioned(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
-	ownerA := AccessScope{OwnerID: "owner-a"}
+	ownerA := AccessScope{OwnerID: "owner-a", OrganizationID: "1"}
 	created, err := store.Create(ctx, ownerA, testDefinition("Operations"))
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +73,7 @@ func TestStoreCRUDIsOwnerScopedAndVersioned(t *testing.T) {
 	if got.GetDefinition().GetName() != "Operations" {
 		t.Fatalf("persisted name = %q", got.GetDefinition().GetName())
 	}
-	if _, err := store.Get(ctx, AccessScope{OwnerID: "owner-b"}, got.GetDashboardId()); !errors.Is(err, control.ErrNotFound) {
+	if _, err := store.Get(ctx, AccessScope{OwnerID: "owner-b", OrganizationID: "1"}, got.GetDashboardId()); !errors.Is(err, control.ErrNotFound) {
 		t.Fatalf("cross-owner Get() error = %v, want not found", err)
 	}
 	listed, err := store.List(ctx, ownerA, nil)
@@ -102,7 +104,7 @@ func TestStoreCRUDIsOwnerScopedAndVersioned(t *testing.T) {
 func TestStoreRejectsDuplicateNamesAndForgedOwners(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
-	scope := AccessScope{OwnerID: "owner-a"}
+	scope := AccessScope{OwnerID: "owner-a", OrganizationID: "1"}
 	if _, err := store.Create(ctx, scope, testDefinition("Operations")); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +121,7 @@ func TestStoreRejectsDuplicateNamesAndForgedOwners(t *testing.T) {
 
 func TestStoreEnforcesOwnerCapacityAcrossConcurrentCreates(t *testing.T) {
 	ctx := context.Background()
-	db, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	db, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +143,7 @@ func TestStoreEnforcesOwnerCapacityAcrossConcurrentCreates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope := AccessScope{OwnerID: "owner-a"}
+	scope := AccessScope{OwnerID: "owner-a", OrganizationID: "1"}
 	for index := range maximumDashboardsPerOwner - 1 {
 		if _, err := store.Create(ctx, scope, testDefinition(fmt.Sprintf("Dashboard %d", index))); err != nil {
 			t.Fatal(err)

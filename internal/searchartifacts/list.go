@@ -34,13 +34,15 @@ type artifactListCursor struct {
 }
 
 type artifactListFilterFingerprint struct {
-	Version  int     `json:"v"`
-	TenantID string  `json:"t"`
-	OwnerID  string  `json:"o"`
-	States   []State `json:"s"`
-	AppID    *string `json:"a"`
-	Text     *string `json:"q"`
-	Sort     string  `json:"k"`
+	Version           int     `json:"v"`
+	TenantID          string  `json:"t"`
+	OwnerID           string  `json:"o"`
+	OrganizationID    string  `json:"g"`
+	SiteAdministrator bool    `json:"z"`
+	States            []State `json:"s"`
+	AppID             *string `json:"a"`
+	Text              *string `json:"q"`
+	Sort              string  `json:"k"`
 }
 
 type normalizedArtifactListRequest struct {
@@ -74,8 +76,9 @@ func (store *Store) ListPage(
 	}
 
 	store.mu.Lock()
-	defer store.mu.Unlock()
-	if store.closed {
+	closed := store.closed
+	store.mu.Unlock()
+	if closed {
 		return ListPage{}, ErrClosed
 	}
 
@@ -86,7 +89,7 @@ func (store *Store) ListPage(
 			return ListPage{}, err
 		}
 	} else if err := store.db.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(rowid), 0) FROM durable_search_jobs`).Scan(&cursor.HighWater); err != nil {
+		`SELECT COALESCE(MAX(catalog_sequence), 0) FROM durable_search_jobs`).Scan(&cursor.HighWater); err != nil {
 		return ListPage{}, err
 	}
 	if cursor.HighWater == 0 {
@@ -105,6 +108,8 @@ func (store *Store) ListPage(
 	defer rows.Close()
 
 	items := make([]ListItem, 0, normalized.pageSize+1)
+	scanned := 0
+	lastScannedToken := ""
 	for rows.Next() {
 		if err := ctx.Err(); err != nil {
 			return ListPage{}, err
@@ -133,6 +138,16 @@ func (store *Store) ListPage(
 		if err != nil {
 			return ListPage{}, err
 		}
+		scanned++
+		lastScannedToken = after
+		if store.captureOptions.Authorize != nil {
+			if err := store.captureOptions.Authorize(ctx, record.Job); err != nil {
+				if ctx.Err() != nil {
+					return ListPage{}, ctx.Err()
+				}
+				continue
+			}
+		}
 		items = append(items, ListItem{Record: record, AfterPageToken: after})
 	}
 	if err := rows.Err(); err != nil {
@@ -145,6 +160,8 @@ func (store *Store) ListPage(
 	page := ListPage{Items: items, FirstPageToken: firstPageToken}
 	if hasMore {
 		page.NextPageToken = items[len(items)-1].AfterPageToken
+	} else if scanned == normalized.pageSize+1 {
+		page.NextPageToken = lastScannedToken
 	}
 	return page, nil
 }
@@ -193,74 +210,44 @@ func artifactListQuery(
 	cursor artifactListCursor,
 	nowUS int64,
 ) (string, []any) {
-	arguments := []any{cursor.HighWater, access.TenantID, access.OwnerID, VisibilityEveryone}
+	arguments := []any{}
+	bind := func(value any) string {
+		arguments = append(arguments, value)
+		return fmt.Sprintf("$%d", len(arguments))
+	}
 	predicates := []string{
-		"rowid <= ?",
-		"tenant_id = ?",
-		"(owner_id = ? OR visibility = ?)",
+		"catalog_sequence <= " + bind(cursor.HighWater),
+		"tenant_id = " + bind(access.TenantID),
+		"(owner_id = " + bind(access.OwnerID) + " OR visibility = " + bind(VisibilityEveryone) + " OR " + bind(access.SiteAdministrator) + ")",
+	}
+	if !access.SiteAdministrator && access.OrganizationID != "" {
+		predicates = append(predicates, "convert_from(job_payload,'UTF8')::jsonb->'job'->>'OrganizationID' = "+bind(access.OrganizationID))
 	}
 	if cursor.LastID != "" {
-		predicates = append(predicates, "(created_at_us < ? OR (created_at_us = ? AND id < ?))")
-		arguments = append(arguments, cursor.LastCreatedUS, cursor.LastCreatedUS, cursor.LastID)
+		predicates = append(predicates, "(created_at_us < "+bind(cursor.LastCreatedUS)+" OR (created_at_us = "+bind(cursor.LastCreatedUS)+" AND id < "+bind(cursor.LastID)+"))")
 	}
-	if statePredicate, stateArguments := artifactListStatePredicate(request.states, nowUS); statePredicate != "" {
-		predicates = append(predicates, statePredicate)
-		arguments = append(arguments, stateArguments...)
+	if len(request.states) != 0 {
+		parts := []string{}
+		for _, state := range request.states {
+			if state == StateExpired {
+				parts = append(parts, "(state = "+bind(state)+" OR (expires_at_us IS NOT NULL AND expires_at_us <= "+bind(nowUS)+"))")
+			} else {
+				parts = append(parts, "state = "+bind(state))
+			}
+		}
+		predicates = append(predicates, "("+strings.Join(parts, " OR ")+")")
 	}
 	if request.appID != nil {
-		predicates = append(predicates, "json_extract(CAST(job_payload AS TEXT), '$.job.AppID') = ?")
-		arguments = append(arguments, *request.appID)
+		predicates = append(predicates, "convert_from(job_payload,'UTF8')::jsonb->'job'->>'AppID' = "+bind(*request.appID))
 	}
 	if request.text != nil {
-		predicates = append(predicates, "instr(lower(json_extract(CAST(job_payload AS TEXT), '$.job.SPL')), lower(?)) > 0")
-		arguments = append(arguments, *request.text)
+		predicates = append(predicates, "strpos(lower(convert_from(job_payload,'UTF8')::jsonb->'job'->>'SPL'),lower("+bind(*request.text)+")) > 0")
 	}
-	arguments = append(arguments, request.pageSize+1)
-	return `
-		SELECT id, tenant_id, owner_id, state, visibility, retention_class, lifetime_ns, job_payload,
-			artifact_name, artifact_sha256, artifact_size_bytes,
-			last_accessed_at_us, expires_at_us, version, created_at_us
-		FROM durable_search_jobs
-		WHERE ` + strings.Join(predicates, " AND ") + `
-		ORDER BY created_at_us DESC, id DESC
-		LIMIT ?`, arguments
-}
-
-func artifactListStatePredicate(states []State, nowUS int64) (string, []any) {
-	if len(states) == 0 {
-		return "", nil
-	}
-	direct := make([]State, 0, len(states)+3)
-	hasActive := false
-	hasExpired := false
-	for _, state := range states {
-		switch state {
-		case StateQueued, StateParsing, StatePlanning, StateRunning:
-			hasActive = true
-		case StateExpired:
-			hasExpired = true
-		default:
-			direct = append(direct, state)
-		}
-	}
-	if hasActive {
-		direct = append(direct, StateQueued, StateParsing, StatePlanning, StateRunning)
-	}
-	slices.Sort(direct)
-	direct = slices.Compact(direct)
-	parts := make([]string, 0, 2)
-	arguments := make([]any, 0, len(direct)+1)
-	if len(direct) != 0 {
-		parts = append(parts, "state IN ("+strings.TrimSuffix(strings.Repeat("?,", len(direct)), ",")+")")
-		for _, state := range direct {
-			arguments = append(arguments, state)
-		}
-	}
-	if hasExpired {
-		parts = append(parts, "(state = ? OR (expires_at_us IS NOT NULL AND expires_at_us <= ?))")
-		arguments = append(arguments, StateExpired, nowUS)
-	}
-	return "(" + strings.Join(parts, " OR ") + ")", arguments
+	limit := bind(request.pageSize + 1)
+	return `SELECT id, tenant_id, owner_id, state, visibility, retention_class, lifetime_ns, job_payload,
+		artifact_name, artifact_sha256, artifact_size_bytes,
+		last_accessed_at_us, expires_at_us, version, created_at_us
+		FROM durable_search_jobs WHERE ` + strings.Join(predicates, " AND ") + ` ORDER BY created_at_us DESC,id DESC LIMIT ` + limit, arguments
 }
 
 func artifactListRecordMatches(record Record, request normalizedArtifactListRequest) bool {
@@ -281,13 +268,14 @@ func artifactListFilterHash(
 	request normalizedArtifactListRequest,
 ) (string, error) {
 	payload, err := json.Marshal(artifactListFilterFingerprint{
-		Version:  artifactListCursorVersion,
-		TenantID: access.TenantID,
-		OwnerID:  access.OwnerID,
-		States:   request.states,
-		AppID:    request.appID,
-		Text:     request.text,
-		Sort:     artifactListFixedSort,
+		Version:        artifactListCursorVersion,
+		TenantID:       access.TenantID,
+		OwnerID:        access.OwnerID,
+		OrganizationID: access.OrganizationID, SiteAdministrator: access.SiteAdministrator,
+		States: request.states,
+		AppID:  request.appID,
+		Text:   request.text,
+		Sort:   artifactListFixedSort,
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode search artifact list filters: %w", err)

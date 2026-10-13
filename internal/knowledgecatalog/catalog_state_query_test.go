@@ -31,8 +31,8 @@ func TestReadCatalogStateUsesOneBoundedQuery(t *testing.T) {
 	connection := integrationCorruptionConnection(t, database)
 	if _, err := connection.ExecContext(context.Background(), `
 		UPDATE knowledge_catalog_revision_heads
-		SET state_token = zeroblob(?)
-		WHERE tenant_id = ?
+		SET state_token = decode(repeat('00', ($1)::int), 'hex')
+		WHERE tenant_id = $2
 	`, maximumDefinitionBytes*2, testTenant); err != nil {
 		closeIntegrationCorruptionConnection(t, connection)
 		t.Fatalf("write oversized revision-head token: %v", err)

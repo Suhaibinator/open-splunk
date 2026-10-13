@@ -3,7 +3,6 @@ package knowledgecatalog
 import (
 	"bytes"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +10,8 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestWriterReplayRejectsTamperedCompactOutcomeAuthorities(t *testing.T) {
@@ -92,13 +93,13 @@ func TestWriterReceiptSnapshotPairIsForeignKeyBoundAndIndependentlyReplayVerifie
 
 	if _, err := harness.database.SQLDB().ExecContext(t.Context(), `
 		UPDATE knowledge_mutation_idempotency
-		SET committed_catalog_state_token = ?
-		WHERE tenant_id = ? AND route = ? AND client_request_id = ?`,
+		SET committed_catalog_state_token = $1
+		WHERE tenant_id = $2 AND route = $3 AND client_request_id = $4`,
 		bytes.Repeat([]byte{0x91}, catalogStateTokenBytes),
 		writerFaultTenant,
 		mutationRouteCreate,
 		request.GetClientRequestId(),
-	); err == nil || !strings.Contains(err.Error(), "FOREIGN KEY") {
+	); !writerForeignKeyViolation(err) {
 		t.Fatalf("row-only state-token tamper error = %v, want foreign-key rejection", err)
 	}
 	replayed, err := harness.writer.Create(
@@ -156,7 +157,7 @@ func TestWriterReplayRejectsCoordinatedOutcomeAndRowAuditRebinding(t *testing.T)
 	var occurredAt int64
 	if err := harness.database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT created_at_unix_micro FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND route = ? AND client_request_id = ?`,
+		WHERE tenant_id = $1 AND route = $2 AND client_request_id = $3`,
 		writerFaultTenant, mutationRouteCreate, first.GetClientRequestId(),
 	).Scan(&occurredAt); err != nil {
 		t.Fatalf("read first audit occurrence: %v", err)
@@ -248,8 +249,8 @@ func TestWriterReplayRejectsWholeReceiptRebindingAcrossEquivalentCreates(t *test
 			successful_audit_sequence, created_at_unix_micro,
 			retention_anchor_unix_micro, retain_until_unix_micro
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
-		  AND route = ? AND client_request_id = ?`,
+		WHERE tenant_id = $1 AND actor_kind = $2 AND actor_id = $3
+		  AND route = $4 AND client_request_id = $5`,
 			writerFaultTenant,
 			audit.ActorKindBrowser,
 			"writer-fault-administrator",
@@ -289,7 +290,7 @@ func TestWriterReplayRejectsWholeReceiptRebindingAcrossEquivalentCreates(t *test
 		winner.CreatedAt, winner.RetentionAnchor, winner.RetainUntil,
 	}
 	statement := writerOutcomeReceiptUpdateStatement(t, assignment)
-	if _, err := harness.database.SQLDB().ExecContext(t.Context(), statement, append(values,
+	if _, err := harness.database.SQLDB().ExecContext(t.Context(), pgtest.Parameters(statement), append(values,
 		writerFaultTenant, audit.ActorKindBrowser, "writer-fault-administrator",
 		mutationRouteCreate, first.GetClientRequestId())...); err == nil {
 		t.Fatal("whole receipt rebinding succeeded with composite foreign key enabled")
@@ -329,7 +330,7 @@ func TestWriterReplayRejectsWholeReceiptRebindingAcrossEquivalentCreates(t *test
 func dropWriterOutcomeReceiptUpdateGuard(t *testing.T, harness *writerFaultHarness) {
 	t.Helper()
 	if _, err := harness.database.SQLDB().ExecContext(t.Context(),
-		`DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden`); err != nil {
+		`DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden ON knowledge_mutation_idempotency`); err != nil {
 		t.Fatalf("drop immutable receipt update trigger: %v", err)
 	}
 }
@@ -343,8 +344,8 @@ func readWriterOutcomeEnvelope(
 	var encoded []byte
 	if err := harness.database.SQLDB().QueryRowContext(t.Context(), `SELECT outcome_proto
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
-		  AND route = ? AND client_request_id = ?`,
+		WHERE tenant_id = $1 AND actor_kind = $2 AND actor_id = $3
+		  AND route = $4 AND client_request_id = $5`,
 		writerFaultTenant,
 		audit.ActorKindBrowser,
 		"writer-fault-administrator",
@@ -389,7 +390,7 @@ func updateWriterOutcomeReceipt(
 		requestID,
 	)
 	result, err := harness.database.SQLDB().ExecContext(
-		t.Context(), writerOutcomeReceiptUpdateStatement(t, assignment), arguments...,
+		t.Context(), pgtest.Parameters(writerOutcomeReceiptUpdateStatement(t, assignment)), arguments...,
 	)
 	if err != nil {
 		t.Fatalf("tamper compact outcome: %v", err)
@@ -412,7 +413,7 @@ func updateWriterOutcomeReceiptWithoutForeignKeys(
 		t.Fatalf("open receipt-tamper connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(t.Context(), connection); err != nil {
 		t.Fatalf("disable receipt foreign keys: %v", err)
 	}
 	arguments := append(values,
@@ -423,9 +424,9 @@ func updateWriterOutcomeReceiptWithoutForeignKeys(
 		requestID,
 	)
 	result, updateErr := connection.ExecContext(
-		t.Context(), writerOutcomeReceiptUpdateStatement(t, assignment), arguments...,
+		t.Context(), pgtest.Parameters(writerOutcomeReceiptUpdateStatement(t, assignment)), arguments...,
 	)
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
+	if _, err := pgtest.RestoreForeignKeys(t.Context(), connection); err != nil {
 		t.Fatalf("restore receipt foreign keys: %v", err)
 	}
 	if updateErr != nil {
@@ -468,4 +469,9 @@ func writerOutcomeReceiptUpdateStatement(t *testing.T, assignment string) string
 		t.Fatalf("unknown outcome receipt assignment %q", assignment)
 		return ""
 	}
+}
+
+func writerForeignKeyViolation(err error) bool {
+	var violation *pgconn.PgError
+	return errors.As(err, &violation) && violation.Code == "23503"
 }

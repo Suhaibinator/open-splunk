@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"gorm.io/gorm"
 )
 
@@ -51,10 +52,11 @@ func (store *Store) RevalidateCollectorInTransaction(
 // using a caller-owned transaction. It neither commits nor rolls back
 // transaction.
 //
-// Callers must use an immediate transaction from the same migrated control
+// Callers must use a read-committed transaction from the same migrated control
 // database and include every other collector-admission decision in that
 // transaction. Committing this update separately from durable fleet lease
-// allocation is unsafe.
+// allocation is unsafe. This helper acquires catalog and credential fences
+// before reading authority; callers must not already hold later resource locks.
 func (store *Store) RevalidateAndRecordCollectorUseInTransaction(
 	ctx context.Context,
 	transaction *gorm.DB,
@@ -67,6 +69,12 @@ func (store *Store) RevalidateAndRecordCollectorUseInTransaction(
 		acceptedAt,
 	)
 	if err != nil {
+		return Authentication{}, err
+	}
+	if err := pgmeta.LockCatalogShared(transaction); err != nil {
+		return Authentication{}, err
+	}
+	if err := pgmeta.Lock(transaction, "15:ingestion-credentials"); err != nil {
 		return Authentication{}, err
 	}
 	authentication, err := store.authenticate(transaction, plaintext, acceptedAt)

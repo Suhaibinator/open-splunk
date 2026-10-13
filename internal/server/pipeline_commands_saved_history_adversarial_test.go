@@ -31,7 +31,7 @@ func TestPipelineSavedSearchExecutionUsesPersistedCommandDefinition(t *testing.T
 	t.Parallel()
 
 	const (
-		ownerID  = "owner-pipeline-persisted"
+		ownerID  = "1026"
 		tenantID = "tenant-pipeline-persisted"
 		appID    = "app-pipeline-persisted"
 		savedID  = "saved-pipeline-persisted"
@@ -101,7 +101,7 @@ func TestPipelineHistoryRerunReconstructsPersistedCommandDefinition(t *testing.T
 
 	const (
 		historyID = "history-pipeline-persisted"
-		ownerID   = "owner-1"
+		ownerID   = "1009"
 		tenantID  = "tenant-1"
 		appID     = "app-main"
 	)

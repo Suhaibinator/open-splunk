@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"slices"
+	"strconv"
 	"time"
 
 	"fortio.org/safecast"
@@ -128,7 +129,13 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 		return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, err)
 	}
 
+	organization, organizationErr := strconv.ParseInt(request.OrganizationID, 10, 64)
+	if organizationErr != nil || organization <= 0 || strconv.FormatInt(organization, 10) != request.OrganizationID {
+		return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
+	}
 	expectedResolutionScope := knowledgecatalog.ResolutionScope{
+		OrganizationID:             organization,
+		SiteAdministrator:          request.siteAdministrator,
 		TenantID:                   request.TenantID,
 		PrincipalID:                request.OwnerID,
 		AppID:                      request.AppID,
@@ -177,6 +184,25 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 		if compilerErr != nil {
 			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, compilerErr)
 		}
+		inventoryJob := Job{
+			ID: searchJobID, OwnerID: request.OwnerID, TenantID: request.TenantID,
+			OrganizationID: request.OrganizationID, SitePrivilegeUsed: request.siteAdministrator,
+			AppID: request.AppID, State: StatePlanning,
+		}
+		if manager.authorizeJob != nil {
+			// Seal the prefix only for its immediate source check. The public
+			// snapshot is finalized separately from the full compiled query.
+			prefixCompiled, compileErr := inventoryCompiler.CompileContext(admissionContext, inventoryPrefix)
+			if compileErr != nil {
+				return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, compileErr)
+			}
+			prefixSnapshot, snapshotErr := resolution.Finalize(prefixCompiled)
+			if snapshotErr != nil {
+				return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, snapshotErr)
+			}
+			inventoryJob.KnowledgeSnapshot = prefixSnapshot.Summary()
+			inventoryJob.KnowledgeObjectIDs = prefixSnapshot.ObjectIDs()
+		}
 		discoveryContext := admissionContext
 		if manager.limitSource != nil {
 			discoveryContext = searchlimits.WithPolicy(discoveryContext, admittedLimits)
@@ -189,6 +215,7 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 			inventoryPrefix,
 			wildcardRequest,
 			maximumRuntime,
+			inventoryJob,
 		)
 		if err != nil {
 			if _, ok := errors.AsType[*plan.Diagnostic](err); ok {
@@ -418,6 +445,9 @@ func (manager *Manager) safeSPLAdmissionError(caller context.Context, err error,
 func (manager *Manager) safeKnowledgeAdmissionError(caller context.Context, err error) error {
 	if operationErr := manager.operationContextError(caller); operationErr != nil {
 		return operationErr
+	}
+	if errors.Is(err, ErrSourceForbidden) {
+		return err
 	}
 	if errors.Is(err, ErrCapacity) ||
 		errors.Is(err, control.ErrCapacityExceeded) ||

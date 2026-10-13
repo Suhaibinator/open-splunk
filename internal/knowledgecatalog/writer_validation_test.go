@@ -60,12 +60,12 @@ func newWriterValidationHarness(
 		Read: ReadScope{
 			TenantID:       testTenant,
 			OwnerID:        testOwner,
-			ReadableAppIDs: []string{testApp},
+			ReadableAppIDs: []string{testApp}, OrganizationID: 1,
 		},
 		Write: WriteScope{
 			TenantID:       testTenant,
 			OwnerID:        testOwner,
-			WritableAppIDs: []string{testApp},
+			WritableAppIDs: []string{testApp}, OrganizationID: 1,
 		},
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"gorm.io/gorm"
 )
 
@@ -85,7 +86,7 @@ func TestReadPublicationActiveTransitionInventoryBindsExactCatalogs(t *testing.T
 	}
 	mustExec(t, database, `INSERT INTO index_deletion_tombstones (
 		index_id, name, deleted_version, deleted_at_unix_micro
-	) VALUES (?, ?, ?, ?)`, tombstoned.ID, tombstoned.Definition.Name, tombstoned.Version, 100)
+	) VALUES ($1, $2, $3, $4)`, tombstoned.ID, tombstoned.Definition.Name, tombstoned.Version, 100)
 
 	read := readPublicationTransitionTestInventory(t, database, store)
 	inventory := read.inventory
@@ -149,14 +150,14 @@ func TestReadPublicationActiveTransitionInventoryRejectsAuthorityDrift(t *testin
 			name: "active tenant ledger",
 			mutate: func(t *testing.T, database *control.DB) {
 				mustExec(t, database, `UPDATE knowledge_catalog_tenants
-					SET active_object_count = 0 WHERE tenant_id = ?`, testTenant)
+					SET active_object_count = 0 WHERE tenant_id = $1`, testTenant)
 			},
 		},
 		{
 			name: "missing app revision",
 			mutate: func(t *testing.T, database *control.DB) {
 				dropTrigger(t, database, "app_catalog_revision_delete_is_forbidden")
-				mustExec(t, database, `DELETE FROM app_catalog_revisions WHERE tenant_id = ?`, testTenant)
+				mustExec(t, database, `DELETE FROM app_catalog_revisions WHERE tenant_id = $1`, testTenant)
 			},
 		},
 		{
@@ -204,33 +205,33 @@ func TestPublicationTransitionAppPreflightIsTenantDrivenAndBounded(t *testing.T)
 		t.Fatalf("compile app preflight query: %v", dryRun.Error)
 	}
 	sqlText := dryRun.Statement.SQL.String()
-	details := explainSQLiteQueryPlan(t, database.SQLDB(), sqlText, dryRun.Statement.Vars)
+	details := explainPostgreSQLQueryPlan(t, database.SQLDB(), sqlText, dryRun.Statement.Vars)
 	joined := strings.Join(details, "\n")
-	if !strings.Contains(joined, "app_workspaces_tenant_display_id_idx") ||
-		strings.Contains(joined, "SCAN app") || strings.Contains(joined, "USE TEMP B-TREE") ||
+	if (!strings.Contains(joined, "table app_workspaces using app_workspaces_tenant_id_app_id_key") && !strings.Contains(joined, "app_workspaces_tenant_display_id_idx")) ||
+		strings.Contains(joined, "Seq Scan on app") || strings.Contains(joined, "Sort") ||
 		strings.Contains(strings.ToUpper(sqlText), "ORDER BY") {
 		t.Fatalf("app preflight is not a bounded tenant-index walk:\n%s\nSQL:\n%s", joined, sqlText)
 	}
-	if !strings.Contains(sqlText, fmt.Sprintf("LIMIT %d", maximumReadableApps+1)) {
+	if !nativeBoundLimit(sqlText, dryRun.Statement.Vars, maximumReadableApps+1) {
 		t.Fatalf("app preflight SQL lacks the %d-row bound: %s / %#v", maximumReadableApps+1, sqlText, dryRun.Statement.Vars)
 	}
 
 	for index := range maximumReadableApps - 1 {
 		appID := fmt.Sprintf("app_%021dA", index+1)
 		slug := fmt.Sprintf("inventory-overflow-%03d", index+1)
-		mustExec(t, database, `INSERT INTO app_workspaces (
+		mustExec(t, database, `INSERT INTO app_workspaces (organization_id,
 			app_id, tenant_id, version, slug, display_name, description,
 			default_time_range_present, default_earliest, default_latest,
 			default_timezone, state, created_at_unix_micro, updated_at_unix_micro,
 			archived_at_unix_micro
 		)
-		SELECT ?, tenant_id, version, ?, ?, description,
+		SELECT 1, $1, tenant_id, version, $2, $3, description,
 			default_time_range_present, default_earliest, default_latest,
 			default_timezone, state, created_at_unix_micro, updated_at_unix_micro,
 			archived_at_unix_micro
-		FROM app_workspaces WHERE app_id = ?`, appID, slug, slug, testApp)
+		FROM app_workspaces WHERE app_id = $4`, appID, slug, slug, testApp)
 	}
-	token, visits := newProjectionVisitCounter(t)
+	token, visits := newProjectionVisitCounter(t, database)
 	var records []publicationTransitionAppRecord
 	if err := publicationTransitionAppPreflightQuery(database.GORMDB(), testTenant).
 		Where(projectionVisitFunction+"(?, app.version) = 1", token).
@@ -246,7 +247,7 @@ func TestPublicationTransitionAppPreflightIsTenantDrivenAndBounded(t *testing.T)
 			maximumReadableApps+1,
 		)
 	}
-	tx := database.GORMDB().WithContext(t.Context()).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(t.Context()))
 	if tx.Error != nil {
 		t.Fatalf("begin over-bound inventory transaction: %v", tx.Error)
 	}
@@ -266,6 +267,7 @@ func TestPublicationTransitionAppPreflightIsTenantDrivenAndBounded(t *testing.T)
 		testTenant,
 		publicationTransitionEndpoint{},
 		publicationTransitionEndpoint{},
+		1,
 	); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("over-bound complete inventory error = %v, want ErrCorrupt", err)
 	}
@@ -296,20 +298,36 @@ func TestPublicationTransitionActiveHydrationPlanBoundsRegistryDriver(t *testing
 		t.Fatalf("compile ACTIVE hydration query: %v", dryRun.Error)
 	}
 	sqlText := dryRun.Statement.SQL.String()
-	details := explainSQLiteQueryPlan(t, database.SQLDB(), sqlText, dryRun.Statement.Vars)
+	details := explainPostgreSQLQueryPlan(t, database.SQLDB(), sqlText, dryRun.Statement.Vars)
 	joined := strings.Join(details, "\n")
 	for _, required := range []string{
 		"publication_active_projection",
-		"knowledge_objects_resolution_idx",
-		"SCAN publication_active_projection",
+		"on publication_active_projection",
 	} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("ACTIVE hydration plan lacks %q:\n%s\nSQL:\n%s", required, joined, sqlText)
 		}
 	}
-	if strings.Contains(joined, "SCAN active_registry") ||
-		strings.Contains(joined, "SCAN candidate") ||
-		!strings.Contains(sqlText, fmt.Sprintf("LIMIT %d", MaximumResolutionCandidates+1)) {
+	if !strings.Contains(joined, "knowledge_objects_active_tenant_idx") && !strings.Contains(joined, "knowledge_objects_resolution_idx") {
+		t.Fatalf("ACTIVE hydration lacks a tenant/active registry index: %s", joined)
+	}
+	for _, alias := range []string{"candidate", "projection"} {
+		var exact bool
+		for _, detail := range details {
+			if strings.Contains(detail, "Index") && (strings.Contains(detail, " on "+alias+" ") || strings.Contains(detail, " on "+alias+"_")) && strings.Contains(detail, "tenant_id =") && strings.Contains(detail, "knowledge_object_id =") && strings.Contains(detail, "object_version =") {
+				exact = true
+			}
+		}
+		if !exact {
+			t.Fatalf("ACTIVE hydration lacks exact current %s identity index: %s", alias, joined)
+		}
+	}
+	if strings.Count(sqlText, "JOIN LATERAL") != 2 || strings.Count(sqlText, fmt.Sprintf("LIMIT %d", MaximumResolutionCandidates+1)) != 1 {
+		t.Fatalf("ACTIVE hydration lacks dependent bounded registry/projection barriers: %s", sqlText)
+	}
+	if strings.Contains(joined, "Seq Scan on active_registry") ||
+		strings.Contains(joined, "Seq Scan on candidate") ||
+		!nativeBoundLimit(sqlText, dryRun.Statement.Vars, MaximumResolutionCandidates+1) {
 		t.Fatalf("ACTIVE hydration is not registry-driven and bounded:\n%s\nSQL:\n%s", joined, sqlText)
 	}
 }
@@ -323,11 +341,11 @@ func TestPublicationTransitionPhysicalIndexPlanUsesNameIndexBeforeLimit(t *testi
 		t.Fatalf("compile physical index preflight query: %v", dryRun.Error)
 	}
 	sqlText := dryRun.Statement.SQL.String()
-	details := explainSQLiteQueryPlan(t, database.SQLDB(), sqlText, dryRun.Statement.Vars)
+	details := explainPostgreSQLQueryPlan(t, database.SQLDB(), sqlText, dryRun.Statement.Vars)
 	joined := strings.Join(details, "\n")
 	if !strings.Contains(joined, "indexes_name_id_idx") ||
-		strings.Contains(joined, "USE TEMP B-TREE") ||
-		!strings.Contains(sqlText, fmt.Sprintf("LIMIT %d", maximumPublicationIndexAtoms+1)) {
+		strings.Contains(joined, "Sort") ||
+		!nativeBoundLimit(sqlText, dryRun.Statement.Vars, maximumPublicationIndexAtoms+1) {
 		t.Fatalf("physical index preflight is not a bounded name-index walk:\n%s\nSQL:\n%s", joined, sqlText)
 	}
 }
@@ -354,7 +372,7 @@ func readPublicationTransitionTestInventoryFor(
 	after publicationTransitionEndpoint,
 ) publicationActiveTransitionInventoryRead {
 	t.Helper()
-	tx := database.GORMDB().WithContext(t.Context()).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(t.Context()))
 	if tx.Error != nil {
 		t.Fatalf("begin inventory test transaction: %v", tx.Error)
 	}
@@ -368,6 +386,7 @@ func readPublicationTransitionTestInventoryFor(
 		testTenant,
 		before,
 		after,
+		1,
 	)
 	if err != nil {
 		t.Fatalf("read publication transition inventory: %v", err)
@@ -381,7 +400,7 @@ func readPublicationTransitionTestInventoryError(
 	store *Store,
 ) error {
 	t.Helper()
-	tx := database.GORMDB().WithContext(t.Context()).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(t.Context()))
 	if tx.Error != nil {
 		t.Fatalf("begin rejected inventory transaction: %v", tx.Error)
 	}
@@ -395,6 +414,7 @@ func readPublicationTransitionTestInventoryError(
 		testTenant,
 		publicationTransitionEndpoint{},
 		publicationTransitionEndpoint{},
+		1,
 	)
 	return err
 }
@@ -415,6 +435,9 @@ func createPublicationTransitionTestIndex(
 			TenantID:  testTenant,
 			Appender:  publicationTransitionTestIndexAuditAppender{},
 			Validator: validator,
+			BindCreatedIndex: func(ctx context.Context, tx *gorm.DB, indexID string) error {
+				return tx.WithContext(ctx).Exec("INSERT INTO os_index_organizations(index_id,organization_id) VALUES (?,1)", indexID).Error
+			},
 		},
 	)
 	if err != nil {

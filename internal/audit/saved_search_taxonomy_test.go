@@ -144,6 +144,19 @@ func TestSavedSearchAuditActorPolicyIsActionSpecific(t *testing.T) {
 		ID:   "single-user",
 		Role: ActorRoleUser,
 	}
+	// A live index Manage grant permits existing-index mutations by an ordinary
+	// browser user. Audit validation preserves the actor's actual role; central
+	// authorization checks that grant before the operation reaches the appender.
+	for _, action := range []Action{ActionIndexUpdate, ActionIndexActivate, ActionIndexArchive, ActionIndexDeleteKeepData, ActionIndexDeleteData} {
+		version := uint64(2)
+		if action == ActionIndexDeleteData {
+			version = 3
+		}
+		event := Event{Sequence: 1, TenantID: "tenant", OccurredAt: occurredAt, Actor: ordinaryUser, Action: action, TargetKind: TargetKindIndex, TargetID: "events", TargetVersion: version}
+		if err := event.ValidateForTenant("tenant"); err != nil {
+			t.Fatalf("delegated existing-index %s actor policy: %v", action, err)
+		}
+	}
 	for _, event := range []Event{
 		{
 			Sequence: 1, TenantID: "tenant", OccurredAt: occurredAt, Actor: ordinaryUser,
@@ -152,8 +165,8 @@ func TestSavedSearchAuditActorPolicyIsActionSpecific(t *testing.T) {
 		},
 		{
 			Sequence: 1, TenantID: "tenant", OccurredAt: occurredAt, Actor: ordinaryUser,
-			Action: ActionIndexUpdate, TargetKind: TargetKindIndex,
-			TargetID: "events", TargetVersion: 2,
+			Action: ActionIndexCreate, TargetKind: TargetKindIndex,
+			TargetID: "events", TargetVersion: 1,
 		},
 		{
 			Sequence: 1, TenantID: "tenant", OccurredAt: occurredAt, Actor: ordinaryUser,
@@ -167,7 +180,7 @@ func TestSavedSearchAuditActorPolicyIsActionSpecific(t *testing.T) {
 	}
 }
 
-func TestSavedSearchAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing.T) {
+func TestSavedSearchAuditEventsPersistAndPostgreSQLRejectsTaxonomyForgeries(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -267,7 +280,7 @@ func TestSavedSearchAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testi
 		tenant_id, sequence, occurred_at_unix_micro,
 		actor_kind, actor_id, actor_role, action,
 		target_kind, target_id, target_version
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 	for _, forgery := range []struct {
 		name       string
 		actorKind  ActorKind
@@ -285,7 +298,7 @@ func TestSavedSearchAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testi
 		{"saved-search update version one", ActorKindSystem, defaultSystemActorID, ActorRoleSystem, ActionSavedSearchUpdate, TargetKindSavedSearch, 1},
 		{"saved-search duplicate version two", ActorKindSystem, defaultSystemActorID, ActorRoleSystem, ActionSavedSearchDuplicate, TargetKindSavedSearch, 2},
 		{"saved-search delete version zero", ActorKindSystem, defaultSystemActorID, ActorRoleSystem, ActionSavedSearchDelete, TargetKindSavedSearch, 0},
-		{"browser user administrative action", ActorKindBrowser, "single-user", ActorRoleUser, ActionIndexUpdate, TargetKindIndex, 2},
+		{"browser user ingestion token update", ActorKindBrowser, "single-user", ActorRoleUser, ActionIngestionTokenUpdate, TargetKindIngestionToken, 2},
 	} {
 		t.Run(forgery.name, func(t *testing.T) {
 			_, insertErr := database.SQLDB().ExecContext(
@@ -302,9 +315,7 @@ func TestSavedSearchAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testi
 				"saved-search-schema",
 				forgery.version,
 			)
-			if insertErr == nil {
-				t.Fatal("forged saved-search audit event succeeded")
-			}
+			requireNativeAuditRejection(t, insertErr, "forged saved-search audit event")
 		})
 	}
 }

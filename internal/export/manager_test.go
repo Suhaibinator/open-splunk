@@ -2442,6 +2442,9 @@ func TestManagerDoesNotChangeConfiguredBaseDirectoryPermissions(t *testing.T) {
 	if err := os.Mkdir(base, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	manager, err := New(Config{
 		Source:      &exportTestSource{datasets: map[string]exportTestDataset{}},
 		ArtifactDir: base,

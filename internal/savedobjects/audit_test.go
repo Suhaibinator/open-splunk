@@ -31,7 +31,7 @@ func TestAuditedSavedSearchIdempotentCreateReplaysCurrentMetadata(t *testing.T) 
 	raw := newSavedSearchAuditRawStore(t, database, dependencies.options())
 	appender := &recordingSavedSearchAuditAppender{}
 	store := newSavedSearchAuditStore(t, raw, appender)
-	scope := AccessScope{OwnerID: "owner-a"}
+	scope := AccessScope{OwnerID: "owner-a", OrganizationID: "1"}
 	definition := savedSearchDefinition("idempotent search", "")
 	requestID := "saved request 001"
 	intent, err := requestidempotency.NewIntent(
@@ -115,7 +115,7 @@ func TestAuditedSavedSearchParallelIdempotentCreatesConverge(t *testing.T) {
 	raw := newSavedSearchAuditRawStore(t, database, dependencies.options())
 	appender := &recordingSavedSearchAuditAppender{}
 	store := newSavedSearchAuditStore(t, raw, appender)
-	scope := AccessScope{OwnerID: "owner-a"}
+	scope := AccessScope{OwnerID: "owner-a", OrganizationID: "1"}
 	definition := savedSearchDefinition("parallel idempotent search", "")
 	intent, err := requestidempotency.NewIntent(
 		savedSearchAuditTestTenant, "browser", "owner-a",
@@ -137,7 +137,7 @@ func TestAuditedSavedSearchParallelIdempotentDuplicatesConverge(t *testing.T) {
 		ids:  []string{"ss_parallel_source"},
 	}
 	raw := newSavedSearchAuditRawStore(t, database, dependencies.options())
-	scope := AccessScope{OwnerID: "owner-a"}
+	scope := AccessScope{OwnerID: "owner-a", OrganizationID: "1"}
 	source, err := raw.Create(t.Context(), scope, savedSearchDefinition("parallel source", ""))
 	if err != nil {
 		t.Fatal(err)
@@ -309,7 +309,7 @@ func TestAuditedStorePublishesCompleteSavedSearchLifecycleInsideMutationTransact
 	appender := &recordingSavedSearchAuditAppender{}
 	audited := newSavedSearchAuditStore(t, store, appender)
 	ctx := context.Background()
-	scope := AccessScope{OwnerID: "owner-a"}
+	scope := AccessScope{OwnerID: "owner-a", OrganizationID: "1"}
 
 	created, err := audited.Create(ctx, scope, savedSearchDefinition("lifecycle", ""))
 	if err != nil {
@@ -436,7 +436,7 @@ func TestAuditedStoreRollsBackEverySavedSearchMutationWhenAuditFails(t *testing.
 			}
 			store := newSavedSearchAuditRawStore(t, database, dependencies.options())
 			ctx := context.Background()
-			scope := AccessScope{OwnerID: "owner"}
+			scope := AccessScope{OwnerID: "owner", OrganizationID: "1"}
 			var existing *opensplunk.SavedSearch
 			if action != SavedSearchMutationAuditActionCreate {
 				var err error
@@ -511,7 +511,7 @@ func TestAuditedStoreDoesNotAuditRejectedSavedSearchOperations(t *testing.T) {
 
 	database, store := openTestStore(t)
 	ctx := context.Background()
-	owner := AccessScope{OwnerID: "owner-a"}
+	owner := AccessScope{OwnerID: "owner-a", OrganizationID: "1"}
 	first, err := store.Create(ctx, owner, savedSearchDefinition("same", ""))
 	if err != nil {
 		t.Fatalf("seed first Create() error = %v", err)
@@ -558,7 +558,7 @@ func TestAuditedStoreDoesNotAuditRejectedSavedSearchOperations(t *testing.T) {
 	); !errors.Is(err, control.ErrAlreadyExists) {
 		t.Fatalf("conflicting Update() error = %v, want ErrAlreadyExists", err)
 	}
-	otherOwner := AccessScope{OwnerID: "owner-b"}
+	otherOwner := AccessScope{OwnerID: "owner-b", OrganizationID: "1"}
 	if _, err := audited.Update(
 		ctx,
 		otherOwner,
@@ -652,7 +652,7 @@ func TestAuditedStoreIDCollisionsPublishOnlyTheCommittedSavedSearch(t *testing.T
 				},
 			})
 			ctx := context.Background()
-			scope := AccessScope{OwnerID: "owner"}
+			scope := AccessScope{OwnerID: "owner", OrganizationID: "1"}
 			var source *opensplunk.SavedSearch
 			if test.action == SavedSearchMutationAuditActionDuplicate {
 				var err error
@@ -722,7 +722,7 @@ func TestAuditedStoreConcurrentSavedSearchMutationsPublishOnlyTheWinner(t *testi
 	t.Run("optimistic update", func(t *testing.T) {
 		_, store := openTestStore(t)
 		ctx := context.Background()
-		scope := AccessScope{OwnerID: "owner"}
+		scope := AccessScope{OwnerID: "owner", OrganizationID: "1"}
 		created, err := store.Create(ctx, scope, savedSearchDefinition("concurrent-update", ""))
 		if err != nil {
 			t.Fatalf("seed Create() error = %v", err)
@@ -775,7 +775,7 @@ func TestAuditedStoreConcurrentSavedSearchMutationsPublishOnlyTheWinner(t *testi
 	t.Run("unique name create", func(t *testing.T) {
 		_, store := openTestStore(t)
 		ctx := context.Background()
-		scope := AccessScope{OwnerID: "owner"}
+		scope := AccessScope{OwnerID: "owner", OrganizationID: "1"}
 		appender := &recordingSavedSearchAuditAppender{}
 		audited := newSavedSearchAuditStore(t, store, appender)
 		start := make(chan struct{})
@@ -916,7 +916,7 @@ func TestSavedSearchReceiptReconcilesCommittedCancellation(t *testing.T) {
 	raw := newSavedSearchAuditRawStore(t, database, dependencies.options())
 	appender := &recordingSavedSearchAuditAppender{}
 	store := newSavedSearchAuditStore(t, raw, appender)
-	scope := AccessScope{OwnerID: "owner-a"}
+	scope := AccessScope{OwnerID: "owner-a", OrganizationID: "1"}
 	definition := savedSearchDefinition("committed cancellation", "")
 	intent, err := requestidempotency.NewIntent(savedSearchAuditTestTenant, "browser", scope.OwnerID,
 		requestidempotency.RouteCreateSavedSearch, "committed-cancellation-request",

@@ -27,40 +27,44 @@ type listCursor struct {
 }
 
 type listFingerprint struct {
-	Version        int            `json:"v"`
-	TenantID       string         `json:"t"`
-	OwnerID        string         `json:"o"`
-	ReadableAppIDs []string       `json:"a"`
-	PageSize       uint32         `json:"p"`
-	IncludeTotal   bool           `json:"z"`
-	AppID          *string        `json:"j"`
-	OwnerFilter    *string        `json:"w"`
-	Text           *string        `json:"q"`
-	ObjectTypes    []ObjectType   `json:"y"`
-	States         []State        `json:"e"`
-	SharingScopes  []SharingScope `json:"h"`
-	SelectorText   *string        `json:"l"`
-	SortBy         SortBy         `json:"b"`
-	SortDirection  SortDirection  `json:"d"`
+	OrganizationID    int64          `json:"org"`
+	SiteAdministrator bool           `json:"admin"`
+	Version           int            `json:"v"`
+	TenantID          string         `json:"t"`
+	OwnerID           string         `json:"o"`
+	ReadableAppIDs    []string       `json:"a"`
+	PageSize          uint32         `json:"p"`
+	IncludeTotal      bool           `json:"z"`
+	AppID             *string        `json:"j"`
+	OwnerFilter       *string        `json:"w"`
+	Text              *string        `json:"q"`
+	ObjectTypes       []ObjectType   `json:"y"`
+	States            []State        `json:"e"`
+	SharingScopes     []SharingScope `json:"h"`
+	SelectorText      *string        `json:"l"`
+	SortBy            SortBy         `json:"b"`
+	SortDirection     SortDirection  `json:"d"`
 }
 
 func requestFingerprint(request normalizedListRequest) (string, error) {
 	payload, err := json.Marshal(listFingerprint{
-		Version:        cursorVersion,
-		TenantID:       request.scope.tenantID,
-		OwnerID:        request.scope.ownerID,
-		ReadableAppIDs: request.scope.readableAppIDs,
-		PageSize:       request.pageSize,
-		IncludeTotal:   request.includeTotal,
-		AppID:          request.appIDFilter,
-		OwnerFilter:    request.ownerIDFilter,
-		Text:           request.textFilter,
-		ObjectTypes:    request.objectTypeFilters,
-		States:         request.stateFilters,
-		SharingScopes:  request.sharingScopeFilters,
-		SelectorText:   request.selectorTextFilter,
-		SortBy:         request.sortBy,
-		SortDirection:  request.direction,
+		Version:           cursorVersion,
+		OrganizationID:    request.scope.organizationID,
+		SiteAdministrator: request.scope.siteAdministrator,
+		TenantID:          request.scope.tenantID,
+		OwnerID:           request.scope.ownerID,
+		ReadableAppIDs:    request.scope.readableAppIDs,
+		PageSize:          request.pageSize,
+		IncludeTotal:      request.includeTotal,
+		AppID:             request.appIDFilter,
+		OwnerFilter:       request.ownerIDFilter,
+		Text:              request.textFilter,
+		ObjectTypes:       request.objectTypeFilters,
+		States:            request.stateFilters,
+		SharingScopes:     request.sharingScopeFilters,
+		SelectorText:      request.selectorTextFilter,
+		SortBy:            request.sortBy,
+		SortDirection:     request.direction,
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode knowledge catalog cursor fingerprint: %w", err)

@@ -12,6 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -106,7 +110,7 @@ func TestWriterMetadataUpdatePreservesInactiveOpaqueFutureAuthority(t *testing.T
 	scope := WriteScope{
 		TenantID:       testTenant,
 		OwnerID:        testOwner,
-		WritableAppIDs: []string{testApp},
+		WritableAppIDs: []string{testApp}, OrganizationID: 1,
 	}
 	updatedDescription := "metadata changed by the older server"
 	expectedDefinition := proto.Clone(fixture.definition).(*opensplunk.KnowledgeObjectDefinition)
@@ -300,7 +304,7 @@ func seedWriterInactiveOpaquePublication(
 	if len(dependencies) == 0 {
 		t.Fatal("inactive opaque publication requires a real dependency")
 	}
-	tx, err := database.SQLDB().BeginTx(t.Context(), nil)
+	tx, err := pgmeta.BeginSQL(t.Context(), database.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin inactive opaque publication fixture: %v", err)
 	}
@@ -325,11 +329,11 @@ func seedWriterInactiveOpaquePublication(
 	if !typeOK || !scopeOK {
 		t.Fatal("inactive opaque fixture has unsupported scalar identity")
 	}
-	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (
+	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (organization_id,
 		tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro,
 		disabled_at_unix_micro, quarantined_at_unix_micro, deleted_at_unix_micro, quarantine_reason
-	) VALUES (?, ?, 1, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, NULL, NULL, NULL, NULL)`,
+	) VALUES (1, $1, $2, 1, $3, $4, $5, $6, $7, 'draft', $8, $9, $10, NULL, NULL, NULL, NULL)`,
 		testTenant,
 		objectID,
 		fixture.metadata.AppID,
@@ -372,8 +376,8 @@ func assertWriterInactiveOpaqueUpdateReceipt(
 		       committed_catalog_revision, committed_catalog_state_token,
 		       successful_audit_sequence, recovery_audit_sequence
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
-		  AND route = ? AND client_request_id = ?`,
+		WHERE tenant_id = $1 AND actor_kind = $2 AND actor_id = $3
+		  AND route = $4 AND client_request_id = $5`,
 		testTenant,
 		audit.ActorKindBrowser,
 		"writer-future-administrator",
@@ -438,7 +442,7 @@ func assertWriterInactiveOpaqueUpdateReceipt(
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT action, actor_kind, actor_id, actor_role, target_kind, target_id,
 		       target_version, app_id, object_type, sharing_scope
-		FROM audit_events WHERE tenant_id = ? AND sequence = ?`,
+		FROM audit_events WHERE tenant_id = $1 AND sequence = $2`,
 		testTenant,
 		successfulAuditSequence,
 	).Scan(
@@ -495,7 +499,7 @@ func assertWriterInactiveOpaqueImmutableAuthority(
 		JOIN knowledge_definition_blobs AS blob
 		  ON blob.tenant_id = version.tenant_id
 		 AND blob.definition_digest = version.definition_digest
-		WHERE version.tenant_id = ? AND version.knowledge_object_id = ?
+		WHERE version.tenant_id = $1 AND version.knowledge_object_id = $2
 		ORDER BY version.object_version`, testTenant, objectID)
 	if err != nil {
 		t.Fatalf("read inactive opaque immutable versions: %v", err)
@@ -572,7 +576,7 @@ func assertWriterInactiveOpaqueImmutableAuthority(
 		SELECT source_object_version, ordinal, target_kind, target_object_id,
 		       target_object_version, dependency_role
 		FROM knowledge_object_dependencies
-		WHERE tenant_id = ? AND source_object_id = ?
+		WHERE tenant_id = $1 AND source_object_id = $2
 		ORDER BY source_object_version, ordinal`, testTenant, objectID)
 	if err != nil {
 		t.Fatalf("read inactive opaque dependency rows: %v", err)
@@ -624,7 +628,7 @@ func assertWriterInactiveOpaqueImmutableAuthority(
 	sealRows, err := database.SQLDB().QueryContext(t.Context(), `
 		SELECT object_version, dependency_count
 		FROM knowledge_object_dependency_seals
-		WHERE tenant_id = ? AND knowledge_object_id = ?
+		WHERE tenant_id = $1 AND knowledge_object_id = $2
 		ORDER BY object_version`, testTenant, objectID)
 	if err != nil {
 		t.Fatalf("read inactive opaque dependency seals: %v", err)
@@ -667,7 +671,7 @@ func readWriterForwardCompatAuthoritySnapshot(
 	snapshot := make(writerFaultSnapshot, len(writerFaultSnapshotTables))
 	for _, table := range writerFaultSnapshotTables {
 		query := `SELECT * FROM "` + table + `" WHERE tenant_id = ?`
-		rows, err := database.SQLDB().QueryContext(t.Context(), query, testTenant)
+		rows, err := database.SQLDB().QueryContext(t.Context(), pgtest.Parameters(query), testTenant)
 		if err != nil {
 			t.Fatalf("snapshot forward-compatible authority %s: %v", table, err)
 		}

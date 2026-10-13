@@ -14,7 +14,8 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.27.0"
+  GO_VERSION: "1.27.2"
+  GO_LINT_PACKAGES: . ./cmd/... ./deploy/... ./gen/go/... ./internal/... ./integration/... ./migrations/...
   OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e
 
 concurrency:
@@ -149,10 +150,10 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
         with:
-          version: v2.13.1
-          # The inherited inventory is clean; enforce the complete Go tree on
-          # every push rather than retaining a historical diff-only baseline.
-          args: --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+          version: v2.14.0
+          # Cover every main-module source tree, including generated contracts
+          # and deployment tests. npm packages can contain unrelated Go examples.
+          args: --timeout=10m --max-issues-per-linter=0 --max-same-issues=0 ${{ env.GO_LINT_PACKAGES }}
 
   go-test:
     name: Go tests (${{ matrix.label }})
@@ -248,6 +249,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Prepare isolated native PostgreSQL and MinIO fixtures
+        env:
+          OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE: ${{ vars.OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE }}
+        run: scripts/start-ci-native-services.sh
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -384,6 +390,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      - name: Prepare isolated native PostgreSQL and MinIO fixtures
+        env:
+          OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE: ${{ vars.OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE }}
+        run: scripts/start-ci-native-services.sh
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
@@ -476,6 +487,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      - name: Prepare isolated native PostgreSQL and MinIO fixtures
+        env:
+          OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE: ${{ vars.OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE }}
+        run: scripts/start-ci-native-services.sh
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
@@ -504,6 +520,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Prepare isolated native PostgreSQL and MinIO fixtures
+        env:
+          OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE: ${{ vars.OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE }}
+        run: scripts/start-ci-native-services.sh
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -550,6 +571,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+
+      - name: Prepare isolated native PostgreSQL and MinIO fixtures
+        env:
+          OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE: ${{ vars.OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE }}
+        run: scripts/start-ci-native-services.sh
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -770,6 +796,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      - name: Prepare isolated native PostgreSQL and MinIO fixtures
+        env:
+          OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE: ${{ vars.OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE }}
+        run: scripts/start-ci-native-services.sh
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
@@ -825,6 +856,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Prepare isolated native PostgreSQL and MinIO fixtures
+        env:
+          OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE: ${{ vars.OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE }}
+        run: scripts/start-ci-native-services.sh
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -950,6 +986,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      - name: Prepare isolated native PostgreSQL and MinIO fixtures
+        env:
+          OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE: ${{ vars.OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE }}
+        run: scripts/start-ci-native-services.sh
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
@@ -962,6 +1003,11 @@ jobs:
         with:
           node-version-file: .node-version
 
+      - name: Set up target architecture emulation
+        uses: docker/setup-qemu-action@05340b9d1d8c9ee1cc6e6b3977cc655743b589f4
+        with:
+          platforms: arm64
+
       - name: Verify native release recovery with production Compose
         timeout-minutes: 40
         env:
@@ -972,6 +1018,7 @@ jobs:
           OPEN_SPLUNK_SERVER_IMAGE: open-splunk-ci/server-recovery:${{ github.sha }}
           OPEN_SPLUNK_COLLECTOR_IMAGE: open-splunk-ci/collector-recovery:${{ github.sha }}
           OPEN_SPLUNK_DEPLOYMENT_RECOVERY_DRILL: "1"
+          OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE: ${{ vars.OPEN_SPLUNK_RECOVERY_DRILL_MINIO_IMAGE }}
         run: |
           set -euo pipefail
           recovery_proof_root="$(mktemp -d)"
@@ -1016,6 +1063,11 @@ jobs:
           docker run --rm --network none "$recovery_image" \
             -verify-embedded-release > "$recovery_proof_root/actual.txt"
           cmp "$recovery_proof_root/expected.txt" "$recovery_proof_root/actual.txt"
+          for postgres_tool in pg_dump pg_restore; do
+            docker run --rm --network none \
+              --entrypoint "/usr/local/bin/$postgres_tool" "$recovery_image" --version |
+              grep 'PostgreSQL) 18'
+          done
           OPEN_SPLUNK_RECOVERY_DRILL_SERVER_IMAGE="$recovery_image" \
             scripts/test-deployment-recovery.sh
 
@@ -1253,6 +1305,11 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
+
+      - name: Set up target architecture emulation
+        uses: docker/setup-qemu-action@05340b9d1d8c9ee1cc6e6b3977cc655743b589f4
+        with:
+          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069

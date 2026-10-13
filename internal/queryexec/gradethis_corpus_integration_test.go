@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -15,7 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -81,13 +83,13 @@ func TestGradeThisCorpusAgainstClickHouse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "visibility.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		_ = storeConnection.Close()
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		_ = storeConnection.Close()
 		t.Fatal(err)

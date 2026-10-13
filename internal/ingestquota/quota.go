@@ -1,6 +1,6 @@
 // Package ingestquota owns the dependency-neutral ingestion rate policy and
 // virtual-schedule arithmetic shared by control-plane authorization and the
-// durable SQLite visibility boundary.
+// durable PostgreSQL visibility boundary.
 package ingestquota
 
 import (

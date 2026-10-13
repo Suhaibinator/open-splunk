@@ -10,6 +10,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/dashboards"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -26,11 +27,11 @@ func (handler *apiHandler) createDashboard(request *http.Request, input *openspl
 	if err != nil {
 		return nil, err
 	}
-	record, err := handler.dashboards.Create(request.Context(), handler.dashboardScope(), definition)
+	record, err := handler.dashboards.Create(request.Context(), handler.dashboardScope(request.Context()), definition)
 	if mapped := mapDashboardCallError(request, err); mapped != nil {
 		return nil, mapped
 	}
-	converted, err := handler.cloneDashboard(record)
+	converted, err := handler.cloneDashboard(record, request.Context())
 	if err != nil || converted.GetVersion() != 1 {
 		return nil, internalError()
 	}
@@ -39,11 +40,11 @@ func (handler *apiHandler) createDashboard(request *http.Request, input *openspl
 
 func (handler *apiHandler) getDashboard(request *http.Request, input *opensplunk.GetDashboardRequest) (*opensplunk.GetDashboardResponse, error) {
 	id := input.GetDashboardId()
-	record, err := handler.dashboards.Get(request.Context(), handler.dashboardScope(), id)
+	record, err := handler.dashboards.Get(request.Context(), handler.dashboardScope(request.Context()), id)
 	if mapped := mapDashboardCallError(request, err); mapped != nil {
 		return nil, mapped
 	}
-	converted, err := handler.cloneDashboard(record)
+	converted, err := handler.cloneDashboard(record, request.Context())
 	if err != nil || converted.GetDashboardId() != id {
 		return nil, internalError()
 	}
@@ -62,13 +63,13 @@ func (handler *apiHandler) listDashboards(request *http.Request, input *opensplu
 			release()
 		}
 	}()
-	records, err := handler.dashboards.List(request.Context(), handler.dashboardScope(), appID)
+	records, err := handler.dashboards.List(request.Context(), handler.dashboardScope(request.Context()), appID)
 	if mapped := mapDashboardCallError(request, err); mapped != nil {
 		return nil, mapped
 	}
 	converted := make([]*opensplunk.Dashboard, len(records))
 	for index, record := range records {
-		converted[index], err = handler.cloneDashboard(record)
+		converted[index], err = handler.cloneDashboard(record, request.Context())
 		if err != nil || appID != nil && converted[index].GetDefinition().GetAppId() != *appID {
 			return nil, internalError()
 		}
@@ -87,11 +88,11 @@ func (handler *apiHandler) updateDashboard(request *http.Request, input *openspl
 	if err != nil {
 		return nil, err
 	}
-	record, err := handler.dashboards.Update(request.Context(), handler.dashboardScope(), id, input.GetExpectedVersion(), definition)
+	record, err := handler.dashboards.Update(request.Context(), handler.dashboardScope(request.Context()), id, input.GetExpectedVersion(), definition)
 	if mapped := mapDashboardCallError(request, err); mapped != nil {
 		return nil, mapped
 	}
-	converted, err := handler.cloneDashboard(record)
+	converted, err := handler.cloneDashboard(record, request.Context())
 	if err != nil || converted.GetDashboardId() != id || converted.GetVersion() != input.GetExpectedVersion()+1 {
 		return nil, internalError()
 	}
@@ -100,7 +101,7 @@ func (handler *apiHandler) updateDashboard(request *http.Request, input *openspl
 
 func (handler *apiHandler) deleteDashboard(request *http.Request, input *opensplunk.DeleteDashboardRequest) (*opensplunk.DeleteDashboardResponse, error) {
 	id := input.GetDashboardId()
-	err := handler.dashboards.Delete(request.Context(), handler.dashboardScope(), id, input.GetExpectedVersion())
+	err := handler.dashboards.Delete(request.Context(), handler.dashboardScope(request.Context()), id, input.GetExpectedVersion())
 	if mapped := mapDashboardCallError(request, err); mapped != nil {
 		return nil, mapped
 	}
@@ -110,11 +111,11 @@ func (handler *apiHandler) deleteDashboard(request *http.Request, input *openspl
 func (handler *apiHandler) runDashboardPanel(request *http.Request, input *opensplunk.RunDashboardPanelRequest) (*opensplunk.RunDashboardPanelResponse, error) {
 	id := input.GetDashboardId()
 	panelID := input.GetPanelId()
-	record, err := handler.dashboards.Get(request.Context(), handler.dashboardScope(), id)
+	record, err := handler.dashboards.Get(request.Context(), handler.dashboardScope(request.Context()), id)
 	if mapped := mapDashboardCallError(request, err); mapped != nil {
 		return nil, mapped
 	}
-	trusted, err := handler.cloneDashboard(record)
+	trusted, err := handler.cloneDashboard(record, request.Context())
 	if err != nil || trusted.GetDashboardId() != id {
 		return nil, internalError()
 	}
@@ -140,7 +141,8 @@ func (handler *apiHandler) runDashboardPanel(request *http.Request, input *opens
 		return nil, err
 	}
 	job, err := handler.jobs.Create(request.Context(), searchjobs.CreateRequest{
-		SPL: resolved.SPL, OwnerID: handler.ownerID, TenantID: handler.tenantID,
+		OrganizationID: handler.requestOrganization(request.Context()),
+		SPL:            resolved.SPL, OwnerID: handler.requestOwner(request.Context()), TenantID: handler.tenantID,
 		AuthorizedIndexes: slices.Clone(requestedIndexes), RequestedIndexes: requestedIndexes,
 		TimeRange: resolved.TimeRange, AppID: resolved.AppID,
 		Source: searchjobs.JobSource{Origin: searchjobs.JobOriginDashboard, ObjectID: id},
@@ -185,24 +187,44 @@ func (handler *apiHandler) dashboardDefinition(request *http.Request, input *ope
 	return definition, nil
 }
 
-func (handler *apiHandler) cloneDashboard(input *opensplunk.Dashboard) (*opensplunk.Dashboard, error) {
+func (handler *apiHandler) cloneDashboard(input *opensplunk.Dashboard, contexts ...context.Context) (*opensplunk.Dashboard, error) {
 	if input == nil || input.GetDefinition() == nil || input.GetVersion() == 0 || proto.Size(input.GetDefinition()) > maximumDashboardDefinitionBytes {
 		return nil, errors.New("dashboard service returned an invalid record")
 	}
 	if id, err := dashboardID(input.GetDashboardId()); err != nil || id != input.GetDashboardId() {
 		return nil, errors.New("dashboard service returned an invalid record")
 	}
-	if input.GetDefinition().OwnerId == nil || input.GetDefinition().GetOwnerId() != handler.ownerID {
+	sharedRead := false
+	if len(contexts) > 0 {
+		if scope, ok := authorization.FromContext(contexts[0]); ok {
+			sharedRead = scope.Subject.IsSiteAdmin() || input.GetDefinition().GetSharingScope() == opensplunk.SharingScope_SHARING_SCOPE_APP || input.GetDefinition().GetSharingScope() == opensplunk.SharingScope_SHARING_SCOPE_GLOBAL
+		}
+	}
+	if input.GetDefinition().OwnerId == nil || input.GetDefinition().GetOwnerId() != handler.requestOwner(contexts...) && !sharedRead {
 		return nil, errors.New("dashboard service returned a record outside the authenticated owner scope")
 	}
 	if input.GetCreatedAt() == nil || input.GetCreatedAt().CheckValid() != nil || input.GetUpdatedAt() == nil || input.GetUpdatedAt().CheckValid() != nil || input.GetUpdatedAt().AsTime().Before(input.GetCreatedAt().AsTime()) {
 		return nil, errors.New("dashboard service returned invalid timestamps")
 	}
+	if handler.authorization != nil && len(contexts) > 0 {
+		for _, panel := range input.GetDefinition().GetPanels() {
+			if err := handler.authorizeStoredSearchDefinition(contexts[0], panel.GetSearch()); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return proto.Clone(input).(*opensplunk.Dashboard), nil
 }
 
-func (handler *apiHandler) dashboardScope() dashboards.AccessScope {
-	return dashboards.AccessScope{OwnerID: handler.ownerID}
+func (handler *apiHandler) dashboardScope(contexts ...context.Context) dashboards.AccessScope {
+	result := dashboards.AccessScope{OwnerID: handler.requestOwner(contexts...)}
+	if len(contexts) > 0 {
+		if scope, ok := authorization.FromContext(contexts[0]); ok {
+			result.OrganizationID = handler.requestOrganization(contexts[0])
+			result.SiteAdministrator = scope.Subject.IsSiteAdmin()
+		}
+	}
+	return result
 }
 
 func dashboardID(input string) (string, error) {

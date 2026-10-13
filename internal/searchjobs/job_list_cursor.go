@@ -30,24 +30,27 @@ type jobListCursor struct {
 }
 
 type jobListFilterFingerprint struct {
-	Version  int     `json:"v"`
-	TenantID string  `json:"t"`
-	OwnerID  string  `json:"o"`
-	AppID    *string `json:"a"`
-	States   []State `json:"s"`
-	Text     *string `json:"q"`
-	Sort     string  `json:"k"`
+	Version           int     `json:"v"`
+	TenantID          string  `json:"t"`
+	OwnerID           string  `json:"o"`
+	OrganizationID    string  `json:"g"`
+	SiteAdministrator bool    `json:"z"`
+	AppID             *string `json:"a"`
+	States            []State `json:"s"`
+	Text              *string `json:"q"`
+	Sort              string  `json:"k"`
 }
 
 func jobListFilterHash(access AccessScope, request normalizedJobListRequest) (string, error) {
 	payload, err := json.Marshal(jobListFilterFingerprint{
-		Version:  jobListCursorVersion,
-		TenantID: access.TenantID,
-		OwnerID:  access.OwnerID,
-		AppID:    request.appID,
-		States:   request.states,
-		Text:     request.text,
-		Sort:     jobListFixedSort,
+		Version:        jobListCursorVersion,
+		TenantID:       access.TenantID,
+		OwnerID:        access.OwnerID,
+		OrganizationID: access.OrganizationID, SiteAdministrator: access.SiteAdministrator,
+		AppID:  request.appID,
+		States: request.states,
+		Text:   request.text,
+		Sort:   jobListFixedSort,
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode search job list filter: %w", err)

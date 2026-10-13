@@ -132,7 +132,7 @@ func TestRuntimeKnowledgeManagementCursorContinuesAcrossReopen(t *testing.T) {
 	databasePath := filepath.Join(directory, "control.db")
 	masterKeyPath := filepath.Join(directory, "server.key")
 
-	firstDatabase, err := control.Open(ctx, databasePath)
+	firstDatabase, err := openTestControl(t, ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestRuntimeKnowledgeManagementCursorContinuesAcrossReopen(t *testing.T) {
 		_ = firstDatabase.Close()
 		t.Fatal(err)
 	}
-	writeScope := knowledgecatalog.WriteScope{
+	writeScope := knowledgecatalog.WriteScope{OrganizationID: 1,
 		TenantID:       runtimeKnowledgeTestTenant,
 		OwnerID:        runtimeKnowledgeTestOwner,
 		WritableAppIDs: []string{runtimeKnowledgeTestApp},
@@ -193,7 +193,7 @@ func TestRuntimeKnowledgeManagementCursorContinuesAcrossReopen(t *testing.T) {
 			t.Fatalf("create draft %q: %v", name, err)
 		}
 	}
-	readScope := knowledgecatalog.ReadScope{
+	readScope := knowledgecatalog.ReadScope{OrganizationID: 1,
 		TenantID:       runtimeKnowledgeTestTenant,
 		OwnerID:        runtimeKnowledgeTestOwner,
 		ReadableAppIDs: []string{runtimeKnowledgeTestApp},
@@ -218,7 +218,7 @@ func TestRuntimeKnowledgeManagementCursorContinuesAcrossReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	secondDatabase, err := control.Open(ctx, databasePath)
+	secondDatabase, err := openTestControl(t, ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 
 	created, err := runtime.lookupManagement.Create(
 		t.Context(),
-		lookupservice.Scope{
+		lookupservice.Scope{OrganizationID: 1,
 			TenantID: runtimeKnowledgeTestTenant,
 			OwnerID:  runtimeKnowledgeTestOwner,
 		},
@@ -293,10 +293,11 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 	admission, err := runtime.lookupResolver.ResolveLookupAdmission(
 		t.Context(),
 		searchjobs.LookupAdmissionResolutionScope{
-			TenantID:    runtimeKnowledgeTestTenant,
-			PrincipalID: runtimeKnowledgeTestOwner,
-			AppID:       runtimeKnowledgeTestApp,
-			Names:       []string{"service_owners"},
+			OrganizationID: 1,
+			TenantID:       runtimeKnowledgeTestTenant,
+			PrincipalID:    runtimeKnowledgeTestOwner,
+			AppID:          runtimeKnowledgeTestApp,
+			Names:          []string{"service_owners"},
 		},
 	)
 	if err != nil {
@@ -359,7 +360,7 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 
 	replaced, err := runtime.lookupManagement.Replace(
 		t.Context(),
-		lookupservice.Scope{
+		lookupservice.Scope{OrganizationID: 1,
 			TenantID: runtimeKnowledgeTestTenant,
 			OwnerID:  runtimeKnowledgeTestOwner,
 		},
@@ -392,10 +393,11 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 	replacedAdmission, err := runtime.lookupResolver.ResolveLookupAdmission(
 		t.Context(),
 		searchjobs.LookupAdmissionResolutionScope{
-			TenantID:    runtimeKnowledgeTestTenant,
-			PrincipalID: runtimeKnowledgeTestOwner,
-			AppID:       runtimeKnowledgeTestApp,
-			Names:       []string{"service_owners"},
+			OrganizationID: 1,
+			TenantID:       runtimeKnowledgeTestTenant,
+			PrincipalID:    runtimeKnowledgeTestOwner,
+			AppID:          runtimeKnowledgeTestApp,
+			Names:          []string{"service_owners"},
 		},
 	)
 	if err != nil {
@@ -459,7 +461,7 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 		)
 	}
 
-	scope := lookupservice.Scope{
+	scope := lookupservice.Scope{OrganizationID: 1,
 		TenantID: runtimeKnowledgeTestTenant, OwnerID: runtimeKnowledgeTestOwner,
 	}
 	lookupID := created.GetLookup().GetLookupId()
@@ -495,7 +497,7 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 	rows, err := database.SQLDB().QueryContext(t.Context(), `
 		SELECT action, target_id, target_version
 		FROM audit_events
-		WHERE tenant_id = ? AND target_kind = 'lookup'
+		WHERE tenant_id = $1 AND target_kind = 'lookup'
 		ORDER BY sequence ASC`, runtimeKnowledgeTestTenant)
 	if err != nil {
 		t.Fatalf("list runtime lookup audit: %v", err)
@@ -663,6 +665,7 @@ func TestRuntimeKnowledgeCompositionDoesNotAdvertiseWithoutSearchAdmission(
 		bytes.NewReader(payload),
 	)
 	request.Header.Set("Content-Type", "application/x-protobuf")
+	request.Header.Set("Authorization", "Bearer "+runtimeAdministratorToken)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -690,7 +693,7 @@ func TestRuntimeKnowledgeResolverEnabledEmptyAdmissionSucceeds(t *testing.T) {
 
 	resolution, err := runtime.resolver.Resolve(
 		t.Context(),
-		knowledgecatalog.ResolutionScope{
+		knowledgecatalog.ResolutionScope{OrganizationID: 1,
 			TenantID:                   runtimeKnowledgeTestTenant,
 			PrincipalID:                runtimeKnowledgeTestOwner,
 			AppID:                      runtimeKnowledgeTestApp,
@@ -760,7 +763,7 @@ func newRuntimeKnowledgeTestRuntime(
 ) (runtimeKnowledgeManagement, *control.DB) {
 	t.Helper()
 	directory := t.TempDir()
-	database, err := control.Open(
+	database, err := openTestControl(t,
 		t.Context(),
 		filepath.Join(directory, "control.db"),
 	)
@@ -768,6 +771,7 @@ func newRuntimeKnowledgeTestRuntime(
 		t.Fatal(err)
 	}
 	masterKeyPath := filepath.Join(directory, "server.key")
+	initializeRuntimeIndexOwnershipFixture(t, database)
 	auditStore := newRuntimeKnowledgeTestAudit(t, database, masterKeyPath)
 	runtime, err := newRuntimeKnowledgeManagement(
 		t.Context(),
@@ -823,7 +827,7 @@ func createRuntimeKnowledgeTestApp(t *testing.T, database *control.DB) {
 	}
 	if _, err := catalog.CreateApp(
 		t.Context(),
-		control.AppAccessScope{TenantID: runtimeKnowledgeTestTenant},
+		control.AppAccessScope{OrganizationID: 1, TenantID: runtimeKnowledgeTestTenant},
 		control.AppDefinition{
 			Slug:        "runtime-knowledge",
 			DisplayName: "Runtime Knowledge",
@@ -835,14 +839,16 @@ func createRuntimeKnowledgeTestApp(t *testing.T, database *control.DB) {
 
 func createRuntimeKnowledgeTestIndex(t *testing.T, database *control.DB) {
 	t.Helper()
-	if _, err := database.CreateIndex(t.Context(), control.IndexDefinition{
+	created, err := database.CreateIndex(t.Context(), control.IndexDefinition{
 		Name:             "main",
 		DisplayName:      "Main",
 		IngestionEnabled: true,
 		SearchEnabled:    true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create runtime knowledge test index: %v", err)
 	}
+	assignRuntimeIndexOwnershipFixture(t, database, created.ID)
 }
 
 func runtimeKnowledgeTestCreateRequest(
@@ -876,7 +882,7 @@ func runtimeKnowledgeSearchRequest(t *testing.T) searchjobs.CreateRequest {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return searchjobs.CreateRequest{
+	return searchjobs.CreateRequest{OrganizationID: "1",
 		SPL:               "index=main | table message",
 		OwnerID:           runtimeKnowledgeTestOwner,
 		TenantID:          runtimeKnowledgeTestTenant,
@@ -1052,7 +1058,7 @@ func TestNewRuntimeKnowledgeManagementRejectsMissingAuditAppender(t *testing.T) 
 	t.Parallel()
 
 	directory := t.TempDir()
-	database, err := control.Open(
+	database, err := openTestControl(t,
 		context.Background(),
 		filepath.Join(directory, "control.db"),
 	)

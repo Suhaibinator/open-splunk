@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
@@ -46,7 +46,7 @@ func TestInspectKnowledgeExecutionUsesExactRetainedCompilerAuthority(t *testing.
 		)
 	}
 	normalized := normalizedRequest{
-		access: searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
+		access: searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
 		jobID:  snapshot.ID,
 	}
 	if !validSnapshotContract(snapshot, normalized) {
@@ -133,7 +133,7 @@ func TestInspectKnowledgeExecutionUsesExactRetainedCompilerAuthority(t *testing.
 	}
 	again, err := service.Inspect(
 		context.Background(),
-		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
+		searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
 		Request{SearchJobID: snapshot.ID},
 	)
 	if err != nil || !proto.Equal(again.KnowledgeSnapshot, wantSummary) {
@@ -271,7 +271,7 @@ func TestInspectRetainedLookupFailsClosedWithoutConcreteRestorer(t *testing.T) {
 	})
 	result, err := service.Inspect(
 		context.Background(),
-		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
+		searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
 		Request{SearchJobID: snapshot.ID},
 	)
 	if !errors.Is(err, ErrInspectionFailed) {
@@ -442,7 +442,7 @@ func TestInspectKnowledgePostflightMismatchSuppressesOutput(t *testing.T) {
 	})
 	result, err := service.Inspect(
 		context.Background(),
-		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
+		searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
 		Request{SearchJobID: snapshot.ID},
 	)
 	if !errors.Is(err, ErrInspectionFailed) {
@@ -482,7 +482,7 @@ func retainedKnowledgeInspectionSnapshotFor(
 	cursorKey := []byte("inspection-knowledge-cursor-key-at-least-32-bytes")
 	database, err := control.Open(
 		context.Background(),
-		filepath.Join(t.TempDir(), "control.db"),
+		pgtest.DSN(t),
 	)
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
@@ -506,7 +506,7 @@ func retainedKnowledgeInspectionSnapshotFor(
 	}
 	if _, err := apps.CreateApp(
 		context.Background(),
-		control.AppAccessScope{TenantID: tenantID},
+		control.AppAccessScope{OrganizationID: 1, TenantID: tenantID},
 		control.AppDefinition{Slug: "inspection-app", DisplayName: "Inspection App"},
 	); err != nil {
 		t.Fatalf("CreateApp(): %v", err)
@@ -562,7 +562,7 @@ func retainedKnowledgeInspectionSnapshotFor(
 	if err != nil {
 		t.Fatalf("searchtime.NewAbsoluteRange(): %v", err)
 	}
-	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{
+	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{OrganizationID: "1",
 		SPL:               source,
 		OwnerID:           ownerID,
 		TenantID:          tenantID,
@@ -580,7 +580,7 @@ func retainedKnowledgeInspectionSnapshotFor(
 	}
 	snapshot, err := manager.CompletedExecutionSnapshotFor(
 		context.Background(),
-		searchjobs.AccessScope{TenantID: tenantID, OwnerID: ownerID},
+		searchjobs.AccessScope{OrganizationID: "1", TenantID: tenantID, OwnerID: ownerID},
 		created.ID,
 	)
 	if err != nil {

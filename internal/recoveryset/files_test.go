@@ -295,6 +295,9 @@ func unsafeArchiveFixtures() map[string]func(*testing.T, string, string) {
 			if err := os.WriteFile(path, []byte("wide"), 0o644); err != nil {
 				t.Fatal(err)
 			}
+			if err := os.Chmod(path, 0o644); err != nil {
+				t.Fatal(err)
+			}
 		},
 		"directory": func(t *testing.T, _, path string) {
 			if err := os.Mkdir(path, 0o700); err != nil {

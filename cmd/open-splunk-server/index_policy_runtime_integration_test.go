@@ -31,7 +31,7 @@ func TestRuntimeIndexPoliciesRefreshWithoutCollectorReconnect(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "index-policy-runtime.db"))
+	database, err := openTestControl(t, ctx, filepath.Join(t.TempDir(), "index-policy-runtime.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestRuntimeIndexPoliciesRefreshWithoutCollectorReconnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	issued, err := tokens.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{
+	issued, err := tokens.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 1,
 		Name:              "index policy runtime collector",
 		AllowedIndexNames: []string{"main", "audit"},
 		BoundCollectorID:  collectorID,

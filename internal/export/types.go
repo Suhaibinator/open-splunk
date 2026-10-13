@@ -268,6 +268,9 @@ type ArtifactDownload interface {
 type DownloadLease struct {
 	mu            sync.Mutex
 	closeOnce     sync.Once
+	cancel        context.CancelFunc
+	stop          func() bool
+	closed        bool
 	file          io.ReadCloser
 	artifact      Artifact
 	manager       *Manager
@@ -288,25 +291,26 @@ func (lease *DownloadLease) Artifact() Artifact {
 // Job is a detached export-job snapshot. Owner and tenant are enforced by
 // Manager methods but intentionally omitted from public snapshots.
 type Job struct {
-	SourceKind  SourceKind
-	Pattern     *patterns.ExportRequest
-	ID          string
-	Version     uint64
-	SearchJobID string
-	Format      Format
-	Columns     []string
-	RowLimit    uint64
-	ByteLimit   uint64
-	CSV         CSVOptions
-	JSONLines   JSONLinesOptions
-	State       State
-	Progress    Progress
-	Artifact    *Artifact
-	Failure     *Failure
-	CreatedAt   time.Time
-	StartedAt   time.Time
-	FinishedAt  time.Time
-	ExpiresAt   time.Time
+	OrganizationID string
+	SourceKind     SourceKind
+	Pattern        *patterns.ExportRequest
+	ID             string
+	Version        uint64
+	SearchJobID    string
+	Format         Format
+	Columns        []string
+	RowLimit       uint64
+	ByteLimit      uint64
+	CSV            CSVOptions
+	JSONLines      JSONLinesOptions
+	State          State
+	Progress       Progress
+	Artifact       *Artifact
+	Failure        *Failure
+	CreatedAt      time.Time
+	StartedAt      time.Time
+	FinishedAt     time.Time
+	ExpiresAt      time.Time
 	// KnowledgeSnapshot is the bounded, definition-free admission provenance
 	// of the source execution. Nil identifies a legacy knowledge-disabled
 	// search. Public transports must apply current-policy redaction.

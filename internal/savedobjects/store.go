@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"fortio.org/safecast"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -20,6 +22,7 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/resourcepolicy"
 )
 
 const (
@@ -27,10 +30,13 @@ const (
 	maximumIDAttempts     = 4
 )
 
-// AccessScope is the authenticated single-user ownership boundary. All
-// lookups are owner-scoped so object existence is not disclosed across it.
+// AccessScope carries trusted organization and user ownership. Shared reads
+// remain inside the organization; mutations remain private to the owner unless
+// the freshly authenticated subject is a site administrator.
 type AccessScope struct {
-	OwnerID string
+	OwnerID           string
+	OrganizationID    string
+	SiteAdministrator bool
 }
 
 // Options contains process dependencies. CursorKey is required and must be a
@@ -120,6 +126,9 @@ func (store *Store) create(
 	if err != nil {
 		return nil, err
 	}
+	if scope.OrganizationID == "" {
+		return nil, fmt.Errorf("%w: organization is required for creation", control.ErrInvalidArgument)
+	}
 	normalized, indexed, encoded, err := normalizeAndEncodeDefinition(definition, ownerID)
 	if err != nil {
 		return nil, err
@@ -138,6 +147,7 @@ func (store *Store) create(
 			return nil, errors.New("generate saved-search ID: generator returned an invalid ID")
 		}
 		record := newSavedSearchRecord(id, ownerID, indexed, encoded, now)
+		record.OrganizationID, _ = strconv.ParseInt(scope.OrganizationID, 10, 64)
 		var createErr error
 		if publisher == nil {
 			createErr = store.orm.WithContext(ctx).Create(&record).Error
@@ -145,7 +155,7 @@ func (store *Store) create(
 				return buildSavedSearch(id, 1, normalized, now, now), nil
 			}
 		} else {
-			tx := store.orm.WithContext(ctx).Begin()
+			tx := pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "saved-content:"+ownerID)
 			if tx.Error != nil {
 				return nil, mapContextError(ctx, "begin saved-search create", tx.Error)
 			}
@@ -179,7 +189,7 @@ func (store *Store) create(
 		if contextErr := ctx.Err(); contextErr != nil {
 			return nil, fmt.Errorf("create saved search: %w", contextErr)
 		}
-		conflict, conflictErr := store.nameConflict(ctx, ownerID, indexed.appID, indexed.name, "")
+		conflict, conflictErr := store.nameConflict(ctx, scope.OrganizationID, ownerID, indexed.appID, indexed.name, "")
 		if conflictErr != nil {
 			return nil, conflictErr
 		}
@@ -216,10 +226,8 @@ func (store *Store) Get(ctx context.Context, scope AccessScope, id string) (*ope
 		return nil, err
 	}
 	record, err := takeSavedSearchRecord(
-		store.orm.WithContext(ctx),
-		"saved_search_id = ? AND owner_id = ?",
-		id,
-		ownerID,
+		scopeQuery(store.orm.WithContext(ctx), scope, ownerID, true),
+		"saved_search_id = ?", id,
 	)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, control.ErrNotFound
@@ -288,17 +296,15 @@ func (store *Store) update(
 		return nil, fmt.Errorf("%w: saved-search definition is required", control.ErrInvalidArgument)
 	}
 
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := store.beginOwnedMutation(ctx, scope, id, ownerID, false)
 	if tx.Error != nil {
 		return nil, mapContextError(ctx, "begin saved-search update", tx.Error)
 	}
 	defer finishSavedSearchTx(tx, &returnedErr)
 
 	currentRecord, err := takeSavedSearchRecord(
-		tx,
-		"saved_search_id = ? AND owner_id = ?",
-		id,
-		ownerID,
+		scopeQuery(tx, scope, ownerID, false),
+		"saved_search_id = ?", id,
 	)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, control.ErrNotFound
@@ -306,6 +312,7 @@ func (store *Store) update(
 	if err != nil {
 		return nil, fmt.Errorf("read saved search for update: %w", err)
 	}
+	ownerID = currentRecord.OwnerID
 	current, err := savedSearchFromRecord(currentRecord)
 	if err != nil {
 		return nil, fmt.Errorf("read saved search for update: %w", err)
@@ -321,7 +328,7 @@ func (store *Store) update(
 	if err != nil {
 		return nil, err
 	}
-	conflict, err := nameConflictQuery(tx, ownerID, indexed.appID, indexed.name, id)
+	conflict, err := nameConflictQuery(tx.Where("organization_id = ?", currentRecord.OrganizationID), ownerID, indexed.appID, indexed.name, id)
 	if err != nil {
 		return nil, fmt.Errorf("check saved-search name conflict: %w", err)
 	}
@@ -334,7 +341,7 @@ func (store *Store) update(
 	}
 
 	expectedVersionDB := safecast.MustConv[int64](expectedVersion)
-	update := tx.Model(&savedSearchRecord{}).
+	update := scopeQuery(tx, scope, ownerID, false).Model(&savedSearchRecord{}).
 		Where(
 			"saved_search_id = ? AND owner_id = ? AND version = ?",
 			id,
@@ -344,6 +351,7 @@ func (store *Store) update(
 		Updates(map[string]any{
 			"app_id":                indexed.appID,
 			"definition_proto":      encoded,
+			"source_index_names":    indexed.sourceIndexNames,
 			"name":                  indexed.name,
 			"sharing_scope":         int64(indexed.sharingScope),
 			"updated_at_unix_micro": now.UnixMicro(),
@@ -422,16 +430,14 @@ func (store *Store) duplicate(
 		return nil, err
 	}
 
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "saved-content:"+ownerID)
 	if tx.Error != nil {
 		return nil, mapContextError(ctx, "begin saved-search duplicate", tx.Error)
 	}
 	defer finishSavedSearchTx(tx, &returnedErr)
 	sourceRecord, err := takeSavedSearchRecord(
-		tx,
-		"saved_search_id = ? AND owner_id = ?",
-		sourceID,
-		ownerID,
+		scopeQuery(tx, scope, ownerID, true),
+		"saved_search_id = ?", sourceID,
 	)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, control.ErrNotFound
@@ -445,17 +451,21 @@ func (store *Store) duplicate(
 	}
 	definition := proto.Clone(source.Definition).(*opensplunk.SavedSearchDefinition)
 	definition.Name = newName
+	definition.OwnerId = stringPointer(ownerID)
 	if destinationAppID != nil {
 		if definition.Search == nil {
 			definition.Search = &opensplunk.SearchDefinition{}
 		}
 		definition.Search.AppId = stringPointer(*destinationAppID)
 	}
+	if scope.OrganizationID == "" {
+		return nil, fmt.Errorf("%w: organization is required for creation", control.ErrInvalidArgument)
+	}
 	normalized, indexed, encoded, err := normalizeAndEncodeDefinition(definition, ownerID)
 	if err != nil {
 		return nil, err
 	}
-	conflict, err := nameConflictQuery(tx, ownerID, indexed.appID, indexed.name, "")
+	conflict, err := nameConflictQuery(tx.Where("organization_id = ?", parsedOrganization(scope.OrganizationID)), ownerID, indexed.appID, indexed.name, "")
 	if err != nil {
 		return nil, fmt.Errorf("check duplicate saved-search name: %w", err)
 	}
@@ -475,8 +485,15 @@ func (store *Store) duplicate(
 			return nil, errors.New("generate duplicate saved-search ID: generator returned an invalid ID")
 		}
 		record := newSavedSearchRecord(id, ownerID, indexed, encoded, now)
+		record.OrganizationID, _ = strconv.ParseInt(scope.OrganizationID, 10, 64)
+		if err := tx.SavePoint("saved_duplicate_attempt").Error; err != nil {
+			return nil, err
+		}
 		create := tx.Create(&record)
 		if create.Error == nil {
+			if err := tx.Exec("RELEASE SAVEPOINT saved_duplicate_attempt").Error; err != nil {
+				return nil, err
+			}
 			if err := publishSavedSearchMutationAudit(
 				ctx,
 				tx,
@@ -499,7 +516,10 @@ func (store *Store) duplicate(
 		if contextErr := ctx.Err(); contextErr != nil {
 			return nil, fmt.Errorf("duplicate saved search: %w", contextErr)
 		}
-		conflict, conflictErr := nameConflictQuery(tx, ownerID, indexed.appID, indexed.name, "")
+		if err := tx.RollbackTo("saved_duplicate_attempt").Error; err != nil {
+			return nil, err
+		}
+		conflict, conflictErr := nameConflictQuery(tx.Where("organization_id = ?", parsedOrganization(scope.OrganizationID)), ownerID, indexed.appID, indexed.name, "")
 		if conflictErr != nil {
 			return nil, fmt.Errorf("check duplicate saved-search name: %w", conflictErr)
 		}
@@ -552,15 +572,15 @@ func (store *Store) delete(
 	if err := validateExpectedVersion(expectedVersion); err != nil {
 		return err
 	}
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := store.beginOwnedMutation(ctx, scope, id, ownerID, true)
 	if tx.Error != nil {
 		return mapContextError(ctx, "begin saved-search delete", tx.Error)
 	}
 	defer finishSavedSearchTx(tx, &returnedErr)
 	var current savedSearchRecord
-	err = tx.
-		Select("saved_search_id", "version").
-		Where("saved_search_id = ? AND owner_id = ?", id, ownerID).
+	err = scopeQuery(tx, scope, ownerID, false).
+		Select("saved_search_id", "version", "owner_id").
+		Where("saved_search_id = ?", id).
 		Take(&current).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return control.ErrNotFound
@@ -570,6 +590,7 @@ func (store *Store) delete(
 	}
 
 	expectedVersionDB := safecast.MustConv[int64](expectedVersion)
+	ownerID = current.OwnerID
 	if current.Version != expectedVersionDB {
 		return control.ErrVersionConflict
 	}
@@ -580,7 +601,7 @@ func (store *Store) delete(
 			return err
 		}
 	}
-	deleted := tx.
+	deleted := scopeQuery(tx, scope, ownerID, false).
 		Where(
 			"saved_search_id = ? AND owner_id = ? AND version = ?",
 			id,
@@ -618,6 +639,7 @@ func (store *Store) delete(
 func savedSearchFromRecord(record savedSearchRecord) (*opensplunk.SavedSearch, error) {
 	if validateObjectID(record.SavedSearchID) != nil ||
 		record.Version < 1 ||
+		record.OrganizationID < 1 ||
 		record.SharingScope < 1 ||
 		record.SharingScope > 3 ||
 		record.UpdatedAtUnixMicro < record.CreatedAtUnixMicro {
@@ -634,7 +656,7 @@ func savedSearchFromRecord(record savedSearchRecord) (*opensplunk.SavedSearch, e
 		// database corruption as a client-side 400 response.
 		return nil, errors.New("invalid saved-search definition in control-plane database")
 	}
-	if record.Name != indexed.name ||
+	if !resourcepolicy.MatchesSourceNames(record.SourceIndexNames, indexed.sourceIndexNames) || record.Name != indexed.name ||
 		record.AppID != indexed.appID ||
 		record.OwnerID != indexed.ownerID ||
 		record.SharingScope != int64(indexed.sharingScope) {
@@ -673,6 +695,7 @@ func newSavedSearchRecord(
 		OwnerID:            ownerID,
 		SharingScope:       int64(indexed.sharingScope),
 		DefinitionProto:    slices.Clone(encoded),
+		SourceIndexNames:   slices.Clone(indexed.sourceIndexNames),
 		CreatedAtUnixMicro: now.UnixMicro(),
 		UpdatedAtUnixMicro: now.UnixMicro(),
 	}
@@ -684,9 +707,9 @@ func takeSavedSearchRecord(database *gorm.DB, query string, args ...any) (savedS
 	return record, result.Error
 }
 
-func (store *Store) nameConflict(ctx context.Context, ownerID, appID, name, excludingID string) (bool, error) {
+func (store *Store) nameConflict(ctx context.Context, organizationID, ownerID, appID, name, excludingID string) (bool, error) {
 	conflict, err := nameConflictQuery(
-		store.orm.WithContext(ctx),
+		store.orm.WithContext(ctx).Where("organization_id = ?", parsedOrganization(organizationID)),
 		ownerID,
 		appID,
 		name,
@@ -744,6 +767,12 @@ func validateExpectedVersion(version uint64) error {
 }
 
 func normalizeScope(scope AccessScope) (string, error) {
+	if !scope.SiteAdministrator || scope.OrganizationID != "" {
+		organizationID, err := strconv.ParseInt(scope.OrganizationID, 10, 64)
+		if err != nil || organizationID < 1 || strconv.FormatInt(organizationID, 10) != scope.OrganizationID {
+			return "", fmt.Errorf("%w: organization ID must be canonical positive decimal", control.ErrInvalidArgument)
+		}
+	}
 	ownerID := strings.TrimSpace(scope.OwnerID)
 	if err := validateIdentifierText("owner ID", ownerID, 255, false); err != nil {
 		return "", err
@@ -819,4 +848,53 @@ func newSavedSearchID() (string, error) {
 func stringPointer(value string) *string {
 	value = strings.Clone(value)
 	return &value
+}
+
+// scopeQuery applies stored organization ownership before hydrating any object.
+// The server additionally revalidates source app/index grants for shared reads.
+func scopeQuery(query *gorm.DB, scope AccessScope, ownerID string, read bool) *gorm.DB {
+	if read {
+		query = resourcepolicy.Filter(query, "saved_searches")
+	}
+	if !scope.SiteAdministrator || scope.OrganizationID != "" {
+		organizationID, _ := strconv.ParseInt(scope.OrganizationID, 10, 64)
+		query = query.Where("organization_id = ?", organizationID)
+	}
+	if scope.SiteAdministrator {
+		return query
+	}
+	if read {
+		return query.Where("(owner_id = ? OR sharing_scope IN (2, 3))", ownerID)
+	}
+	return query.Where("owner_id = ?", ownerID)
+}
+
+func parsedOrganization(value string) int64 { id, _ := strconv.ParseInt(value, 10, 64); return id }
+
+// A site administrator may edit another creator's object. The creator is
+// immutable, so resolve that resource's owner before taking its mutation key;
+// locking the acting administrator would invert row/key order with its creator.
+func (store *Store) beginOwnedMutation(ctx context.Context, scope AccessScope, id, ownerID string, deleteCatalogDependents bool) *gorm.DB {
+	mutationOwner := ownerID
+	if scope.SiteAdministrator {
+		var identity savedSearchRecord
+		read := scopeQuery(store.orm.WithContext(ctx), scope, ownerID, false).Select("owner_id").Where("saved_search_id = ?", id).Take(&identity)
+		if read.Error != nil && !errors.Is(read.Error, gorm.ErrRecordNotFound) {
+			return read
+		}
+		if read.Error == nil {
+			mutationOwner = identity.OwnerID
+		}
+	}
+	if deleteCatalogDependents {
+		tx := pgmeta.BeginLocked(store.orm.WithContext(ctx), pgmeta.Catalog)
+		if tx.Error == nil {
+			if err := pgmeta.Lock(tx, "saved-content:"+mutationOwner); err != nil {
+				_ = tx.Rollback()
+				tx.Error = err
+			}
+		}
+		return tx
+	}
+	return pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "saved-content:"+mutationOwner)
 }

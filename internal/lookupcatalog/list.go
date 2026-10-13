@@ -3,13 +3,16 @@ package lookupcatalog
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"fortio.org/safecast"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/lookupdefinition"
@@ -17,6 +20,7 @@ import (
 
 const listProjectionFrom = `
 	FROM knowledge_lookup_definitions AS registry
+	JOIN app_workspaces AS owning_app ON owning_app.tenant_id=registry.tenant_id AND owning_app.app_id=registry.app_id
 	JOIN knowledge_lookup_definition_versions AS version
 	  ON version.tenant_id = registry.tenant_id
 	 AND version.lookup_id = registry.lookup_id
@@ -51,7 +55,7 @@ type normalizedListPageRequest struct {
 
 // ListPage returns one joined, filtered, keyset-bounded management page. The
 // owner catalog commitment, projections, and optional total are read from one
-// SQLite snapshot; no immutable CSV body is loaded.
+// PostgreSQL snapshot; no immutable CSV body is loaded.
 func (catalog *Catalog) ListPage(
 	ctx context.Context,
 	request ListPageRequest,
@@ -63,7 +67,7 @@ func (catalog *Catalog) ListPage(
 	if err != nil {
 		return ListPage{}, err
 	}
-	tx, err := catalog.database.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := pgmeta.BeginSQL(ctx, catalog.database, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return ListPage{}, fmt.Errorf("begin lookup list-page snapshot: %w", err)
 	}
@@ -73,7 +77,7 @@ func (catalog *Catalog) ListPage(
 		}
 	}()
 
-	snapshot, err := readLookupListSnapshot(ctx, tx, normalized.TenantID, normalized.OwnerID)
+	snapshot, err := readLookupListSnapshot(ctx, tx, normalized.TenantID, normalized.OwnerID, normalized.OrganizationID, normalized.SiteAdministrator)
 	if err != nil {
 		return ListPage{}, err
 	}
@@ -98,7 +102,7 @@ func (catalog *Catalog) ListPage(
 			_ = rows.Close()
 			return ListPage{}, projectionErr
 		}
-		if record.lookup.GetOwnerId() != normalized.OwnerID {
+		if !normalized.SiteAdministrator && record.lookup.GetOwnerId() != normalized.OwnerID {
 			_ = rows.Close()
 			return ListPage{}, ErrCorrupt
 		}
@@ -138,7 +142,7 @@ func (catalog *Catalog) ListPage(
 		}
 		page.TotalSize = &total
 	}
-	finalSnapshot, err := readLookupListSnapshot(ctx, tx, normalized.TenantID, normalized.OwnerID)
+	finalSnapshot, err := readLookupListSnapshot(ctx, tx, normalized.TenantID, normalized.OwnerID, normalized.OrganizationID, normalized.SiteAdministrator)
 	if err != nil {
 		return ListPage{}, err
 	}
@@ -152,7 +156,7 @@ func (catalog *Catalog) ListPage(
 }
 
 func normalizeListPageRequest(request ListPageRequest) (normalizedListPageRequest, error) {
-	if !validIdentity(request.TenantID, 255) || !validIdentity(request.OwnerID, 255) ||
+	if request.OrganizationID <= 0 || !validIdentity(request.TenantID, 255) || !validIdentity(request.OwnerID, 255) ||
 		(request.AppID != "" && !validIdentity(request.AppID, 128)) ||
 		request.Limit == 0 || request.Limit > MaximumManagedLookups+1 ||
 		!utf8.ValidString(request.TextFilter) || len(request.TextFilter) > MaximumListTextBytes ||
@@ -235,29 +239,29 @@ func lookupListPageSQL(request normalizedListPageRequest) (string, []any) {
 		direction = "DESC"
 	}
 	query := listProjectionSelect + where + " ORDER BY " + column + " " + direction +
-		", registry.lookup_id " + direction + " LIMIT ?"
+		", registry.lookup_id " + direction + " LIMIT $" + strconv.Itoa(len(arguments)+1)
 	arguments = append(arguments, uint64(request.Limit)+1)
 	return query, arguments
 }
 
 func lookupListWhere(request normalizedListPageRequest, includePosition bool) (string, []any) {
-	clauses := []string{"registry.tenant_id = ?", "registry.owner_id = ?"}
-	arguments := []any{request.TenantID, request.OwnerID}
+	clauses := []string{"registry.tenant_id = $1", "(registry.owner_id = $2 OR $4)", "registry.organization_id=$3", "owning_app.organization_id=$3"}
+	arguments := []any{request.TenantID, request.OwnerID, request.OrganizationID, request.SiteAdministrator}
 	if request.AppID != "" {
-		clauses = append(clauses, "registry.app_id = ?")
+		clauses = append(clauses, "registry.app_id = $"+strconv.Itoa(len(arguments)+1))
 		arguments = append(arguments, request.AppID)
 	}
 	if len(request.states) != 0 {
 		placeholders := make([]string, len(request.states))
 		for index, state := range request.states {
-			placeholders[index] = "?"
+			placeholders[index] = "$" + strconv.Itoa(len(arguments)+1)
 			arguments = append(arguments, state)
 		}
 		clauses = append(clauses, "registry.state IN ("+strings.Join(placeholders, ",")+")")
 	}
 	if request.TextFilter != "" {
-		clauses = append(clauses, lookupDefinitionTextContainsFunction+"(version.definition_proto, ?) = 1")
-		arguments = append(arguments, request.TextFilter)
+		clauses = append(clauses, fmt.Sprintf("(strpos(lower(registry.name), $%d) > 0 OR strpos(lower(registry.description), $%d) > 0)", len(arguments)+1, len(arguments)+2))
+		arguments = append(arguments, request.TextFilter, request.TextFilter)
 	}
 	if includePosition && request.Position != nil {
 		column := lookupListSortColumn(request.SortBy)
@@ -269,7 +273,7 @@ func lookupListWhere(request normalizedListPageRequest, includePosition bool) (s
 		if request.SortBy != opensplunk.LookupSortBy_LOOKUP_SORT_BY_NAME {
 			primary = request.Position.UnixMicro
 		}
-		clauses = append(clauses, "("+column+" "+operator+" ? OR ("+column+" = ? AND registry.lookup_id "+operator+" ?))")
+		clauses = append(clauses, fmt.Sprintf("(%s %s $%d OR (%s = $%d AND registry.lookup_id %s $%d))", column, operator, len(arguments)+1, column, len(arguments)+2, operator, len(arguments)+3))
 		arguments = append(arguments, primary, primary, request.Position.LookupID)
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), arguments
@@ -328,17 +332,40 @@ func readLookupListSnapshot(
 	tx *sql.Tx,
 	tenantID string,
 	ownerID string,
+	organizationID int64,
+	siteAdministrator bool,
 ) (ListSnapshot, error) {
 	var count, revision int64
-	var state []byte
-	err := tx.QueryRowContext(ctx, `
-		SELECT count(*), COALESCE(sum(current_version), 0),
-			`+lookupCatalogStateFunction+`(lookup_id, current_version)
-		FROM knowledge_lookup_definitions
-		WHERE tenant_id = ? AND owner_id = ?`, tenantID, ownerID).Scan(&count, &revision, &state)
+	aggregate := &lookupCatalogStateAggregate{}
+	rows, err := tx.QueryContext(ctx, `SELECT lookup_id, current_version FROM knowledge_lookup_definitions WHERE tenant_id = $1 AND (owner_id = $2 OR $5) AND organization_id=$4 ORDER BY lookup_id LIMIT $3`, tenantID, ownerID, MaximumManagedLookups+1, organizationID, siteAdministrator)
 	if err != nil {
 		return ListSnapshot{}, fmt.Errorf("read lookup list snapshot: %w", err)
 	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var version int64
+		if err := rows.Scan(&id, &version); err != nil {
+			return ListSnapshot{}, err
+		}
+		if err := aggregate.Step([]driver.Value{id, version}); err != nil {
+			return ListSnapshot{}, ErrCorrupt
+		}
+		count++
+		revision += version
+	}
+	if err := rows.Err(); err != nil {
+		return ListSnapshot{}, err
+	}
+	value, err := aggregate.WindowValue()
+	if err != nil {
+		return ListSnapshot{}, ErrCorrupt
+	}
+	state, ok := value.([]byte)
+	if !ok {
+		return ListSnapshot{}, ErrCorrupt
+	}
+
 	if count < 0 || count > MaximumManagedLookups || revision < count || revision > MaximumVersions {
 		return ListSnapshot{}, ErrCorrupt
 	}

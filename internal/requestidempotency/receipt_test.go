@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
@@ -75,7 +78,7 @@ func TestClientRequestIDContractIncludesPrintableSpace(t *testing.T) {
 }
 
 func TestReceiptCoCommitReplayConflictAndClockRollback(t *testing.T) {
-	database, err := control.Open(t.Context(), t.TempDir()+"/control.db")
+	database, err := control.Open(t.Context(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
 	}
@@ -96,7 +99,7 @@ func TestReceiptCoCommitReplayConflictAndClockRollback(t *testing.T) {
 	}
 	createdAt := time.Date(2026, time.September, 12, 12, 0, 0, 123_456_000, time.UTC)
 	auditSequence := uint64(7)
-	tx := database.GORMDB().WithContext(t.Context()).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(t.Context()))
 	receipt, err := requestidempotency.AppendInTransaction(
 		t.Context(), tx, intent, target, &auditSequence, createdAt,
 	)
@@ -149,7 +152,7 @@ func TestReceiptCoCommitReplayConflictAndClockRollback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIntent(rollback): %v", err)
 	}
-	tx = database.GORMDB().WithContext(t.Context()).Begin()
+	tx = pgmeta.Begin(database.GORMDB().WithContext(t.Context()))
 	rollbackReceipt, err := requestidempotency.AppendInTransaction(
 		t.Context(), tx, rollbackKey,
 		requestidempotency.Target{
@@ -176,7 +179,7 @@ func TestReceiptCoCommitReplayConflictAndClockRollback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIntent(reclaim): %v", err)
 	}
-	tx = database.GORMDB().WithContext(t.Context()).Begin()
+	tx = pgmeta.Begin(database.GORMDB().WithContext(t.Context()))
 	if _, err := requestidempotency.AppendInTransaction(
 		t.Context(), tx, reclaimKey,
 		requestidempotency.Target{
@@ -199,7 +202,7 @@ func TestReceiptCoCommitReplayConflictAndClockRollback(t *testing.T) {
 }
 
 func TestAsynchronousReceiptStaysFencedUntilTerminal(t *testing.T) {
-	database, err := control.Open(t.Context(), t.TempDir()+"/control.db")
+	database, err := control.Open(t.Context(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +218,7 @@ func TestAsynchronousReceiptStaysFencedUntilTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	createdAt := time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)
-	tx := database.GORMDB().WithContext(t.Context()).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(t.Context()))
 	receipt, err := requestidempotency.AppendInTransaction(
 		t.Context(), tx, intent,
 		requestidempotency.Target{

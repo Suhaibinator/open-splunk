@@ -111,7 +111,7 @@ func TestJobJournalRoundTripsMaximumHistoryRerunProvenanceID(t *testing.T) {
 
 	got, err := store.Get(
 		context.Background(),
-		AccessScope{TenantID: "tenant", OwnerID: "owner"},
+		AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"},
 		terminal.ID,
 	)
 	if err != nil {
@@ -185,7 +185,7 @@ func TestJobJournalRoundTripsScheduledProvenance(t *testing.T) {
 			}
 			got, err := store.Get(
 				context.Background(),
-				AccessScope{TenantID: "tenant", OwnerID: "owner"},
+				AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"},
 				job.ID,
 			)
 			if err != nil {

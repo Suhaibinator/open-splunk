@@ -161,6 +161,34 @@ func TestIndexDataDeletionRuntimeRejectsWakeAfterCloseBegins(t *testing.T) {
 	}
 }
 
+func TestIndexDataDeletionRuntimeKeepsCanceledShutdownWhenWorkerAlreadyStopped(t *testing.T) {
+	store := &runtimeDeletionStore{}
+	runtime, err := newIndexDataDeletionRuntime(&runtimeDeletionControl{
+		next: func(context.Context) (control.IndexDeletionOperation, error) {
+			return control.IndexDeletionOperation{}, control.ErrNotFound
+		},
+	}, store, indexread.NewRegistry(), "tenant-a", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stop the worker first so completion and cancellation are both ready.
+	// The runtime must retain its canceled budget rather than close the store.
+	if err := runtime.coordinator.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := runtime.Close(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled shutdown returned %v", err)
+	}
+	if err := runtime.Close(t.Context()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("subsequent shutdown lost cancellation: %v", err)
+	}
+	if calls := store.closeCalls.Load(); calls != 0 {
+		t.Fatalf("canceled shutdown closed store %d times", calls)
+	}
+}
+
 func TestNewIndexDataDeletionRuntimeForwardsTenantAndErrorReporter(t *testing.T) {
 	reported := make(chan error, 1)
 	controlPlane := &runtimeDeletionControl{

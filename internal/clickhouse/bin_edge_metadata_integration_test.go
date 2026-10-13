@@ -16,13 +16,14 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 )
 
@@ -996,27 +997,22 @@ type binEdgeMetadataProfile struct {
 
 func binEdgeMetadataCluster(t *testing.T, ctx context.Context) (clickhousedriver.Conn, *Store) {
 	t.Helper()
-	container := "open-splunk-bin-edge-metadata-" + integrationRandomHex(t, 6)
-	password := integrationRandomHex(t, 24)
-	image := os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE")
-	if image == "" {
-		image = storeIntegrationImage
+	image, err := testsupport.ResolvePinnedClickHouseImage(os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	integrationDocker(t, ctx, nil,
-		"run", "--detach", "--rm", "--name", container,
-		"--publish", "127.0.0.1::9000",
-		"--env", "CLICKHOUSE_DB=open_splunk",
-		"--env", "CLICKHOUSE_USER=open_splunk",
-		"--env", "CLICKHOUSE_PASSWORD="+password,
-		"--env", "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
-		image,
-	)
+	fixture, err := testsupport.StartClickHouse(ctx, image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	container, password := fixture.Name, fixture.Password
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cleanupCancel()
-		_ = exec.CommandContext(cleanupCtx, "docker", "rm", "--force", "--volumes", container).Run()
+		if err := fixture.Close(cleanupCtx); err != nil {
+			t.Error(err)
+		}
 	})
-	integrationWaitForClickHouse(t, ctx, container, password)
 
 	migrationPaths, err := filepath.Glob(filepath.Join("..", "..", "migrations", "clickhouse", "[0-9][0-9][0-9][0-9]_*.sql"))
 	if err != nil || len(migrationPaths) == 0 {
@@ -1040,12 +1036,12 @@ func binEdgeMetadataCluster(t *testing.T, ctx context.Context) (clickhousedriver
 	config.Addresses = []string{integrationNativeAddress(t, ctx, container)}
 	config.Username = "open_splunk"
 	config.Password = password
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("open visibility control database: %v", err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatalf("create visibility sequencer: %v", err)
 	}

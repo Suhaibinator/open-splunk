@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+// InferenceAPI selects the wire shape independently of the destination provider.
+// UNSPECIFIED selects the provider's configured default. Explicit selections may
+// use any wire or native API supported by the configured provider.
+enum InferenceAPI {
+  INFERENCE_API_UNSPECIFIED = 0;
+  INFERENCE_API_CHAT_COMPLETIONS = 1;
+  INFERENCE_API_ANTHROPIC_MESSAGES = 2;
+  INFERENCE_API_RESPONSES = 3;
+  INFERENCE_API_GOOGLE_NATIVE = 4;
+  INFERENCE_API_AZURE_NATIVE = 5;
+}
+
+// InferenceHTTPAuth selects how an HTTP inference provider presents its
+// credential. UNSPECIFIED uses X-API-Key for Anthropic Messages and bearer for
+// other HTTP APIs; API_KEY uses the configured auth header (default X-API-Key);
+// NONE sends no credential.
+enum InferenceHTTPAuth {
+  INFERENCE_HTTP_AUTH_UNSPECIFIED = 0;
+  INFERENCE_HTTP_AUTH_BEARER = 1;
+  INFERENCE_HTTP_AUTH_API_KEY = 2;
+  INFERENCE_HTTP_AUTH_NONE = 3;
+}
+
+// InferenceProviderAdapter selects the client family that talks to a provider.
+// UNSPECIFIED is invalid configuration.
+enum InferenceProviderAdapter {
+  INFERENCE_PROVIDER_ADAPTER_UNSPECIFIED = 0;
+  INFERENCE_PROVIDER_ADAPTER_HTTP = 1;
+  INFERENCE_PROVIDER_ADAPTER_GOOGLE_GENAI = 2;
+  INFERENCE_PROVIDER_ADAPTER_AZURE_FOUNDRY = 3;
+}
+
+// InferenceGoogleBackend selects the Google GenAI service. UNSPECIFIED is
+// invalid configuration.
+enum InferenceGoogleBackend {
+  INFERENCE_GOOGLE_BACKEND_UNSPECIFIED = 0;
+  INFERENCE_GOOGLE_BACKEND_AI_STUDIO = 1;
+  INFERENCE_GOOGLE_BACKEND_VERTEX_AI = 2;
+}
+
+// InferenceGoogleAuth selects how a Google GenAI provider authenticates.
+// API_KEY uses the provider's credential binding; APPLICATION_DEFAULT uses
+// Google application-default credentials and requires the Vertex AI backend.
+// UNSPECIFIED is invalid configuration.
+enum InferenceGoogleAuth {
+  INFERENCE_GOOGLE_AUTH_UNSPECIFIED = 0;
+  INFERENCE_GOOGLE_AUTH_API_KEY = 1;
+  INFERENCE_GOOGLE_AUTH_APPLICATION_DEFAULT = 2;
+}
+
+// OpenRouterProviderSort orders OpenRouter's upstream providers. UNSPECIFIED
+// omits the field so OpenRouter applies its default routing policy.
+enum OpenRouterProviderSort {
+  OPEN_ROUTER_PROVIDER_SORT_UNSPECIFIED = 0;
+  OPEN_ROUTER_PROVIDER_SORT_PRICE = 1;
+  OPEN_ROUTER_PROVIDER_SORT_LATENCY = 2;
+  OPEN_ROUTER_PROVIDER_SORT_THROUGHPUT = 3;
+}
+
+// OpenRouterDataCollection controls whether OpenRouter may route to providers
+// that store or train on request data. UNSPECIFIED omits the field.
+enum OpenRouterDataCollection {
+  OPEN_ROUTER_DATA_COLLECTION_UNSPECIFIED = 0;
+  OPEN_ROUTER_DATA_COLLECTION_ALLOW = 1;
+  OPEN_ROUTER_DATA_COLLECTION_DENY = 2;
+}
+
+// InferenceModel captures one DB-backed inference model catalog row.
+message InferenceModel {
+  uint64 id = 1;
+  reserved 2;
+  reserved "provider";
+  string provider_id = 6;
+  string provider_model_id = 3;
+  string display_name = 4;
+  bool active = 5;
+}

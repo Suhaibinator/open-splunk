@@ -8,17 +8,20 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+
 	openexport "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -100,7 +103,7 @@ func TestPipelinePinnedClickHousePublishesNullableListsThroughPagingAndExport(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "visibility.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		_ = storeConnection.Close()
 		t.Fatal(err)
@@ -110,7 +113,7 @@ func TestPipelinePinnedClickHousePublishesNullableListsThroughPagingAndExport(t 
 			t.Errorf("close pipeline live control DB: %v", closeErr)
 		}
 	})
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		_ = storeConnection.Close()
 		t.Fatal(err)

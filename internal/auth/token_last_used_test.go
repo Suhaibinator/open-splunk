@@ -3,7 +3,9 @@ package auth
 import (
 	"context"
 	"errors"
-	"path/filepath"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	"sync"
 	"testing"
 	"time"
@@ -28,7 +30,7 @@ func TestRecordCollectorTokenUseProjectsMonotonicObservation(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "last-used",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -150,7 +152,7 @@ func TestRecordCollectorTokenUseRequiresActiveUnexpiredToken(t *testing.T) {
 	revoked, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "revoked",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(revoked): %v", err)
@@ -166,7 +168,7 @@ func TestRecordCollectorTokenUseRequiresActiveUnexpiredToken(t *testing.T) {
 		Name:              "expired",
 		AllowedIndexNames: []string{"main"},
 		BoundCollectorID:  testCollectorID,
-		ExpiresAt:         now.Add(time.Minute),
+		ExpiresAt:         now.Add(time.Minute), OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(expired): %v", err)
@@ -178,14 +180,14 @@ func TestRecordCollectorTokenUseRequiresActiveUnexpiredToken(t *testing.T) {
 	disabled, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "disabled",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(disabled): %v", err)
 	}
 	if _, err := db.SQLDB().ExecContext(
 		ctx,
-		`UPDATE ingestion_tokens SET state = 'disabled' WHERE ingestion_token_id = ?`,
+		`UPDATE ingestion_tokens SET state = 'disabled' WHERE ingestion_token_id = $1`,
 		disabled.Token.ID,
 	); err != nil {
 		t.Fatalf("disable collector token: %v", err)
@@ -197,7 +199,7 @@ func TestRecordCollectorTokenUseRequiresActiveUnexpiredToken(t *testing.T) {
 	active, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "active",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(active): %v", err)
@@ -233,7 +235,7 @@ func TestConcurrentCollectorTokenUseKeepsNewestObservation(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "concurrent",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -279,7 +281,7 @@ func TestCollectorTokenLastUseSurvivesDatabaseReopen(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "control.sqlite")
+	path := pgtest.DSN(t)
 	key := []byte("0123456789abcdef0123456789abcdef")
 	db, err := control.Open(ctx, path)
 	if err != nil {
@@ -299,7 +301,7 @@ func TestCollectorTokenLastUseSurvivesDatabaseReopen(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "persistent-last-use",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		_ = db.Close()

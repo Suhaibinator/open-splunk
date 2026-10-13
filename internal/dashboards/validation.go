@@ -12,6 +12,7 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/protostrict"
+	"github.com/Suhaibinator/open-splunk/internal/resourcepolicy"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -30,9 +31,10 @@ const (
 )
 
 type indexedDefinition struct {
-	name         string
-	appID        string
-	sharingScope opensplunk.SharingScope
+	sourceIndexNames []byte
+	name             string
+	appID            string
+	sharingScope     opensplunk.SharingScope
 }
 
 func normalizeDefinition(
@@ -127,8 +129,13 @@ func normalizeDefinition(
 	if len(encoded) == 0 || len(encoded) > maximumDashboardDefinitionBytes {
 		return nil, indexedDefinition{}, nil, fmt.Errorf("%w: dashboard definition exceeds %d bytes", control.ErrInvalidArgument, maximumDashboardDefinitionBytes)
 	}
+	sourceIndexNames, sourceErr := resourcepolicy.DashboardSourceNames(definition)
+	if sourceErr != nil {
+		return nil, indexedDefinition{}, nil, sourceErr
+	}
 	return definition, indexedDefinition{
-		name: definition.GetName(), appID: definition.GetAppId(), sharingScope: definition.GetSharingScope(),
+		sourceIndexNames: sourceIndexNames,
+		name:             definition.GetName(), appID: definition.GetAppId(), sharingScope: definition.GetSharingScope(),
 	}, encoded, nil
 }
 

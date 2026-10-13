@@ -3,6 +3,8 @@ package knowledgecatalog
 import (
 	"errors"
 	"testing"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestWriterDefinitionAppLifecycleWidthIsPreflightedBeforeHydration(t *testing.T) {
@@ -12,21 +14,21 @@ func TestWriterDefinitionAppLifecycleWidthIsPreflightedBeforeHydration(t *testin
 		t.Fatalf("open app-lifecycle corruption connection: %v", err)
 	}
 	defer func() {
-		if _, err := connection.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = OFF`); err != nil {
+		if _, err := pgtest.Checks(t.Context(), connection, true); err != nil {
 			t.Errorf("restore app lifecycle checks during cleanup: %v", err)
 		}
 		if err := connection.Close(); err != nil {
 			t.Errorf("close app-lifecycle corruption connection: %v", err)
 		}
 	}()
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(t.Context(), connection, false); err != nil {
 		t.Fatalf("disable app lifecycle checks: %v", err)
 	}
 	const hostileStateBytes = 4 << 20
 	result, err := connection.ExecContext(t.Context(), `
 		UPDATE app_workspaces
-		SET state = 'WIDE-' || CAST(zeroblob(?) AS TEXT)
-		WHERE tenant_id = ? AND app_id = ?`,
+		SET state = 'WIDE-' || repeat('x',$1::int)
+		WHERE tenant_id = $2 AND app_id = $3`,
 		hostileStateBytes,
 		writerFaultTenant,
 		writerFaultApp,
@@ -37,7 +39,7 @@ func TestWriterDefinitionAppLifecycleWidthIsPreflightedBeforeHydration(t *testin
 	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
 		t.Fatalf("oversized app lifecycle rows = %d, %v; want 1", affected, err)
 	}
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = OFF`); err != nil {
+	if _, err := pgtest.Checks(t.Context(), connection, true); err != nil {
 		t.Fatalf("restore app lifecycle checks: %v", err)
 	}
 
@@ -55,15 +57,15 @@ func TestWriterDefinitionAppLifecycleWidthIsPreflightedBeforeHydration(t *testin
 	}
 	assertWriterFaultSnapshotsEqual(t, readWriterFaultSnapshot(t, harness.database), stable)
 
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(t.Context(), connection, false); err != nil {
 		t.Fatalf("disable app checks for restoration: %v", err)
 	}
 	if _, err := connection.ExecContext(t.Context(), `
 		UPDATE app_workspaces SET state = 'active'
-		WHERE tenant_id = ? AND app_id = ?`, writerFaultTenant, writerFaultApp); err != nil {
+		WHERE tenant_id = $1 AND app_id = $2`, writerFaultTenant, writerFaultApp); err != nil {
 		t.Fatalf("restore app lifecycle: %v", err)
 	}
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = OFF`); err != nil {
+	if _, err := pgtest.Checks(t.Context(), connection, true); err != nil {
 		t.Fatalf("restore app checks after restoration: %v", err)
 	}
 	assertWriterFaultIntegrity(t, harness.database)

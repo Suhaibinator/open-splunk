@@ -140,6 +140,14 @@ func StartClickHouse(ctx context.Context, image string) (*ClickHouseContainer, e
 		"--env", "CLICKHOUSE_USER="+container.Username,
 		"--env", "CLICKHOUSE_PASSWORD="+container.Password,
 		"--env", "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
+		"--env", "NO_PROXY=127.0.0.1,localhost",
+		"--env", "no_proxy=127.0.0.1,localhost",
+		"--env", "HTTP_PROXY=",
+		"--env", "HTTPS_PROXY=",
+		"--env", "ALL_PROXY=",
+		"--env", "http_proxy=",
+		"--env", "https_proxy=",
+		"--env", "all_proxy=",
 		container.Image,
 	); err != nil {
 		return nil, fmt.Errorf("start ClickHouse test container: %w: %s", err, boundedOutput(output))
@@ -472,6 +480,14 @@ func servicePrincipalDockerArgumentsForTransport(
 		"--env", "CLICKHOUSE_USER="+bootstrapUsername,
 		"--env", "CLICKHOUSE_PASSWORD="+bootstrapPassword,
 		"--env", "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
+		"--env", "NO_PROXY=127.0.0.1,localhost",
+		"--env", "no_proxy=127.0.0.1,localhost",
+		"--env", "HTTP_PROXY=",
+		"--env", "HTTPS_PROXY=",
+		"--env", "ALL_PROXY=",
+		"--env", "http_proxy=",
+		"--env", "https_proxy=",
+		"--env", "all_proxy=",
 		container.Image,
 	)
 }

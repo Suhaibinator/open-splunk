@@ -14,7 +14,7 @@ import (
 )
 
 func journalJob(id string, state searchjobs.State, now time.Time) searchjobs.Job {
-	return searchjobs.Job{
+	return searchjobs.Job{OrganizationID: "1",
 		ID: id, OwnerID: "owner", TenantID: "tenant",
 		SPL:              " \nindex=main | head 1\t",
 		RequestedIndexes: []string{"main"},
@@ -60,7 +60,7 @@ func TestJobJournalAdmitsAndFinalizesDetachedSearchMetadata(t *testing.T) {
 	if err := journal.Finalize(context.Background(), terminal); err != nil {
 		t.Fatalf("Finalize() error = %v", err)
 	}
-	got, err := store.Get(context.Background(), AccessScope{TenantID: "tenant", OwnerID: "owner"}, terminal.ID)
+	got, err := store.Get(context.Background(), AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}, terminal.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestJobJournalAdmitsAndFinalizesDetachedSearchMetadata(t *testing.T) {
 		t.Fatalf("matched-events counter was invented: %+v", got)
 	}
 	var indexedAppID, indexedSavedSearchID string
-	if err := database.SQLDB().QueryRowContext(context.Background(), `SELECT app_id, saved_search_id FROM search_history WHERE search_job_id = ?`, terminal.ID).Scan(&indexedAppID, &indexedSavedSearchID); err != nil {
+	if err := database.SQLDB().QueryRowContext(context.Background(), `SELECT app_id, saved_search_id FROM search_history WHERE search_job_id = $1`, terminal.ID).Scan(&indexedAppID, &indexedSavedSearchID); err != nil {
 		t.Fatal(err)
 	}
 	if indexedAppID != "search-app" || indexedSavedSearchID != "saved-1" {
@@ -111,7 +111,7 @@ func TestJobJournalMapsAndBoundsSafeFailure(t *testing.T) {
 	if err := journal.Finalize(context.Background(), failed); err != nil {
 		t.Fatalf("Finalize(failed) error = %v", err)
 	}
-	got, err := store.Get(context.Background(), AccessScope{TenantID: "tenant", OwnerID: "owner"}, failed.ID)
+	got, err := store.Get(context.Background(), AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}, failed.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

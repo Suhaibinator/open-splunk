@@ -3,7 +3,6 @@ package clickhouse
 import (
 	"context"
 	"net"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -31,14 +31,13 @@ func testEventAuthorizationFilteringAgainstClickHouse(
 	t.Helper()
 
 	controlDB, err := control.Open(
-		ctx,
-		filepath.Join(t.TempDir(), "event-authorization.sqlite"),
+		ctx, pgtest.DSN(t),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestPersistedCapSurvivesDefaultReopenAndExplicitMismatchFails(t *testing.T) {
@@ -69,7 +71,7 @@ func TestDuplicateRetainedJobPublicationRollsBackWithoutAdvancingState(t *testin
 		t.Fatal("INSERT OR REPLACE bypassed retained search-job uniqueness")
 	}
 
-	tx := database.GORMDB().WithContext(ctx).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 	if tx.Error != nil {
 		t.Fatal(tx.Error)
 	}
@@ -105,7 +107,7 @@ func TestConcurrentUniqueAppendsRemainDenseAndBounded(t *testing.T) {
 	for index := range attempts {
 		wait.Go(func() {
 			<-start
-			tx := database.GORMDB().WithContext(ctx).Begin()
+			tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 			if tx.Error != nil {
 				errorsByAttempt <- tx.Error
 				return
@@ -157,10 +159,10 @@ func TestStartupIntegrityRejectsGapAndForgedRows(t *testing.T) {
 				"owner", fmt.Sprintf("job-%d", index), time.Duration(index)*time.Microsecond,
 			))
 		}
-		if err := database.GORMDB().Exec("DROP TRIGGER search_attempt_audit_event_delete_requires_rolling_prune").Error; err != nil {
+		if err := database.GORMDB().Exec("DROP TRIGGER search_attempt_audit_event_delete_requires_rolling_prune ON search_attempt_audit_events").Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := database.GORMDB().Exec("DROP TRIGGER search_attempt_audit_event_prune_advances_state").Error; err != nil {
+		if err := database.GORMDB().Exec("DROP TRIGGER search_attempt_audit_event_prune_advances_state ON search_attempt_audit_events").Error; err != nil {
 			t.Fatal(err)
 		}
 		if err := database.GORMDB().Exec(`
@@ -184,10 +186,10 @@ func TestStartupIntegrityRejectsGapAndForgedRows(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = connection.Close() }()
-		if _, err := connection.ExecContext(ctx, "DROP TRIGGER search_attempt_audit_event_update_is_forbidden"); err != nil {
+		if _, err := connection.ExecContext(ctx, "DROP TRIGGER search_attempt_audit_event_update_is_forbidden ON search_attempt_audit_events"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := connection.ExecContext(ctx, "PRAGMA ignore_check_constraints = ON"); err != nil {
+		if _, err := pgtest.Checks(ctx, connection, false); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := connection.ExecContext(ctx, `
@@ -211,7 +213,7 @@ func TestAppendRejectsNilAndCanceledContexts(t *testing.T) {
 	ctx := context.Background()
 	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 5)
-	tx := database.GORMDB().WithContext(ctx).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 	if tx.Error != nil {
 		t.Fatal(tx.Error)
 	}

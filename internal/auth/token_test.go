@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -9,7 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	"slices"
 	"strings"
 	"sync"
@@ -45,7 +48,7 @@ func TestCollectorTokenIdempotentCreateNeverReplaysPlaintext(t *testing.T) {
 	}
 	request := CreateCollectorTokenRequest{
 		Name: "idempotent collector", AllowedIndexNames: []string{"idempotent-token"},
-		BoundCollectorID: testCollectorID,
+		BoundCollectorID: testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	}
 	issued, replayed, err := store.CreateCollectorTokenIdempotent(t.Context(), request, intent)
 	if err != nil || replayed || issued.Secret.Plaintext() == "" {
@@ -93,7 +96,7 @@ func TestCollectorTokenParallelIdempotentCreatesConverge(t *testing.T) {
 	}
 	request := CreateCollectorTokenRequest{
 		Name: "parallel idempotent collector", AllowedIndexNames: []string{"parallel-idempotent-token"},
-		BoundCollectorID: testCollectorID,
+		BoundCollectorID: testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	}
 	intent, err := requestidempotency.NewIntent(
 		"default", "system", "open-splunk-server", requestidempotency.RouteCreateIngestionToken,
@@ -172,7 +175,7 @@ func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 		Name:              "production collector",
 		Description:       "writes two indexes",
 		AllowedIndexNames: []string{" AUDIT ", "main", "main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken() error = %v", err)
@@ -214,7 +217,7 @@ func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 	if queryErr := db.SQLDB().QueryRowContext(ctx, `
 		SELECT token_digest, token_prefix, bound_collector_id
 		FROM ingestion_tokens
-		WHERE ingestion_token_id = ?`, issued.Token.ID).
+		WHERE ingestion_token_id = $1`, issued.Token.ID).
 		Scan(&digest, &safePrefix, &boundCollectorID); queryErr != nil {
 		t.Fatalf("read stored token: %v", queryErr)
 	}
@@ -230,7 +233,7 @@ func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 	if boundCollectorID != testCollectorID {
 		t.Fatalf("stored collector binding = %q, want %q", boundCollectorID, testCollectorID)
 	}
-	rows, err := db.SQLDB().QueryContext(ctx, `SELECT name FROM pragma_table_info('ingestion_tokens')`)
+	rows, err := db.SQLDB().QueryContext(ctx, `SELECT name FROM (SELECT a.attname AS name,a.attnum-1 AS cid,CASE WHEN t.typname='int8' THEN 'BIGINT' ELSE upper(t.typname) END AS type,CASE WHEN a.attnotnull THEN 1 ELSE 0 END AS "notnull",COALESCE((SELECT array_position(c.conkey,a.attnum) FROM pg_constraint c WHERE c.conrelid=r.oid AND c.contype='p'),0) AS pk,CASE WHEN a.attgenerated='s' THEN 3 ELSE 0 END AS hidden FROM pg_attribute a JOIN pg_class r ON r.oid=a.attrelid JOIN pg_namespace n ON n.oid=r.relnamespace JOIN pg_type t ON t.oid=a.atttypid WHERE n.nspname=current_schema() AND r.relname='ingestion_tokens' AND a.attnum>0 AND NOT a.attisdropped) AS column_metadata`)
 	if err != nil {
 		t.Fatalf("inspect ingestion_tokens columns: %v", err)
 	}
@@ -276,17 +279,17 @@ func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 	}
 	if _, updateErr := db.SQLDB().ExecContext(ctx, `
 		UPDATE ingestion_tokens SET state = 'revoked'
-		WHERE ingestion_token_id = ?`, issued.Token.ID); updateErr == nil {
+		WHERE ingestion_token_id = $1`, issued.Token.ID); updateErr == nil {
 		t.Fatal("revoked state without revoked_at unexpectedly succeeded")
 	}
 	if _, updateErr := db.SQLDB().ExecContext(ctx, `
 		UPDATE ingestion_tokens SET revoked_at_unix_micro = created_at_unix_micro
-		WHERE ingestion_token_id = ?`, issued.Token.ID); updateErr == nil {
+		WHERE ingestion_token_id = $1`, issued.Token.ID); updateErr == nil {
 		t.Fatal("active state with revoked_at unexpectedly succeeded")
 	}
 	if _, updateErr := db.SQLDB().ExecContext(ctx, `
 		UPDATE ingestion_tokens SET expires_at_unix_micro = created_at_unix_micro
-		WHERE ingestion_token_id = ?`, issued.Token.ID); updateErr == nil {
+		WHERE ingestion_token_id = $1`, issued.Token.ID); updateErr == nil {
 		t.Fatal("expiration at creation time unexpectedly succeeded")
 	}
 
@@ -303,10 +306,10 @@ func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 	if _, authenticateErr := store.Authenticate(ctx, plaintext); !errors.Is(authenticateErr, ErrUnauthorized) {
 		t.Fatalf("Authenticate(revoked) error = %v, want ErrUnauthorized", authenticateErr)
 	}
-	if _, updateErr := db.SQLDB().ExecContext(ctx, `UPDATE ingestion_tokens SET state = 'active' WHERE ingestion_token_id = ?`, issued.Token.ID); updateErr == nil {
+	if _, updateErr := db.SQLDB().ExecContext(ctx, `UPDATE ingestion_tokens SET state = 'active' WHERE ingestion_token_id = $1`, issued.Token.ID); updateErr == nil {
 		t.Fatal("direct reactivation of revoked token unexpectedly succeeded")
 	}
-	if _, updateErr := db.SQLDB().ExecContext(ctx, `UPDATE ingestion_tokens SET token_digest = zeroblob(32) WHERE ingestion_token_id = ?`, issued.Token.ID); updateErr == nil {
+	if _, updateErr := db.SQLDB().ExecContext(ctx, `UPDATE ingestion_tokens SET token_digest = decode(repeat('00', (32)::int), 'hex') WHERE ingestion_token_id = $1`, issued.Token.ID); updateErr == nil {
 		t.Fatal("direct mutation of token digest unexpectedly succeeded")
 	}
 	if _, revokeErr := store.RevokeCollectorToken(ctx, issued.Token.ID, issued.Token.Version); !errors.Is(revokeErr, control.ErrVersionConflict) {
@@ -330,7 +333,7 @@ func TestStoreCopiesDigestKey(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "key-copy",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -363,7 +366,7 @@ func TestAuthenticateRefreshesCurrentActiveScopes(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "scope refresh",
 		AllowedIndexNames: []string{"second", "first"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -410,13 +413,23 @@ func TestGetAndListCollectorTokensReturnSafeMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore(): %v", err)
 	}
+	// These equal-time IDs differ in case, exposing a default-locale PostgreSQL
+	// sort that disagrees with the API's byte-order tiebreaker deterministically.
+	lowercaseID, err := base64.RawURLEncoding.DecodeString("aaaaaaaaaaaaaaaaaaaaag")
+	if err != nil || len(lowercaseID) != tokenIDRandomBytes {
+		t.Fatalf("decode token ID fixture: %v", err)
+	}
+	randomness := append(bytes.Repeat([]byte{1}, tokenRandomBytes), make([]byte, tokenIDRandomBytes)...)
+	randomness = append(randomness, bytes.Repeat([]byte{2}, tokenRandomBytes)...)
+	randomness = append(randomness, lowercaseID...)
+	store.random = bytes.NewReader(randomness)
 	now := time.Date(2026, 7, 21, 10, 0, 0, 0, time.UTC)
 	store.now = func() time.Time { return now }
 	first, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "first",
 		AllowedIndexNames: []string{"main"},
 		BoundCollectorID:  testCollectorID,
-		ExpiresAt:         now.Add(time.Hour),
+		ExpiresAt:         now.Add(time.Hour), OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(first): %v", err)
@@ -425,12 +438,15 @@ func TestGetAndListCollectorTokensReturnSafeMetadata(t *testing.T) {
 	second, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "second",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(second): %v", err)
 	}
 
+	if first.Token.ID != "tok_AAAAAAAAAAAAAAAAAAAAAA" || second.Token.ID != "tok_aaaaaaaaaaaaaaaaaaaaag" {
+		t.Fatalf("token byte-order fixture IDs = %q,%q", first.Token.ID, second.Token.ID)
+	}
 	got, err := store.GetCollectorToken(ctx, first.Token.ID)
 	if err != nil {
 		t.Fatalf("GetCollectorToken(): %v", err)
@@ -450,6 +466,11 @@ func TestGetAndListCollectorTokensReturnSafeMetadata(t *testing.T) {
 	slices.Sort(wantIDs)
 	if len(tokens) != 2 || tokens[0].ID != wantIDs[0] || tokens[1].ID != wantIDs[1] {
 		t.Fatalf("ListCollectorTokens() = %#v", tokens)
+	}
+	for _, token := range tokens {
+		if strings.Contains(fmt.Sprintf("%#v", token), first.Secret.Plaintext()) || strings.Contains(fmt.Sprintf("%#v", token), second.Secret.Plaintext()) {
+			t.Fatalf("list token metadata exposed a credential: %#v", token)
+		}
 	}
 	store.now = func() time.Time { return now.Add(time.Hour) }
 	expired, err := store.GetCollectorToken(ctx, first.Token.ID)
@@ -481,7 +502,7 @@ func TestUpdateCollectorTokenReplacesDefinitionAndScopesAtomically(t *testing.T)
 		Name:              "before",
 		Description:       "old",
 		AllowedIndexNames: []string{"first"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -544,7 +565,7 @@ func TestUpdateCollectorTokenRejectsInactiveOrInvalidReplacement(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "token",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -573,7 +594,7 @@ func TestUpdateCollectorTokenRejectsInactiveOrInvalidReplacement(t *testing.T) {
 		Name:              "short",
 		AllowedIndexNames: []string{"main"},
 		BoundCollectorID:  testCollectorID,
-		ExpiresAt:         now.Add(time.Minute),
+		ExpiresAt:         now.Add(time.Minute), OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(short): %v", err)
@@ -602,7 +623,7 @@ func TestCollectorTokenRandomnessFailuresAreSafe(t *testing.T) {
 	_, err = store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "failure",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err == nil {
 		t.Fatal("CreateCollectorToken() unexpectedly succeeded")
@@ -616,7 +637,7 @@ func TestCollectorTokenRandomnessFailuresAreSafe(t *testing.T) {
 	_, err = store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "id failure",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err == nil {
 		t.Fatal("CreateCollectorToken(ID randomness failure) unexpectedly succeeded")
@@ -663,7 +684,7 @@ func TestCollectorTokensRequireExplicitActiveIngestionIndexes(t *testing.T) {
 			_, createErr := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 				Name:              name,
 				AllowedIndexNames: indexes,
-				BoundCollectorID:  testCollectorID,
+				BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 			})
 			if !errors.Is(createErr, control.ErrInvalidArgument) {
 				t.Fatalf("CreateCollectorToken() error = %v, want ErrInvalidArgument", createErr)
@@ -674,7 +695,7 @@ func TestCollectorTokensRequireExplicitActiveIngestionIndexes(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "valid",
 		AllowedIndexNames: []string{"active"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(valid): %v", err)
@@ -717,7 +738,7 @@ func TestCollectorTokenValidationExpirationAndRandomness(t *testing.T) {
 		Name:              "already expired",
 		AllowedIndexNames: []string{"main"},
 		BoundCollectorID:  testCollectorID,
-		ExpiresAt:         now,
+		ExpiresAt:         now, OrganizationID: 1, IssuerUserID: 42,
 	}); !errors.Is(createErr, control.ErrInvalidArgument) {
 		t.Fatalf("CreateCollectorToken(expired) error = %v, want ErrInvalidArgument", createErr)
 	}
@@ -726,7 +747,7 @@ func TestCollectorTokenValidationExpirationAndRandomness(t *testing.T) {
 		Name:              "short lived",
 		AllowedIndexNames: []string{"main"},
 		BoundCollectorID:  testCollectorID,
-		ExpiresAt:         now.Add(time.Hour),
+		ExpiresAt:         now.Add(time.Hour), OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(short lived): %v", err)
@@ -745,7 +766,7 @@ func TestCollectorTokenValidationExpirationAndRandomness(t *testing.T) {
 		issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 			Name:              fmt.Sprintf("random-%03d", i),
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		})
 		if err != nil {
 			t.Fatalf("CreateCollectorToken(%d): %v", i, err)
@@ -781,7 +802,7 @@ func TestCollectorTokenGORMModelsMatchMigratedSQLiteSchema(t *testing.T) {
 
 			rows, err := db.SQLDB().QueryContext(
 				ctx,
-				fmt.Sprintf("SELECT name FROM pragma_table_info('%s') ORDER BY cid", test.table),
+				fmt.Sprintf("SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '%s' ORDER BY ordinal_position", test.table),
 			)
 			if err != nil {
 				t.Fatalf("read migrated columns: %v", err)
@@ -798,7 +819,11 @@ func TestCollectorTokenGORMModelsMatchMigratedSQLiteSchema(t *testing.T) {
 			if err := rows.Close(); err != nil {
 				t.Fatalf("close migrated-column rows: %v", err)
 			}
-			if !slices.Equal(statement.Schema.DBNames, migratedColumns) {
+			// Native additive migrations append columns; GORM binds named columns.
+			modelColumns := slices.Clone(statement.Schema.DBNames)
+			slices.Sort(modelColumns)
+			slices.Sort(migratedColumns)
+			if !slices.Equal(modelColumns, migratedColumns) {
 				t.Fatalf(
 					"GORM %s columns = %v, migrated columns = %v",
 					test.table,
@@ -878,7 +903,7 @@ func TestCollectorTokenStoreSurvivesDatabaseReopen(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "control.sqlite")
+	path := pgtest.DSN(t)
 	key := []byte("0123456789abcdef0123456789abcdef")
 	db, err := control.Open(ctx, path)
 	if err != nil {
@@ -899,7 +924,7 @@ func TestCollectorTokenStoreSurvivesDatabaseReopen(t *testing.T) {
 		AllowedIndexNames:    []string{"main"},
 		BoundCollectorID:     testCollectorID,
 		AllowedHostRegexes:   []string{"^before-host$"},
-		AllowedSourceRegexes: []string{"^before-source$"},
+		AllowedSourceRegexes: []string{"^before-source$"}, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		_ = db.Close()
@@ -982,7 +1007,7 @@ func TestConcurrentCollectorTokenUpdatesHaveOneAtomicCASWinner(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "before",
 		AllowedIndexNames: []string{"alpha"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -1070,17 +1095,13 @@ func TestCollectorTokenScopeReplacementRollsBackOnPersistenceFailure(t *testing.
 		Name:              "original",
 		Description:       "original definition",
 		AllowedIndexNames: []string{"before"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
-		CREATE TRIGGER reject_replacement_scope
-		BEFORE INSERT ON ingestion_token_indexes
-		BEGIN
-			SELECT RAISE(ABORT, 'forced token-scope failure');
-		END`); err != nil {
+		CREATE OR REPLACE FUNCTION reject_replacement_scope_function() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING MESSAGE = 'forced token-scope failure'; RETURN NEW; END $$; CREATE TRIGGER reject_replacement_scope BEFORE INSERT ON ingestion_token_indexes FOR EACH ROW EXECUTE FUNCTION reject_replacement_scope_function()`); err != nil {
 		t.Fatalf("create failure trigger: %v", err)
 	}
 
@@ -1129,7 +1150,7 @@ func TestCollectorTokenStoreHonorsContextCancellation(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "context",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -1150,7 +1171,7 @@ func TestCollectorTokenStoreHonorsContextCancellation(t *testing.T) {
 			_, operationErr := store.CreateCollectorToken(canceled, CreateCollectorTokenRequest{
 				Name:              "canceled",
 				AllowedIndexNames: []string{"main"},
-				BoundCollectorID:  testCollectorID,
+				BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 			})
 			return operationErr
 		},
@@ -1215,7 +1236,7 @@ func assertCollectorTokenScopeIndexParity(
 	}
 	rows, err := db.SQLDB().QueryContext(
 		context.Background(),
-		fmt.Sprintf("SELECT name FROM pragma_index_info('%s') ORDER BY seqno", indexName),
+		fmt.Sprintf("SELECT name FROM (SELECT a.attname AS name,k.ordinality-1 AS seqno,1 AS \"key\",CASE WHEN (i.indoption[(k.ordinality-1)::int] & 1)=1 THEN 1 ELSE 0 END AS \"desc\" FROM pg_index i JOIN pg_class x ON x.oid=i.indexrelid JOIN pg_namespace n ON n.oid=x.relnamespace CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum,ordinality) JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum WHERE n.nspname=current_schema() AND x.relname='%s' AND k.ordinality<=i.indnkeyatts) AS index_metadata ORDER BY seqno", indexName),
 	)
 	if err != nil {
 		t.Fatalf("read migrated index: %v", err)
@@ -1239,7 +1260,7 @@ func assertCollectorTokenScopeIndexParity(
 
 func BenchmarkAuthorizeCollectorToken(b *testing.B) {
 	ctx := context.Background()
-	db, err := control.Open(ctx, b.TempDir()+"/control.sqlite")
+	db, err := control.Open(ctx, pgtest.DSN(b))
 	if err != nil {
 		b.Fatalf("control.Open(): %v", err)
 	}
@@ -1254,7 +1275,7 @@ func BenchmarkAuthorizeCollectorToken(b *testing.B) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "benchmark",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		b.Fatalf("CreateCollectorToken(): %v", err)
@@ -1277,7 +1298,7 @@ func openControlDB(t *testing.T) *control.DB {
 
 func controlTestOpen(t *testing.T) *control.DB {
 	t.Helper()
-	db, err := control.Open(context.Background(), t.TempDir()+"/control.sqlite")
+	db, err := control.Open(context.Background(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
 	}

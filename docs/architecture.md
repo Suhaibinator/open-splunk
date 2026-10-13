@@ -3,7 +3,7 @@
 Open Splunk is a single-node log ingestion, search, and analytics product. A Go
 server owns the control plane, the search lifecycle, ingestion admission, and
 the embedded browser application. ClickHouse owns event storage and query
-execution. SQLite owns bounded control-plane state and durable ingestion work.
+execution. PostgreSQL owns identity, organization membership, index grants, bounded control-plane state and durable ingestion work. Private versioned MinIO stores complete query captures and export artifacts.
 A separate Go collector tails application logs and delivers protobuf batches to
 the server over an authenticated bidirectional gRPC stream.
 
@@ -14,7 +14,9 @@ the server over an authenticated bidirectional gRPC stream.
 | `open-splunk-server` | HTTPS/API serving, browser assets, authentication, catalogs, search jobs, schedules, webhook alerts, native and HEC admission, audit, recovery, and reconciliation |
 | `open-splunk-collector` | file discovery and tailing, canonical event construction, WAL/checkpoints, retry, pacing, and dead letters |
 | Browser application | same-origin administration, search, analytics, and dashboard UI using generated protobuf codecs |
-| SQLite | indexes, apps, tokens, collectors, server settings, saved and scheduled searches, alerts, dashboards, jobs/history, knowledge, lookup metadata, audit journals, quotas, visibility reservations, outbox, and recovery authority |
+| PostgreSQL | indexes, apps, tokens, collectors, server settings, saved and scheduled searches, alerts, dashboards, jobs/history, knowledge, lookup metadata, audit journals, quotas, visibility reservations, outbox, and recovery authority |
+| GoCommon | Google OAuth, HttpOnly sessions, users, organization hierarchy and membership invariants |
+| Private MinIO | complete captures and streaming exports, referenced by immutable object version |
 | ClickHouse | immutable event rows, expiration metadata, field metadata, and bounded SPL query execution |
 
 The Next.js application is statically exported and embedded in the Go server.
@@ -37,7 +39,7 @@ Native ingestion follows this sequence:
 2. The server authenticates the token and collector identity, refreshes token
    and index policy, validates events, and checks token and index virtual
    schedules. Explicit collector redaction has already run before the local WAL.
-3. One serializable SQLite transaction reserves visibility, stores immutable
+3. One serializable PostgreSQL transaction reserves visibility, stores immutable
    request identity and outbox payload, charges quotas, and records terminal
    per-event rejection information.
 4. The outbox writer inserts the accepted rows into ClickHouse. Stable batch,
@@ -72,7 +74,7 @@ sharing is permitted only after a complete, unexpired artifact exists. An alert
 evaluates only an exact result (or a provable lower-bound condition), extends
 the job retention before delivery, and signs one bounded HTTPS webhook attempt.
 Schedules, sharing, alert state, encrypted destinations, signing-key
-generations, run history, and feature-operation audit records remain in SQLite.
+generations, run history, and feature-operation audit records remain in PostgreSQL.
 
 ## Persistence boundary
 
@@ -85,13 +87,13 @@ recovery sets fail closed. The server never silently erases or rewrites
 unrecognized state; development operators provision fresh state when the
 source revision changes incompatibly.
 
-SQLite schema changes are explicit SQL migrations and never GORM
+PostgreSQL schema changes are explicit SQL migrations and never GORM
 `AutoMigrate`. ClickHouse access on the event path uses the native driver, not
-GORM. A coordinated recovery set binds the SQLite authority and ClickHouse
+GORM. A coordinated recovery set binds the PostgreSQL authority and ClickHouse
 backup to one generation so restore cannot mix branches.
 
 Accepted ingestion is split into durable logical batches and physical
-ClickHouse write groups. SQLite retains each batch's identity, quota decision,
+ClickHouse write groups. PostgreSQL retains each batch's identity, quota decision,
 response metadata, outbox, HEC acknowledgment state, and visibility sequence.
 The server seals an ordered group with a stable deduplication token before any
 storage side effect, marks the complete group ambiguous before its one
@@ -109,7 +111,7 @@ protocol and limits.
   rest. Secrets are never written to audit, metrics, cursors, snapshots, or
   event provenance.
 - Audited control-plane mutation families use optimistic concurrency and commit
-  their success audit record in the same SQLite transaction.
+  their success audit record in the same PostgreSQL transaction.
 - Unknown or malformed persisted authority fails startup or the protected
   operation; the server does not continue with a partial policy or snapshot.
 - Parsers, protobuf handlers, catalogs, cursors, queues, journals, bodies,
@@ -117,6 +119,65 @@ protocol and limits.
 - Generated SQL is parameterized. Public errors redact SQL, bound values,
   event data, definition bodies, and backend exception text.
 
-The current surface is intentionally single-node and trusted-single-user at
-the browser boundary. The schemas are prepared for stronger role enforcement,
-but distributed coordination and general multi-user RBAC are roadmap work.
+The current surface is single-node with authenticated users, organizations and per-index access rules. Distributed coordination remains separate work.
+
+
+## Account and index authority
+
+GoCommon is composed into the server through the pinned `third_party/go-common`
+module snapshot. The browser uses its actual compiled core client from
+`third_party/go-common-core` while retaining OpenSplunk CSS and primitives.
+Google sign-in creates an ordinary user with no team memberships. GoCommon always
+provisions its managed personal workspace; OpenSplunk filters organization lists
+to its team type and grants no index authority through that workspace. Siteadmin type 44
+is operator-assigned, with unconditional organization/index access. Ordinary
+users need active organization membership before role or individual index
+rules apply. Viewer, Admin and Owner roles are 1, 23 and 44. Deny wins over allow.
+
+Organization context accompanies cookie-authenticated HTTP requests and socket
+handshakes. Access is checked before query planning, retained reads, mutation,
+background execution and export acquisition. The browser clears private state
+on user or organization changes. MinIO object keys never confer user access;
+large downloads stream through an authenticated gateway. PostgreSQL stores
+metadata and manifests, while MinIO stores full captures and exports; bounded
+browser previews are explicitly distinguished from complete captured results.
+
+Specialized artifact storage belongs to OpenSplunk's `internal/objectstore`
+adapter over MinIO. It verifies the operator-provisioned private bucket's
+versioning and pins reads and deletion to exact object versions and ETags.
+GoCommon's attachment lifecycle and storage contracts remain unchanged.
+
+
+GoCommon borrows the application PostgreSQL pool without a transaction interceptor
+or application writer triggers on its tables. Ordinary transactions acquire no
+writer lock. Read snapshots use repeatable read; mutation repositories explicitly
+lock the authority they inspect before changing it.
+
+Catalog publication protects the instance-wide index revision, physical-record
+limit and selector dependencies. Ingestion acquires a shared catalog fence,
+credential authority, then the visibility/pending/quota boundary. Capture and
+export reservations share the retained-storage budget. These locks protect real
+instance-wide invariants and never span query execution, object uploads or reads.
+Saved content and history use owner keys; collector revisions, alert/export
+budgets and audit/receipt accounting use tenant keys; index policies use index
+keys. Shared catalog fences allow independent saved-content owners to write
+concurrently while excluding incompatible catalog deletion.
+
+Business mutations append audit and retry receipts in their ambient transaction.
+Database-only transaction closures retry serialization/deadlock aborts at most
+four times. Unique constraints, conditional version updates and existing native
+transition/append-only guards remain authoritative. Fixed-scope statement
+guards take their invariant before tuple locks; owner/tenant row guards back the
+repositories' explicit prelocks. The migration removes the
+legacy universal statement triggers without rewriting historical migrations.
+
+Policy mutations lock users, organizations and membership rows before their index
+policy key, then reread ownership and revision before publication. Native user
+lifecycle callbacks keep GoCommon's guarded ancestor/last-Owner primitives.
+Organization deletion locks its root first, then reads and locks the current
+subtree before checking dependent application resources. Resource creation locks
+and validates its live owning organization.
+Callbacks require an ambient native transaction and never acquire a universal
+application lock. Child provisioning locks live ancestors before native
+hierarchy insertion. Bootstrap, migration,
+maintenance ownership and coordinated recovery exclusion remain separate.

@@ -425,7 +425,7 @@ func TestSearchSuggestionsCancellationStopsAuthorizationAndServiceWork(t *testin
 		t.Parallel()
 		service := &fakeSearchSuggestions{maximum: 10}
 		jobs := &fakeSearchJobs{}
-		handlerWithDeadline, err := NewHandler(Config{
+		handlerWithDeadline, err := newAuthenticatedTestHandler(Config{
 			SearchJobs:                 jobs,
 			SearchSuggestions:          service,
 			Indexes:                    deadlineIndexCatalog{},
@@ -865,8 +865,8 @@ func TestSearchSuggestionsOptionalServiceAndMaximumAreValidatedAtConstruction(t 
 	for _, maximum := range []uint32{0, uint32(spl.MaximumSuggestionLimit + 1)} {
 		config := base
 		config.SearchSuggestions = &fakeSearchSuggestions{maximum: maximum}
-		if handler, err := NewHandler(config); err == nil || handler != nil {
-			t.Fatalf("NewHandler(maximum=%d) = (%v, %v), want nil error result", maximum, handler, err)
+		if handler, err := newAuthenticatedTestHandler(config); err == nil || handler != nil {
+			t.Fatalf("newAuthenticatedTestHandler(maximum=%d) = (%v, %v), want nil error result", maximum, handler, err)
 		}
 	}
 }

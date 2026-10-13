@@ -3147,7 +3147,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     ?? unreadableTokenCreateRecovery?.reconciliationError
     ?? ""
   );
-  const recoveryNeedsAuthentication = /auth|sign[ -]?in|administrator token/i.test(
+  const recoveryNeedsAuthentication = /auth|sign[ -]?in|session/i.test(
     recoveryAuthenticationError,
   );
   const issuedHECCurlExample = issuedToken === null || !hecEnabled

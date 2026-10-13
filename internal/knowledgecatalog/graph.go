@@ -8,9 +8,9 @@ import (
 	"strings"
 
 	"fortio.org/safecast"
-	"gorm.io/gorm"
-
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"gorm.io/gorm"
 )
 
 // ListDependencies returns the disclosed direct outgoing edges of one exact
@@ -70,7 +70,7 @@ func (store *Store) listGraph(
 		}
 	}
 
-	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(store.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return DependencyPage{}, mapError(ctx.Err(), "begin graph read", tx.Error)
 	}
@@ -483,16 +483,16 @@ func readAuthorizedObjectRegistryRecords(query *gorm.DB, limit int) ([]registryR
 	}
 	var sizes []registrySizeRecord
 	if err := query.Session(&gorm.Session{}).Select(`
-		length(CAST(object.knowledge_object_id AS BLOB)) AS knowledge_object_id_bytes,
-		length(CAST(object.tenant_id AS BLOB)) AS tenant_id_bytes,
-		length(CAST(object.app_id AS BLOB)) AS app_id_bytes,
-		length(CAST(object.owner_id AS BLOB)) AS owner_id_bytes,
-		length(CAST(object.object_type AS BLOB)) AS object_type_bytes,
-		length(CAST(object.name AS BLOB)) AS name_bytes,
-		length(CAST(object.sharing_scope AS BLOB)) AS sharing_scope_bytes,
-		length(CAST(object.state AS BLOB)) AS state_bytes,
+		octet_length(object.knowledge_object_id) AS knowledge_object_id_bytes,
+		octet_length(object.tenant_id) AS tenant_id_bytes,
+		octet_length(object.app_id) AS app_id_bytes,
+		octet_length(object.owner_id) AS owner_id_bytes,
+		octet_length(object.object_type) AS object_type_bytes,
+		octet_length(object.name) AS name_bytes,
+		octet_length(object.sharing_scope) AS sharing_scope_bytes,
+		octet_length(object.state) AS state_bytes,
 		coalesce(length(object.definition_digest), 0) AS digest_bytes,
-		coalesce(length(CAST(object.quarantine_reason AS BLOB)), 0) AS quarantine_reason_bytes
+		coalesce(octet_length(object.quarantine_reason), 0) AS quarantine_reason_bytes
 	`).Limit(limit).Find(&sizes).Error; err != nil {
 		return nil, err
 	}

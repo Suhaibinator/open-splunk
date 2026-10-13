@@ -15,7 +15,9 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/alerts"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/cursorcodec"
+	"github.com/Suhaibinator/open-splunk/internal/resourcepolicy"
 	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchretention"
 )
@@ -29,12 +31,14 @@ const (
 )
 
 type alertListCursor struct {
+	Scope        string `json:"scope"`
 	AfterAlertID string `json:"after_alert_id"`
 	AppFilter    string `json:"app_filter"`
 	TextFilter   string `json:"text_filter"`
 }
 
 type alertRunCursor struct {
+	Scope      string `json:"scope"`
 	AfterRunID string `json:"after_run_id"`
 	AlertID    string `json:"alert_id"`
 }
@@ -56,8 +60,12 @@ func (handler *apiHandler) registerAlertRoutes(group *apiRouteGroup, maximumRequ
 
 func (handler *apiHandler) createAlert(request *http.Request, input *opensplunk.CreateAlertRequest) (*opensplunk.CreateAlertResponse, error) {
 	definition, webhookURL := alertDefinitionFromProto(input.GetDefinition())
+	if err := handler.authorizeAlertDefinition(request.Context(), definition); err != nil {
+		return nil, mapAuthorizationError(err)
+	}
 	issued, err := handler.alertService.Create(request.Context(), alerts.CreateInput{
-		OwnerID: handler.ownerID, ClientRequestID: input.GetClientRequestId(), Definition: definition, WebhookURL: webhookURL,
+		OrganizationID: handler.requestOrganization(request.Context()),
+		OwnerID:        handler.requestOwner(request.Context()), ClientRequestID: input.GetClientRequestId(), Definition: definition, WebhookURL: webhookURL,
 	})
 	if mapped := mapAlertCallError(request.Context(), err); mapped != nil {
 		return nil, mapped
@@ -83,18 +91,32 @@ func (handler *apiHandler) listAlerts(request *http.Request, input *opensplunk.L
 	includeTotal := input.GetPage().GetIncludeTotalSize()
 	appFilter := input.GetAppIdFilter()
 	textFilter := input.GetTextFilter()
-	cursor := alertListCursor{AppFilter: appFilter, TextFilter: textFilter}
+	policyFingerprint, err := resourcepolicy.Fingerprint(request.Context())
+	if err != nil {
+		return nil, mapAuthorizationError(err)
+	}
+	cursorScope := handler.appCursorScope(request.Context()) + ":" + policyFingerprint
+	cursor := alertListCursor{Scope: cursorScope, AppFilter: appFilter, TextFilter: textFilter}
 	if pageToken != "" {
-		if err := cursorcodec.Decode(handler.adminCursorKey[:], alertListCursorDomain, alertCursorVersion, maximumAlertPageTokenBytes, pageToken, &cursor); err != nil || cursor.AppFilter != appFilter || cursor.TextFilter != textFilter {
+		if err := cursorcodec.Decode(handler.adminCursorKey[:], alertListCursorDomain, alertCursorVersion, maximumAlertPageTokenBytes, pageToken, &cursor); err != nil || cursor.Scope != cursorScope || cursor.AppFilter != appFilter || cursor.TextFilter != textFilter {
 			return nil, badRequestError("alert page token is invalid")
 		}
 	}
-	summaries, err := handler.alertService.List(request.Context(), handler.ownerID, alerts.MaximumAlertsPerOwner)
+	if handler.alertScope(request.Context()).SiteAdministrator {
+		return handler.listSiteAdministratorAlerts(request, input, cursor, cursorScope)
+	}
+	summaries, err := handler.alertService.List(request.Context(), handler.alertScope(request.Context()), alerts.MaximumAlertsPerOwner)
 	if mapped := mapAlertCallError(request.Context(), err); mapped != nil {
 		return nil, mapped
 	}
 	filtered := make([]alerts.AlertSummary, 0, len(summaries))
 	for _, summary := range summaries {
+		if err := handler.authorizeAlertDefinition(request.Context(), summary.Definition); err != nil {
+			if errors.Is(err, authorization.ErrForbidden) {
+				continue
+			}
+			return nil, mapAuthorizationError(err)
+		}
 		if appFilter != "" && summary.Definition.Application != appFilter {
 			continue
 		}
@@ -119,7 +141,7 @@ func (handler *apiHandler) listAlerts(request *http.Request, input *opensplunk.L
 	nextPageToken := ""
 	if end < len(filtered) {
 		nextPageToken, err = cursorcodec.Encode(handler.adminCursorKey[:], alertListCursorDomain, alertCursorVersion, maximumAlertPageTokenBytes, alertListCursor{
-			AfterAlertID: filtered[end-1].ID, AppFilter: appFilter, TextFilter: textFilter,
+			Scope: cursorScope, AfterAlertID: filtered[end-1].ID, AppFilter: appFilter, TextFilter: textFilter,
 		})
 		if err != nil {
 			return nil, internalError()
@@ -132,10 +154,43 @@ func (handler *apiHandler) listAlerts(request *http.Request, input *opensplunk.L
 	return &opensplunk.ListAlertsResponse{Alerts: result, Page: page}, nil
 }
 
+func (handler *apiHandler) listSiteAdministratorAlerts(request *http.Request, input *opensplunk.ListAlertsRequest, cursor alertListCursor, cursorScope string) (*opensplunk.ListAlertsResponse, error) {
+	page, err := handler.alertService.ListPage(request.Context(), handler.alertScope(request.Context()), alerts.ListPageRequest{
+		Limit: int(input.GetPage().GetPageSize()), AfterAlertID: cursor.AfterAlertID, Application: input.GetAppIdFilter(), Text: input.GetTextFilter(), IncludeTotal: input.GetPage().GetIncludeTotalSize(),
+	})
+	if mapped := mapAlertCallError(request.Context(), err); mapped != nil {
+		return nil, mapped
+	}
+	items := make([]*opensplunk.Alert, 0, len(page.Alerts))
+	for _, summary := range page.Alerts {
+		projected, err := alertSummaryToProto(summary)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, projected)
+	}
+	token := ""
+	if page.NextAlertID != "" {
+		token, err = cursorcodec.Encode(handler.adminCursorKey[:], alertListCursorDomain, alertCursorVersion, maximumAlertPageTokenBytes, alertListCursor{Scope: cursorScope, AfterAlertID: page.NextAlertID, AppFilter: input.GetAppIdFilter(), TextFilter: input.GetTextFilter()})
+		if err != nil {
+			return nil, internalError()
+		}
+	}
+	projectedPage, err := boundedListPageResponse("alert", boundedListPageMetadata{itemCount: len(items), nextPageToken: token, totalSize: page.TotalSize, totalExact: input.GetPage().GetIncludeTotalSize()}, int(input.GetPage().GetPageSize()), input.GetPage().GetPageToken(), input.GetPage().GetIncludeTotalSize(), maximumAlertPageTokenBytes)
+	if err != nil {
+		return nil, internalError()
+	}
+	return &opensplunk.ListAlertsResponse{Alerts: items, Page: projectedPage}, nil
+}
+
 func (handler *apiHandler) updateAlert(request *http.Request, input *opensplunk.UpdateAlertRequest) (*opensplunk.UpdateAlertResponse, error) {
 	definition, webhookURL := alertDefinitionFromProto(input.GetDefinition())
+	if err := handler.authorizeAlertDefinition(request.Context(), definition); err != nil {
+		return nil, mapAuthorizationError(err)
+	}
 	updated, err := handler.alertService.Update(request.Context(), alerts.UpdateInput{
-		ID: input.GetAlertId(), OwnerID: handler.ownerID, ExpectedVersion: input.GetExpectedVersion(),
+		Scope: handler.alertScope(request.Context()),
+		ID:    input.GetAlertId(), OwnerID: handler.requestOwner(request.Context()), ExpectedVersion: input.GetExpectedVersion(),
 		Definition: definition, WebhookURL: webhookURL,
 	})
 	if mapped := mapAlertCallError(request.Context(), err); mapped != nil {
@@ -149,7 +204,10 @@ func (handler *apiHandler) updateAlert(request *http.Request, input *opensplunk.
 }
 
 func (handler *apiHandler) setAlertEnabled(request *http.Request, input *opensplunk.SetAlertEnabledRequest) (*opensplunk.SetAlertEnabledResponse, error) {
-	updated, err := handler.alertService.SetEnabled(request.Context(), handler.ownerID, input.GetAlertId(), input.GetExpectedVersion(), input.GetEnabled())
+	if _, err := handler.alertProjection(request.Context(), input.GetAlertId()); err != nil {
+		return nil, err
+	}
+	updated, err := handler.alertService.SetEnabled(request.Context(), handler.alertScope(request.Context()), input.GetAlertId(), input.GetExpectedVersion(), input.GetEnabled())
 	if mapped := mapAlertCallError(request.Context(), err); mapped != nil {
 		return nil, mapped
 	}
@@ -162,7 +220,7 @@ func (handler *apiHandler) setAlertEnabled(request *http.Request, input *openspl
 
 func (handler *apiHandler) deleteAlert(request *http.Request, input *opensplunk.DeleteAlertRequest) (*opensplunk.DeleteAlertResponse, error) {
 	id := input.GetAlertId()
-	err := handler.alertService.Delete(request.Context(), handler.ownerID, id, input.GetExpectedVersion())
+	err := handler.alertService.Delete(request.Context(), handler.alertScope(request.Context()), id, input.GetExpectedVersion())
 	if mapped := mapAlertCallError(request.Context(), err); mapped != nil {
 		return nil, mapped
 	}
@@ -170,10 +228,13 @@ func (handler *apiHandler) deleteAlert(request *http.Request, input *opensplunk.
 }
 
 func (handler *apiHandler) runAlert(request *http.Request, input *opensplunk.RunAlertRequest) (*opensplunk.RunAlertResponse, error) {
+	if _, err := handler.alertProjection(request.Context(), input.GetAlertId()); err != nil {
+		return nil, err
+	}
 	if handler.alertCoordinator == nil {
 		return nil, unavailableError("alert run-now service is unavailable")
 	}
-	run, err := handler.alertCoordinator.RunNow(request.Context(), handler.ownerID, input.GetAlertId())
+	run, err := handler.alertCoordinator.RunNow(request.Context(), handler.alertScope(request.Context()), input.GetAlertId())
 	if mapped := mapAlertCallError(request.Context(), err); mapped != nil {
 		return nil, mapped
 	}
@@ -188,11 +249,14 @@ func (handler *apiHandler) testAlertWebhook(request *http.Request, input *opensp
 	if handler.alertDeliverer == nil {
 		return nil, unavailableError("alert webhook delivery service is unavailable")
 	}
-	summary, err := handler.alertService.Get(request.Context(), handler.ownerID, input.GetAlertId())
+	summary, err := handler.alertService.Get(request.Context(), handler.alertScope(request.Context()), input.GetAlertId())
 	if mapped := mapAlertCallError(request.Context(), err); mapped != nil {
 		return nil, mapped
 	}
-	secrets, err := handler.alertService.OpenTestDeliverySecrets(request.Context(), handler.ownerID, summary.ID)
+	if err := handler.authorizeAlertDefinition(request.Context(), summary.Definition); err != nil {
+		return nil, mapAuthorizationError(err)
+	}
+	secrets, err := handler.alertService.OpenTestDeliverySecrets(request.Context(), handler.alertScope(request.Context()), summary.ID)
 	if mapped := mapAlertCallError(request.Context(), err); mapped != nil {
 		return nil, mapped
 	}
@@ -227,7 +291,10 @@ func (handler *apiHandler) testAlertWebhook(request *http.Request, input *opensp
 }
 
 func (handler *apiHandler) rotateAlertSecret(request *http.Request, input *opensplunk.RotateAlertSecretRequest) (*opensplunk.RotateAlertSecretResponse, error) {
-	issued, err := handler.alertService.RotateSecret(request.Context(), handler.ownerID, input.GetAlertId(), input.GetExpectedVersion())
+	if _, err := handler.alertProjection(request.Context(), input.GetAlertId()); err != nil {
+		return nil, err
+	}
+	issued, err := handler.alertService.RotateSecret(request.Context(), handler.alertScope(request.Context()), input.GetAlertId(), input.GetExpectedVersion())
 	if mapped := mapAlertCallError(request.Context(), err); mapped != nil {
 		return nil, mapped
 	}
@@ -243,16 +310,25 @@ func (handler *apiHandler) listAlertRuns(request *http.Request, input *opensplun
 	pageToken := input.GetPage().GetPageToken()
 	includeTotal := input.GetPage().GetIncludeTotalSize()
 	id := input.GetAlertId()
-	cursor := alertRunCursor{AlertID: id}
+	policyFingerprint, err := resourcepolicy.Fingerprint(request.Context())
+	if err != nil {
+		return nil, mapAuthorizationError(err)
+	}
+	cursorScope := handler.appCursorScope(request.Context()) + ":" + policyFingerprint
+	cursor := alertRunCursor{Scope: cursorScope, AlertID: id}
 	if pageToken != "" {
-		if err := cursorcodec.Decode(handler.adminCursorKey[:], alertRunCursorDomain, alertCursorVersion, maximumAlertPageTokenBytes, pageToken, &cursor); err != nil || cursor.AlertID != id {
+		if err := cursorcodec.Decode(handler.adminCursorKey[:], alertRunCursorDomain, alertCursorVersion, maximumAlertPageTokenBytes, pageToken, &cursor); err != nil || cursor.Scope != cursorScope || cursor.AlertID != id {
 			return nil, badRequestError("alert run page token is invalid")
 		}
 	}
-	if _, err := handler.alertService.Get(request.Context(), handler.ownerID, id); err != nil {
-		return nil, mapAlertCallError(request.Context(), err)
+	if _, err := handler.alertProjection(request.Context(), id); err != nil {
+		return nil, err
 	}
-	runs, err := handler.alertRepository.ListRuns(request.Context(), handler.ownerID, id, alerts.MaximumRunHistory)
+	boundCtx, boundErr := alerts.WithAccessScope(request.Context(), handler.alertScope(request.Context()))
+	if boundErr != nil {
+		return nil, mapAlertCallError(request.Context(), boundErr)
+	}
+	runs, err := handler.alertRepository.ListRuns(boundCtx, handler.requestOwner(request.Context()), id, alerts.MaximumRunHistory)
 	if mapped := mapAlertCallError(request.Context(), err); mapped != nil {
 		return nil, mapped
 	}
@@ -269,7 +345,7 @@ func (handler *apiHandler) listAlertRuns(request *http.Request, input *opensplun
 				jobIDs = append(jobIDs, run.SearchJobID)
 			}
 		}
-		retainedByJobID, err = inspector.InspectMany(request.Context(), handler.accessScope(), jobIDs)
+		retainedByJobID, err = inspector.InspectMany(request.Context(), handler.accessScope(request.Context()), jobIDs)
 		if err != nil {
 			return nil, mapSearchArtifactError(err)
 		}
@@ -299,7 +375,7 @@ func (handler *apiHandler) listAlertRuns(request *http.Request, input *opensplun
 	nextPageToken := ""
 	if end < len(runs) {
 		nextPageToken, err = cursorcodec.Encode(handler.adminCursorKey[:], alertRunCursorDomain, alertCursorVersion, maximumAlertPageTokenBytes, alertRunCursor{
-			AfterRunID: runs[end-1].AlertRunID, AlertID: id,
+			Scope: cursorScope, AfterRunID: runs[end-1].AlertRunID, AlertID: id,
 		})
 		if err != nil {
 			return nil, internalError()
@@ -391,11 +467,36 @@ func alertResultTabToProto(input alerts.ResultTab) (opensplunk.SearchResultTab, 
 }
 
 func (handler *apiHandler) alertProjection(ctx context.Context, id string) (*opensplunk.Alert, error) {
-	summary, err := handler.alertService.Get(ctx, handler.ownerID, id)
+	summary, err := handler.alertService.Get(ctx, handler.alertScope(ctx), id)
 	if mapped := mapAlertCallError(ctx, err); mapped != nil {
 		return nil, mapped
 	}
+	if err := handler.authorizeAlertDefinition(ctx, summary.Definition); err != nil {
+		return nil, mapAuthorizationError(err)
+	}
 	return alertSummaryToProto(summary)
+}
+
+func (handler *apiHandler) authorizeAlertDefinition(ctx context.Context, definition alerts.Definition) error {
+	snapshot, present, err := resourcepolicy.FromContext(ctx)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return nil
+	}
+	search := &opensplunk.SearchDefinition{Spl: definition.SPL, IndexScope: definition.IndexScope}
+	if definition.Application != "" {
+		search.AppId = &definition.Application
+	}
+	sources, err := resourcepolicy.SourceNames(search)
+	if err != nil {
+		return err
+	}
+	if !resourcepolicy.AllowsSource(snapshot, sources, definition.Application) {
+		return authorization.ErrForbidden
+	}
+	return nil
 }
 
 func alertSummaryToProto(summary alerts.AlertSummary) (*opensplunk.Alert, error) {
@@ -667,4 +768,12 @@ func mapAlertCallError(ctx context.Context, operationErr error) error {
 	default:
 		return unavailableError("alert service is unavailable")
 	}
+}
+
+func (handler *apiHandler) alertScope(ctx context.Context) alerts.AccessScope {
+	scope := alerts.AccessScope{OwnerID: handler.requestOwner(ctx), OrganizationID: handler.requestOrganization(ctx)}
+	if actor, ok := authorization.FromContext(ctx); ok {
+		scope.SiteAdministrator = actor.Subject.IsSiteAdmin()
+	}
+	return scope
 }

@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"math"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -25,7 +26,7 @@ const (
 
 func TestServiceLifecycleBindsImmutableAssetsAndDetaches(t *testing.T) {
 	service := newTestService(t)
-	scope := Scope{TenantID: testTenant, OwnerID: testOwner}
+	scope := Scope{TenantID: testTenant, OwnerID: testOwner, OrganizationID: 1}
 	definition := testDefinition("services")
 	createRequest := &opensplunk.CreateLookupRequest{
 		Definition: definition,
@@ -43,7 +44,7 @@ func TestServiceLifecycleBindsImmutableAssetsAndDetaches(t *testing.T) {
 	initialResolved, err := service.catalog.GetResolved(t.Context(), lookupcatalog.GetRequest{
 		TenantID: testTenant,
 		OwnerID:  testOwner,
-		LookupID: lookupID,
+		LookupID: lookupID, OrganizationID: 1,
 	})
 	if err != nil || initialResolved.Asset.Ref.Version != 1 {
 		t.Fatalf("initial physical version = %#v, %v", initialResolved.Asset.Ref, err)
@@ -85,7 +86,7 @@ func TestServiceLifecycleBindsImmutableAssetsAndDetaches(t *testing.T) {
 	replacedResolved, err := service.catalog.GetResolved(t.Context(), lookupcatalog.GetRequest{
 		TenantID: testTenant,
 		OwnerID:  testOwner,
-		LookupID: lookupID,
+		LookupID: lookupID, OrganizationID: 1,
 	})
 	if err != nil || replacedResolved.Asset.Ref.LookupAssetID != initialResolved.Asset.Ref.LookupAssetID ||
 		replacedResolved.Asset.Ref.Version != 2 {
@@ -128,7 +129,7 @@ func TestServiceLifecycleBindsImmutableAssetsAndDetaches(t *testing.T) {
 
 func TestCreateIdempotentReplaysAndRejectsChangedIntent(t *testing.T) {
 	service := newTestService(t)
-	scope := Scope{TenantID: testTenant, OwnerID: testOwner}
+	scope := Scope{TenantID: testTenant, OwnerID: testOwner, OrganizationID: 1}
 	requestID := "lookup request 01"
 	input := &opensplunk.CreateLookupRequest{
 		ClientRequestId: &requestID,
@@ -169,7 +170,7 @@ func TestCreateIdempotentReplaysAndRejectsChangedIntent(t *testing.T) {
 
 func TestParallelIdempotentLookupCreatesConverge(t *testing.T) {
 	service, database := newTestServiceWithDatabase(t)
-	scope := Scope{TenantID: testTenant, OwnerID: testOwner}
+	scope := Scope{TenantID: testTenant, OwnerID: testOwner, OrganizationID: 1}
 	requestID := "parallel lookup request 01"
 	input := &opensplunk.CreateLookupRequest{
 		ClientRequestId: &requestID,
@@ -234,7 +235,7 @@ func TestParallelIdempotentLookupCreatesConverge(t *testing.T) {
 
 func TestServiceCatalogConflictRollsBackPhysicalPublication(t *testing.T) {
 	service, database := newTestServiceWithDatabase(t)
-	scope := Scope{TenantID: testTenant, OwnerID: testOwner}
+	scope := Scope{TenantID: testTenant, OwnerID: testOwner, OrganizationID: 1}
 	request := &opensplunk.CreateLookupRequest{
 		Definition: testDefinition("duplicate"),
 		CsvData:    []byte("service_id,owner\na,alice\n"),
@@ -249,7 +250,7 @@ func TestServiceCatalogConflictRollsBackPhysicalPublication(t *testing.T) {
 	var stages, identities, versions int
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT staged_asset_count, asset_identity_count, published_version_count
-		FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id = ?`,
+		FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id = $1`,
 		testTenant,
 	).Scan(&stages, &identities, &versions); err != nil {
 		t.Fatalf("read lookup ledger: %v", err)
@@ -263,7 +264,7 @@ func TestServiceDuplicateKeyAuthorityRollsBackPhysicalPublication(t *testing.T) 
 	service, database := newTestServiceWithDatabase(t)
 	_, err := service.Create(
 		t.Context(),
-		Scope{TenantID: testTenant, OwnerID: testOwner},
+		Scope{TenantID: testTenant, OwnerID: testOwner, OrganizationID: 1},
 		&opensplunk.CreateLookupRequest{
 			Definition: testDefinition("duplicate-keys"),
 			CsvData:    []byte("service_id,owner\na,alice\na,bob\n"),
@@ -276,7 +277,7 @@ func TestServiceDuplicateKeyAuthorityRollsBackPhysicalPublication(t *testing.T) 
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT staged_asset_count, asset_identity_count,
 		       published_version_count, stored_content_bytes
-		FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id = ?`,
+		FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id = $1`,
 		testTenant,
 	).Scan(&stages, &identities, &versions, &storedBytes); err != nil {
 		t.Fatalf("read duplicate-key rollback ledger: %v", err)
@@ -294,7 +295,7 @@ func TestServiceDuplicateKeyAuthorityRollsBackPhysicalPublication(t *testing.T) 
 
 func TestServicePreviewAndFilteredCursorPagination(t *testing.T) {
 	service := newTestService(t)
-	scope := Scope{TenantID: testTenant, OwnerID: testOwner}
+	scope := Scope{TenantID: testTenant, OwnerID: testOwner, OrganizationID: 1}
 
 	preview, err := service.Preview(t.Context(), scope, &opensplunk.PreviewLookupRequest{
 		Definition:  testDefinition("preview"),
@@ -360,13 +361,13 @@ func TestServiceRejectsPartialDependenciesAndCrossOwnerReads(t *testing.T) {
 		t.Fatalf("New(empty) = %v", err)
 	}
 	service := newTestService(t)
-	created, err := service.Create(t.Context(), Scope{TenantID: testTenant, OwnerID: testOwner}, &opensplunk.CreateLookupRequest{
+	created, err := service.Create(t.Context(), Scope{TenantID: testTenant, OwnerID: testOwner, OrganizationID: 1}, &opensplunk.CreateLookupRequest{
 		Definition: testDefinition("private"), CsvData: []byte("service_id,owner\na,alice\n"),
 	})
 	if err != nil {
 		t.Fatalf("Create(): %v", err)
 	}
-	_, err = service.Get(t.Context(), Scope{TenantID: testTenant, OwnerID: "other-owner"}, &opensplunk.GetLookupRequest{LookupId: created.GetLookup().GetLookupId()})
+	_, err = service.Get(t.Context(), Scope{TenantID: testTenant, OwnerID: "other-owner", OrganizationID: 1}, &opensplunk.GetLookupRequest{LookupId: created.GetLookup().GetLookupId()})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-owner Get() = %v", err)
 	}
@@ -374,7 +375,7 @@ func TestServiceRejectsPartialDependenciesAndCrossOwnerReads(t *testing.T) {
 
 func TestServiceListKeysetSortMatrixHasNoGapsOrDuplicates(t *testing.T) {
 	service := newTestService(t)
-	scope := Scope{TenantID: testTenant, OwnerID: testOwner}
+	scope := Scope{TenantID: testTenant, OwnerID: testOwner, OrganizationID: 1}
 	lookups := make([]*opensplunk.Lookup, 0, 4)
 	for _, name := range []string{"zeta", "alpha", "gamma", "beta"} {
 		created, err := service.Create(t.Context(), scope, &opensplunk.CreateLookupRequest{
@@ -473,7 +474,7 @@ func TestServiceGetRejectsVersionsOutsideSQLiteAuthority(t *testing.T) {
 	version := uint64(math.MaxInt64) + 1
 	_, err := service.Get(
 		t.Context(),
-		Scope{TenantID: testTenant, OwnerID: testOwner},
+		Scope{TenantID: testTenant, OwnerID: testOwner, OrganizationID: 1},
 		&opensplunk.GetLookupRequest{LookupId: "lookup-1", Version: &version},
 	)
 	if !errors.Is(err, ErrInvalid) {
@@ -502,12 +503,12 @@ func newTestService(t *testing.T) *Service {
 
 func newTestServiceWithDatabase(t *testing.T) (*Service, *control.DB) {
 	t.Helper()
-	database, err := control.Open(t.Context(), filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := control.Open(t.Context(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	if _, err := database.SQLDB().ExecContext(t.Context(), `INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES (?)`, testTenant); err != nil {
+	if _, err := database.SQLDB().ExecContext(t.Context(), `INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ($1)`, testTenant); err != nil {
 		t.Fatalf("provision test tenant: %v", err)
 	}
 	apps, err := control.NewAppCatalog(database, control.AppCatalogOptions{
@@ -521,7 +522,7 @@ func newTestServiceWithDatabase(t *testing.T) (*Service, *control.DB) {
 	}
 	if _, err := apps.CreateApp(
 		t.Context(),
-		control.AppAccessScope{TenantID: testTenant},
+		control.AppAccessScope{TenantID: testTenant, OrganizationID: 1},
 		control.AppDefinition{Slug: "lookup-service", DisplayName: "Lookup Service"},
 	); err != nil {
 		t.Fatalf("CreateApp(): %v", err)

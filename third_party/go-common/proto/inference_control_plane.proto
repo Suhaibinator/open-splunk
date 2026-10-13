@@ -1,0 +1,415 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "inference.proto";
+import "chat.proto";
+
+// ============================================================================
+// Numeric operation identity
+//
+// A downstream application (for example GradeThis) keeps its own generated
+// operation enum and registers its numeric values. go-common never depends on
+// that enum's semantics, only on its numeric value.
+// ============================================================================
+
+// ============================================================================
+// Attempt-ledger discriminants
+//
+// Every persisted or wire-crossed discriminant is a numeric enum, never a
+// string. The integer values below match the go-common execution kernel's typed
+// int32 enums exactly, so the kernel aliases these generated types rather than
+// keeping a divergent local copy.
+// ============================================================================
+
+// InferenceAttemptStatus is the lifecycle state of one provider attempt.
+enum InferenceAttemptStatus {
+  INFERENCE_ATTEMPT_STATUS_UNSPECIFIED = 0;
+  INFERENCE_ATTEMPT_STATUS_SUCCEEDED = 1;
+  INFERENCE_ATTEMPT_STATUS_FAILED = 2;
+  INFERENCE_ATTEMPT_STATUS_IN_FLIGHT = 3;
+  // The deadline passed without a recorded completion; a late completion may replace this.
+  INFERENCE_ATTEMPT_STATUS_OUTCOME_UNKNOWN = 4;
+}
+
+// InferenceRetryReason is the typed classification of why a failed attempt was
+// judged retryable or terminal. Values mirror the kernel classifier.
+enum InferenceRetryReason {
+  INFERENCE_RETRY_REASON_UNSPECIFIED = 0;
+  INFERENCE_RETRY_REASON_CONTEXT_CANCELED = 1;
+  INFERENCE_RETRY_REASON_CONTEXT_DEADLINE_EXCEEDED = 2;
+  INFERENCE_RETRY_REASON_HTTP_STATUS = 3;
+  INFERENCE_RETRY_REASON_HTTP_STATUS_TERMINAL = 4;
+  INFERENCE_RETRY_REASON_NETWORK_TIMEOUT = 5;
+  INFERENCE_RETRY_REASON_NETWORK_TEMPORARY = 6;
+  INFERENCE_RETRY_REASON_MESSAGE_HTTP_STATUS = 7;
+  INFERENCE_RETRY_REASON_MESSAGE_RATE_LIMIT = 8;
+  INFERENCE_RETRY_REASON_MESSAGE_UNAVAILABLE = 9;
+  INFERENCE_RETRY_REASON_MESSAGE_TIMEOUT = 10;
+  INFERENCE_RETRY_REASON_SCHEMA_GENERATION = 11;
+  INFERENCE_RETRY_REASON_NOT_RETRYABLE = 12;
+  INFERENCE_RETRY_REASON_STREAM_COMMITTED = 13;
+}
+
+// InferenceRetryOutcome is the disposition of a failed attempt within the retry
+// loop. It is a bounded metric/diagnostic label, not persisted on the row.
+enum InferenceRetryOutcome {
+  INFERENCE_RETRY_OUTCOME_UNSPECIFIED = 0;
+  INFERENCE_RETRY_OUTCOME_RETRIED = 1;
+  INFERENCE_RETRY_OUTCOME_EXHAUSTED = 2;
+  INFERENCE_RETRY_OUTCOME_NOT_RETRYABLE = 3;
+}
+
+// InferenceThrottleKind identifies which bucket blocked an attempt before the
+// provider call.
+enum InferenceThrottleKind {
+  INFERENCE_THROTTLE_KIND_UNSPECIFIED = 0;
+  INFERENCE_THROTTLE_KIND_REQUEST = 1;
+  INFERENCE_THROTTLE_KIND_TOKEN = 2;
+}
+
+// InferenceTokenSource classifies how the token counts on an attempt were
+// obtained: provider-reported versus locally estimated.
+enum InferenceTokenSource {
+  INFERENCE_TOKEN_SOURCE_UNSPECIFIED = 0;
+  INFERENCE_TOKEN_SOURCE_PROVIDER_REPORTED = 1;
+  INFERENCE_TOKEN_SOURCE_ESTIMATED = 2;
+}
+
+// ============================================================================
+// Route and rate-limit contracts
+// ============================================================================
+
+// InferenceOperationRoute is the wire projection of one operation's persisted
+// route configuration. The owning operation is carried by
+// InferenceOperationRouteEntry. Request/token limits are not carried here; they
+// live on the model-level rate-limit policy.
+message InferenceOperationRoute {
+  InferenceAPI api = 13;
+  InferenceAPI effective_api = 14;
+  uint64 inference_model_id = 1;
+  reserved 2;
+  reserved "provider";
+  string provider_id = 15;
+  string provider_model_id = 3;
+  google.protobuf.Duration total_timeout = 4;
+  int32 max_attempts = 5;
+  google.protobuf.Duration initial_backoff = 6;
+  google.protobuf.Duration max_backoff = 7;
+  optional double temperature = 8;
+  optional uint64 config_version = 9;
+  optional uint64 updater_user_id = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+// InferenceRateLimitBucket is one token-bucket configuration.
+message InferenceRateLimitBucket {
+  int64 capacity = 1;
+  google.protobuf.Duration refill_interval = 2;
+  int64 refill_units = 3;
+  google.protobuf.Duration wait_cap = 4;
+}
+
+// InferenceModelRateLimitPolicy carries the optional, all-or-none request and
+// token buckets shared by every route targeting one inference model.
+message InferenceModelRateLimitPolicy {
+  uint64 inference_model_id = 1;
+  optional InferenceRateLimitBucket request_bucket = 2;
+  optional InferenceRateLimitBucket token_bucket = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+// ============================================================================
+// Attempt ledger
+// ============================================================================
+
+// InferenceAttempt is the wire projection of one attempt-ledger row. It never
+// carries prompts, completions, reasoning, raw provider bodies, or secrets;
+// error strings are bounded and context JSON is allowlisted and size-capped.
+// Current attribution summaries, absent when the referenced entity is unavailable.
+// These are read-time projections, not historical snapshots.
+message InferenceAttemptActor {
+  uint64 id = 1;
+  string username = 2;
+  string first_name = 3;
+  string last_name = 4;
+  bool is_bot = 5;
+}
+
+message InferenceAttemptOrganization {
+  int64 id = 1;
+  string name = 2;
+  string slug = 3;
+}
+
+message InferenceAttempt {
+  // Server-owned effective temperature and retry/rate-limit policies; no credentials.
+  bytes effective_settings_json = 42;
+  // Effective wire shape; historical attempts remain unspecified.
+  InferenceAPI api = 40;
+  uint64 id = 1;
+  int32 operation = 2;
+  string symbolic_name = 3;
+  string invocation_id = 4;
+  int32 attempt_number = 5;
+  InferenceCallPurpose runtime_purpose = 6;
+  uint64 inference_model_id = 7;
+  reserved 8;
+  reserved "provider";
+  string provider_id = 41;
+  string provider_model_id = 9;
+  InferenceAttemptStatus status = 10;
+  string error_class = 11;
+  string error_message = 12;
+  bool retryable = 13;
+  InferenceRetryReason retry_reason = 14;
+  string request_trace_id = 15;
+  optional uint64 actor_user_id = 16;
+  InferenceTokenSource token_source = 17;
+  int64 input_tokens = 18;
+  int64 output_tokens = 19;
+  int64 total_tokens = 20;
+  int64 cached_tokens = 21;
+  int64 thought_tokens = 22;
+  int64 input_characters = 23;
+  int64 input_images = 24;
+  int64 input_videos = 25;
+  int64 input_audio_files = 26;
+  bytes custom_usage_json = 27;
+  bytes sanitized_context_json = 28;
+  google.protobuf.Timestamp started_at = 29;
+  google.protobuf.Timestamp ended_at = 30;
+  google.protobuf.Timestamp created_at = 31;
+  google.protobuf.Duration latency = 32;
+  string display_name = 33;
+  // Organization that owns and is charged for this inference invocation.
+  // Optional only so historical rows created before organization attribution
+  // can still be represented; every new execution requires a positive value.
+  optional int64 organization_id = 34;
+  InferenceAttemptActor actor = 35;
+  InferenceAttemptOrganization organization = 36;
+  // Output tokens / full attempt seconds; absent when usage or duration is unavailable.
+  optional double request_tokens_per_second = 37;
+  // Approximate output tokens / seconds from first content chunk to completion.
+  optional double generation_tokens_per_second = 38;
+  // First client-observed text/tool chunk; absent for historical and buffered calls.
+  google.protobuf.Timestamp first_output_at = 39;
+}
+
+// ============================================================================
+// Admin read contracts (minimal; the admin service worker extends these)
+// ============================================================================
+
+// InferenceAttemptFilter carries the generic attempt-list filters. All fields
+// are optional; metadata containment accepts only registered/allowlisted keys.
+message InferenceAttemptFilter {
+  optional google.protobuf.Timestamp from_time = 1;
+  optional google.protobuf.Timestamp to_time = 2;
+  reserved 3;
+  reserved "provider";
+  optional string provider_id = 16;
+  optional uint64 inference_model_id = 4;
+  optional int32 operation = 5;
+  optional InferenceAttemptStatus status = 6;
+  optional InferenceTokenSource token_source = 7;
+  optional uint64 actor_user_id = 8;
+  optional string request_trace_id = 9;
+  optional string invocation_id = 10;
+  // metadata is an allowlisted-key -> value map applied as JSON containment.
+  map<string, string> metadata = 11;
+  // List page size: 0 uses inference_attempt_list_default_limit (default 100); the HTTP API
+  // rejects negative values and values above inference_attempt_list_max_limit (default 500).
+  int32 limit = 12;
+  // List offset; the HTTP API rejects negative values.
+  int32 offset = 13;
+  // query is a bounded free-text search over invocation/trace ids, error
+  // class/message, and provider model id.
+  optional string query = 14;
+  // Restricts attempts and usage aggregates to the owning organization.
+  optional int64 organization_id = 15;
+}
+
+// ListInferenceAttemptsResponse is a filtered page of attempts. It runs no
+// exact count query.
+message ListInferenceAttemptsResponse {
+  repeated InferenceAttempt attempts = 1;
+  // Lower bound on matching rows, not an exact pagination count. A value larger
+  // than offset + attempts.length means another page exists. A nonempty final
+  // page yields the exact count; an empty page yields zero (including offsets
+  // beyond the end). Clients must not infer an exact page count from this value.
+  int64 total = 2;
+  // limit is the page size the server used for this page: the request's limit, or
+  // inference_attempt_list_default_limit when the request omitted it. Clients compute the next
+  // page's offset from it.
+  int32 limit = 3;
+}
+
+// InferenceUsageSummary is the aggregate rollup for a filtered attempt set.
+message InferenceUsageSummary {
+  int64 attempt_count = 1;
+  int64 success_count = 2;
+  int64 failure_count = 3;
+  int64 input_tokens = 4;
+  int64 output_tokens = 5;
+  int64 total_tokens = 6;
+}
+
+// InferenceUsageBreakdownRow is one grouped aggregation row (by provider,
+// operation, and status). symbolic_name/display_name are the server-provided
+// fallbacks for consumers without a translated operation label.
+message InferenceUsageBreakdownRow {
+  reserved 1;
+  reserved "provider";
+  string provider_id = 8;
+  int32 operation = 2;
+  InferenceAttemptStatus status = 3;
+  int64 attempt_count = 4;
+  int64 total_tokens = 5;
+  string symbolic_name = 6;
+  string display_name = 7;
+}
+
+// ============================================================================
+// Admin endpoint contracts
+//
+// Operation identity on the wire is always the owning application's numeric
+// enum value. Responses additionally carry symbolic_name + display_name as
+// diagnostics/fallbacks. Reads are gated by
+// SITE_PERMISSION_OPERATION_INFERENCE_VIEWING, writes by
+// SITE_PERMISSION_OPERATION_INFERENCE_ADMINISTRATION.
+// ============================================================================
+
+// ListInferenceRoutesRequest lists every registered operation and its route.
+message ListInferenceRoutesRequest {}
+
+// InferenceOperationRouteEntry pairs one code-registered operation with its
+// persisted route. route is absent when the operation has no route configured.
+message InferenceOperationRouteEntry {
+  int32 operation = 1;
+  string symbolic_name = 2;
+  string display_name = 3;
+  int32 sort_order = 4;
+  bool required = 5;
+  optional InferenceOperationRoute route = 6;
+}
+
+// ListInferenceRoutesResponse is every registered operation with its route,
+// ordered by sort order and enum value.
+message ListInferenceRoutesResponse {
+  repeated InferenceOperationRouteEntry routes = 1;
+}
+
+// UpdateInferenceRouteRequest replaces the mutable route fields for one
+// operation. An absent temperature clears the stored temperature.
+message UpdateInferenceRouteRequest {
+  // Absent preserves the stored selection; explicit UNSPECIFIED resets it.
+  optional InferenceAPI api = 8;
+  int32 operation = 1;
+  uint64 inference_model_id = 2;
+  google.protobuf.Duration total_timeout = 3;
+  int32 max_attempts = 4;
+  google.protobuf.Duration initial_backoff = 5;
+  google.protobuf.Duration max_backoff = 6;
+  optional double temperature = 7;
+}
+
+// UpdateInferenceRouteResponse returns the stored route after the update.
+message UpdateInferenceRouteResponse {
+  InferenceOperationRouteEntry route = 1;
+}
+
+// ListInferenceRateLimitPoliciesRequest lists every model rate-limit policy.
+message ListInferenceRateLimitPoliciesRequest {}
+
+// ListInferenceRateLimitPoliciesResponse is every configured model rate-limit
+// policy ordered by inference model id.
+message ListInferenceRateLimitPoliciesResponse {
+  repeated InferenceModelRateLimitPolicy policies = 1;
+}
+
+// UpdateInferenceRateLimitPolicyRequest replaces one model's optional,
+// all-or-none request and token buckets. An absent bucket clears that limit.
+message UpdateInferenceRateLimitPolicyRequest {
+  uint64 inference_model_id = 1;
+  optional InferenceRateLimitBucket request_bucket = 2;
+  optional InferenceRateLimitBucket token_bucket = 3;
+}
+
+// UpdateInferenceRateLimitPolicyResponse returns the stored policy after the
+// update. The in-process buckets rebuild on the next execution that loads it.
+message UpdateInferenceRateLimitPolicyResponse {
+  InferenceModelRateLimitPolicy policy = 1;
+}
+
+// ListInferenceAttemptsRequest is a filtered, paginated attempt-ledger read.
+message ListInferenceAttemptsRequest {
+  InferenceAttemptFilter filter = 1;
+}
+
+// GetInferenceAttemptRequest loads one attempt row by ledger id.
+message GetInferenceAttemptRequest {
+  uint64 id = 1;
+}
+
+// GetInferenceAttemptResponse includes a bounded snapshot of the invocation history.
+message GetInferenceAttemptResponse {
+  InferenceAttempt attempt = 1;
+  // Up to 50 other attempts, ordered by attempt number then id. The requested
+  // attempt is always returned separately, even when history is truncated.
+  repeated InferenceAttempt related_attempts = 2;
+  bool related_attempts_truncated = 3;
+}
+
+// GetInferenceUsageRequest aggregates the filtered attempt set.
+message GetInferenceUsageRequest {
+  InferenceAttemptFilter filter = 1;
+}
+
+// GetInferenceUsageResponse carries the rollup plus the
+// provider/operation/status breakdown for one filtered attempt set.
+message GetInferenceUsageResponse {
+  InferenceUsageSummary summary = 1;
+  repeated InferenceUsageBreakdownRow breakdown = 2;
+}
+
+// ============================================================================
+// Request-scoped model selection
+//
+// Read surface for pickers that build an inference.ModelSelection. It is gated
+// by SITE_PERMISSION_OPERATION_INFERENCE_MODEL_OVERRIDE rather than inference
+// viewing, so an actor who may select a model can always see the choices.
+// ============================================================================
+
+// SelectableInferenceModel is one active catalog model whose provider is
+// currently configured. It carries display identity and API choices only.
+message SelectableInferenceModel {
+  uint64 id = 1;
+  string display_name = 2;
+  string provider_id = 3;
+  string provider_display_name = 4;
+  string provider_model_id = 5;
+  InferenceAPI default_api = 6;
+  repeated InferenceAPI supported_apis = 7;
+}
+
+// ListSelectableInferenceModelsRequest optionally names the operation the
+// selection will apply to, so the response can describe its routed default.
+message ListSelectableInferenceModelsRequest {
+  optional int32 operation = 1;
+}
+
+// ListSelectableInferenceModelsResponse lists the selectable models. The routed
+// fields are present only when the named operation currently has a route.
+message ListSelectableInferenceModelsResponse {
+  repeated SelectableInferenceModel models = 1;
+  optional uint64 routed_inference_model_id = 2;
+  optional InferenceAPI routed_effective_api = 3;
+  // Display identity of the routed model, present even when it is not selectable.
+  optional string routed_model_display_name = 4;
+}

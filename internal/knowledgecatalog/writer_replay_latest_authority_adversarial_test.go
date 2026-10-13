@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
@@ -169,7 +171,7 @@ func TestWriterHistoricalReplayVersionOwnerSameWidthTamperIsCorruptAndReadOnly(t
 
 func stageWriterReplayQuarantineV2(t *testing.T, harness *writerFaultHarness, objectID string) {
 	t.Helper()
-	tx, err := harness.database.SQLDB().BeginTx(t.Context(), nil)
+	tx, err := pgmeta.BeginSQL(t.Context(), harness.database.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin immutable quarantine publication: %v", err)
 	}
@@ -181,7 +183,7 @@ func stageWriterReplayQuarantineV2(t *testing.T, harness *writerFaultHarness, ob
 		SELECT app_id, owner_id, object_type, name, sharing_scope,
 		       state, current_version, created_at_unix_micro
 		FROM knowledge_objects
-		WHERE tenant_id = ? AND knowledge_object_id = ?`,
+		WHERE tenant_id = $1 AND knowledge_object_id = $2`,
 		writerFaultTenant,
 		objectID,
 	).Scan(
@@ -284,11 +286,11 @@ func rewriteWriterReplayQuarantineRegistry(
 		t.Fatalf("open quarantine registry rewrite connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(t.Context(), connection); err != nil {
 		t.Fatalf("disable quarantine registry foreign keys: %v", err)
 	}
 	defer func() {
-		if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
+		if _, err := pgtest.RestoreForeignKeys(t.Context(), connection); err != nil {
 			t.Errorf("restore quarantine registry foreign keys: %v", err)
 		}
 	}()
@@ -337,7 +339,7 @@ func rewriteWriterReplayQuarantineRegistry(
 	default:
 		t.Fatalf("unknown quarantine registry rewrite %q", rewrite)
 	}
-	result, err := connection.ExecContext(t.Context(), statement, writerFaultTenant, objectID)
+	result, err := connection.ExecContext(t.Context(), pgtest.Parameters(statement), writerFaultTenant, objectID)
 	if err != nil {
 		t.Fatalf("rewrite quarantine registry: %v", err)
 	}
@@ -359,8 +361,8 @@ func assertWriterReplayImmutableQuarantineV2(
 		  ON lifecycle.tenant_id = version.tenant_id
 		 AND lifecycle.knowledge_object_id = version.knowledge_object_id
 		 AND lifecycle.object_version = version.object_version
-		WHERE version.tenant_id = ?
-		  AND version.knowledge_object_id = ?
+		WHERE version.tenant_id = $1
+		  AND version.knowledge_object_id = $2
 		  AND version.object_version = 2
 		  AND version.state = 'quarantined'
 		  AND version.definition_digest IS NULL
@@ -383,7 +385,7 @@ func assertWriterReplayImmutableQuarantineV2(
 	if err := harness.database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT current_version, state
 		FROM knowledge_objects
-		WHERE tenant_id = ? AND knowledge_object_id = ?`,
+		WHERE tenant_id = $1 AND knowledge_object_id = $2`,
 		writerFaultTenant,
 		objectID,
 	).Scan(&currentVersion, &state); err != nil {
@@ -412,7 +414,7 @@ func createWriterReplayLatestHiddenApp(t *testing.T, harness *writerFaultHarness
 	}
 	if _, err := apps.CreateApp(
 		t.Context(),
-		control.AppAccessScope{TenantID: writerFaultTenant},
+		control.AppAccessScope{TenantID: writerFaultTenant, OrganizationID: 1},
 		control.AppDefinition{Slug: "writer-replay-latest-hidden", DisplayName: "Writer replay latest hidden"},
 	); err != nil {
 		t.Fatalf("CreateApp(hidden latest app): %v", err)
@@ -451,11 +453,11 @@ func stageWriterReplayUnauthorizedLatestV2(
 			quarantine_reason, created_at_unix_micro
 		)
 		SELECT tenant_id, knowledge_object_id, 2,
-		       ?, ?, object_type, name, sharing_scope, state,
-		       definition_digest, dependency_count, ?,
+		       $1, $2, object_type, name, sharing_scope, state,
+		       definition_digest, dependency_count, $3,
 		       NULL, created_at_unix_micro + 1
 		FROM knowledge_object_versions
-		WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = 1`,
+		WHERE tenant_id = $4 AND knowledge_object_id = $5 AND object_version = 1`,
 		appID,
 		ownerID,
 		mutationKind,
@@ -470,8 +472,8 @@ func stageWriterReplayUnauthorizedLatestV2(
 	var count int64
 	if err := connection.QueryRowContext(t.Context(), `
 		SELECT count(*) FROM knowledge_object_versions
-		WHERE tenant_id = ? AND knowledge_object_id = ?
-		  AND object_version = 2 AND owner_id = ? AND app_id = ?`,
+		WHERE tenant_id = $1 AND knowledge_object_id = $2
+		  AND object_version = 2 AND owner_id = $3 AND app_id = $4`,
 		writerFaultTenant,
 		objectID,
 		ownerID,
@@ -505,8 +507,8 @@ func tamperWriterReplayHistoricalOwner(
 
 	result, err := connection.ExecContext(t.Context(), `
 		UPDATE knowledge_object_versions
-		SET owner_id = ?
-		WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = 1`,
+		SET owner_id = $1
+		WHERE tenant_id = $2 AND knowledge_object_id = $3 AND object_version = 1`,
 		ownerID,
 		writerFaultTenant,
 		objectID,
@@ -519,9 +521,9 @@ func tamperWriterReplayHistoricalOwner(
 	var storedOwner string
 	var ownerBytes int64
 	if err := connection.QueryRowContext(t.Context(), `
-		SELECT owner_id, length(CAST(owner_id AS BLOB))
+		SELECT owner_id, length(convert_to((owner_id)::text,'UTF8'))
 		FROM knowledge_object_versions
-		WHERE tenant_id = ? AND knowledge_object_id = ? AND object_version = 1`,
+		WHERE tenant_id = $1 AND knowledge_object_id = $2 AND object_version = 1`,
 		writerFaultTenant,
 		objectID,
 	).Scan(&storedOwner, &ownerBytes); err != nil {
@@ -549,19 +551,19 @@ func corruptSingleWriterReplayReceipt(
 		"knowledge_mutation_idempotency_update_is_forbidden",
 	)
 	defer restore()
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(t.Context(), connection, false); err != nil {
 		t.Fatalf("enable receipt check corruption: %v", err)
 	}
 	defer func() {
-		if _, err := connection.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = OFF`); err != nil {
+		if _, err := pgtest.Checks(t.Context(), connection, true); err != nil {
 			t.Errorf("restore receipt checks: %v", err)
 		}
 	}()
 
 	result, err := connection.ExecContext(t.Context(), `
 		UPDATE knowledge_mutation_idempotency
-		SET outcome_proto = zeroblob(1025)
-		WHERE tenant_id = ? AND route = 'objects.create' AND client_request_id = ?`,
+		SET outcome_proto = decode(repeat('00', (1025)::int), 'hex')
+		WHERE tenant_id = $1 AND route = 'objects.create' AND client_request_id = $2`,
 		writerFaultTenant,
 		requestID,
 	)
@@ -578,11 +580,11 @@ func removeSingleWriterReplayDefinitionBlob(t *testing.T, harness *writerFaultHa
 		t.Fatalf("open single replay blob tamper connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(t.Context(), connection); err != nil {
 		t.Fatalf("disable single replay blob foreign keys: %v", err)
 	}
 	defer func() {
-		if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
+		if _, err := pgtest.RestoreForeignKeys(t.Context(), connection); err != nil {
 			t.Errorf("restore single replay blob foreign keys: %v", err)
 		}
 	}()
@@ -594,7 +596,7 @@ func removeSingleWriterReplayDefinitionBlob(t *testing.T, harness *writerFaultHa
 	defer restore()
 
 	result, err := connection.ExecContext(t.Context(), `
-		DELETE FROM knowledge_definition_blobs WHERE tenant_id = ?`, writerFaultTenant)
+		DELETE FROM knowledge_definition_blobs WHERE tenant_id = $1`, writerFaultTenant)
 	if err != nil {
 		t.Fatalf("remove single replay definition blob: %v", err)
 	}
@@ -616,11 +618,10 @@ func dropWriterReplayTriggers(
 			t.Fatalf("invalid test trigger name %q", name)
 		}
 		if err := connection.QueryRowContext(t.Context(), `
-			SELECT sql FROM sqlite_schema
-			WHERE type = 'trigger' AND name = ?`, name).Scan(&triggerSQL[index]); err != nil {
+			SELECT pg_get_triggerdef(t.oid)||';'||pg_get_functiondef(t.tgfoid) FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND NOT t.tgisinternal AND t.tgname=$1`, name).Scan(&triggerSQL[index]); err != nil {
 			t.Fatalf("read trigger %s: %v", name, err)
 		}
-		if _, err := connection.ExecContext(t.Context(), `DROP TRIGGER `+name); err != nil {
+		if _, err := connection.ExecContext(t.Context(), `DROP TRIGGER `+name+` ON `+writerReplayTriggerTable(t, connection, name)); err != nil {
 			t.Fatalf("drop trigger %s: %v", name, err)
 		}
 	}
@@ -635,7 +636,7 @@ func dropWriterReplayTriggers(
 
 func writerReplayExecOne(t *testing.T, tx *sql.Tx, query string, args ...any) {
 	t.Helper()
-	result, err := tx.ExecContext(t.Context(), query, args...)
+	result, err := tx.ExecContext(t.Context(), pgtest.Parameters(query), args...)
 	if err != nil {
 		t.Fatalf("execute replay fixture statement: %v", err)
 	}
@@ -648,4 +649,13 @@ func writerReplayRequireOne(t *testing.T, result sql.Result, label string) {
 	if err != nil || affected != 1 {
 		t.Fatalf("%s = %d, %v; want 1", label, affected, err)
 	}
+}
+
+func writerReplayTriggerTable(t *testing.T, connection *sql.Conn, name string) string {
+	t.Helper()
+	var table string
+	if err := connection.QueryRowContext(t.Context(), `SELECT quote_ident(r.relname) FROM pg_trigger g JOIN pg_class r ON r.oid=g.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND NOT g.tgisinternal AND g.tgname=$1`, name).Scan(&table); err != nil {
+		t.Fatal(err)
+	}
+	return table
 }

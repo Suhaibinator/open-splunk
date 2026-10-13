@@ -64,6 +64,10 @@ function stableProgressEqual(left: SearchProgress, right: SearchProgress): boole
     && left.matchedEvents === right.matchedEvents
     && left.producedRows === right.producedRows
     && left.resultBytes === right.resultBytes
+    && left.captureRows === right.captureRows
+    && left.captureBytes === right.captureBytes
+    && left.captureComplete === right.captureComplete
+    && left.previewTruncated === right.previewTruncated
     && Object.is(left.percentComplete, right.percentComplete)
     && equalDuration(left.queueWait, right.queueWait)
     && left.countersAreEstimates === right.countersAreEstimates;

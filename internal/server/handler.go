@@ -19,6 +19,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/alerts"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
@@ -121,6 +122,7 @@ var (
 // TrustedSearchAdmissionRequest is fully parsed search intent. The trusted
 // service still re-resolves live app/index authority before creating the job.
 type TrustedSearchAdmissionRequest struct {
+	OrganizationID    string
 	SPL               string
 	OwnerID           string
 	TenantID          string
@@ -578,18 +580,22 @@ func (handler *Handler) Close(ctx context.Context) error {
 // are always loaded from IndexCatalog so authorization and UI bootstrap cannot
 // drift apart.
 type BootstrapConfig struct {
-	Build                 *opensplunk.BuildMetadata
-	SearchWebSocketPath   string
-	Features              []opensplunk.ServerFeature
-	Apps                  []*opensplunk.AppSummary
-	SelectedAppID         string
-	MaximumPreviewRows    uint32
-	MaximumSubscriptions  uint32
-	MaximumWebSocketBytes uint64
-	MaximumExportRows     uint64
-	MaximumExportBytes    uint64
-	DefaultSearchTimeout  time.Duration
-	SearchResultRetention time.Duration
+	Build                      *opensplunk.BuildMetadata
+	SearchWebSocketPath        string
+	Features                   []opensplunk.ServerFeature
+	Apps                       []*opensplunk.AppSummary
+	SelectedAppID              string
+	MaximumPreviewRows         uint32
+	MaximumSubscriptions       uint32
+	MaximumWebSocketBytes      uint64
+	MaximumExportRows          uint64
+	MaximumExportBytes         uint64
+	MaximumCaptureRows         uint64
+	MaximumCaptureBytes        uint64
+	OrganizationRetentionBytes uint64
+	GlobalRetentionBytes       uint64
+	DefaultSearchTimeout       time.Duration
+	SearchResultRetention      time.Duration
 }
 
 // Settings is the administrator mutation surface and live bootstrap
@@ -609,7 +615,7 @@ type Settings interface {
 // remains an interface here so transport tests do not need runtime search and
 // webhook dependencies.
 type AlertCoordinator interface {
-	RunNow(context.Context, string, string) (alerts.RunSummary, error)
+	RunNow(context.Context, alerts.AccessScope, string) (alerts.RunSummary, error)
 }
 
 // Config composes the trusted-network browser API and embedded static UI.
@@ -617,6 +623,10 @@ type AlertCoordinator interface {
 // single-user release; authentication can replace them without changing the
 // search-job ownership boundary.
 type Config struct {
+	RetentionUsage             RetentionUsageReader
+	IdentityAuthenticator      IdentityAuthenticator
+	IdentityHandler            http.Handler
+	Authorization              *authorization.Service
 	Logger                     *zap.Logger
 	SearchJobs                 SearchJobs
 	SearchArtifacts            SearchArtifacts
@@ -664,7 +674,6 @@ type Config struct {
 	IndexFields                IndexFields
 	SearchSuggestions          SearchSuggestions
 	SearchWebSocket            SearchWebSocket
-	BrowserAuthenticator       auth.BrowserAuthenticator
 	WebUI                      fs.FS
 	Bootstrap                  BootstrapConfig
 	OwnerID                    string
@@ -691,6 +700,9 @@ type Config struct {
 }
 
 type apiHandler struct {
+	retentionUsage             RetentionUsageReader
+	identityAuthenticator      IdentityAuthenticator
+	authorization              *authorization.Service
 	logger                     *zap.Logger
 	jobs                       SearchJobs
 	searchArtifacts            SearchArtifacts
@@ -734,7 +746,6 @@ type apiHandler struct {
 	indexFields                IndexFields
 	searchSuggestions          SearchSuggestions
 	searchWebSocket            SearchWebSocket
-	browserAuthenticator       auth.BrowserAuthenticator
 	administratorRoutes        map[string]struct{}
 	ownerID                    string
 	tenantID                   string
@@ -764,6 +775,12 @@ type apiHandler struct {
 // before the SPA handler, including unknown API paths, so frontend fallback can
 // never conceal an unavailable or misspelled backend route.
 func NewHandler(config Config) (*Handler, error) {
+	if isNilDependency(config.IdentityAuthenticator) || config.Authorization == nil {
+		return nil, errors.New("create server handler: user identity and resource authorization are required")
+	}
+	if config.Authorization != nil && config.IdentityAuthenticator == nil {
+		return nil, errors.New("create server handler: resource authorization requires identity")
+	}
 	logger := config.Logger
 	if logger == nil {
 		logger = zap.NewNop()
@@ -815,7 +832,6 @@ func NewHandler(config Config) (*Handler, error) {
 	serverSettings := adminServices.serverSettings
 	collectorAdmin := adminServices.collectorAdmin
 	appAdmin := adminServices.appAdmin
-	browserAuthenticator := adminServices.browserAuthenticator
 	appCursorKey := adminServices.appCursorKey
 	appCatalog := knowledgeServices.appCatalog
 	knowledgeCatalog := knowledgeServices.catalog
@@ -1052,6 +1068,8 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 
 	api := &apiHandler{
+		identityAuthenticator:      config.IdentityAuthenticator,
+		authorization:              config.Authorization,
 		logger:                     logger,
 		jobs:                       config.SearchJobs,
 		searchArtifacts:            searchArtifacts,
@@ -1095,7 +1113,6 @@ func NewHandler(config Config) (*Handler, error) {
 		indexFields:                indexFields,
 		searchSuggestions:          suggestionService,
 		searchWebSocket:            searchWebSocket,
-		browserAuthenticator:       browserAuthenticator,
 		ownerID:                    ownerID,
 		tenantID:                   tenantID,
 		maximumPageSize:            pageSize,
@@ -1108,6 +1125,7 @@ func NewHandler(config Config) (*Handler, error) {
 		maximumSuggestions:         maximumSuggestions,
 		routeTimeout:               routeTimeout,
 		bootstrap:                  bootstrap,
+		retentionUsage:             config.RetentionUsage,
 		now:                        now,
 		requestGate:                make(chan struct{}, concurrentRequests),
 		serializationGate:          make(chan struct{}, concurrentResponses),
@@ -1140,6 +1158,11 @@ func NewHandler(config Config) (*Handler, error) {
 		"/api/saved-searches/delete",
 	)
 	administratorRoutes := make(map[string]struct{}, 25)
+	if api.authorization != nil {
+		for _, path := range []string{"/api/indexes/permissions/get", "/api/indexes/permissions/set", "/api/indexes/permissions/delete", "/api/indexes/organization/set"} {
+			apiRoutes[path] = http.MethodPost
+		}
+	}
 	if api.searchPatterns != nil {
 		apiRoutes[apiPathPrefix+searchPatternsListRoute] = http.MethodPost
 		apiRoutes[apiPathPrefix+searchPatternMembersRoute] = http.MethodPost
@@ -1390,6 +1413,9 @@ func NewHandler(config Config) (*Handler, error) {
 	// itself could otherwise reach the SPA's index document.
 	mux.Handle("/api", apiBoundary)
 	mux.Handle("/api/", apiBoundary)
+	if config.IdentityHandler != nil {
+		mux.Handle("/api/identity/", config.IdentityHandler)
+	}
 	mux.Handle("/", spa)
 	return &Handler{next: mux, searchWebSocket: searchWebSocket}, nil
 }
@@ -1702,6 +1728,7 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 }
 
 func (handler *apiHandler) registerCoreRoutes(group *apiRouteGroup, smallRequestBytes int64) {
+	handler.registerIndexPermissionRoutes(group, smallRequestBytes)
 	group.Route(
 		sizedProtoPostRoute("/system/bootstrap", smallRequestBytes, handler.getSystemBootstrap, sanitizeGetSystemBootstrapRequest),
 		protoPostRoute("/search/validate", handler.validateSearch, sanitizeValidateSearchRequest),

@@ -13,10 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-
-	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 var auditTestTime = time.Date(2026, 8, 3, 12, 34, 56, 789_123_456, time.FixedZone("fixture", -7*60*60))
@@ -25,7 +26,7 @@ func auditTestCursorKey() []byte { return bytes.Repeat([]byte{0x5a}, minimumCurs
 
 func openAuditTestDatabase(t *testing.T) *control.DB {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "control.db")
+	path := pgtest.DSN(t)
 	database, err := control.Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("control.Open: %v", err)
@@ -77,49 +78,12 @@ func populateCanonicalAuditJournal(
 		if eventCount == 0 {
 			return nil
 		}
-		return tx.Exec(`
-			WITH RECURSIVE audit_sequence(sequence) AS (
-				SELECT 1
-				UNION ALL
-				SELECT sequence + 1
-				FROM audit_sequence
-				WHERE sequence < ?
-			)
-			INSERT INTO audit_events (
-				tenant_id,
-				sequence,
-				occurred_at_unix_micro,
-				actor_kind,
-				actor_id,
-				actor_role,
-				action,
-				target_kind,
-				target_id,
-				target_version
-			)
-			SELECT
-				?,
-				sequence,
-				?,
-				?,
-				?,
-				?,
-				?,
-				?,
-				printf('token-%06d', sequence),
-				1
-			FROM audit_sequence
-			ORDER BY sequence
-		`,
-			eventCount,
-			tenantID,
-			auditTestTime.UnixMicro(),
-			ActorKindSystem,
-			defaultSystemActorID,
-			ActorRoleSystem,
-			ActionIngestionTokenCreate,
-			TargetKindIngestionToken,
-		).Error
+		// PostgreSQL statement transition tables account for the whole dense batch.
+		// Keep every append-only/taxonomy guard enabled during fixture population.
+		return tx.Exec(`INSERT INTO audit_events(tenant_id,sequence,occurred_at_unix_micro,actor_kind,actor_id,actor_role,action,target_kind,target_id,target_version)
+ SELECT ?,sequence,?,?,?,?,?,?,'token-' || lpad(sequence::text,6,'0'),1
+ FROM generate_series(1,?::bigint) AS audit_sequence(sequence)
+ ORDER BY sequence`, tenantID, auditTestTime.UnixMicro(), ActorKindSystem, defaultSystemActorID, ActorRoleSystem, ActionIngestionTokenCreate, TargetKindIngestionToken, eventCount).Error
 	})
 	if err != nil {
 		t.Fatalf("populate canonical audit journal: %v", err)
@@ -284,7 +248,7 @@ func TestAppendInTransactionRollsBackWithCaller(t *testing.T) {
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	ctx := context.Background()
 
-	tx := database.GORMDB().WithContext(ctx).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 	if tx.Error != nil {
 		t.Fatalf("Begin: %v", tx.Error)
 	}
@@ -338,7 +302,7 @@ func TestAppendInTransactionRejectsAutocommitAndForeignHandles(t *testing.T) {
 	}
 
 	foreign := openAuditTestDatabase(t)
-	foreignTx := foreign.GORMDB().WithContext(ctx).Begin()
+	foreignTx := pgmeta.Begin(foreign.GORMDB().WithContext(ctx))
 	if foreignTx.Error != nil {
 		t.Fatalf("begin foreign transaction: %v", foreignTx.Error)
 	}
@@ -360,7 +324,7 @@ func TestAppendInTransactionRejectsAutocommitAndForeignHandles(t *testing.T) {
 		{name: "rolled back", call: func(tx *gorm.DB) error { return tx.Rollback().Error }},
 	} {
 		t.Run(finish.name, func(t *testing.T) {
-			tx := database.GORMDB().WithContext(ctx).Begin()
+			tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 			if tx.Error != nil {
 				t.Fatalf("Begin: %v", tx.Error)
 			}
@@ -539,7 +503,8 @@ func TestAuditBackupExcludesUncommittedEventAndResumesDenseSequence(t *testing.T
 	t.Parallel()
 	ctx := context.Background()
 	directory := t.TempDir()
-	database, err := control.Open(ctx, filepath.Join(directory, "control.db"))
+	sourceDSN := pgtest.DSN(t)
+	database, err := control.Open(ctx, sourceDSN)
 	if err != nil {
 		t.Fatalf("control.Open: %v", err)
 	}
@@ -555,7 +520,7 @@ func TestAuditBackupExcludesUncommittedEventAndResumesDenseSequence(t *testing.T
 		1,
 	)
 
-	tx := database.GORMDB().WithContext(ctx).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(ctx))
 	if tx.Error != nil {
 		t.Fatalf("Begin: %v", tx.Error)
 	}
@@ -573,7 +538,7 @@ func TestAuditBackupExcludesUncommittedEventAndResumesDenseSequence(t *testing.T
 		_ = tx.Rollback().Error
 		t.Fatalf("provisional sequence = %d", provisional.Sequence)
 	}
-	backupPath := filepath.Join(directory, "backup.db")
+	backupPath := filepath.Join(directory, "backup.pgdump")
 	if err := database.BackupTo(ctx, backupPath); err != nil {
 		_ = tx.Rollback().Error
 		t.Fatalf("BackupTo: %v", err)
@@ -582,7 +547,11 @@ func TestAuditBackupExcludesUncommittedEventAndResumesDenseSequence(t *testing.T
 		t.Fatalf("Rollback provisional event: %v", err)
 	}
 
-	restored, err := control.Open(ctx, backupPath)
+	restoredDSN := pgtest.EmptyCopy(t, sourceDSN)
+	if err := control.RestoreFrom(ctx, restoredDSN, backupPath); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := control.Open(ctx, restoredDSN)
 	if err != nil {
 		t.Fatalf("control.Open(backup): %v", err)
 	}
@@ -700,33 +669,32 @@ func TestAuditMigrationRejectsForgedAccountingAndTaxonomy(t *testing.T) {
 		{
 			name: "forged nonempty initial state",
 			sql: `INSERT INTO audit_tenant_state
-				(tenant_id, next_sequence, event_count) VALUES (?, 2, 1)`,
+				(tenant_id, next_sequence, event_count) VALUES ($1, 2, 1)`,
 			args: []any{"forged-tenant"},
 		},
 		{
 			name: "duplicate state replacement",
-			sql: `INSERT OR REPLACE INTO audit_tenant_state
-				(tenant_id, next_sequence, event_count) VALUES (?, 2, 1)`,
+			sql: `INSERT INTO audit_tenant_state
+				(tenant_id, next_sequence, event_count) VALUES ($1, 2, 1) ON CONFLICT (tenant_id) DO UPDATE SET next_sequence=EXCLUDED.next_sequence,event_count=EXCLUDED.event_count`,
 			args: []any{event.TenantID},
 		},
 		{
 			name: "state advance without terminal event",
 			sql: `UPDATE audit_tenant_state
-				SET next_sequence = 3, event_count = 2 WHERE tenant_id = ?`,
+				SET next_sequence = 3, event_count = 2 WHERE tenant_id = $1`,
 			args: []any{event.TenantID},
 		},
 		{
 			name: "state moves backwards",
 			sql: `UPDATE audit_tenant_state
-				SET next_sequence = 1, event_count = 0 WHERE tenant_id = ?`,
+				SET next_sequence = 1, event_count = 0 WHERE tenant_id = $1`,
 			args: []any{event.TenantID},
 		},
 	}
 	for _, attack := range accountingAttacks {
 		t.Run(attack.name, func(t *testing.T) {
-			if _, err := database.SQLDB().ExecContext(ctx, attack.sql, attack.args...); err == nil {
-				t.Fatal("forged audit accounting succeeded")
-			}
+			_, err := database.SQLDB().ExecContext(ctx, attack.sql, attack.args...)
+			requireNativeAuditRejection(t, err, "forged audit accounting")
 		})
 	}
 
@@ -734,7 +702,7 @@ func TestAuditMigrationRejectsForgedAccountingAndTaxonomy(t *testing.T) {
 		tenant_id, sequence, occurred_at_unix_micro,
 		actor_kind, actor_id, actor_role, action,
 		target_kind, target_id, target_version
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 	eventAttacks := []struct {
 		name   string
 		values []any
@@ -778,9 +746,8 @@ func TestAuditMigrationRejectsForgedAccountingAndTaxonomy(t *testing.T) {
 	}
 	for _, attack := range eventAttacks {
 		t.Run(attack.name, func(t *testing.T) {
-			if _, err := database.SQLDB().ExecContext(ctx, insertEvent, attack.values...); err == nil {
-				t.Fatal("forged audit event succeeded")
-			}
+			_, err := database.SQLDB().ExecContext(ctx, insertEvent, attack.values...)
+			requireNativeAuditRejection(t, err, "forged audit event")
 		})
 	}
 
@@ -788,7 +755,7 @@ func TestAuditMigrationRejectsForgedAccountingAndTaxonomy(t *testing.T) {
 	if err := database.SQLDB().QueryRowContext(ctx, `
 		SELECT next_sequence, event_count
 		FROM audit_tenant_state
-		WHERE tenant_id = ?`, event.TenantID).Scan(&nextSequence, &eventCount); err != nil {
+		WHERE tenant_id = $1`, event.TenantID).Scan(&nextSequence, &eventCount); err != nil {
 		t.Fatalf("read accounting after attacks: %v", err)
 	}
 	if nextSequence != 2 || eventCount != 1 {
@@ -806,7 +773,7 @@ func TestNewStoreFailsClosedOnPreexistingInteriorJournalGap(t *testing.T) {
 	appendAuditTestEvent(t, writer, ctx, "tenant-gap", ActionIngestionTokenRevoke, "token", 3)
 
 	if err := database.GORMDB().Exec(
-		"DROP TRIGGER audit_event_delete_is_forbidden",
+		"DROP TRIGGER audit_event_delete_is_forbidden ON audit_events",
 	).Error; err != nil {
 		t.Fatalf("drop event delete trigger: %v", err)
 	}
@@ -842,18 +809,18 @@ func TestNewStoreFailsClosedOnPreexistingMalformedInteriorJournalRow(t *testing.
 	if err != nil {
 		t.Fatalf("acquire corruption connection: %v", err)
 	}
-	if _, err := connection.ExecContext(ctx, "DROP TRIGGER audit_event_update_is_forbidden"); err != nil {
+	if _, err := connection.ExecContext(ctx, "DROP TRIGGER audit_event_update_is_forbidden ON audit_events"); err != nil {
 		_ = connection.Close()
 		t.Fatalf("drop event update trigger: %v", err)
 	}
-	if _, err := connection.ExecContext(ctx, "PRAGMA ignore_check_constraints = ON"); err != nil {
+	if _, err := pgtest.Checks(ctx, connection, false); err != nil {
 		_ = connection.Close()
 		t.Fatalf("ignore fixture constraints: %v", err)
 	}
 	if _, err := connection.ExecContext(ctx, `
 		UPDATE audit_events
 		SET actor_role = 'user'
-		WHERE tenant_id = ? AND sequence = 2`, "tenant-malformed"); err != nil {
+		WHERE tenant_id = $1 AND sequence = 2`, "tenant-malformed"); err != nil {
 		_ = connection.Close()
 		t.Fatalf("corrupt interior event: %v", err)
 	}
@@ -881,18 +848,18 @@ func TestAppendFailsClosedOnRuntimeTailCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire corruption connection: %v", err)
 	}
-	if _, err := connection.ExecContext(ctx, "DROP TRIGGER audit_event_update_is_forbidden"); err != nil {
+	if _, err := connection.ExecContext(ctx, "DROP TRIGGER audit_event_update_is_forbidden ON audit_events"); err != nil {
 		_ = connection.Close()
 		t.Fatalf("drop event update trigger: %v", err)
 	}
-	if _, err := connection.ExecContext(ctx, "PRAGMA ignore_check_constraints = ON"); err != nil {
+	if _, err := pgtest.Checks(ctx, connection, false); err != nil {
 		_ = connection.Close()
 		t.Fatalf("ignore fixture constraints: %v", err)
 	}
 	if _, err := connection.ExecContext(ctx, `
 		UPDATE audit_events
 		SET actor_role = 'user'
-		WHERE tenant_id = ? AND sequence = 2`, "tenant-tail"); err != nil {
+		WHERE tenant_id = $1 AND sequence = 2`, "tenant-tail"); err != nil {
 		_ = connection.Close()
 		t.Fatalf("corrupt tail event: %v", err)
 	}
@@ -916,7 +883,7 @@ func TestAppendChecksCorruptFullStateBeforeCapacity(t *testing.T) {
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 
 	if err := database.GORMDB().Exec(
-		"DROP TRIGGER audit_tenant_state_initial_shape_is_valid",
+		"DROP TRIGGER audit_tenant_state_initial_shape_is_valid ON audit_tenant_state",
 	).Error; err != nil {
 		t.Fatalf("remove initial-state fixture guard: %v", err)
 	}
@@ -978,11 +945,12 @@ func TestAuditRowsAndStateAreImmutable(t *testing.T) {
 		TargetVersion:       2,
 	}
 	if err := database.GORMDB().Exec(`
-		INSERT OR REPLACE INTO audit_events (
+		INSERT INTO audit_events (
 			sequence, tenant_id, occurred_at_unix_micro,
 			actor_kind, actor_id, actor_role, action,
 			target_kind, target_id, target_version
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (tenant_id, sequence) DO UPDATE SET action=EXCLUDED.action,target_version=EXCLUDED.target_version
 	`,
 		replacement.Sequence,
 		replacement.TenantID,
@@ -995,7 +963,7 @@ func TestAuditRowsAndStateAreImmutable(t *testing.T) {
 		replacement.TargetID,
 		replacement.TargetVersion,
 	).Error; err == nil {
-		t.Fatal("audit event INSERT OR REPLACE succeeded")
+		t.Fatal("audit event conflict replacement succeeded")
 	}
 
 	page, err := store.List(ctx, event.TenantID, ListRequest{})
@@ -1051,7 +1019,7 @@ func TestExplicitGORMModelsMatchMigratedAuditColumns(t *testing.T) {
 	}
 	rows, err := database.SQLDB().QueryContext(context.Background(), `
 		SELECT name
-		FROM pragma_table_info('audit_events')
+		FROM (SELECT a.attname AS name,a.attnum-1 AS cid,CASE WHEN t.typname='int8' THEN 'BIGINT' ELSE upper(t.typname) END AS type,CASE WHEN a.attnotnull THEN 1 ELSE 0 END AS "notnull",COALESCE((SELECT array_position(c.conkey,a.attnum) FROM pg_constraint c WHERE c.conrelid=r.oid AND c.contype='p'),0) AS pk,CASE WHEN a.attgenerated='s' THEN 3 ELSE 0 END AS hidden FROM pg_attribute a JOIN pg_class r ON r.oid=a.attrelid JOIN pg_namespace n ON n.oid=r.relnamespace JOIN pg_type t ON t.oid=a.atttypid WHERE n.nspname=current_schema() AND r.relname='audit_events' AND a.attnum>0 AND NOT a.attisdropped) AS column_metadata
 		WHERE pk > 0
 		ORDER BY pk`)
 	if err != nil {
@@ -1085,15 +1053,15 @@ func TestExplicitGORMModelsMatchMigratedAuditColumns(t *testing.T) {
 		}
 		wantType := "TEXT"
 		if index == 1 || index == 2 || index == 9 {
-			wantType = "INTEGER"
+			wantType = "INT8"
 		}
-		if column.DatabaseTypeName() != wantType {
+		if strings.ToUpper(column.DatabaseTypeName()) != wantType {
 			t.Fatalf("column %q type = %q, want %q", column.Name(), column.DatabaseTypeName(), wantType)
 		}
 	}
 	columnRows, err := database.SQLDB().QueryContext(context.Background(), `
 		SELECT name, type, "notnull"
-		FROM pragma_table_info('audit_events')
+		FROM (SELECT a.attname AS name,a.attnum-1 AS cid,CASE WHEN t.typname='int8' THEN 'BIGINT' ELSE upper(t.typname) END AS type,CASE WHEN a.attnotnull THEN 1 ELSE 0 END AS "notnull",COALESCE((SELECT array_position(c.conkey,a.attnum) FROM pg_constraint c WHERE c.conrelid=r.oid AND c.contype='p'),0) AS pk,CASE WHEN a.attgenerated='s' THEN 3 ELSE 0 END AS hidden FROM pg_attribute a JOIN pg_class r ON r.oid=a.attrelid JOIN pg_namespace n ON n.oid=r.relnamespace JOIN pg_type t ON t.oid=a.atttypid WHERE n.nspname=current_schema() AND r.relname='audit_events' AND a.attnum>0 AND NOT a.attisdropped) AS column_metadata
 		ORDER BY cid`)
 	if err != nil {
 		t.Fatalf("read migrated column definitions: %v", err)
@@ -1107,7 +1075,7 @@ func TestExplicitGORMModelsMatchMigratedAuditColumns(t *testing.T) {
 		}
 		wantType := "TEXT"
 		if index == 1 || index == 2 || index == 9 {
-			wantType = "INTEGER"
+			wantType = "BIGINT"
 		}
 		wantNotNull := 1
 		if index >= 10 {
@@ -1157,7 +1125,7 @@ func TestExplicitGORMModelsMatchMigratedAuditColumns(t *testing.T) {
 		rows, err := database.SQLDB().QueryContext(
 			context.Background(),
 			fmt.Sprintf(
-				"SELECT name, desc FROM pragma_index_xinfo('%s') WHERE key = 1 ORDER BY seqno",
+				"SELECT name, \"desc\" FROM (SELECT a.attname AS name,k.ordinality-1 AS seqno,1 AS \"key\",CASE WHEN (i.indoption[(k.ordinality-1)::int] & 1)=1 THEN 1 ELSE 0 END AS \"desc\" FROM pg_index i JOIN pg_class x ON x.oid=i.indexrelid JOIN pg_namespace n ON n.oid=x.relnamespace CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum,ordinality) JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum WHERE n.nspname=current_schema() AND x.relname='%s' AND k.ordinality<=i.indnkeyatts) AS index_metadata WHERE key = 1 ORDER BY seqno",
 				name,
 			),
 		)
@@ -1179,5 +1147,18 @@ func TestExplicitGORMModelsMatchMigratedAuditColumns(t *testing.T) {
 		if !slices.Equal(migrated, expected) {
 			t.Errorf("migrated index %s = %v, want %v", name, migrated, expected)
 		}
+	}
+}
+
+// A malformed test query must not stand in for an invariant rejecting a valid
+// PostgreSQL mutation. Class 42 means the fixture never exercised its guard.
+func requireNativeAuditRejection(t testing.TB, err error, operation string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("%s succeeded", operation)
+	}
+	var sqlState interface{ SQLState() string }
+	if errors.As(err, &sqlState) && strings.HasPrefix(sqlState.SQLState(), "42") {
+		t.Fatalf("%s used an invalid PostgreSQL fixture: %v", operation, err)
 	}
 }

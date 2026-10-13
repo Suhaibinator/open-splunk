@@ -2,11 +2,12 @@
 
 override PROTOC_GEN_GO_VERSION := v1.36.12
 override PROTOC_GEN_GO_GRPC_VERSION := v1.6.2
-override GOLANGCI_LINT_VERSION := v2.13.1
+override GOLANGCI_LINT_VERSION := v2.14.0
+override GO_LINT_PACKAGES := . ./cmd/... ./deploy/... ./gen/go/... ./internal/... ./integration/... ./migrations/...
 override GO_LINT_TOOL_BIN := $(CURDIR)/.cache/go-lint-tools
 override PROTO_TOOL_BIN := $(CURDIR)/.cache/proto-tools
 override PROTO_LINT_CACHE := $(CURDIR)/.cache/buf
-override RELEASE_GO_VERSION := 1.27.0
+override RELEASE_GO_VERSION := 1.27.2
 override RELEASE_NODE_VERSION := 26.7.0
 override RELEASE_NPM_VERSION := 11.19.0
 override RELEASE_GIT_ENV := env \
@@ -48,9 +49,8 @@ override BASE_GO_TOOL_ENV := env \
 	GOTOOLCHAIN=local \
 	GOWORK=off
 override GO_TOOL_ENV := $(BASE_GO_TOOL_ENV)
-# SQLite-backed tests use go-sqlite3, while release binaries remain pure-Go.
-# Override only the test invocation so build and publication tooling stays
-# reproducibly CGO-disabled.
+# Test binaries can exercise collector-local native dependencies while release
+# binaries remain reproducibly CGO-disabled.
 override GO_TEST_ENV := $(GO_TOOL_ENV) CGO_ENABLED=1
 override DEVELOPMENT_ENV_FILE := $(CURDIR)/deploy/.env.development
 override DEVELOPMENT_COMPOSE := docker compose --project-name open-splunk-development --env-file $(DEVELOPMENT_ENV_FILE) -f $(CURDIR)/deploy/docker-compose.development.yaml
@@ -132,6 +132,7 @@ oci:
 			bash "$$launcher"
 
 build-ui: proto
+	node scripts/check-go-common.mjs
 	env \
 		LANG=C \
 		LC_ALL=C \
@@ -178,7 +179,7 @@ dev-clickhouse:
 	@command -v docker >/dev/null 2>&1 || { echo "Docker is required for development ClickHouse" >&2; exit 1; }
 	@docker compose version >/dev/null 2>&1 || { echo "Docker Compose v2 is required for development ClickHouse" >&2; exit 1; }
 	@test -f "$(DEVELOPMENT_ENV_FILE)" || ./deploy/generate-env.sh --development "$(DEVELOPMENT_ENV_FILE)"
-	$(DEVELOPMENT_COMPOSE) up --detach --wait clickhouse
+	$(DEVELOPMENT_COMPOSE) up --detach --wait clickhouse postgres minio
 
 dev-down:
 	@test -f "$(DEVELOPMENT_ENV_FILE)" || { echo "development environment is not initialized; run 'make dev-clickhouse' first" >&2; exit 1; }
@@ -245,7 +246,7 @@ verify:
 	$(GO_TOOL_ENV) go build ./...
 	$(GO_TEST_ENV) go vet ./...
 	$(MAKE) go-lint-tools
-	$(GO_TOOL_ENV) GOOS=linux GOARCH=amd64 "$(GO_LINT_TOOL_BIN)/golangci-lint" run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0 ./...
+	$(GO_TOOL_ENV) GOOS=linux GOARCH=amd64 "$(GO_LINT_TOOL_BIN)/golangci-lint" run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0 $(GO_LINT_PACKAGES)
 
 clean:
 	$(GO_TOOL_ENV) go clean

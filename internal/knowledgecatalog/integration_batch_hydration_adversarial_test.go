@@ -12,6 +12,8 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"gorm.io/gorm"
 )
 
@@ -158,10 +160,10 @@ func TestIntegrationBatchHydrationVisibleCandidateCorruptionFailsClosed(t *testi
 			corrupt: func(t *testing.T, database *control.DB) {
 				dropTrigger(t, database, "knowledge_definition_blob_update_is_forbidden")
 				mustExec(t, database, `UPDATE knowledge_definition_blobs
-					SET definition_proto = X'00', definition_bytes = 1
-					WHERE tenant_id = ? AND definition_digest = (
+					SET definition_proto = decode('00','hex'), definition_bytes = 1
+					WHERE tenant_id = $1 AND definition_digest = (
 						SELECT definition_digest FROM knowledge_objects
-						WHERE tenant_id = ? AND knowledge_object_id = 'ko-corrupt-source'
+						WHERE tenant_id = $2 AND knowledge_object_id = 'ko-corrupt-source'
 					)`, testTenant, testTenant)
 			},
 		},
@@ -171,7 +173,7 @@ func TestIntegrationBatchHydrationVisibleCandidateCorruptionFailsClosed(t *testi
 				dropTrigger(t, database, "knowledge_list_selector_update_is_forbidden")
 				mustExec(t, database, `UPDATE knowledge_object_list_selector_patterns
 					SET value = 'xxxxxxx-*'
-					WHERE tenant_id = ? AND knowledge_object_id = 'ko-corrupt-source'
+					WHERE tenant_id = $1 AND knowledge_object_id = 'ko-corrupt-source'
 					  AND dimension = 'host'`, testTenant)
 			},
 		},
@@ -180,7 +182,7 @@ func TestIntegrationBatchHydrationVisibleCandidateCorruptionFailsClosed(t *testi
 			corrupt: func(t *testing.T, database *control.DB) {
 				dropTrigger(t, database, "knowledge_dependency_update_is_forbidden")
 				mustExec(t, database, `UPDATE knowledge_object_dependencies SET ordinal = 1
-					WHERE tenant_id = ? AND source_object_id = 'ko-corrupt-source'
+					WHERE tenant_id = $1 AND source_object_id = 'ko-corrupt-source'
 					  AND source_object_version = 1`, testTenant)
 			},
 		},
@@ -297,15 +299,15 @@ func TestIntegrationBatchHydrationHiddenCorruptionIsNotAnOracle(t *testing.T) {
 	dropTrigger(t, database, "knowledge_dependency_update_is_forbidden")
 	dropTrigger(t, database, "knowledge_list_projection_update_is_forbidden")
 	mustExec(t, database, `UPDATE knowledge_definition_blobs
-		SET definition_proto = X'00', definition_bytes = 1
-		WHERE tenant_id = ? AND definition_digest = (
+		SET definition_proto = decode('00','hex'), definition_bytes = 1
+		WHERE tenant_id = $1 AND definition_digest = (
 			SELECT definition_digest FROM knowledge_objects
-			WHERE tenant_id = ? AND knowledge_object_id = 'ko-hidden-source'
+			WHERE tenant_id = $2 AND knowledge_object_id = 'ko-hidden-source'
 		)`, testTenant, testTenant)
 	mustExec(t, database, `UPDATE knowledge_object_list_selector_patterns SET value = 'xxxxxx-*'
-		WHERE tenant_id = ? AND knowledge_object_id = 'ko-hidden-source'`, testTenant)
+		WHERE tenant_id = $1 AND knowledge_object_id = 'ko-hidden-source'`, testTenant)
 	mustExec(t, database, `UPDATE knowledge_object_dependencies SET ordinal = 1
-		WHERE tenant_id = ? AND source_object_id = 'ko-hidden-source'`, testTenant)
+		WHERE tenant_id = $1 AND source_object_id = 'ko-hidden-source'`, testTenant)
 	execWithForeignKeysDisabled(t, database, `UPDATE knowledge_object_list_projections
 		SET owner_id = ? WHERE tenant_id = ? AND knowledge_object_id = 'ko-hidden-source'`, testOwner, testTenant)
 
@@ -337,7 +339,7 @@ func TestIntegrationCatalogTenantHealthDoesNotDisclosePrivateRows(t *testing.T) 
 		requests := privacyContractListRequests("ledger-visible")
 		baselineLists := privacyContractCaptureLists(t, store, requests)
 		mustExec(t, database, `UPDATE knowledge_catalog_tenants
-			SET identity_count = identity_count - 1 WHERE tenant_id = ?`, testTenant)
+			SET identity_count = identity_count - 1 WHERE tenant_id = $1`, testTenant)
 		privacyContractAssertPhysicalCountDiagnostic(t, database, 3)
 		privacyContractAssertGets(t, store, visibleIDs, baselineGets)
 		privacyContractAssertLists(t, store, requests, baselineLists)
@@ -365,11 +367,11 @@ func TestIntegrationCatalogTenantHealthDoesNotDisclosePrivateRows(t *testing.T) 
 		if err != nil {
 			t.Fatalf("acquire over-cap fixture connection: %v", err)
 		}
-		if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = OFF`); err != nil {
+		if _, err := pgtest.DropForeignKeys(context.Background(), connection); err != nil {
 			_ = connection.Close()
 			t.Fatalf("disable over-cap fixture foreign keys: %v", err)
 		}
-		if _, err := connection.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+		if _, err := pgtest.Checks(context.Background(), connection, false); err != nil {
 			_ = connection.Close()
 			t.Fatalf("disable over-cap fixture checks: %v", err)
 		}
@@ -377,7 +379,7 @@ func TestIntegrationCatalogTenantHealthDoesNotDisclosePrivateRows(t *testing.T) 
 		for start := 0; start < physicalRows; start += 250 {
 			end := min(start+250, physicalRows)
 			var statement strings.Builder
-			statement.WriteString(`INSERT INTO knowledge_objects (
+			statement.WriteString(`INSERT INTO knowledge_objects (organization_id,
 				tenant_id, knowledge_object_id, current_version, app_id, owner_id,
 				object_type, name, sharing_scope, state, definition_digest,
 				created_at_unix_micro, updated_at_unix_micro,
@@ -389,21 +391,21 @@ func TestIntegrationCatalogTenantHealthDoesNotDisclosePrivateRows(t *testing.T) 
 				if index != start {
 					statement.WriteByte(',')
 				}
-				statement.WriteString(`(?, ?, 1, ?, 'owner-over-cap', 'field_alias', ?,
-					'private', 'draft', zeroblob(32), 1, 1, NULL, NULL, NULL, NULL)`)
+				statement.WriteString(`(1, ?, ?, 1, ?, 'owner-over-cap', 'field_alias', ?,
+					'private', 'draft', decode(repeat('00', (32)::int), 'hex'), 1, 1, NULL, NULL, NULL, NULL)`)
 				objectID := fmt.Sprintf("ko-over-cap-%05d", index)
 				arguments = append(arguments, testTenant, objectID, testApp, objectID)
 			}
-			if _, err := connection.ExecContext(context.Background(), statement.String(), arguments...); err != nil {
+			if _, err := connection.ExecContext(context.Background(), pgtest.Parameters(statement.String()), arguments...); err != nil {
 				_ = connection.Close()
 				t.Fatalf("insert over-cap fixture rows [%d,%d): %v", start, end, err)
 			}
 		}
-		if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`); err != nil {
+		if _, err := pgtest.RestoreForeignKeys(context.Background(), connection); err != nil {
 			_ = connection.Close()
 			t.Fatalf("restore over-cap fixture foreign keys: %v", err)
 		}
-		if _, err := connection.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = OFF`); err != nil {
+		if _, err := pgtest.Checks(context.Background(), connection, true); err != nil {
 			_ = connection.Close()
 			t.Fatalf("restore over-cap fixture check constraints: %v", err)
 		}
@@ -596,7 +598,7 @@ func insertIntegrationBatchObjects(t *testing.T, database *control.DB, count int
 	if count < 1 || count > maximumObjectsPerTenant {
 		t.Fatalf("invalid batch fixture count %d", count)
 	}
-	tx, err := database.SQLDB().BeginTx(context.Background(), nil)
+	tx, err := pgmeta.BeginSQL(context.Background(), database.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin batch fixture: %v", err)
 	}
@@ -644,11 +646,11 @@ func insertIntegrationBatchObjects(t *testing.T, database *control.DB, count int
 			mutations++
 		}
 		insertIntegrationProjection(t, tx, objectID, currentVersion, StateDraft, current)
-		if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (
+		if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (organization_id,
 			tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name,
 			sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro,
 			disabled_at_unix_micro, quarantined_at_unix_micro, deleted_at_unix_micro, quarantine_reason
-		) VALUES (?, ?, ?, ?, ?, 'field_alias', ?, 'private', 'draft', ?, ?, ?, NULL, NULL, NULL, NULL)`,
+		) VALUES (1, $1, $2, $3, $4, $5, 'field_alias', $6, 'private', 'draft', $7, $8, $9, NULL, NULL, NULL, NULL)`,
 			testTenant, objectID, currentVersion, testApp, testOwner, name, current.Digest[:], timestamp, updatedAt,
 		); err != nil {
 			t.Fatalf("insert batch registry %d: %v", index, err)
@@ -656,7 +658,7 @@ func insertIntegrationBatchObjects(t *testing.T, database *control.DB, count int
 	}
 	for mutation := int64(0); mutation < mutations; mutation++ {
 		if _, err := tx.ExecContext(t.Context(), `UPDATE knowledge_catalog_tenants
-			SET catalog_revision = catalog_revision + 1 WHERE tenant_id = ?`, testTenant); err != nil {
+			SET catalog_revision = catalog_revision + 1 WHERE tenant_id = $1`, testTenant); err != nil {
 			t.Fatalf("advance batch catalog revision %d: %v", mutation, err)
 		}
 	}
@@ -670,7 +672,7 @@ func insertIntegrationDisabledBatchObjects(t *testing.T, database *control.DB, c
 	if count < 1 || count > maximumObjectsPerTenant || int64(count)*2 > maximumVersionsPerTenant {
 		t.Fatalf("invalid disabled batch fixture count %d", count)
 	}
-	tx, err := database.SQLDB().BeginTx(context.Background(), nil)
+	tx, err := pgmeta.BeginSQL(context.Background(), database.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin disabled batch fixture: %v", err)
 	}
@@ -696,11 +698,11 @@ func insertIntegrationDisabledBatchObjects(t *testing.T, database *control.DB, c
 		insertIntegrationVersion(t, tx, objectID, 1, StateActive, "create", normalized.Digest[:], normalized, createdAt)
 		insertIntegrationVersion(t, tx, objectID, 2, StateDisabled, "disable", normalized.Digest[:], normalized, disabledAt)
 		insertIntegrationProjection(t, tx, objectID, 2, StateDisabled, normalized)
-		if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (
+		if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (organization_id,
 			tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name,
 			sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro,
 			disabled_at_unix_micro, quarantined_at_unix_micro, deleted_at_unix_micro, quarantine_reason
-		) VALUES (?, ?, 2, ?, ?, 'field_alias', ?, 'private', 'disabled', ?, ?, ?, ?, NULL, NULL, NULL)`,
+		) VALUES (1, $1, $2, 2, $3, $4, 'field_alias', $5, 'private', 'disabled', $6, $7, $8, $9, NULL, NULL, NULL)`,
 			testTenant,
 			objectID,
 			testApp,
@@ -716,7 +718,7 @@ func insertIntegrationDisabledBatchObjects(t *testing.T, database *control.DB, c
 	}
 	for mutation := 0; mutation < count*2; mutation++ {
 		if _, err := tx.ExecContext(t.Context(), `UPDATE knowledge_catalog_tenants
-			SET catalog_revision = catalog_revision + 1 WHERE tenant_id = ?`, testTenant); err != nil {
+			SET catalog_revision = catalog_revision + 1 WHERE tenant_id = $1`, testTenant); err != nil {
 			t.Fatalf("advance disabled batch catalog revision %d: %v", mutation, err)
 		}
 	}

@@ -224,7 +224,13 @@ func (coordinator *Coordinator) Step(ctx context.Context, now time.Time) error {
 // RunNow claims and enqueues one immediate occurrence without advancing the
 // alert's cron cursor. The returned SEARCHING summary identifies the durable
 // run; callers inspect run history for its eventual terminal outcome.
-func (coordinator *Coordinator) RunNow(ctx context.Context, ownerID, alertID string) (RunSummary, error) {
+func (coordinator *Coordinator) RunNow(ctx context.Context, scope AccessScope, alertID string) (RunSummary, error) {
+	scoped, scopeErr := WithAccessScope(ctx, scope)
+	if scopeErr != nil {
+		return RunSummary{}, scopeErr
+	}
+	ctx = scoped
+	ownerID := scope.OwnerID
 	if ctx == nil || strings.TrimSpace(ownerID) == "" || strings.TrimSpace(alertID) == "" {
 		return RunSummary{}, ErrInvalidArgument
 	}

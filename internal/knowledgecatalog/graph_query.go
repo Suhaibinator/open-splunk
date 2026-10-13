@@ -38,8 +38,14 @@ func incomingGraphBaseQuery(
 	// is hydrated or read outgoing. Discovering such constraint-bypassed rows
 	// from the target side would require a new bounded current-inverse authority;
 	// dropping this predicate would instead scan every current source edge.
-	return query.Joins(`CROSS JOIN knowledge_object_dependencies AS dependency
-		INDEXED BY knowledge_object_dependencies_source_target_idx`).
+	return query.Joins(`JOIN LATERAL (SELECT dependency.* FROM knowledge_object_dependencies AS dependency
+		WHERE dependency.tenant_id = source.tenant_id
+		AND dependency.source_object_id = source.knowledge_object_id
+		AND dependency.source_object_version = source.current_version
+		AND dependency.target_kind = 'object'
+		AND dependency.target_object_id = ?
+		AND dependency.target_object_version = ?
+		OFFSET 0) AS dependency ON true`, root.KnowledgeObjectID, root.ObjectVersion).
 		Where("source.state <> ?", StateQuarantined).
 		Where(`dependency.tenant_id = source.tenant_id
 			AND dependency.source_object_id = source.knowledge_object_id
@@ -119,25 +125,25 @@ func incomingGraphCandidateReadQuery(
 		Order("dependency.target_object_version ASC").
 		Order("dependency.dependency_role ASC")
 	return query.Session(&gorm.Session{}).Select(fmt.Sprintf(`
-		CASE WHEN length(CAST(dependency.tenant_id AS BLOB)) BETWEEN 1 AND %[1]d
+		CASE WHEN octet_length(dependency.tenant_id) BETWEEN 1 AND %[1]d
 			THEN dependency.tenant_id ELSE '' END AS tenant_id,
-		CASE WHEN length(CAST(dependency.source_object_id AS BLOB)) BETWEEN 1 AND %[2]d
+		CASE WHEN octet_length(dependency.source_object_id) BETWEEN 1 AND %[2]d
 			THEN dependency.source_object_id ELSE '' END AS source_object_id,
 		dependency.source_object_version,
 		dependency.ordinal,
-		CASE WHEN length(CAST(dependency.target_kind AS BLOB)) = %[3]d
+		CASE WHEN octet_length(dependency.target_kind) = %[3]d
 			THEN dependency.target_kind ELSE '' END AS target_kind,
-		CASE WHEN length(CAST(dependency.target_object_id AS BLOB)) BETWEEN 1 AND %[2]d
+		CASE WHEN octet_length(dependency.target_object_id) BETWEEN 1 AND %[2]d
 			THEN dependency.target_object_id ELSE '' END AS target_object_id,
 		dependency.target_object_version,
-		CASE WHEN length(CAST(dependency.dependency_role AS BLOB)) = %[4]d
+		CASE WHEN octet_length(dependency.dependency_role) = %[4]d
 			THEN dependency.dependency_role ELSE '' END AS dependency_role,
 		1 AS target_found,
-		length(CAST(dependency.tenant_id AS BLOB)) AS width_tenant_id_bytes,
-		length(CAST(dependency.source_object_id AS BLOB)) AS width_source_id_bytes,
-		length(CAST(dependency.target_kind AS BLOB)) AS width_target_kind_bytes,
-		length(CAST(dependency.target_object_id AS BLOB)) AS width_target_id_bytes,
-		length(CAST(dependency.dependency_role AS BLOB)) AS width_dependency_role_bytes
+		octet_length(dependency.tenant_id) AS width_tenant_id_bytes,
+		octet_length(dependency.source_object_id) AS width_source_id_bytes,
+		octet_length(dependency.target_kind) AS width_target_kind_bytes,
+		octet_length(dependency.target_object_id) AS width_target_id_bytes,
+		octet_length(dependency.dependency_role) AS width_dependency_role_bytes
 	`, maximumTenantIDBytes, maximumObjectIDBytes, len("object"), len("field_input"))).Limit(limit)
 }
 

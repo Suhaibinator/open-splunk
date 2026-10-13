@@ -7,58 +7,11 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"google.golang.org/protobuf/proto"
-	"modernc.org/sqlite"
 )
 
 const (
-	lookupDefinitionTextContainsFunction = "open_splunk_lookup_definition_text_contains_v1"
-	lookupCatalogStateFunction           = "open_splunk_lookup_catalog_state_v1"
-	lookupCatalogStateDomain             = "open-splunk/lookup-owner-catalog-state/v1\x00"
+	lookupCatalogStateDomain = "open-splunk/lookup-owner-catalog-state/v1\x00"
 )
-
-func init() {
-	sqlite.MustRegisterDeterministicScalarFunction(
-		lookupDefinitionTextContainsFunction,
-		2,
-		lookupDefinitionTextContains,
-	)
-	sqlite.MustRegisterFunction(lookupCatalogStateFunction, &sqlite.FunctionImpl{
-		NArgs:         2,
-		Deterministic: true,
-		MakeAggregate: func(sqlite.FunctionContext) (sqlite.AggregateFunction, error) {
-			return &lookupCatalogStateAggregate{}, nil
-		},
-	})
-}
-
-func lookupDefinitionTextContains(
-	_ *sqlite.FunctionContext,
-	arguments []driver.Value,
-) (driver.Value, error) {
-	if len(arguments) != 2 {
-		return nil, fmt.Errorf("lookup definition text predicate received %d arguments", len(arguments))
-	}
-	definitionBytes, ok := arguments[0].([]byte)
-	if !ok {
-		return nil, fmt.Errorf("lookup definition text predicate received %T definition", arguments[0])
-	}
-	needle, ok := arguments[1].(string)
-	if !ok || needle == "" || needle != strings.ToLower(needle) {
-		return nil, fmt.Errorf("lookup definition text predicate received invalid search text")
-	}
-	definition := &opensplunk.LookupDefinition{}
-	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(definitionBytes, definition); err != nil {
-		return nil, fmt.Errorf("decode lookup definition text projection: %w", err)
-	}
-	if strings.Contains(strings.ToLower(definition.GetName()), needle) ||
-		strings.Contains(strings.ToLower(definition.GetDescription()), needle) {
-		return int64(1), nil
-	}
-	return int64(0), nil
-}
 
 type lookupCatalogStateEntry struct {
 	lookupID string
@@ -70,7 +23,6 @@ type lookupCatalogStateAggregate struct {
 }
 
 func (aggregate *lookupCatalogStateAggregate) Step(
-	_ *sqlite.FunctionContext,
 	arguments []driver.Value,
 ) error {
 	if len(arguments) != 2 {
@@ -92,15 +44,12 @@ func (aggregate *lookupCatalogStateAggregate) Step(
 }
 
 func (*lookupCatalogStateAggregate) WindowInverse(
-	_ *sqlite.FunctionContext,
 	_ []driver.Value,
 ) error {
 	return fmt.Errorf("lookup catalog state does not support window evaluation")
 }
 
-func (aggregate *lookupCatalogStateAggregate) WindowValue(
-	_ *sqlite.FunctionContext,
-) (driver.Value, error) {
+func (aggregate *lookupCatalogStateAggregate) WindowValue() (driver.Value, error) {
 	entries := slices.Clone(aggregate.entries)
 	slices.SortFunc(entries, func(left, right lookupCatalogStateEntry) int {
 		return strings.Compare(left.lookupID, right.lookupID)
@@ -121,7 +70,7 @@ func (aggregate *lookupCatalogStateAggregate) WindowValue(
 	return hash.Sum(nil), nil
 }
 
-func (aggregate *lookupCatalogStateAggregate) Final(*sqlite.FunctionContext) {
+func (aggregate *lookupCatalogStateAggregate) Final() {
 	aggregate.entries = nil
 }
 

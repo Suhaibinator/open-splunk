@@ -107,9 +107,7 @@ func (manager *Manager) List(
 	}
 	var exactEntries []retainedExportListEntry
 	if normalized.includeTotal {
-		root := manager.jobsByScope[normalizedAccess]
-		exactEntries = make([]retainedExportListEntry, 0, exportListIndexSize(root))
-		exportListIndexCollectBefore(root, nil, &exactEntries, exportListIndexSize(root))
+		exactEntries = manager.collectExportListEntriesLocked(normalizedAccess, nil, manager.maxJobs)
 	}
 	manager.mu.RUnlock()
 
@@ -135,10 +133,21 @@ func (manager *Manager) List(
 				entry.mu.Unlock()
 				return false, contextErr
 			}
-			if entry.access != normalizedAccess {
+			if !sameAccess(entry.access, normalizedAccess) {
 				entry.mu.Unlock()
 				continue
 			}
+			sourceID := entry.job.SearchJobID
+			entry.mu.Unlock()
+			if manager.authorize != nil {
+				if err := manager.authorize(ctx, normalizedAccess, sourceID); err != nil {
+					if ctx.Err() != nil {
+						return false, ctx.Err()
+					}
+					continue
+				}
+			}
+			entry.mu.Lock()
 			priorState := entry.job.State
 			_, _ = manager.expireLocked(entry, now)
 			if entry.job.State != priorState {
@@ -254,8 +263,10 @@ func normalizeExportListRequest(
 		return invalid("owner ID is invalid")
 	}
 	access = searchjobs.AccessScope{
-		TenantID: strings.Clone(access.TenantID),
-		OwnerID:  strings.Clone(access.OwnerID),
+		TenantID:          strings.Clone(access.TenantID),
+		OwnerID:           strings.Clone(access.OwnerID),
+		OrganizationID:    strings.Clone(access.OrganizationID),
+		SiteAdministrator: access.SiteAdministrator,
 	}
 	pageSize := request.PageSize
 	if pageSize == 0 {
@@ -376,7 +387,7 @@ func (manager *Manager) exportListContextError(ctx context.Context) error {
 }
 
 func (manager *Manager) insertExportListEntryLocked(entry *jobEntry) {
-	scope := entry.access
+	scope := exportOwnerScope(entry.access)
 	manager.jobsByScope[scope] = exportListIndexInsert(
 		manager.jobsByScope[scope],
 		newExportListIndexNode(entry),
@@ -388,7 +399,7 @@ func (manager *Manager) insertExportListEntryLocked(entry *jobEntry) {
 }
 
 func (manager *Manager) removeExportListEntryLocked(entry *jobEntry) {
-	scope := entry.access
+	scope := exportOwnerScope(entry.access)
 	root := exportListIndexRemove(manager.jobsByScope[scope], entry)
 	// A map update preserves the existing equal key's string headers. Delete
 	// first so removing the job that originally supplied this scope key cannot
@@ -403,7 +414,7 @@ func (manager *Manager) removeExportListEntryLocked(entry *jobEntry) {
 		}
 		return
 	}
-	manager.jobsByScope[root.Value().access] = root
+	manager.jobsByScope[exportOwnerScope(root.Value().access)] = root
 }
 
 // compactExportListScopeIndexLocked releases bucket storage retained after
@@ -429,7 +440,7 @@ func (manager *Manager) compactExportListScopeIndexLocked() {
 		live,
 	)
 	for _, root := range manager.jobsByScope {
-		compacted[root.Value().access] = root
+		compacted[exportOwnerScope(root.Value().access)] = root
 	}
 	manager.jobsByScope = compacted
 	manager.scopeIndexHighWater = live
@@ -444,17 +455,7 @@ func (manager *Manager) exportListIndexChunk(
 	if manager.closed {
 		return nil, false, ErrClosed
 	}
-	result := make(
-		[]retainedExportListEntry,
-		0,
-		exportListIndexChunkSize+1,
-	)
-	exportListIndexCollectBefore(
-		manager.jobsByScope[access],
-		before,
-		&result,
-		exportListIndexChunkSize+1,
-	)
+	result := manager.collectExportListEntriesLocked(access, before, exportListIndexChunkSize+1)
 	more := len(result) > exportListIndexChunkSize
 	if more {
 		result = result[:exportListIndexChunkSize]
@@ -495,4 +496,35 @@ func exportListKeyComesBefore(left, right exportListBoundary) bool {
 		return left.id < right.id
 	}
 	return left.createdAt.Before(right.createdAt)
+}
+
+// collectExportListEntriesLocked merges owner indexes for a site administrator.
+// Each merge retains at most one bounded page; exact totals are bounded by MaxJobs.
+func (manager *Manager) collectExportListEntriesLocked(access searchjobs.AccessScope, before *exportListBoundary, limit int) []retainedExportListEntry {
+	result := make([]retainedExportListEntry, 0, limit)
+	for scope, root := range manager.jobsByScope {
+		if scope.TenantID != access.TenantID || (!access.SiteAdministrator && scope.OwnerID != access.OwnerID) {
+			continue
+		}
+		next := make([]retainedExportListEntry, 0, limit)
+		exportListIndexCollectBefore(root, before, &next, limit)
+		result = append(result, next...)
+		slices.SortFunc(result, func(a, b retainedExportListEntry) int {
+			if exportListKeyComesBefore(a.key, b.key) {
+				return 1
+			}
+			if exportListKeyComesBefore(b.key, a.key) {
+				return -1
+			}
+			return 0
+		})
+		if len(result) > limit {
+			result = result[:limit]
+		}
+	}
+	return result
+}
+
+func exportOwnerScope(access searchjobs.AccessScope) searchjobs.AccessScope {
+	return searchjobs.AccessScope{TenantID: access.TenantID, OwnerID: access.OwnerID}
 }

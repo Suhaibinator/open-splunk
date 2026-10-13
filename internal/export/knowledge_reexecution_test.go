@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"google.golang.org/protobuf/proto"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
@@ -647,7 +647,7 @@ func newKnowledgeReexecutionFixture(
 	searches, schema, access := newReexecutionTestSearches()
 	const appID = "app_aaaaaaaaaaaaaaaaaaaaaA"
 	cursorKey := []byte("export-knowledge-fixture-cursor-key-at-least-32-bytes")
-	database, err := control.Open(context.Background(), filepath.Join(t.TempDir(), "control.db"))
+	database, err := control.Open(context.Background(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
 	}
@@ -663,7 +663,7 @@ func newKnowledgeReexecutionFixture(
 	}
 	if _, err := apps.CreateApp(
 		context.Background(),
-		control.AppAccessScope{TenantID: access.TenantID},
+		control.AppAccessScope{OrganizationID: 1, TenantID: access.TenantID},
 		control.AppDefinition{Slug: "export-app", DisplayName: "Export App"},
 	); err != nil {
 		t.Fatalf("CreateApp(): %v", err)

@@ -74,7 +74,7 @@ func TestGetSearchJobLaunchesExpiredTombstoneWithoutResults(t *testing.T) {
 		jobs:            &fakeSearchJobs{getErr: searchjobs.ErrNotFound},
 		searchArtifacts: artifacts,
 		tenantID:        "tenant-1",
-		ownerID:         "owner-1",
+		ownerID:         "1009",
 		now:             func() time.Time { return testNow },
 	}
 	response, err := handler.getSearchJob(
@@ -107,7 +107,8 @@ func TestGetSearchJobOverlaysLiveStateOnDurableRetentionMetadata(t *testing.T) {
 	expiresAt := testNow.Add(10 * time.Minute)
 	artifacts := &launchSearchArtifacts{record: searchartifacts.Record{
 		Job: searchjobs.Job{
-			ID: job.ID, OwnerID: job.OwnerID, TenantID: job.TenantID,
+			OrganizationID: job.OrganizationID,
+			ID:             job.ID, OwnerID: job.OwnerID, TenantID: job.TenantID,
 			SPL: job.SPL, NormalizedSPL: job.NormalizedSPL, State: searchjobs.StateQueued,
 			Version: 1, CreatedAt: job.CreatedAt,
 		},
@@ -116,10 +117,10 @@ func TestGetSearchJobOverlaysLiveStateOnDurableRetentionMetadata(t *testing.T) {
 	}}
 	handler := &apiHandler{
 		jobs: &fakeSearchJobs{getJob: job}, searchArtifacts: artifacts,
-		tenantID: "tenant-1", ownerID: "owner-1", now: func() time.Time { return testNow },
+		tenantID: "tenant-1", ownerID: "1009", now: func() time.Time { return testNow },
 	}
 	response, err := handler.getSearchJob(
-		httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/search/jobs/get", nil),
+		httptest.NewRequestWithContext(serverFixtureScope(context.Background(), 1009), http.MethodPost, "/api/search/jobs/get", nil),
 		&opensplunk.GetSearchJobRequest{SearchJobId: job.ID},
 	)
 	if err != nil {
@@ -147,7 +148,7 @@ func TestGetSearchResultsRejectsTerminalDurablePublicationFailure(t *testing.T) 
 		Rows: []searchjobs.ResultRow{{Ordinal: 0, Values: []searchjobs.Value{searchjobs.StringValue("must-not-leak")}}},
 	}}
 	handler := &apiHandler{
-		jobs: jobs, searchArtifacts: artifacts, tenantID: "tenant-1", ownerID: "owner-1",
+		jobs: jobs, searchArtifacts: artifacts, tenantID: "tenant-1", ownerID: "1009",
 		now: func() time.Time { return testNow },
 	}
 	_, err := handler.getSearchResults(

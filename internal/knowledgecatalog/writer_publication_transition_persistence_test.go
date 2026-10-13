@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -19,7 +21,7 @@ var errWriterTransitionPersistenceStop = errors.New("stop writer transition pers
 
 func TestPublishMutationZeroTransitionPreservesPersistenceHookOrder(t *testing.T) {
 	harness := newWriterFaultHarness(t)
-	tx := harness.database.GORMDB().Begin()
+	tx := pgmeta.Begin(harness.database.GORMDB())
 	if tx.Error != nil {
 		t.Fatalf("begin zero-transition hook-order transaction: %v", tx.Error)
 	}
@@ -61,7 +63,7 @@ func TestPublishMutationZeroTransitionPreservesPersistenceHookOrder(t *testing.T
 
 func TestPublishMutationDetachesPlanDependenciesBeforeFirstHook(t *testing.T) {
 	harness := newWriterFaultHarness(t)
-	tx := harness.database.GORMDB().Begin()
+	tx := pgmeta.Begin(harness.database.GORMDB())
 	if tx.Error != nil {
 		t.Fatalf("begin aliased-dependency transaction: %v", tx.Error)
 	}
@@ -286,7 +288,7 @@ func TestPublishMutationTransitionRejectionsPrecedePersistence(t *testing.T) {
 func TestPublishMutationRejectsZeroAuthorityForACTIVEPlan(t *testing.T) {
 	harness := newWriterFaultHarness(t)
 	trace := &writerTransitionDMLTrace{}
-	tx := harness.database.GORMDB().Session(&gorm.Session{Logger: trace}).Begin()
+	tx := pgmeta.Begin(harness.database.GORMDB().Session(&gorm.Session{Logger: trace}))
 	if tx.Error != nil {
 		t.Fatalf("begin zero-ACTIVE transaction: %v", tx.Error)
 	}
@@ -348,7 +350,7 @@ func TestPublishMutationWrongTransactionWinsBeforeMissingBindingRead(t *testing.
 
 	trace := &writerTransitionDMLTrace{}
 	otherDatabase, _ := newCatalogTestStore(t)
-	other := otherDatabase.GORMDB().Session(&gorm.Session{Logger: trace}).Begin()
+	other := pgmeta.Begin(otherDatabase.GORMDB().Session(&gorm.Session{Logger: trace}))
 	if other.Error != nil {
 		t.Fatalf("begin wrong transition transaction: %v", other.Error)
 	}
@@ -447,7 +449,7 @@ func newWriterTransitionPersistenceFixture(t *testing.T) *writerTransitionPersis
 		t.Fatalf("prepare transition Writer request: %v", err)
 	}
 	trace := &writerTransitionDMLTrace{}
-	tx := database.GORMDB().Session(&gorm.Session{Logger: trace}).Begin()
+	tx := pgmeta.Begin(database.GORMDB().Session(&gorm.Session{Logger: trace}))
 	if tx.Error != nil {
 		t.Fatalf("begin transition Writer transaction: %v", tx.Error)
 	}
@@ -478,6 +480,7 @@ func newWriterTransitionPersistenceFixture(t *testing.T) *writerTransitionPersis
 		testTenant,
 		publicationTransitionEndpoint{},
 		publicationTransitionEndpoint{},
+		normalizedScope.organizationID,
 	)
 	if err != nil {
 		t.Fatalf("read unbound transition Writer inventory: %v", err)
@@ -614,7 +617,7 @@ func newWriterACTIVETransitionPersistenceFixture(t *testing.T) *writerTransition
 		t.Fatalf("prepare ACTIVE transition Writer request: %v", err)
 	}
 	trace := &writerTransitionDMLTrace{}
-	tx := database.GORMDB().Session(&gorm.Session{Logger: trace}).Begin()
+	tx := pgmeta.Begin(database.GORMDB().Session(&gorm.Session{Logger: trace}))
 	if tx.Error != nil {
 		t.Fatalf("begin ACTIVE transition Writer transaction: %v", tx.Error)
 	}

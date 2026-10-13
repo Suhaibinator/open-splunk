@@ -80,6 +80,8 @@ type timechartWorkSink struct {
 	receipt *timechartWorkRows
 }
 
+func (sink timechartWorkSink) UnderlyingResultSink() searchjobs.ResultSink { return sink.ResultSink }
+
 func (sink timechartWorkSink) SetSchema(schema searchjobs.Schema) error {
 	if err := publishTimechartWork(sink.ResultSink, sink.receipt.total); err != nil {
 		return err

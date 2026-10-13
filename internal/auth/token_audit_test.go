@@ -34,7 +34,7 @@ func TestCollectorTokenMutationsAppendAtomicSecretFreeAuditEvents(t *testing.T) 
 		Name:              "audited collector",
 		Description:       "safe mutable metadata",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken: %v", err)
@@ -162,7 +162,7 @@ func TestCollectorTokenMutationsAppendAtomicSecretFreeAuditEvents(t *testing.T) 
 	}
 
 	columnRows, err := database.SQLDB().QueryContext(ctx, `
-		SELECT name FROM pragma_table_info('audit_events') ORDER BY cid`)
+		SELECT name FROM (SELECT a.attname AS name,a.attnum-1 AS cid,CASE WHEN t.typname='int8' THEN 'BIGINT' ELSE upper(t.typname) END AS type,CASE WHEN a.attnotnull THEN 1 ELSE 0 END AS "notnull",COALESCE((SELECT array_position(c.conkey,a.attnum) FROM pg_constraint c WHERE c.conrelid=r.oid AND c.contype='p'),0) AS pk,CASE WHEN a.attgenerated='s' THEN 3 ELSE 0 END AS hidden FROM pg_attribute a JOIN pg_class r ON r.oid=a.attrelid JOIN pg_namespace n ON n.oid=r.relnamespace JOIN pg_type t ON t.oid=a.atttypid WHERE n.nspname=current_schema() AND r.relname='audit_events' AND a.attnum>0 AND NOT a.attisdropped) AS column_metadata ORDER BY cid`)
 	if err != nil {
 		t.Fatalf("inspect audit columns: %v", err)
 	}
@@ -219,11 +219,7 @@ func TestCollectorTokenCreationRollsBackWhenAuditAppendFails(t *testing.T) {
 		t.Fatalf("CreateIndex(main): %v", err)
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
-		CREATE TRIGGER test_force_audit_insert_failure
-		BEFORE INSERT ON audit_events
-		BEGIN
-			SELECT RAISE(ABORT, 'forced audit persistence failure');
-		END`); err != nil {
+		CREATE OR REPLACE FUNCTION test_force_audit_insert_failure_function() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING MESSAGE = 'forced audit persistence failure'; RETURN NEW; END $$; CREATE TRIGGER test_force_audit_insert_failure BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION test_force_audit_insert_failure_function()`); err != nil {
 		t.Fatalf("create audit failure trigger: %v", err)
 	}
 	store, err := NewStore(
@@ -236,7 +232,7 @@ func TestCollectorTokenCreationRollsBackWhenAuditAppendFails(t *testing.T) {
 	_, err = store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "must roll back",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err == nil {
 		t.Fatal("CreateCollectorToken succeeded without its audit event")
@@ -283,7 +279,7 @@ func TestCollectorTokenUpdateAndRevocationRollBackWhenAuditAppendFails(t *testin
 		Description:        "unchanged",
 		AllowedIndexNames:  []string{"main"},
 		AllowedHostRegexes: []string{"^before$"},
-		BoundCollectorID:   testCollectorID,
+		BoundCollectorID:   testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken: %v", err)
@@ -292,11 +288,7 @@ func TestCollectorTokenUpdateAndRevocationRollBackWhenAuditAppendFails(t *testin
 	installFailure := func() {
 		t.Helper()
 		if _, err := database.SQLDB().ExecContext(ctx, `
-			CREATE TRIGGER test_force_later_audit_insert_failure
-			BEFORE INSERT ON audit_events
-			BEGIN
-				SELECT RAISE(ABORT, 'forced later audit persistence failure');
-			END`); err != nil {
+			CREATE OR REPLACE FUNCTION test_force_later_audit_insert_failure_function() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING MESSAGE = 'forced later audit persistence failure'; RETURN NEW; END $$; CREATE TRIGGER test_force_later_audit_insert_failure BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION test_force_later_audit_insert_failure_function()`); err != nil {
 			t.Fatalf("create audit failure trigger: %v", err)
 		}
 	}
@@ -304,7 +296,7 @@ func TestCollectorTokenUpdateAndRevocationRollBackWhenAuditAppendFails(t *testin
 		t.Helper()
 		if _, err := database.SQLDB().ExecContext(
 			ctx,
-			`DROP TRIGGER test_force_later_audit_insert_failure`,
+			`DROP TRIGGER test_force_later_audit_insert_failure ON audit_events`,
 		); err != nil {
 			t.Fatalf("drop audit failure trigger: %v", err)
 		}
@@ -401,7 +393,7 @@ func TestCollectorTokenRevocationPruningRollsBackWhenAuditAppendFails(t *testing
 		issued[index], err = store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 			Name:              "pruning audit " + string(rune('a'+index)),
 			AllowedIndexNames: []string{"main"},
-			BoundCollectorID:  testCollectorID,
+			BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 		})
 		if err != nil {
 			t.Fatalf("CreateCollectorToken(%d): %v", index, err)
@@ -417,11 +409,7 @@ func TestCollectorTokenRevocationPruningRollsBackWhenAuditAppendFails(t *testing
 		}
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
-		CREATE TRIGGER test_force_pruning_audit_insert_failure
-		BEFORE INSERT ON audit_events
-		BEGIN
-			SELECT RAISE(ABORT, 'forced pruning audit persistence failure');
-		END`); err != nil {
+		CREATE OR REPLACE FUNCTION test_force_pruning_audit_insert_failure_function() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING MESSAGE = 'forced pruning audit persistence failure'; RETURN NEW; END $$; CREATE TRIGGER test_force_pruning_audit_insert_failure BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION test_force_pruning_audit_insert_failure_function()`); err != nil {
 		t.Fatalf("create audit failure trigger: %v", err)
 	}
 	if _, err := store.RevokeCollectorToken(
@@ -489,7 +477,7 @@ func TestCollectorTokenAuditRequiresExplicitAdministratorAndScopesTenant(t *test
 	request := CreateCollectorTokenRequest{
 		Name:              "administrator owned",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	}
 
 	if _, err := store.CreateCollectorToken(ctx, request); !errors.Is(

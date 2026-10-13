@@ -50,7 +50,7 @@ func (lease *runtimePatternFixtureLease) Next(ctx context.Context) (searchjobs.R
 func TestRuntimePatternsRetainsIdentityAndTypedMembersAcrossServiceRestart(t *testing.T) {
 	ctx := context.Background()
 	directory := t.TempDir()
-	db, err := control.Open(ctx, filepath.Join(directory, "control.db"))
+	db, err := openTestControl(t, ctx, filepath.Join(directory, "control.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestRuntimePatternsRetainsIdentityAndTypedMembersAcrossServiceRestart(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	job := searchjobs.Job{ID: "retained-runtime", Version: 1, TenantID: "tenant", OwnerID: "owner", SPL: "index=main", TimeRange: rangeValue.Intent(), State: searchjobs.StateQueued, CreatedAt: now}
+	job := searchjobs.Job{OrganizationID: "1", ID: "retained-runtime", Version: 1, TenantID: "tenant", OwnerID: "1", SPL: "index=main", TimeRange: rangeValue.Intent(), State: searchjobs.StateQueued, CreatedAt: now}
 	if err := store.Admit(ctx, job); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestRuntimePatternsRetainsIdentityAndTypedMembersAcrossServiceRestart(t *te
 	if err := store.Finalize(ctx, job); err != nil {
 		t.Fatal(err)
 	}
-	access := searchjobs.AccessScope{TenantID: job.TenantID, OwnerID: job.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: "1", TenantID: job.TenantID, OwnerID: job.OwnerID}
 	if _, err := store.PersistResults(ctx, access, job.ID, &runtimePatternFixtureLease{schema: schema, rows: []searchjobs.ResultRow{
 		{Ordinal: 0, Values: []searchjobs.Value{searchjobs.StringValue("request 1"), searchjobs.UnsignedValue(math.MaxUint64)}},
 		{Ordinal: 1, Values: []searchjobs.Value{searchjobs.StringValue("request 2"), searchjobs.UnsignedValue(9007199254740993)}},
@@ -141,7 +141,7 @@ func TestRuntimePatternsRetainsIdentityAndTypedMembersAcrossServiceRestart(t *te
 	if value, ok := members.Rows[0].Values[0].Unsigned(); !ok || value != math.MaxUint64 {
 		t.Fatalf("exact integer = %d/%t", value, ok)
 	}
-	_, err = second.Members(ctx, searchjobs.AccessScope{TenantID: "tenant", OwnerID: "other"}, patterns.MemberRequest{SearchJobID: job.ID, Generation: 17, Sensitivity: patterns.Balanced, PatternID: patternID})
+	_, err = second.Members(ctx, searchjobs.AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "other"}, patterns.MemberRequest{SearchJobID: job.ID, Generation: 17, Sensitivity: patterns.Balanced, PatternID: patternID})
 	if !errors.Is(err, searchartifacts.ErrNotFound) {
 		t.Fatalf("cross-owner source = %v", err)
 	}
@@ -174,7 +174,7 @@ func verifyRuntimePatternExportRestart(t *testing.T, db *control.DB, directory s
 		t.Fatal(err)
 	}
 	ordinary := &runtimeNoOrdinaryExport{}
-	config := exportjobs.Config{Source: ordinary, Journal: journal, PatternSource: service, ArtifactDir: filepath.Join(directory, "exports")}
+	config := exportjobs.Config{Blobs: runtimePatternPrivateBlobs(t), Source: ordinary, Journal: journal, PatternSource: service, ArtifactDir: filepath.Join(directory, "exports")}
 	manager, err := exportjobs.New(config)
 	if err != nil {
 		t.Fatal(err)
@@ -202,7 +202,7 @@ func verifyRuntimePatternExportRestart(t *testing.T, db *control.DB, directory s
 			break
 		}
 		if current.State == exportjobs.StateFailed || time.Now().After(deadline) {
-			t.Fatalf("export did not complete: %+v", current)
+			t.Fatalf("export did not complete: %+v; failure=%+v", current, current.Failure)
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -223,11 +223,12 @@ func verifyRuntimePatternExportRestart(t *testing.T, db *control.DB, directory s
 	if err != nil || !found || receipt.ID != accepted.ID || receipt.Pattern == nil || *receipt.Pattern != source {
 		t.Fatalf("restored receipt = %+v, found %t, error %v", receipt, found, err)
 	}
-	grant, err := reopened.CreateDownloadGrant(ctx, access, receipt.ID)
-	if err != nil {
-		t.Fatal(err)
+	foreign := access
+	foreign.OwnerID = "1007"
+	if _, err := reopened.AcquireDownloadFor(ctx, foreign, receipt.ID); !errors.Is(err, exportjobs.ErrNotFound) {
+		t.Fatalf("restored export disclosed to another owner: %v", err)
 	}
-	download, err := reopened.RedeemDownload(ctx, grant.Token)
+	download, err := reopened.AcquireDownloadFor(ctx, access, receipt.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

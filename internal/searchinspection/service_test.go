@@ -54,7 +54,7 @@ func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 
 	result, err := service.Inspect(
 		context.Background(),
-		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
+		searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
 		Request{SearchJobID: snapshot.ID},
 	)
 	if err != nil {
@@ -161,7 +161,7 @@ func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 	result.PhysicalPlan.Reads[0].Indexes[0].Keys[0] = "mutated"
 	again, err := service.Inspect(
 		context.Background(),
-		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
+		searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
 		Request{SearchJobID: snapshot.ID},
 	)
 	if err != nil {
@@ -197,7 +197,7 @@ func TestInspectAuthoredExpressionBuildsCompilesProjectsAndRedacts(t *testing.T)
 
 	result, err := service.Inspect(
 		context.Background(),
-		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
+		searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
 		Request{SearchJobID: snapshot.ID},
 	)
 	if err != nil {
@@ -270,7 +270,7 @@ func TestInspectRejectsGenuineSealedCompilerScopeSubstitutionBeforeExplain(t *te
 			})
 			result, err := service.Inspect(
 				context.Background(),
-				searchjobs.AccessScope{TenantID: base.TenantID, OwnerID: base.OwnerID},
+				searchjobs.AccessScope{OrganizationID: base.OrganizationID, TenantID: base.TenantID, OwnerID: base.OwnerID},
 				Request{SearchJobID: base.ID},
 			)
 			if !errors.Is(err, ErrInspectionFailed) || !reflect.DeepEqual(result, Result{}) {
@@ -285,7 +285,7 @@ func TestInspectRejectsGenuineSealedCompilerScopeSubstitutionBeforeExplain(t *te
 
 func TestInspectRejectsInvalidRequestsBeforeDependencyWork(t *testing.T) {
 	snapshot := validInspectionSnapshot()
-	validAccess := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	validAccess := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	tests := []struct {
 		name    string
 		access  searchjobs.AccessScope
@@ -323,7 +323,7 @@ func TestInspectRejectsInvalidRequestsBeforeDependencyWork(t *testing.T) {
 
 func TestInspectHonorsCallerCancellationAtEveryBoundary(t *testing.T) {
 	snapshot := validInspectionSnapshot()
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	request := Request{SearchJobID: snapshot.ID}
 
 	t.Run("before admission", func(t *testing.T) {
@@ -430,7 +430,7 @@ func TestInspectAdmissionIsFailFastBeforeSnapshotAndCompilation(t *testing.T) {
 	service := newInspectionTestService(t, inspectionTestConfig{
 		Searches: searches, Compiler: compiler, Explainer: explainer, MaxConcurrent: 1,
 	})
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	request := Request{SearchJobID: snapshot.ID}
 	first := make(chan inspectionCallResult, 1)
 	go func() {
@@ -585,7 +585,7 @@ func TestInspectUsesMetadataOnlyWhenResultLeaseCapacityIsSaturated(t *testing.T)
 
 func TestInspectPostflightPreventsStaleOrChangedPublication(t *testing.T) {
 	snapshot := validInspectionSnapshot()
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	request := Request{SearchJobID: snapshot.ID}
 	tests := []struct {
 		name      string
@@ -643,7 +643,7 @@ func TestInspectPostflightPreventsStaleOrChangedPublication(t *testing.T) {
 
 func TestInspectRejectsChangedSnapshotIdentityBeforePlanning(t *testing.T) {
 	snapshot := validInspectionSnapshot()
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	tests := []struct {
 		name   string
 		change func(*searchjobs.ExecutionSnapshot)
@@ -700,7 +700,7 @@ func TestInspectRejectsChangedSnapshotIdentityBeforePlanning(t *testing.T) {
 
 func TestInspectSanitizesEveryDependencyError(t *testing.T) {
 	snapshot := validInspectionSnapshot()
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	request := Request{SearchJobID: snapshot.ID}
 	const secret = "SELECT private_password FROM internal_host"
 	safeErrors := []error{
@@ -789,7 +789,7 @@ func TestInspectSanitizesEveryDependencyError(t *testing.T) {
 
 func TestInspectClassifiesComplexityAndRejectsUnsealedCompilerOutput(t *testing.T) {
 	snapshot := validInspectionSnapshot()
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	request := Request{SearchJobID: snapshot.ID}
 
 	t.Run("complexity", func(t *testing.T) {
@@ -829,7 +829,7 @@ func TestInspectClassifiesComplexityAndRejectsUnsealedCompilerOutput(t *testing.
 
 func TestInspectRevalidatesExplainOutputBeforeAtomicPublication(t *testing.T) {
 	snapshot := validInspectionSnapshot()
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	tests := []struct {
 		name   string
 		result queryexec.ExplainResult
@@ -875,7 +875,7 @@ func TestInspectRevalidatesExplainOutputBeforeAtomicPublication(t *testing.T) {
 
 func TestInspectCloseCancelsAndJoinsWithoutClosingSharedDependencies(t *testing.T) {
 	snapshot := validInspectionSnapshot()
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	explainer := &inspectionExplainer{
 		started: make(chan struct{}),
 		release: make(chan struct{}),
@@ -1011,7 +1011,7 @@ func TestCloseSynchronouslyCancelsAdmittedOperationBeforeDependency(t *testing.T
 
 func TestInspectCloseCanTimeOutAndRetry(t *testing.T) {
 	snapshot := validInspectionSnapshot()
-	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	access := searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	explainer := &inspectionExplainer{
 		result:        inspectionExplainResult("open-splunk-explain-close-retry"),
 		started:       make(chan struct{}),
@@ -1193,7 +1193,7 @@ func TestInspectNilReceiverAndContext(t *testing.T) {
 
 	result, err = service.Inspect(
 		nilContext,
-		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
+		searchjobs.AccessScope{OrganizationID: snapshot.OrganizationID, TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
 		Request{SearchJobID: snapshot.ID},
 	)
 	if err == nil {

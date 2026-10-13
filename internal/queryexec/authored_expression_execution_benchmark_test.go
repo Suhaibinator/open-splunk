@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -125,7 +127,7 @@ func BenchmarkAuthoredExpressionExecution(b *testing.B) {
 	if err != nil {
 		b.Fatalf("open ClickHouse authored expression benchmark store connection: %v", err)
 	}
-	controlDB, err := control.Open(ctx, filepath.Join(b.TempDir(), "visibility.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(b))
 	if err != nil {
 		_ = storeConnection.Close()
 		b.Fatalf("open authored expression benchmark visibility database: %v", err)
@@ -135,7 +137,7 @@ func BenchmarkAuthoredExpressionExecution(b *testing.B) {
 			b.Errorf("close authored expression benchmark visibility database: %v", closeErr)
 		}
 	})
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		_ = storeConnection.Close()
 		b.Fatalf("create authored expression benchmark visibility sequencer: %v", err)

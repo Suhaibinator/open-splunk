@@ -1,6 +1,7 @@
 package knowledgecatalog
 
 type registryRecord struct {
+	OrganizationID         int64        `gorm:"column:organization_id"`
 	TenantID               string       `gorm:"column:tenant_id"`
 	KnowledgeObjectID      string       `gorm:"column:knowledge_object_id"`
 	CurrentVersion         int64        `gorm:"column:current_version"`

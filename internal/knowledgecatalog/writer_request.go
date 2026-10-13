@@ -360,7 +360,7 @@ func prepareMutationRequest(
 	validated validatedMutationRequest,
 	updatePaths []string,
 ) (preparedMutation, error) {
-	digest := digestMutationRequest(route, scope.ownerID, validated.requestBytes)
+	digest := digestScopedMutationRequest(route, scope, validated.requestBytes)
 	prepared := preparedMutation{
 		scope:           scope,
 		actor:           actor,
@@ -569,4 +569,23 @@ func validClientRequestID(value string) bool {
 
 func invalidMutation(message string) error {
 	return fmt.Errorf("%w: %s", control.ErrInvalidArgument, strings.TrimSpace(message))
+}
+
+func digestScopedMutationRequest(route string, scope normalizedWriteScope, request []byte) [sha256.Size]byte {
+	h := sha256.New()
+	d := digestMutationRequest(route, scope.ownerID, request)
+	writeDigestFrame(h, d[:])
+	var authority [9]byte
+	// The normalized positive int64 ID has the same canonical eight bytes,
+	// without converting a signed identifier to an unsigned integer.
+	if _, err := binary.Encode(authority[:8], binary.BigEndian, scope.organizationID); err != nil {
+		panic("knowledge writer organization authority encoding failed")
+	}
+	if scope.siteAdministrator {
+		authority[8] = 1
+	}
+	writeDigestFrame(h, authority[:])
+	var result [sha256.Size]byte
+	copy(result[:], h.Sum(nil))
+	return result
 }

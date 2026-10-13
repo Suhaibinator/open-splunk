@@ -206,9 +206,9 @@ func newExpirationWebSocketFixture(
 
 	anchor := time.Date(2026, time.July, 26, 12, 0, 0, 0, time.UTC)
 	clock := newExpirationTestClock(anchor)
-	access := searchjobs.AccessScope{
+	access := searchjobs.AccessScope{OrganizationID: "1",
 		TenantID: "tenant-expiration-websocket",
-		OwnerID:  "owner-expiration-websocket",
+		OwnerID:  "1018",
 	}
 	executor := newRealSearchWebSocketExecutor()
 	searchIDs := []string{searchJobID, diagnosticJobID}
@@ -275,7 +275,7 @@ func newExpirationWebSocketFixture(
 		_ = searches.Close()
 		t.Fatalf("searchws.New: %v", err)
 	}
-	handler, err := NewHandler(Config{
+	handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:      searches,
 		Exports:         exports,
 		SearchWebSocket: socketService,

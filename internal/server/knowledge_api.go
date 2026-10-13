@@ -12,6 +12,7 @@ import (
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
@@ -276,6 +277,12 @@ func (handler *apiHandler) knowledgeScopes(
 		OwnerID:        principal.OwnerID(),
 		WritableAppIDs: slices.Clone(apps),
 	}
+	if scope, ok := authorization.FromContext(request.Context()); ok {
+		read.OrganizationID = scope.OrganizationID
+		read.SiteAdministrator = scope.Subject.IsSiteAdmin()
+		write.OrganizationID = scope.OrganizationID
+		write.SiteAdministrator = scope.Subject.IsSiteAdmin()
+	}
 	if err := knowledgecatalog.ValidateWriteScope(write); err != nil {
 		return knowledgeScopes{}, errors.New("knowledge app catalog write scope is invalid")
 	}
@@ -296,7 +303,7 @@ func (scopes knowledgeScopes) allowsRead(
 ) bool {
 	switch scope {
 	case knowledgecatalog.SharingScopePrivate:
-		return scopes.containsApp(appID) && ownerID == scopes.read.OwnerID
+		return scopes.containsApp(appID) && (scopes.read.SiteAdministrator || ownerID == scopes.read.OwnerID)
 	case knowledgecatalog.SharingScopeApp:
 		return scopes.containsApp(appID)
 	case knowledgecatalog.SharingScopeGlobal:
@@ -1198,7 +1205,7 @@ func validKnowledgeMutationObjectResponseAfterDefinitionAuthority(
 		validKnowledgeObjectScalarLifecycleEnvelope(object) &&
 		revision >= object.GetVersion() &&
 		object.GetTenantId() == scopes.write.TenantID &&
-		object.GetOwnerId() == scopes.write.OwnerID &&
+		(scopes.write.SiteAdministrator || object.GetOwnerId() == scopes.write.OwnerID) &&
 		scopes.containsApp(object.GetAppId())
 }
 
@@ -1244,7 +1251,7 @@ func validKnowledgeCreateResponseWithPolicy(
 	if err != nil {
 		return false
 	}
-	return object.GetVersion() == 1 &&
+	return object.GetOwnerId() == scopes.write.OwnerID && object.GetVersion() == 1 &&
 		object.GetState() == request.GetInitialState() &&
 		object.GetAppId() == normalized.AppID &&
 		object.GetName() == normalized.Name &&

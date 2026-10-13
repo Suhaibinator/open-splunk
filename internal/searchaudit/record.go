@@ -22,7 +22,7 @@ const (
 )
 
 // eventSizeRecord is scalar-only so a corrupted text value is rejected before
-// the SQLite driver is asked to allocate it.
+// the PostgreSQL driver is asked to allocate it.
 type eventSizeRecord struct {
 	Sequence                                      int64         `gorm:"column:sequence"`
 	TenantIDBytes                                 int64         `gorm:"column:tenant_id_bytes"`
@@ -53,17 +53,17 @@ func readPreflightedRecords(query *gorm.DB, limit int) ([]searchAttemptEventReco
 	preflight := query.Session(&gorm.Session{}).
 		Select(`
 			sequence,
-			length(CAST(tenant_id AS BLOB)) AS tenant_id_bytes,
-			length(CAST(actor_kind AS BLOB)) AS actor_kind_bytes,
-			length(CAST(actor_id AS BLOB)) AS actor_id_bytes,
-			length(CAST(actor_role AS BLOB)) AS actor_role_bytes,
-			length(CAST(owner_id AS BLOB)) AS owner_id_bytes,
-			length(CAST(search_job_id AS BLOB)) AS search_job_id_bytes,
-			(knowledge_snapshot_sha256 IS NOT NULL)
-			  + (knowledge_snapshot_tenant_catalog_revision IS NOT NULL)
-			  + (knowledge_snapshot_tenant_catalog_state_token IS NOT NULL)
-			  + (knowledge_snapshot_object_count IS NOT NULL)
-			  + (knowledge_snapshot_lookup_asset_count IS NOT NULL)
+			octet_length(tenant_id) AS tenant_id_bytes,
+			octet_length(actor_kind) AS actor_kind_bytes,
+			octet_length(actor_id) AS actor_id_bytes,
+			octet_length(actor_role) AS actor_role_bytes,
+			octet_length(owner_id) AS owner_id_bytes,
+			octet_length(search_job_id) AS search_job_id_bytes,
+			(CASE WHEN knowledge_snapshot_sha256 IS NOT NULL THEN 1 ELSE 0 END)
+			  + (CASE WHEN knowledge_snapshot_tenant_catalog_revision IS NOT NULL THEN 1 ELSE 0 END)
+			  + (CASE WHEN knowledge_snapshot_tenant_catalog_state_token IS NOT NULL THEN 1 ELSE 0 END)
+			  + (CASE WHEN knowledge_snapshot_object_count IS NOT NULL THEN 1 ELSE 0 END)
+			  + (CASE WHEN knowledge_snapshot_lookup_asset_count IS NOT NULL THEN 1 ELSE 0 END)
 			    AS knowledge_snapshot_present_fields,
 			length(knowledge_snapshot_sha256)
 			    AS knowledge_snapshot_sha256_bytes,
@@ -224,14 +224,14 @@ func knowledgeSnapshotFromRecord(
 func validateAllTenantIntegrity(database *gorm.DB) error {
 	var invalidTenantWidth int64
 	if err := database.Raw(`
-		SELECT EXISTS (
+		SELECT CASE WHEN EXISTS (
 			SELECT 1
 			FROM search_attempt_audit_tenant_state
-			WHERE typeof(tenant_id) <> 'text'
-			   OR length(CAST(tenant_id AS BLOB)) NOT BETWEEN 1 AND ?
+			WHERE pg_typeof(tenant_id)::text <> 'text'
+			   OR octet_length(tenant_id) NOT BETWEEN 1 AND ?
 			LIMIT 1
 		)
-	`, maximumTenantIDBytes).Scan(&invalidTenantWidth).Error; err != nil {
+	 THEN 1 ELSE 0 END`, maximumTenantIDBytes).Scan(&invalidTenantWidth).Error; err != nil {
 		return err
 	}
 	if invalidTenantWidth != 0 {
@@ -239,7 +239,7 @@ func validateAllTenantIntegrity(database *gorm.DB) error {
 	}
 	var orphaned int64
 	if err := database.Raw(`
-		SELECT EXISTS (
+		SELECT CASE WHEN EXISTS (
 			SELECT 1
 			FROM search_attempt_audit_events AS event
 			LEFT JOIN search_attempt_audit_tenant_state AS state
@@ -247,7 +247,7 @@ func validateAllTenantIntegrity(database *gorm.DB) error {
 			WHERE state.tenant_id IS NULL
 			LIMIT 1
 		)
-	`).Scan(&orphaned).Error; err != nil {
+	 THEN 1 ELSE 0 END`).Scan(&orphaned).Error; err != nil {
 		return err
 	}
 	if orphaned != 0 {

@@ -12,8 +12,10 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/controlbackup"
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
+	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 )
 
 var outerMemberNames = []string{
@@ -55,15 +57,15 @@ type NativeBackup func(context.Context, NativeBackupRequest) (NativeBackupIdenti
 // CreateOptions identifies one stopped deployment, the new owner-private
 // outer directory, and the separately mounted ClickHouse recovery root.
 type CreateOptions struct {
-	DatabasePath            string
-	MasterKeyPath           string
-	AdministratorTokenPath  string
-	SearchArtifactDirectory string
-	Destination             string
-	ArchiveRoot             string
-	ArchiveOwnership        ArchiveOwnershipPolicy
-	Release                 controlbackup.ReleaseIdentity
-	NativeBackup            NativeBackup
+	PostgresDSN      string
+	MasterKeyPath    string
+	Blobs            searchartifacts.BlobStore
+	Lease            *control.MaintenanceLease
+	Destination      string
+	ArchiveRoot      string
+	ArchiveOwnership ArchiveOwnershipPolicy
+	Release          controlbackup.ReleaseIdentity
+	NativeBackup     NativeBackup
 }
 
 // VerifyOptions identifies a published outer directory and its external
@@ -179,9 +181,7 @@ func createWithHooks(
 		label string
 		value string
 	}{
-		{label: "control database", value: options.DatabasePath},
 		{label: "master key", value: options.MasterKeyPath},
-		{label: "administrator token", value: options.AdministratorTokenPath},
 		{label: "destination", value: options.Destination},
 	} {
 		if err := controlbackup.ValidateExactAbsolutePath(path.label, path.value); err != nil {
@@ -256,12 +256,12 @@ func createWithHooks(
 		createControlPlane = controlbackup.CreatePinned
 	}
 	childManifest, child, err := createControlPlane(ctx, controlbackup.CreateOptions{
-		DatabasePath:            options.DatabasePath,
-		MasterKeyPath:           options.MasterKeyPath,
-		AdministratorTokenPath:  options.AdministratorTokenPath,
-		SearchArtifactDirectory: options.SearchArtifactDirectory,
-		Destination:             childPath,
-		Release:                 options.Release,
+		PostgresDSN:   options.PostgresDSN,
+		MasterKeyPath: options.MasterKeyPath,
+		Blobs:         options.Blobs,
+		Lease:         options.Lease,
+		Destination:   childPath,
+		Release:       options.Release,
 	})
 	if err != nil {
 		if _, ok := errors.AsType[*controlbackup.PublicationStatusError](err); ok {
@@ -315,6 +315,9 @@ func createWithHooks(
 		ArchivePath:     filepath.Join(options.ArchiveRoot, archiveName),
 	}
 	nativeIdentity, backupErr := options.NativeBackup(ctx, request)
+	if backupErr == nil && nativeIdentity.MaxVisibilitySeq > childManifest.MaxAllocatedVisibility {
+		backupErr = errors.New("ClickHouse high-water exceeds PostgreSQL preserved visibility authority")
+	}
 	archivePresent, err := archiveRoot.pathExists(archiveName)
 	if err != nil {
 		return Verification{}, errors.Join(backupErr, err)
@@ -370,7 +373,7 @@ func createWithHooks(
 		Scope:                deploymentRecoverySetScope,
 		ClickHouseIncluded:   true,
 		SourceRevision:       childManifest.SourceRevision,
-		SQLiteMigrations:     childManifest.SQLiteMigrations,
+		PostgresMigrations:   childManifest.PostgresMigrations,
 		ClickHouseMigrations: childManifest.ClickHouseMigrations,
 		ControlPlane: ControlPlaneIdentity{
 			Directory: controlPlaneDirectory,
@@ -617,7 +620,7 @@ func Verify(
 	if childManifest.RecoverySetID != manifest.RecoverySetID ||
 		childManifest.CreatedAtUnixMicro != manifest.CreatedAtUnixMicro ||
 		childManifest.SourceRevision != manifest.SourceRevision ||
-		childManifest.SQLiteMigrations != manifest.SQLiteMigrations ||
+		childManifest.PostgresMigrations != manifest.PostgresMigrations ||
 		childManifest.ClickHouseMigrations != manifest.ClickHouseMigrations {
 		return Verification{}, errors.New(
 			"verify deployment recovery set: control-plane identity differs from outer manifest",

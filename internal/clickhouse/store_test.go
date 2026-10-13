@@ -11,7 +11,6 @@ import (
 	"io"
 	"maps"
 	"net"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -20,14 +19,15 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
-	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
-
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestStoreNativeBatchContractAndEventOrder(t *testing.T) {
@@ -244,12 +244,12 @@ func TestStagePreservesDurableAcceptanceWhenLeaseReleaseFails(t *testing.T) {
 func TestStageAcceptsIndependentHECRequestsFromOneToken(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,10 +264,10 @@ func TestStageAcceptsIndependentHECRequestsFromOneToken(t *testing.T) {
 			INSERT INTO indexes (
 				index_id, version, name, display_name, ingestion_enabled,
 				search_enabled, state, created_at_unix_micro, updated_at_unix_micro
-			) VALUES ('hec-index', 1, 'main', 'Main', 1, 1, 'active', ?, ?)`, []any{nowMicros, nowMicros}},
+			) VALUES ('hec-index', 1, 'main', 'Main', 1, 1, 'active', $1, $2)`, []any{nowMicros, nowMicros}},
 		{`
 			INSERT INTO ingestion_tokens (
-				ingestion_token_id, version, name, description,
+				ingestion_token_id, organization_id, issuer_user_id, version, name, description,
 				token_prefix, token_digest, state,
 				created_at_unix_micro, updated_at_unix_micro,
 				expires_at_unix_micro, revoked_at_unix_micro,
@@ -275,8 +275,8 @@ func TestStageAcceptsIndependentHECRequestsFromOneToken(t *testing.T) {
 				max_ingest_events_per_second,
 				max_ingest_uncompressed_bytes_per_second, purpose
 			) VALUES (
-				'hec-token', 1, 'HEC', '', 'hectest0', ?, 'active',
-				?, ?, NULL, NULL, NULL, NULL, 0, 0, 'hec'
+				'hec-token', 1, 42, 1, 'HEC', '', 'hectest0', $1, 'active',
+				$2, $3, NULL, NULL, NULL, NULL, 0, 0, 'hec'
 			)`, []any{tokenDigest[:], nowMicros, nowMicros}},
 		{`
 			INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
@@ -285,7 +285,7 @@ func TestStageAcceptsIndependentHECRequestsFromOneToken(t *testing.T) {
 			INSERT INTO ingestion_token_hec_profiles (
 				ingestion_token_id, default_index_id, default_host,
 				default_source, default_sourcetype, indexer_acknowledgment
-			) VALUES ('hec-token', 'hec-index', NULL, NULL, NULL, 0)`, nil},
+			) VALUES ('hec-token', 'hec-index', NULL, NULL, NULL, FALSE)`, nil},
 	} {
 		if _, err := controlDB.SQLDB().ExecContext(ctx, statement.query, statement.arguments...); err != nil {
 			t.Fatalf("seed HEC authority: %v", err)
@@ -438,12 +438,12 @@ func TestStorePreservesAmbiguousReservationAndRecognizesCommittedRetry(t *testin
 func TestStoreRebuildsFreshReservationAfterObservedPendingIsAbandoned(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -586,12 +586,12 @@ func TestStoreBoundsRepeatedReservationGoneAsServerBusy(t *testing.T) {
 func TestServerOwnedReconcilerResolvesGapAndAdvancesCommittedFrontier(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -655,12 +655,12 @@ func TestServerOwnedReconcilerResolvesGapAndAdvancesCommittedFrontier(t *testing
 func TestBackgroundReconcilerDrainsOutboxWithoutCollectorRetry(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -867,12 +867,12 @@ func TestReconcilePendingPrunesAfterReplayFailureWithoutMaskingIt(t *testing.T) 
 func TestReconcilePendingBoundsTerminalPruneDuringPersistentReplayFailure(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -885,7 +885,7 @@ func TestReconcilePendingBoundsTerminalPruneDuringPersistentReplayFailure(t *tes
 
 	const rejectedRows = durableBatchRejectWindow + visibilityPruneBatch + 1
 	lastSequence := int64(rejectedRows + 1)
-	tx, err := controlDB.SQLDB().BeginTx(ctx, nil)
+	tx, err := pgmeta.BeginSQL(ctx, controlDB.SQLDB(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -893,13 +893,13 @@ func TestReconcilePendingBoundsTerminalPruneDuringPersistentReplayFailure(t *tes
 		WITH RECURSIVE sequences(sequence) AS (
 			SELECT 2
 			UNION ALL
-			SELECT sequence + 1 FROM sequences WHERE sequence < ?
+			SELECT sequence + 1 FROM sequences WHERE sequence < $1
 		)
 		INSERT INTO ingest_batch_identities
 			(batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro)
-		SELECT printf('retention-reject-%d', sequence),
-		       printf('retention-sequence-%d', sequence),
-		       zeroblob(32), sequence, sequence
+		SELECT 'retention-reject-' || sequence,
+		       'retention-sequence-' || sequence,
+		       decode(repeat('00',32),'hex'), sequence, sequence
 		FROM sequences`, lastSequence); err != nil {
 		_ = tx.Rollback()
 		t.Fatal(err)
@@ -908,20 +908,20 @@ func TestReconcilePendingBoundsTerminalPruneDuringPersistentReplayFailure(t *tes
 		WITH RECURSIVE sequences(sequence) AS (
 			SELECT 2
 			UNION ALL
-			SELECT sequence + 1 FROM sequences WHERE sequence < ?
+			SELECT sequence + 1 FROM sequences WHERE sequence < $1
 		)
 		INSERT INTO ingest_visibility_reservations
 			(sequence, batch_key, state, phase, attempt_id, index_time_unix_milli,
 			 metadata, outbox, outbox_sha256, stored_row_count, decoded_event_bytes,
 			 created_at_unix_micro, committed_at_unix_micro)
-		SELECT sequence, printf('retention-reject-%d', sequence),
-		       'rejected', 'final', '', 0, X'', X'', X'', 0, 0, sequence, sequence
+		SELECT sequence, 'retention-reject-' || sequence,
+		       'rejected', 'final', '', 0, decode('','hex'), decode('','hex'), decode('','hex'), 0, 0, sequence, sequence
 		FROM sequences`, lastSequence); err != nil {
 		_ = tx.Rollback()
 		t.Fatal(err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE ingest_visibility_state SET last_assigned = ? WHERE singleton = 1`,
+		UPDATE ingest_visibility_state SET last_assigned = $1 WHERE singleton = 1`,
 		lastSequence,
 	); err != nil {
 		_ = tx.Rollback()
@@ -1116,12 +1116,12 @@ func TestStoreFailedMarkSendingResolvesUnsentOrAmbiguousPhase(t *testing.T) {
 func TestStoreAttemptLeaseFencesConcurrentWriters(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1195,12 +1195,12 @@ func TestStoreAttemptLeaseFencesConcurrentWriters(t *testing.T) {
 func TestStorePermanentPreSendFailureDoesNotBlockLaterBatch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1233,12 +1233,12 @@ func TestStorePermanentPreSendFailureDoesNotBlockLaterBatch(t *testing.T) {
 func TestStoreRetryUsesPersistedRetentionBeforeLivePolicy(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1284,12 +1284,12 @@ func TestStoreRetryRejectsUnsupportedRetentionMetadata(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1334,7 +1334,7 @@ func TestStoreRetryRejectsUnsupportedRetentionMetadata(t *testing.T) {
 	}
 	if _, err := controlDB.SQLDB().ExecContext(ctx, `
 		UPDATE ingest_visibility_reservations
-		SET metadata = ?
+		SET metadata = $1
 		WHERE sequence = 1`, unsupported); err != nil {
 		t.Fatalf("install unsupported reservation metadata: %v", err)
 	}

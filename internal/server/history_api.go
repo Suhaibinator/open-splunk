@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
@@ -49,8 +50,11 @@ func (handler *apiHandler) registerSearchHistoryRoutes(group *apiRouteGroup, sma
 
 func (handler *apiHandler) getSearchHistoryEntry(request *http.Request, input *opensplunk.GetSearchHistoryEntryRequest) (*opensplunk.GetSearchHistoryEntryResponse, error) {
 	searchJobID := input.GetSearchJobId()
-	entry, err := handler.searchHistory.Get(request.Context(), handler.searchHistoryScope(), searchJobID)
+	entry, err := handler.searchHistory.Get(request.Context(), handler.searchHistoryScope(request.Context()), searchJobID)
 	if err := mapSearchHistoryCallError(request.Context(), err); err != nil {
+		return nil, err
+	}
+	if err := handler.authorizeHistorySource(request.Context(), entry); err != nil {
 		return nil, err
 	}
 	converted, err := cloneSearchHistoryEntry(entry)
@@ -83,7 +87,7 @@ func (handler *apiHandler) listSearchHistory(request *http.Request, input *opens
 		}
 	}()
 
-	result, err := handler.searchHistory.List(request.Context(), handler.searchHistoryScope(), searchhistory.ListRequest{
+	result, err := handler.searchHistory.List(request.Context(), handler.searchHistoryScope(request.Context()), searchhistory.ListRequest{
 		PageSize:            pageSize,
 		PageToken:           page.GetPageToken(),
 		IncludeTotal:        page.GetIncludeTotalSize(),
@@ -107,6 +111,9 @@ func (handler *apiHandler) listSearchHistory(request *http.Request, input *opens
 	entries := make([]*opensplunk.SearchHistoryEntry, len(result.Entries))
 	for index, entry := range result.Entries {
 		if err := searchHistoryRequestContextError(request.Context()); err != nil {
+			return nil, err
+		}
+		if err := handler.authorizeHistorySource(request.Context(), entry); err != nil {
 			return nil, err
 		}
 		entries[index], err = cloneSearchHistoryEntry(entry)
@@ -135,22 +142,29 @@ func (handler *apiHandler) listSearchHistory(request *http.Request, input *opens
 
 func (handler *apiHandler) deleteSearchHistoryEntry(request *http.Request, input *opensplunk.DeleteSearchHistoryEntryRequest) (*opensplunk.DeleteSearchHistoryEntryResponse, error) {
 	searchJobID := input.GetSearchJobId()
-	if err := handler.searchHistory.Delete(request.Context(), handler.searchHistoryScope(), searchJobID); err != nil {
+	if err := handler.searchHistory.Delete(request.Context(), handler.searchHistoryScope(request.Context()), searchJobID); err != nil {
 		return nil, mapSearchHistoryCallError(request.Context(), err)
 	}
 	return &opensplunk.DeleteSearchHistoryEntryResponse{SearchJobId: searchJobID}, nil
 }
 
 func (handler *apiHandler) clearSearchHistory(request *http.Request, input *opensplunk.ClearSearchHistoryRequest) (*opensplunk.ClearSearchHistoryResponse, error) {
-	deleted, err := handler.searchHistory.Clear(request.Context(), handler.searchHistoryScope(), historyFilter(input.GetFilter()))
+	deleted, err := handler.searchHistory.Clear(request.Context(), handler.searchHistoryScope(request.Context()), historyFilter(input.GetFilter()))
 	if err := mapSearchHistoryCallError(request.Context(), err); err != nil {
 		return nil, err
 	}
 	return &opensplunk.ClearSearchHistoryResponse{DeletedCount: deleted}, nil
 }
 
-func (handler *apiHandler) searchHistoryScope() searchhistory.AccessScope {
-	return searchhistory.AccessScope{TenantID: handler.tenantID, OwnerID: handler.ownerID}
+func (handler *apiHandler) searchHistoryScope(contexts ...context.Context) searchhistory.AccessScope {
+	scope := searchhistory.AccessScope{TenantID: handler.tenantID, OwnerID: handler.requestOwner(contexts...)}
+	if len(contexts) > 0 {
+		if authscope, ok := authorization.FromContext(contexts[0]); ok {
+			scope.OrganizationID = handler.requestOrganization(contexts[0])
+			scope.SiteAdministrator = authscope.Subject.IsSiteAdmin()
+		}
+	}
+	return scope
 }
 
 // historyFilter projects an already-sanitized filter onto the store request.
@@ -400,4 +414,40 @@ func newSerializedSearchHistoryListCodec() *serializedSearchHistoryListCodec {
 			sizeError:    "search history list response exceeds the transport limit",
 		},
 	)
+}
+
+func (handler *apiHandler) authorizeHistorySource(ctx context.Context, entry *opensplunk.SearchHistoryEntry) error {
+	if handler.authorization == nil {
+		return nil
+	}
+	scope, ok := authorization.FromContext(ctx)
+	if !ok {
+		return mapAuthorizationError(authorization.ErrUnauthorized)
+	}
+	if scope.Subject.IsSiteAdmin() {
+		return nil
+	}
+	if entry == nil || entry.GetDefinition() == nil {
+		return forbiddenError("history source access is denied")
+	}
+	if err := handler.authorizeSearchApp(ctx, entry.GetDefinition().GetAppId()); err != nil {
+		return err
+	}
+	indexes := entry.GetEffectiveIndexScope()
+	if len(indexes) == 0 {
+		indexes = entry.GetDefinition().GetIndexScope()
+	}
+	if len(indexes) == 0 {
+		return forbiddenError("history source access is denied")
+	}
+	for _, name := range indexes {
+		record, err := handler.indexes.GetIndexByName(ctx, name)
+		if err != nil {
+			return forbiddenError("history source access is denied")
+		}
+		if err = handler.authorizeIndexCapability(ctx, record.ID, authorization.Search); err != nil {
+			return mapAuthorizationError(err)
+		}
+	}
+	return nil
 }

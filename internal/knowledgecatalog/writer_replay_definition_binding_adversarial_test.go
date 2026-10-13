@@ -7,6 +7,7 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -175,8 +176,8 @@ func tamperWriterReplayRequestDigest(
 	var original []byte
 	if err := connection.QueryRowContext(t.Context(), `
 		SELECT request_digest FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
-		  AND route = ? AND client_request_id = ?`,
+		WHERE tenant_id = $1 AND actor_kind = $2 AND actor_id = $3
+		  AND route = $4 AND client_request_id = $5`,
 		writerFaultTenant,
 		audit.ActorKindBrowser,
 		"writer-fault-administrator",
@@ -187,7 +188,7 @@ func tamperWriterReplayRequestDigest(
 		t.Fatalf("read original %s request digest: %v", route, err)
 	}
 	if _, err := connection.ExecContext(t.Context(), `
-		DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden`); err != nil {
+		DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden ON knowledge_mutation_idempotency`); err != nil {
 		_ = connection.Close()
 		t.Fatalf("drop immutable receipt update trigger: %v", err)
 	}
@@ -204,15 +205,15 @@ func tamperWriterReplayRequestDigest(
 		route,
 		requestID,
 	}
-	if _, err := connection.ExecContext(t.Context(), updateSQL, args...); err == nil {
+	if _, err := connection.ExecContext(t.Context(), pgtest.Parameters(updateSQL), args...); err == nil {
 		_ = connection.Close()
 		t.Fatalf("row-only %s request-digest tamper succeeded with foreign keys enabled", route)
 	}
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(t.Context(), connection); err != nil {
 		_ = connection.Close()
 		t.Fatalf("disable request-digest foreign keys: %v", err)
 	}
-	result, err := connection.ExecContext(t.Context(), updateSQL, args...)
+	result, err := connection.ExecContext(t.Context(), pgtest.Parameters(updateSQL), args...)
 	if err != nil {
 		_ = connection.Close()
 		t.Fatalf("rebind %s request digest: %v", route, err)
@@ -221,7 +222,7 @@ func tamperWriterReplayRequestDigest(
 		_ = connection.Close()
 		t.Fatalf("rebind %s request digest rows = %d, %v; want 1", route, affected, err)
 	}
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
+	if _, err := pgtest.RestoreForeignKeys(t.Context(), connection); err != nil {
 		_ = connection.Close()
 		t.Fatalf("restore request-digest foreign keys: %v", err)
 	}
@@ -229,7 +230,7 @@ func tamperWriterReplayRequestDigest(
 		t.Fatalf("close request-digest corruption connection: %v", err)
 	}
 	return func() {
-		result, err := harness.database.SQLDB().ExecContext(t.Context(), updateSQL,
+		result, err := harness.database.SQLDB().ExecContext(t.Context(), pgtest.Parameters(updateSQL),
 			original,
 			writerFaultTenant,
 			audit.ActorKindBrowser,
@@ -265,8 +266,8 @@ func assertWriterReplayStoredDefinition(
 		JOIN knowledge_definition_blobs AS blob
 		  ON blob.tenant_id = version.tenant_id
 		 AND blob.definition_digest = version.definition_digest
-		WHERE version.tenant_id = ? AND version.knowledge_object_id = ?
-		  AND version.object_version = ?`,
+		WHERE version.tenant_id = $1 AND version.knowledge_object_id = $2
+		  AND version.object_version = $3`,
 		writerFaultTenant,
 		objectID,
 		version,

@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
@@ -336,7 +339,7 @@ func TestIndexNameAdmissionValidatorDetectsFinalFactDrift(t *testing.T) {
 				!advanced.CompareAndSwap(false, true) {
 				return
 			}
-			if err := query.Exec(`UPDATE index_catalog_state
+			if err := query.Session(&gorm.Session{NewDB: true}).Exec(`UPDATE index_catalog_state
 				SET revision = revision + 1 WHERE singleton_id = 1`).Error; err != nil {
 				_ = query.AddError(err)
 			}
@@ -462,7 +465,7 @@ func TestIndexNameAdmissionValidatorCorruptAuthorityTaxonomy(t *testing.T) {
 			mutate: func(t *testing.T, database *control.DB) {
 				dropTrigger(t, database, "knowledge_catalog_revision_head_delete_is_forbidden")
 				mustExec(t, database, `DELETE FROM knowledge_catalog_revision_heads
-					WHERE tenant_id = ?`, testTenant)
+					WHERE tenant_id = $1`, testTenant)
 			},
 		},
 		{
@@ -470,7 +473,7 @@ func TestIndexNameAdmissionValidatorCorruptAuthorityTaxonomy(t *testing.T) {
 			mutate: func(t *testing.T, database *control.DB) {
 				dropTrigger(t, database, "app_catalog_revision_delete_is_forbidden")
 				mustExec(t, database, `DELETE FROM app_catalog_revisions
-					WHERE tenant_id = ?`, testTenant)
+					WHERE tenant_id = $1`, testTenant)
 			},
 		},
 		{
@@ -478,7 +481,7 @@ func TestIndexNameAdmissionValidatorCorruptAuthorityTaxonomy(t *testing.T) {
 			mutate: func(t *testing.T, database *control.DB) {
 				dropTrigger(t, database, "knowledge_list_projection_current_seal_delete_is_forbidden")
 				mustExec(t, database, `DELETE FROM knowledge_object_list_projection_seals
-					WHERE tenant_id = ? AND knowledge_object_id = ?`,
+					WHERE tenant_id = $1 AND knowledge_object_id = $2`,
 					testTenant, "ko-corrupt-admission-authority")
 			},
 		},
@@ -490,20 +493,20 @@ func TestIndexNameAdmissionValidatorCorruptAuthorityTaxonomy(t *testing.T) {
 				if err != nil {
 					t.Fatalf("reserve corrupt dependency connection: %v", err)
 				}
-				if _, err := connection.ExecContext(t.Context(), "PRAGMA foreign_keys = OFF"); err != nil {
+				if _, err := pgtest.DropForeignKeys(t.Context(), connection); err != nil {
 					_ = connection.Close()
 					t.Fatalf("disable fixture foreign keys: %v", err)
 				}
 				if _, err := connection.ExecContext(
 					t.Context(),
-					"DROP TRIGGER knowledge_dependency_seal_delete_is_forbidden",
+					"DROP TRIGGER knowledge_dependency_seal_delete_is_forbidden ON knowledge_object_dependency_seals",
 				); err != nil {
 					_ = connection.Close()
 					t.Fatalf("drop dependency-seal guard: %v", err)
 				}
 				if _, err := connection.ExecContext(t.Context(), `
 					DELETE FROM knowledge_object_dependency_seals
-					WHERE tenant_id = ? AND knowledge_object_id = ?`,
+					WHERE tenant_id = $1 AND knowledge_object_id = $2`,
 					testTenant, "ko-corrupt-admission-authority",
 				); err != nil {
 					_ = connection.Close()
@@ -613,7 +616,7 @@ func TestIndexNameAdmissionValidatorMidWorkCancellationAndAppFactDrift(t *testin
 					!advanced.CompareAndSwap(false, true) {
 					return
 				}
-				if err := query.Exec(`UPDATE app_catalog_revisions
+				if err := query.Session(&gorm.Session{NewDB: true}).Exec(`UPDATE app_catalog_revisions
 					SET revision = revision + 1 WHERE tenant_id = ?`, testTenant).Error; err != nil {
 					_ = query.AddError(err)
 				}
@@ -639,7 +642,7 @@ func TestIndexNameAdmissionValidatorMidWorkCancellationAndAppFactDrift(t *testin
 
 func TestIndexNameAdmissionDriversAreBoundedClippedAndIndexed(t *testing.T) {
 	database, _ := newCatalogTestStore(t)
-	details := explainSQLiteQueryPlan(
+	details := explainPostgreSQLQueryPlan(
 		t,
 		database.SQLDB(),
 		publicationIndexAdmissionTenantDriverSQL,
@@ -650,7 +653,7 @@ func TestIndexNameAdmissionDriversAreBoundedClippedAndIndexed(t *testing.T) {
 		details,
 		"knowledge_catalog_tenants_nonempty_active_idx",
 	)
-	details = explainSQLiteQueryPlan(
+	details = explainPostgreSQLQueryPlan(
 		t,
 		database.SQLDB(),
 		publicationIndexAdmissionRegistryDriverSQL,
@@ -663,8 +666,14 @@ func TestIndexNameAdmissionDriversAreBoundedClippedAndIndexed(t *testing.T) {
 	)
 
 	tx := beginIndexAdmissionTestTransaction(t, database)
-	if err := tx.Exec("PRAGMA ignore_check_constraints = ON").Error; err != nil {
-		t.Fatalf("enable corrupt-width fixture: %v", err)
+	// An oversized key cannot fit PostgreSQL's native primary-key btree. A
+	// transaction-local shadow supplies the malformed physical read stream while
+	// the real catalog's covering-index contract was verified above.
+	if err := tx.Exec(`CREATE TEMP TABLE knowledge_catalog_tenants (
+ tenant_id TEXT NOT NULL, catalog_revision BIGINT NOT NULL DEFAULT 0,
+ active_object_count BIGINT NOT NULL DEFAULT 0
+ )`).Error; err != nil {
+		t.Fatalf("create corrupt-width tenant stream: %v", err)
 	}
 	oversized := strings.Repeat("t", maximumTenantIDBytes+1<<20)
 	if err := tx.Exec(
@@ -685,6 +694,7 @@ func TestIndexNameAdmissionDriversAreBoundedClippedAndIndexed(t *testing.T) {
 	objectDatabase, _ := newCatalogTestStore(t)
 	objectTx := beginIndexAdmissionTestTransaction(t, objectDatabase)
 	if err := objectTx.Exec(`CREATE TEMP TABLE knowledge_objects (
+		organization_id BIGINT NOT NULL,
 		tenant_id TEXT NOT NULL,
 		knowledge_object_id TEXT NOT NULL,
 		current_version INTEGER NOT NULL,
@@ -692,15 +702,10 @@ func TestIndexNameAdmissionDriversAreBoundedClippedAndIndexed(t *testing.T) {
 	)`).Error; err != nil {
 		t.Fatalf("create shadow registry driver table: %v", err)
 	}
-	if err := objectTx.Exec(`CREATE INDEX knowledge_objects_active_tenant_idx
-		ON knowledge_objects (tenant_id, knowledge_object_id, current_version)
-		WHERE state = 'active'`).Error; err != nil {
-		t.Fatalf("create shadow registry driver index: %v", err)
-	}
 	oversizedObject := strings.Repeat("o", maximumObjectIDBytes+1<<20)
-	if err := objectTx.Exec(`INSERT INTO knowledge_objects (
+	if err := objectTx.Exec(`INSERT INTO knowledge_objects (organization_id,
 		tenant_id, knowledge_object_id, current_version, state
-	) VALUES ('tenant-shadow', ?, 1, 'active')`, oversizedObject).Error; err != nil {
+	) VALUES (1, 'tenant-shadow', ?, 1, 'active')`, oversizedObject).Error; err != nil {
 		t.Fatalf("insert oversized registry fixture: %v", err)
 	}
 	if _, err := readPublicationIndexAdmissionRegistryDrivers(objectTx); !errors.Is(
@@ -729,7 +734,7 @@ func TestIndexNameAdmissionTenantDriverExactAndPlusOneBoundaries(t *testing.T) {
 				SELECT value + 1 FROM sequence WHERE value < ?
 			)
 			INSERT INTO knowledge_catalog_tenants (tenant_id)
-			SELECT printf('capacity-tenant-%04d', value) FROM sequence`,
+			SELECT 'capacity-tenant-' || lpad((value)::text,4,'0') || '' FROM sequence`,
 				test.lastValue,
 			).Error; err != nil {
 				t.Fatalf("insert tenant-driver capacity fixtures: %v", err)
@@ -780,7 +785,7 @@ func TestIndexNameAdmissionZeroActiveAppAuthorityIsCorrupt(t *testing.T) {
 	mustExec(t, database, `UPDATE app_workspaces
 		SET state = 'archived', updated_at_unix_micro = updated_at_unix_micro + 100,
 			archived_at_unix_micro = updated_at_unix_micro + 100
-		WHERE tenant_id = ?`, testTenant)
+		WHERE tenant_id = $1`, testTenant)
 
 	validator := newIndexAdmissionTestValidator(t, database)
 	tx := beginIndexAdmissionTestTransaction(t, database)
@@ -817,7 +822,7 @@ func beginIndexAdmissionTestTransaction(
 	database *control.DB,
 ) *gorm.DB {
 	t.Helper()
-	tx := database.GORMDB().WithContext(t.Context()).Begin()
+	tx := pgmeta.Begin(database.GORMDB().WithContext(context.Background()))
 	if tx.Error != nil {
 		t.Fatalf("begin index-admission transaction: %v", tx.Error)
 	}
@@ -874,7 +879,7 @@ func createIndexAdmissionTenantApp(
 	}
 	if _, err := catalog.CreateApp(
 		t.Context(),
-		control.AppAccessScope{TenantID: tenantID},
+		control.AppAccessScope{TenantID: tenantID, OrganizationID: 1},
 		control.AppDefinition{
 			Slug:        slug,
 			DisplayName: slug,
@@ -901,14 +906,14 @@ func insertIndexAdmissionTenantObject(
 		t.Fatalf("normalize %s/%s: %v", tenantID, objectID, err)
 	}
 	appID, name, scope, objectType := fixtureIdentity(t, objectID, "v1", normalized)
-	tx, err := database.SQLDB().BeginTx(t.Context(), nil)
+	tx, err := pgmeta.BeginSQL(t.Context(), database.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin %s/%s fixture: %v", tenantID, objectID, err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_definition_blobs (
 		tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro
-	) VALUES (?, ?, ?, ?, ?)`,
+	) VALUES ($1, $2, $3, $4, $5)`,
 		tenantID, normalized.Digest[:], normalized.Bytes, len(normalized.Bytes), timestamp,
 	); err != nil {
 		t.Fatalf("insert %s/%s definition: %v", tenantID, objectID, err)
@@ -917,7 +922,7 @@ func insertIndexAdmissionTenantObject(
 		tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, definition_digest, dependency_count, mutation_kind,
 		quarantine_reason, created_at_unix_micro
-	) VALUES (?, ?, 1, ?, ?, ?, ?, ?, 'active', ?, 0, 'create', NULL, ?)`,
+	) VALUES ($1, $2, 1, $3, $4, $5, $6, $7, 'active', $8, 0, 'create', NULL, $9)`,
 		tenantID, objectID, appID, ownerID, objectType, name, scope,
 		normalized.Digest[:], timestamp,
 	); err != nil {
@@ -925,7 +930,7 @@ func insertIndexAdmissionTenantObject(
 	}
 	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_dependency_seals (
 		tenant_id, knowledge_object_id, object_version, dependency_count
-	) VALUES (?, ?, 1, 0)`, tenantID, objectID); err != nil {
+	) VALUES ($1, $2, 1, 0)`, tenantID, objectID); err != nil {
 		t.Fatalf("seal %s/%s dependencies: %v", tenantID, objectID, err)
 	}
 
@@ -955,7 +960,7 @@ func insertIndexAdmissionTenantObject(
 		sharing_scope, state, description_present, description, index_selector_count,
 		host_selector_count, source_selector_count, sourcetype_selector_count,
 		selector_value_bytes, canonical_selector_bytes
-	) VALUES (?, ?, 1, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)`,
+	) VALUES ($1, $2, 1, $3, $4, $5, $6, $7, 'active', $8, $9, $10, $11, $12, $13, $14, $15)`,
 		tenantID, objectID, appID, ownerID, objectType, name, scope,
 		descriptionPresent, description, counts[0], counts[1], counts[2], counts[3],
 		selectorValueBytes, canonicalSelectorBytes,
@@ -966,23 +971,23 @@ func insertIndexAdmissionTenantObject(
 	projectionBytes := len(description) + selectorValueBytes
 	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_list_projection_seals (
 		tenant_id, knowledge_object_id, object_version, projection_bytes, canonical_selector_bytes
-	) VALUES (?, ?, 1, ?, ?)`,
+	) VALUES ($1, $2, 1, $3, $4)`,
 		tenantID, objectID, projectionBytes, canonicalSelectorBytes,
 	); err != nil {
 		t.Fatalf("seal %s/%s projection: %v", tenantID, objectID, err)
 	}
-	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (
+	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (organization_id,
 		tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro,
 		disabled_at_unix_micro, quarantined_at_unix_micro, deleted_at_unix_micro, quarantine_reason
-	) VALUES (?, ?, 1, ?, ?, ?, ?, ?, 'active', ?, ?, ?, NULL, NULL, NULL, NULL)`,
+	) VALUES (1, $1, $2, 1, $3, $4, $5, $6, $7, 'active', $8, $9, $10, NULL, NULL, NULL, NULL)`,
 		tenantID, objectID, appID, ownerID, objectType, name, scope,
 		normalized.Digest[:], timestamp, timestamp,
 	); err != nil {
 		t.Fatalf("insert %s/%s registry: %v", tenantID, objectID, err)
 	}
 	if _, err := tx.ExecContext(t.Context(), `UPDATE knowledge_catalog_tenants
-		SET catalog_revision = catalog_revision + 1 WHERE tenant_id = ?`, tenantID); err != nil {
+		SET catalog_revision = catalog_revision + 1 WHERE tenant_id = $1`, tenantID); err != nil {
 		t.Fatalf("advance %s catalog revision: %v", tenantID, err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -1018,7 +1023,7 @@ func insertIndexAdmissionTenantSelectorRows(
 			}
 			if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_list_selector_patterns (
 				tenant_id, knowledge_object_id, object_version, dimension, ordinal, match_kind, value
-			) VALUES (?, ?, 1, ?, ?, ?, ?)`,
+			) VALUES ($1, $2, 1, $3, $4, $5, $6)`,
 				tenantID, objectID, dimension.name, ordinal, matchKind, value,
 			); err != nil {
 				t.Fatalf("insert %s/%s selector: %v", tenantID, objectID, err)
@@ -1035,8 +1040,8 @@ func assertIndexAdmissionDriverPlan(
 	t.Helper()
 	joined := strings.Join(details, "\n")
 	if !strings.Contains(joined, indexName) ||
-		!strings.Contains(strings.ToUpper(joined), "COVERING INDEX") ||
-		strings.Contains(strings.ToUpper(joined), "TEMP B-TREE") {
+		!strings.Contains(strings.ToUpper(joined), "INDEX ONLY SCAN") ||
+		strings.Contains(strings.ToUpper(joined), "SORT") {
 		t.Fatalf("driver query plan = %v, want covering %s without temp sort", details, indexName)
 	}
 }

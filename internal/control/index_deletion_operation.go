@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 	"gorm.io/gorm"
 )
@@ -173,7 +174,7 @@ func (db *DB) beginIndexDataDeletionTransaction(
 	confirmationName string,
 	auditPublisher indexMutationAuditPublisher,
 ) (result IndexDeletionOperation, err error) {
-	tx := db.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginLocked(db.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return IndexDeletionOperation{}, fmt.Errorf(
 			"begin index data deletion transaction: %w",
@@ -253,8 +254,21 @@ func (db *DB) beginIndexDataDeletionTransaction(
 		ArchivedIndexVersion: currentRecord.Version,
 		CreatedAtUnixMicro:   createdAt.UnixMicro(),
 	}
+	inUse, err := indexDeletionOperationIDInUse(tx, operationID)
+	if err != nil {
+		return IndexDeletionOperation{}, err
+	}
+	if inUse {
+		return IndexDeletionOperation{}, errIndexDeletionOperationIDCollision
+	}
+	if err := tx.SavePoint("os_index_create").Error; err != nil {
+		return IndexDeletionOperation{}, err
+	}
 	create := tx.Create(&record)
 	if create.Error != nil {
+		if err := tx.RollbackTo("os_index_create").Error; err != nil {
+			return IndexDeletionOperation{}, errors.Join(create.Error, err)
+		}
 		collision, collisionErr := indexDeletionOperationIDInUse(tx, operationID)
 		if collisionErr != nil {
 			return IndexDeletionOperation{}, errors.Join(

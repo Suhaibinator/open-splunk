@@ -20,7 +20,7 @@ import (
 // and a save whose audit row is refused leaves the snapshot untouched.
 func TestRuntimeAppearanceSerializesWritersAndPublishesOnlyCommittedPalettes(t *testing.T) {
 	ctx := context.Background()
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.db"))
+	database, err := openTestControl(t, ctx, filepath.Join(t.TempDir(), "control.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

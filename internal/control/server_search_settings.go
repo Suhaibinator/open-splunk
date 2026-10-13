@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"gorm.io/gorm"
 )
@@ -100,7 +101,7 @@ func (store *ServerSearchSettingsStore) Update(
 	if err != nil {
 		return ServerSearchSettings{}, err
 	}
-	err = store.db.orm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = pgmeta.TransactionLocked(store.db.orm.WithContext(ctx), "settings:server_search_settings", func(tx *gorm.DB) error {
 		var current serverSearchSettingsRecord
 		readErr := tx.First(&current, "singleton_id = ?", 1).Error
 		switch {

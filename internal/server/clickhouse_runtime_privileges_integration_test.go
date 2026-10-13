@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +16,7 @@ import (
 	internalclickhouse "github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
@@ -388,7 +388,7 @@ func TestClickHouseServicePrincipalLifecycle(t *testing.T) {
 
 	controlDB, err := control.Open(
 		ctx,
-		filepath.Join(t.TempDir(), "control.sqlite"),
+		pgtest.DSN(t),
 	)
 	if err != nil {
 		t.Fatalf("open service-principal control plane: %v", err)
@@ -398,7 +398,7 @@ func TestClickHouseServicePrincipalLifecycle(t *testing.T) {
 			t.Errorf("close service-principal control plane: %v", closeErr)
 		}
 	})
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatalf("open service-principal visibility sequencer: %v", err)
 	}

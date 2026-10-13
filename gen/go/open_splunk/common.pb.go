@@ -184,7 +184,7 @@ type BuildMetadata struct {
 	UiBuildId                  string                 `protobuf:"bytes,3,opt,name=ui_build_id,json=uiBuildId,proto3" json:"ui_build_id,omitempty"`
 	UiSha256                   string                 `protobuf:"bytes,4,opt,name=ui_sha256,json=uiSha256,proto3" json:"ui_sha256,omitempty"`
 	ProtobufSchemaSha256       string                 `protobuf:"bytes,5,opt,name=protobuf_schema_sha256,json=protobufSchemaSha256,proto3" json:"protobuf_schema_sha256,omitempty"`
-	SqliteMigrationsSha256     string                 `protobuf:"bytes,6,opt,name=sqlite_migrations_sha256,json=sqliteMigrationsSha256,proto3" json:"sqlite_migrations_sha256,omitempty"`
+	PostgresMigrationsSha256   string                 `protobuf:"bytes,6,opt,name=postgres_migrations_sha256,json=postgresMigrationsSha256,proto3" json:"postgres_migrations_sha256,omitempty"`
 	ClickhouseMigrationsSha256 string                 `protobuf:"bytes,8,opt,name=clickhouse_migrations_sha256,json=clickhouseMigrationsSha256,proto3" json:"clickhouse_migrations_sha256,omitempty"`
 	ProductVersion             *string                `protobuf:"bytes,11,opt,name=product_version,json=productVersion,proto3,oneof" json:"product_version,omitempty"`
 	unknownFields              protoimpl.UnknownFields
@@ -249,9 +249,9 @@ func (x *BuildMetadata) GetProtobufSchemaSha256() string {
 	return ""
 }
 
-func (x *BuildMetadata) GetSqliteMigrationsSha256() string {
+func (x *BuildMetadata) GetPostgresMigrationsSha256() string {
 	if x != nil {
-		return x.SqliteMigrationsSha256
+		return x.PostgresMigrationsSha256
 	}
 	return ""
 }
@@ -844,13 +844,13 @@ var File_open_splunk_common_proto protoreflect.FileDescriptor
 
 const file_open_splunk_common_proto_rawDesc = "" +
 	"\n" +
-	"\x18open_splunk/common.proto\x12\vopen_splunk\x1a\x1fgoogle/protobuf/timestamp.proto\"\xed\x03\n" +
+	"\x18open_splunk/common.proto\x12\vopen_splunk\x1a\x1fgoogle/protobuf/timestamp.proto\"\xf1\x03\n" +
 	"\rBuildMetadata\x12'\n" +
 	"\x0fsource_revision\x18\x02 \x01(\tR\x0esourceRevision\x12\x1e\n" +
 	"\vui_build_id\x18\x03 \x01(\tR\tuiBuildId\x12\x1b\n" +
 	"\tui_sha256\x18\x04 \x01(\tR\buiSha256\x124\n" +
-	"\x16protobuf_schema_sha256\x18\x05 \x01(\tR\x14protobufSchemaSha256\x128\n" +
-	"\x18sqlite_migrations_sha256\x18\x06 \x01(\tR\x16sqliteMigrationsSha256\x12@\n" +
+	"\x16protobuf_schema_sha256\x18\x05 \x01(\tR\x14protobufSchemaSha256\x12<\n" +
+	"\x1apostgres_migrations_sha256\x18\x06 \x01(\tR\x18postgresMigrationsSha256\x12@\n" +
 	"\x1cclickhouse_migrations_sha256\x18\b \x01(\tR\x1aclickhouseMigrationsSha256\x12,\n" +
 	"\x0fproduct_version\x18\v \x01(\tH\x00R\x0eproductVersion\x88\x01\x01B\x12\n" +
 	"\x10_product_versionJ\x04\b\x01\x10\x02J\x04\b\a\x10\bJ\x04\b\t\x10\n" +

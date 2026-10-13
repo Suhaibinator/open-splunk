@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"google.golang.org/protobuf/proto"
 
@@ -49,7 +51,7 @@ type backendIndexDeletionControlCounts struct {
 }
 
 // TestBackendIndexDataDeletionLifecycle proves the administrator DELETE_DATA
-// boundary against the real server, durable SQLite state, and digest-pinned
+// boundary against the real server, durable PostgreSQL state, and digest-pinned
 // ClickHouse. It deliberately holds an accepted mutation behind STOP MERGES,
 // crash-restarts the server with pending work, and verifies exact scope,
 // outstanding-operation idempotency, and the bounded terminal retry contract.
@@ -95,11 +97,12 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 	})
 
 	httpAddress, collectorAddress := unusedLoopbackAddressPair(t)
-	controlDBPath := filepath.Join(work, "control.sqlite")
-	administratorTokenPath, administratorToken := provisionAdministratorToken(
+	controlDSN := pgtest.DSN(t)
+	googleIdentity, googleSession := provisionGoogleSession(
 		t,
-		work,
+		work, controlDSN,
 	)
+	controlDSN = googleIdentity.PostgresDSN
 	assertEmptyDirectory(t, serverRuntimeDir)
 	serverEnvironment := clickHouseServerEnvironment(
 		os.Environ(),
@@ -113,9 +116,9 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 	serverArguments := []string{
 		serverBinary,
 		"-http-listen-address=" + httpAddress,
-		"-control-database-file=" + controlDBPath,
+		"-postgres-dsn=" + controlDSN,
 		"-master-key-file=" + filepath.Join(work, "server.key"),
-		"-administrator-token-file=" + administratorTokenPath,
+
 		"-collector-grpc-listen-address=" + collectorAddress,
 		"-collector-grpc-plaintext-enabled",
 		"-tenant-id=" + backendIndexDeletionTenant,
@@ -127,7 +130,7 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 
 	var serverProcesses []*managedProcess
 	protectedValues := []string{
-		administratorToken,
+		googleSession,
 		clickhouse.Password,
 		clickhouse.MigrationPassword,
 		clickhouse.RuntimePassword,
@@ -201,7 +204,7 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		backendIndexDeletionTargetName,
 		"Physical deletion integration "+
 			backendIndexDeletionTargetName,
@@ -211,7 +214,7 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		target,
 	)
 	neighbor := createBackendIndex(
@@ -219,7 +222,7 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		backendIndexDeletionNeighborName,
 		"Physical deletion integration "+
 			backendIndexDeletionNeighborName,
@@ -260,12 +263,12 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 	zeroVersion := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
 	zeroVersion.ExpectedVersion = 0
 	zeroVersion.Selector = nil
-	finalSQLiteVersion := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
-	finalSQLiteVersion.ExpectedVersion = math.MaxInt64
-	finalSQLiteVersion.Selector = nil
-	aboveSQLiteRange := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
-	aboveSQLiteRange.ExpectedVersion = uint64(math.MaxInt64) + 1
-	aboveSQLiteRange.Selector = nil
+	finalSignedVersion := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
+	finalSignedVersion.ExpectedVersion = math.MaxInt64
+	finalSignedVersion.Selector = nil
+	aboveSignedRange := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
+	aboveSignedRange.ExpectedVersion = uint64(math.MaxInt64) + 1
+	aboveSignedRange.Selector = nil
 	unspecifiedMode := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
 	unspecifiedMode.DataDeletionMode =
 		opensplunk.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_UNSPECIFIED
@@ -304,67 +307,67 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 		},
 		{
 			name:  "zero version before selector",
-			token: administratorToken,
+			token: googleSession,
 			input: zeroVersion,
 			want:  http.StatusBadRequest,
 		},
 		{
-			name:  "final SQLite version before selector",
-			token: administratorToken,
-			input: finalSQLiteVersion,
+			name:  "final signed BIGINT version before selector",
+			token: googleSession,
+			input: finalSignedVersion,
 			want:  http.StatusBadRequest,
 		},
 		{
-			name:  "version above SQLite range before selector",
-			token: administratorToken,
-			input: aboveSQLiteRange,
+			name:  "version above signed BIGINT range before selector",
+			token: googleSession,
+			input: aboveSignedRange,
 			want:  http.StatusBadRequest,
 		},
 		{
 			name:  "unspecified mode before selector",
-			token: administratorToken,
+			token: googleSession,
 			input: unspecifiedMode,
 			want:  http.StatusBadRequest,
 		},
 		{
 			name:  "unknown mode before selector",
-			token: administratorToken,
+			token: googleSession,
 			input: unknownMode,
 			want:  http.StatusBadRequest,
 		},
 		{
 			name:  "noncanonical confirmation before selector",
-			token: administratorToken,
+			token: googleSession,
 			input: noncanonicalConfirmation,
 			want:  http.StatusBadRequest,
 		},
 		{
 			name:  "missing selector",
-			token: administratorToken,
+			token: googleSession,
 			input: missingSelector,
 			want:  http.StatusBadRequest,
 		},
 		{
 			name:  "missing index",
-			token: administratorToken,
+			token: googleSession,
 			input: missingIndex,
 			want:  http.StatusNotFound,
 		},
 		{
 			name:  "active index",
-			token: administratorToken,
+			token: googleSession,
 			input: activeIndex,
 			want:  http.StatusConflict,
 		},
 		{
 			name:  "stale archived version",
-			token: administratorToken,
+			token: googleSession,
 			input: staleVersion,
 			want:  http.StatusConflict,
 		},
 		{
 			name:  "wrong confirmation",
-			token: administratorToken,
+			token: googleSession,
 			input: wrongConfirmation,
 			want:  http.StatusBadRequest,
 		},
@@ -398,7 +401,7 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 	backendIndexDeletionAssertRejectedControlState(
 		t,
 		ctx,
-		controlDBPath,
+		controlDSN,
 		target,
 		neighbor,
 	)
@@ -454,7 +457,7 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 				ctx,
 				httpClient,
 				baseURL+"/api/indexes/delete",
-				administratorToken,
+				googleSession,
 				backendIndexDeletionPhysicalRequestByID(target),
 				&response,
 			)
@@ -522,7 +525,7 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 	operation, attempt := backendIndexDeletionInspectPendingControl(
 		t,
 		ctx,
-		controlDBPath,
+		controlDSN,
 		operationID,
 		target,
 		tableUUID,
@@ -535,7 +538,7 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 			ctx,
 			httpClient,
 			baseURL+"/api/indexes/delete",
-			administratorToken,
+			googleSession,
 			backendIndexDeletionPhysicalRequestByName(target),
 			&restartedResponse,
 		)
@@ -605,7 +608,7 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		target,
 		thirdServer,
 		protectedValues,
@@ -616,7 +619,7 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 			ctx,
 			httpClient,
 			baseURL+"/api/indexes/delete",
-			administratorToken,
+			googleSession,
 			backendIndexDeletionPhysicalRequestByID(target),
 			nil,
 		)
@@ -638,14 +641,14 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 	completion := backendIndexDeletionAssertTerminalControlState(
 		t,
 		ctx,
-		controlDBPath,
+		controlDSN,
 		operation,
 		attempt,
 	)
 	restartedCompletion := backendIndexDeletionAssertTerminalControlState(
 		t,
 		ctx,
-		controlDBPath,
+		controlDSN,
 		operation,
 		attempt,
 	)
@@ -706,7 +709,7 @@ func backendIndexDeletionArchiveIndex(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 	index *opensplunk.Index,
 ) *opensplunk.Index {
 	t.Helper()
@@ -716,7 +719,7 @@ func backendIndexDeletionArchiveIndex(
 		ctx,
 		client,
 		baseURL+"/api/indexes/state/set",
-		administratorToken,
+		googleSession,
 		&opensplunk.SetIndexStateRequest{
 			Selector: &opensplunk.IndexSelector{
 				Selector: &opensplunk.IndexSelector_IndexId{
@@ -787,15 +790,20 @@ func backendIndexDeletionPostProto(
 	ctx context.Context,
 	client *http.Client,
 	url string,
-	bearerToken string,
+	googleSession string,
 	input proto.Message,
 	output proto.Message,
 ) (int, []byte, error) {
-	response, err := performProtoRequestWithBearer(
+	if googleSession == "" {
+		// This negative case intentionally bypasses the workspace cookie jar and
+		// transport, while retaining the server TLS trust configuration.
+		client = &http.Client{Transport: underlyingNativeTransport(client.Transport), Timeout: client.Timeout}
+	}
+	response, err := performProtoRequestWithSession(
 		ctx,
 		client,
 		url,
-		bearerToken,
+		googleSession,
 		input,
 	)
 	if err != nil {
@@ -986,13 +994,13 @@ func backendIndexDeletionTableUUID(
 func backendIndexDeletionAssertRejectedControlState(
 	t *testing.T,
 	ctx context.Context,
-	controlDBPath string,
+	controlDSN string,
 	target *opensplunk.Index,
 	neighbor *opensplunk.Index,
 ) {
 	t.Helper()
 
-	db := backendIndexDeletionOpenControl(t, ctx, controlDBPath)
+	db := backendIndexDeletionOpenControl(t, ctx, controlDSN)
 	defer func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close rejected-state control plane: %v", err)
@@ -1035,7 +1043,7 @@ func backendIndexDeletionAssertRejectedControlState(
 func backendIndexDeletionInspectPendingControl(
 	t *testing.T,
 	ctx context.Context,
-	controlDBPath string,
+	controlDSN string,
 	operationID string,
 	target *opensplunk.Index,
 	tableUUID string,
@@ -1045,7 +1053,7 @@ func backendIndexDeletionInspectPendingControl(
 ) {
 	t.Helper()
 
-	db := backendIndexDeletionOpenControl(t, ctx, controlDBPath)
+	db := backendIndexDeletionOpenControl(t, ctx, controlDSN)
 	defer func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close pending-state control plane: %v", err)
@@ -1133,13 +1141,13 @@ func backendIndexDeletionInspectPendingControl(
 func backendIndexDeletionAssertTerminalControlState(
 	t *testing.T,
 	ctx context.Context,
-	controlDBPath string,
+	controlDSN string,
 	operation control.IndexDeletionOperation,
 	attempt control.IndexDeletionMutationAttempt,
 ) control.IndexDataDeletionCompletion {
 	t.Helper()
 
-	db := backendIndexDeletionOpenControl(t, ctx, controlDBPath)
+	db := backendIndexDeletionOpenControl(t, ctx, controlDSN)
 	defer func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close terminal-state control plane: %v", err)
@@ -1231,7 +1239,7 @@ func backendIndexDeletionAssertTerminalControlState(
 		 FROM indexes
 		 JOIN index_deletion_tombstones
 		   ON index_deletion_tombstones.index_id = indexes.index_id
-		 WHERE indexes.index_id = ?`,
+		 WHERE indexes.index_id = $1`,
 		operation.IndexID,
 	).Scan(
 		&state,
@@ -1273,13 +1281,13 @@ func backendIndexDeletionAssertTerminalControlState(
 func backendIndexDeletionOpenControl(
 	t *testing.T,
 	ctx context.Context,
-	controlDBPath string,
+	controlDSN string,
 ) *control.DB {
 	t.Helper()
 
-	db, err := control.Open(ctx, controlDBPath)
+	db, err := control.OpenReadOnly(ctx, controlDSN)
 	if err != nil {
-		t.Fatalf("open deletion control plane %q: %v", controlDBPath, err)
+		t.Fatalf("open deletion control plane %q: %v", controlDSN, err)
 	}
 	return db
 }
@@ -1408,7 +1416,7 @@ func backendIndexDeletionWaitForCatalogTombstone(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 	target *opensplunk.Index,
 	process *managedProcess,
 	protectedValues []string,
@@ -1428,7 +1436,7 @@ func backendIndexDeletionWaitForCatalogTombstone(
 				probeCtx,
 				client,
 				baseURL+"/api/indexes/get",
-				administratorToken,
+				googleSession,
 				&opensplunk.GetIndexRequest{
 					Selector: &opensplunk.IndexSelector{
 						Selector: &opensplunk.IndexSelector_IndexId{

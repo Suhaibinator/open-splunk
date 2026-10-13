@@ -126,7 +126,7 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if execution.ID != id || execution.TenantID != access.TenantID || execution.OwnerID != access.OwnerID {
+	if execution.ID != id || execution.TenantID != access.TenantID || (!access.SiteAdministrator && (execution.OwnerID != access.OwnerID || (access.OrganizationID != "" && access.OrganizationID != execution.OrganizationID))) {
 		return nil, searchjobs.ErrNotFound
 	}
 	resultMetadata, validPin := execution.ValidatedResultLease(pin)
@@ -147,6 +147,13 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 	compiled, summary, err := source.executionAuthority(execution)
 	if err != nil {
 		return nil, fmt.Errorf("%w: recover completed search execution: %w", searchjobs.ErrResultsUnavailable, err)
+	}
+	if execution.CaptureComplete {
+		if pin.ResultsTruncated() {
+			return nil, searchjobs.ErrResultsUnavailable
+		}
+		pinReleased = true
+		return &continuationResultLease{ResultLease: pin, knowledgeSnapshot: summary, schema: schema, schemaBytes: schemaBytes}, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

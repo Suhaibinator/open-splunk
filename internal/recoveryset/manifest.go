@@ -1,5 +1,5 @@
 // Package recoveryset owns the versioned outer deployment recovery-set
-// manifest. The existing controlbackup v1 bundle remains an independently
+// manifest. The existing native controlbackup bundle remains an independently
 // verifiable child; ClickHouse's native archive remains on its separately
 // mounted recovery disk and is bound here by exact identity.
 package recoveryset
@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	manifestFormatVersion           = uint32(1)
+	manifestFormatVersion           = uint32(2)
 	maximumManifestBytes            = 32 << 10
 	manifestSubject                 = "deployment recovery-set manifest"
 	maximumControlManifestBytes     = uint64(16 << 10)
@@ -36,9 +36,9 @@ const (
 // FileIdentity binds one fixed member name to its exact closed-file bytes.
 type FileIdentity = controlbackup.FileIdentity
 
-// ControlPlaneIdentity binds the unchanged controlbackup v1 child through its
+// ControlPlaneIdentity binds the native controlbackup child through its
 // canonical manifest. Verifying the child manifest recursively verifies its
-// SQLite snapshot, master key, and administrator token.
+// PostgreSQL snapshot, master key, and private object identities.
 type ControlPlaneIdentity struct {
 	Directory string       `json:"directory"`
 	Manifest  FileIdentity `json:"manifest"`
@@ -71,7 +71,7 @@ type Manifest struct {
 	Scope                string                          `json:"scope"`
 	ClickHouseIncluded   bool                            `json:"clickhouse_included"`
 	SourceRevision       string                          `json:"source_revision"`
-	SQLiteMigrations     controlbackup.MigrationIdentity `json:"sqlite_migrations"`
+	PostgresMigrations   controlbackup.MigrationIdentity `json:"postgres_migrations"`
 	ClickHouseMigrations controlbackup.MigrationIdentity `json:"clickhouse_migrations"`
 	ControlPlane         ControlPlaneIdentity            `json:"control_plane"`
 	ClickHouse           ClickHouseIdentity              `json:"clickhouse"`
@@ -216,7 +216,7 @@ func validateManifestRelease(
 func (manifest Manifest) releaseIdentity() controlbackup.ReleaseIdentity {
 	return controlbackup.ReleaseIdentity{
 		SourceRevision:       manifest.SourceRevision,
-		SQLiteMigrations:     manifest.SQLiteMigrations,
+		PostgresMigrations:   manifest.PostgresMigrations,
 		ClickHouseMigrations: manifest.ClickHouseMigrations,
 	}
 }

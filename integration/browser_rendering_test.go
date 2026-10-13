@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/testsupport/identityfixture"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -114,23 +116,22 @@ func TestBrowserFixedResultRendering(t *testing.T) {
 	repository := repositoryRoot(t)
 	stagedBackendRepository := buildBackendFrontend(t, ctx, repository)
 
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
-	if err != nil {
-		t.Fatalf("open browser rendering control database: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := controlDB.Close(); err != nil {
-			t.Errorf("close browser rendering control database: %v", err)
-		}
-	})
-	if _, err := controlDB.CreateIndex(ctx, control.IndexDefinition{
+	browserAddress, _ := unusedLoopbackAddressPair(t)
+	nativeIdentity := identityfixture.New(t, identityfixture.Options{Directory: t.TempDir(), PhysicalTenant: "browser-rendering-tenant", Origin: "http://" + browserAddress})
+	controlDB := nativeIdentity.Database
+	registerNativeBrowserFixture(t, nativeIdentity, "http://"+browserAddress)
+	createdIndex, err := controlDB.CreateIndex(ctx, control.IndexDefinition{
 		Name:             "main",
 		DisplayName:      "Browser rendering",
 		RetentionPeriod:  time.Hour,
 		IngestionEnabled: true,
 		SearchEnabled:    true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create browser rendering index: %v", err)
+	}
+	if err := nativeIdentity.BindIndex(ctx, createdIndex.ID); err != nil {
+		t.Fatal(err)
 	}
 	savedSearches, err := savedobjects.New(controlDB, savedobjects.Options{
 		CursorKey: []byte("123456789abcdef0123456789abcdef0"),
@@ -147,12 +148,14 @@ func TestBrowserFixedResultRendering(t *testing.T) {
 		"browser-rendering-tenant",
 		"main",
 		anchor,
+		nativeIdentity,
 	)
 	executor := &browserRenderingExecutor{}
 	manager, err := searchjobs.New(searchjobs.Config{
 		Executor:        executor,
 		Snapshotter:     browserRenderingSnapshotter{},
 		Journal:         controlPlane.journal,
+		CaptureFactory:  controlPlane.capture,
 		Compiler:        clickhouse.Compiler{Database: "open_splunk", Table: "events"},
 		MaxConcurrent:   1,
 		MaxRows:         browserRenderingRowCount,
@@ -176,16 +179,19 @@ func TestBrowserFixedResultRendering(t *testing.T) {
 	})
 
 	handler, err := server.NewHandler(server.Config{
-		SearchJobs:      manager,
-		Indexes:         browserSearchOnlyCatalog(controlDB),
-		AppCatalog:      controlPlane.appCatalog,
-		SavedSearches:   savedSearches,
-		SearchHistory:   controlPlane.history,
-		WebUI:           os.DirFS(filepath.Join(stagedBackendRepository, "out")),
-		OwnerID:         "browser-rendering-owner",
-		TenantID:        "browser-rendering-tenant",
-		MaximumPageSize: browserRenderingRowCount,
-		Now:             func() time.Time { return anchor },
+		IdentityAuthenticator: nativeIdentity.Runtime,
+		IdentityHandler:       nativeIdentity.Runtime.Handler(),
+		Authorization:         nativeIdentity.Authorization,
+		SearchJobs:            manager,
+		Indexes:               browserSearchOnlyCatalog(controlDB),
+		AppCatalog:            controlPlane.appCatalog,
+		SavedSearches:         savedSearches,
+		SearchHistory:         controlPlane.history,
+		WebUI:                 os.DirFS(filepath.Join(stagedBackendRepository, "out")),
+		OwnerID:               "42",
+		TenantID:              "browser-rendering-tenant",
+		MaximumPageSize:       browserRenderingRowCount,
+		Now:                   func() time.Time { return anchor },
 		Bootstrap: server.BootstrapConfig{
 			SelectedAppID: browserSearchAppID,
 			Features: []opensplunk.ServerFeature{
@@ -215,7 +221,7 @@ func TestBrowserFixedResultRendering(t *testing.T) {
 			}
 			handler.ServeHTTP(response, request)
 		},
-	))
+	), browserAddress)
 	t.Cleanup(func() {
 		testServer.Close()
 		closeContext, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)

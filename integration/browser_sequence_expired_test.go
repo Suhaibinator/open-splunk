@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/testsupport/identityfixture"
+
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
@@ -29,7 +31,7 @@ import (
 const (
 	browserSequenceExpiredJobID        = "browser-sequence-expired"
 	browserSequenceExpiredIndex        = "main"
-	browserSequenceExpiredOwner        = "browser-recovery-owner"
+	browserSequenceExpiredOwner        = "42"
 	browserSequenceExpiredTenant       = "browser-recovery-tenant"
 	browserSequenceExpiredInitialRow   = "preview before sequence expiration"
 	browserSequenceExpiredRecoveredRow = "preview after sequence recovery"
@@ -358,23 +360,22 @@ func runBrowserRecoveryFixture(
 	repository := repositoryRoot(t)
 	stagedBackendRepository := buildBackendFrontend(t, ctx, repository)
 
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
-	if err != nil {
-		t.Fatalf("open browser recovery control database: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := controlDB.Close(); err != nil {
-			t.Errorf("close browser recovery control database: %v", err)
-		}
-	})
-	if _, err := controlDB.CreateIndex(ctx, control.IndexDefinition{
+	browserAddress, _ := unusedLoopbackAddressPair(t)
+	nativeIdentity := identityfixture.New(t, identityfixture.Options{Directory: t.TempDir(), PhysicalTenant: browserSequenceExpiredTenant, Origin: "http://" + browserAddress})
+	controlDB := nativeIdentity.Database
+	registerNativeBrowserFixture(t, nativeIdentity, "http://"+browserAddress)
+	createdIndex, err := controlDB.CreateIndex(ctx, control.IndexDefinition{
 		Name:             browserSequenceExpiredIndex,
 		DisplayName:      "Browser sequence recovery",
 		RetentionPeriod:  time.Hour,
 		IngestionEnabled: true,
 		SearchEnabled:    true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create browser recovery index: %v", err)
+	}
+	if err := nativeIdentity.BindIndex(ctx, createdIndex.ID); err != nil {
+		t.Fatal(err)
 	}
 	savedSearches, err := savedobjects.New(controlDB, savedobjects.Options{
 		CursorKey: []byte("0123456789abcdef0123456789abcdef"),
@@ -391,12 +392,14 @@ func runBrowserRecoveryFixture(
 		browserSequenceExpiredTenant,
 		browserSequenceExpiredIndex,
 		anchor,
+		nativeIdentity,
 	)
 	executor := newBrowserRecoveryExecutor(spec.appendBeforeCompletion)
 	manager, err := searchjobs.New(searchjobs.Config{
 		Executor:        executor,
 		Snapshotter:     browserRecoverySnapshotter(17),
 		Journal:         controlPlane.journal,
+		CaptureFactory:  controlPlane.capture,
 		Compiler:        clickhouse.Compiler{Database: "open_splunk", Table: "events"},
 		MaxConcurrent:   1,
 		RetentionTTL:    time.Hour,
@@ -430,16 +433,19 @@ func runBrowserRecoveryFixture(
 		t.Fatalf("create browser recovery WebSocket: %v", err)
 	}
 	handler, err := server.NewHandler(server.Config{
-		SearchJobs:      manager,
-		SearchWebSocket: searchSocket,
-		Indexes:         browserSearchOnlyCatalog(controlDB),
-		AppCatalog:      controlPlane.appCatalog,
-		SavedSearches:   savedSearches,
-		SearchHistory:   controlPlane.history,
-		WebUI:           os.DirFS(filepath.Join(stagedBackendRepository, "out")),
-		OwnerID:         browserSequenceExpiredOwner,
-		TenantID:        browserSequenceExpiredTenant,
-		Now:             func() time.Time { return anchor },
+		IdentityAuthenticator: nativeIdentity.Runtime,
+		IdentityHandler:       nativeIdentity.Runtime.Handler(),
+		Authorization:         nativeIdentity.Authorization,
+		SearchJobs:            manager,
+		SearchWebSocket:       searchSocket,
+		Indexes:               browserSearchOnlyCatalog(controlDB),
+		AppCatalog:            controlPlane.appCatalog,
+		SavedSearches:         savedSearches,
+		SearchHistory:         controlPlane.history,
+		WebUI:                 os.DirFS(filepath.Join(stagedBackendRepository, "out")),
+		OwnerID:               browserSequenceExpiredOwner,
+		TenantID:              browserSequenceExpiredTenant,
+		Now:                   func() time.Time { return anchor },
 		Bootstrap: server.BootstrapConfig{
 			SelectedAppID: browserSearchAppID,
 		},
@@ -477,7 +483,7 @@ func runBrowserRecoveryFixture(
 			}
 			handler.ServeHTTP(response, request)
 		},
-	))
+	), browserAddress)
 
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
@@ -616,9 +622,13 @@ func waitForAtomicValue(
 	}
 }
 
-func newIPv4LoopbackTestServer(t *testing.T, handler http.Handler) *httptest.Server {
+func newIPv4LoopbackTestServer(t *testing.T, handler http.Handler, addresses ...string) *httptest.Server {
 	t.Helper()
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "127.0.0.1:0")
+	address := "127.0.0.1:0"
+	if len(addresses) > 0 {
+		address = addresses[0]
+	}
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", address)
 	if err != nil {
 		t.Fatalf("listen for loopback test server: %v", err)
 	}

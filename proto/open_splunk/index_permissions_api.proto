@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package open_splunk;
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+// User grants require current membership in the index's organization. Role
+// subjects use Viewer=1, Admin=23, Owner=44. Deny wins over allow; site
+// administrators bypass index grants. Authentication is the session cookie,
+// and organization context is X-OpenSplunk-Organization-ID.
+message IndexPermission {
+  string subject_kind = 1; // user or role
+  uint64 subject_id = 2;
+  string capability = 3; // search, ingest, manage, manage_grants
+  string effect = 4; // allow or deny
+}
+
+message GetIndexPermissionsRequest {
+  string index_id = 1;
+}
+message GetIndexPermissionsResponse {
+  int64 organization_id = 1;
+  repeated IndexPermission rules = 2;
+  uint64 revision = 3;
+  repeated IndexCapabilityDecision effective = 4;
+}
+message IndexCapabilityDecision {
+  string capability = 1;
+  bool allowed = 2;
+  string reason = 3;
+}
+message SetIndexPermissionRequest {
+  string index_id = 1;
+  IndexPermission permission = 2;
+  uint64 expected_revision = 3;
+}
+message SetIndexPermissionResponse {
+  bool success = 1;
+  uint64 revision = 2;
+}
+message DeleteIndexPermissionRequest {
+  string index_id = 1;
+  IndexPermission permission = 2;
+  uint64 expected_revision = 3;
+}
+message DeleteIndexPermissionResponse {
+  bool success = 1;
+  uint64 revision = 2;
+}
+message SetIndexOrganizationRequest {
+  string index_id = 1;
+  int64 organization_id = 2;
+  uint64 expected_revision = 3;
+}
+message SetIndexOrganizationResponse {
+  bool success = 1;
+  uint64 revision = 2;
+}

@@ -268,7 +268,7 @@ function SavedSearchScopeEditorSession({
           </Select>
         </label>
         <p className="reports-action-hint">
-          This field organizes saved searches in the current single-user model. It does not grant access or change search, time range, schedule, app, or owner.
+          This field organizes saved searches in the organization workspace. It does not grant access or change search, time range, schedule, app, or owner.
         </p>
       </form>
     </Modal>

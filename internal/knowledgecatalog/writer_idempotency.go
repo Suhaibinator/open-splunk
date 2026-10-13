@@ -74,16 +74,16 @@ type idempotencyWidthRecord struct {
 // idempotencyWidthRecord. Shared by the replay preflight and the expired
 // receipt reclamation preflight.
 const idempotencyWidthProjectionSQL = `
-		length(CAST(tenant_id AS BLOB)) AS tenant_id_bytes,
-		length(CAST(actor_kind AS BLOB)) AS actor_kind_bytes,
-		length(CAST(actor_id AS BLOB)) AS actor_id_bytes,
-		length(CAST(route AS BLOB)) AS route_bytes,
-		length(CAST(client_request_id AS BLOB)) AS request_id_bytes,
-		length(CAST(mutation_kind AS BLOB)) AS mutation_kind_bytes,
+		octet_length(tenant_id) AS tenant_id_bytes,
+		octet_length(actor_kind) AS actor_kind_bytes,
+		octet_length(actor_id) AS actor_id_bytes,
+		octet_length(route) AS route_bytes,
+		octet_length(client_request_id) AS request_id_bytes,
+		octet_length(mutation_kind) AS mutation_kind_bytes,
 		length(request_digest) AS request_digest_bytes,
 		length(outcome_proto) AS outcome_proto_bytes,
 		length(committed_catalog_state_token) AS state_token_bytes,
-		length(CAST(knowledge_object_id AS BLOB)) AS object_id_bytes
+		octet_length(knowledge_object_id) AS object_id_bytes
 	`
 
 type idempotencyObjectIdentity struct {
@@ -127,8 +127,8 @@ func readIdempotencyObjectIdentity(
 	}
 	var identities []idempotencyObjectIdentity
 	if err := idempotencyReceiptQuery(tx, prepared, route).Select(`
-		length(CAST(knowledge_object_id AS BLOB)) AS knowledge_object_id_bytes,
-		CAST(substr(CAST(knowledge_object_id AS BLOB), 1, ?) AS TEXT) AS knowledge_object_id
+		octet_length(knowledge_object_id) AS knowledge_object_id_bytes,
+		convert_from(substring(convert_to(knowledge_object_id, 'UTF8'), 1, ?), 'UTF8') AS knowledge_object_id
 	`, maximumObjectIDBytes+1).Limit(2).Find(&identities).Error; err != nil {
 		return "", false, err
 	}
@@ -348,7 +348,7 @@ func readIdempotencyRecord(
 }
 
 func validPreparedReplayIdentity(prepared *preparedMutation, route string) bool {
-	if prepared == nil || !validMutationRoute(route) ||
+	if prepared == nil || prepared.scope.organizationID <= 0 || !validMutationRoute(route) ||
 		!validIdentity(prepared.scope.tenantID, maximumTenantIDBytes) ||
 		!validIdentity(prepared.scope.ownerID, maximumOwnerIDBytes) ||
 		len(prepared.scope.writableAppIDs) == 0 ||
@@ -666,15 +666,15 @@ func validateReplayCommitAuthority(tx *gorm.DB, record idempotencyRecord) error 
 	)
 	var widths []mutationCommitAuthorityWidth
 	if err := query.Session(&gorm.Session{}).Select(`
-		length(CAST(tenant_id AS BLOB)) AS tenant_id_bytes,
-		length(CAST(actor_kind AS BLOB)) AS actor_kind_bytes,
-		length(CAST(actor_id AS BLOB)) AS actor_id_bytes,
-		length(CAST(route AS BLOB)) AS route_bytes,
-		length(CAST(client_request_id AS BLOB)) AS request_id_bytes,
+		octet_length(tenant_id) AS tenant_id_bytes,
+		octet_length(actor_kind) AS actor_kind_bytes,
+		octet_length(actor_id) AS actor_id_bytes,
+		octet_length(route) AS route_bytes,
+		octet_length(client_request_id) AS request_id_bytes,
 		length(request_digest) AS request_digest_bytes,
 		length(catalog_state_token) AS state_token_bytes,
-		length(CAST(mutation_kind AS BLOB)) AS mutation_kind_bytes,
-		length(CAST(knowledge_object_id AS BLOB)) AS object_id_bytes
+		octet_length(mutation_kind) AS mutation_kind_bytes,
+		octet_length(knowledge_object_id) AS object_id_bytes
 	`).Limit(2).Find(&widths).Error; err != nil {
 		return err
 	}
@@ -788,7 +788,7 @@ func (writer *Writer) readReplayAuthority(
 		version.TenantID != record.TenantID || version.KnowledgeObjectID != record.KnowledgeObjectID ||
 		version.ObjectVersion != record.ObjectVersion || version.MutationKind != record.MutationKind ||
 		version.CreatedAtUnixMicro != record.CreatedAtUnixMicro ||
-		version.OwnerID != current.OwnerID || version.OwnerID != prepared.scope.ownerID ||
+		version.OwnerID != current.OwnerID || (!prepared.scope.siteAdministrator && version.OwnerID != prepared.scope.ownerID) ||
 		version.ObjectVersion > current.CurrentVersion ||
 		subtle.ConstantTimeCompare(version.DefinitionDigest, reference.GetDefinitionSha256()) != 1 {
 		return replayAuthority{}, fmt.Errorf("%w: knowledge replay version authority disagrees", ErrCorrupt)
@@ -855,7 +855,8 @@ func validateAuthorizedReplayCurrent(
 		Select("object_version").
 		Where("tenant_id = ? AND knowledge_object_id = ? AND object_version = ?",
 			current.TenantID, current.KnowledgeObjectID, latest[0].ObjectVersion).
-		Where("owner_id = ?", prepared.scope.ownerID).
+		Where("(owner_id = ? OR ?)", prepared.scope.ownerID, prepared.scope.siteAdministrator).
+		Where("app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = ?)", prepared.scope.organizationID).
 		Where("app_id IN ?", prepared.scope.writableAppIDs).
 		Limit(2).Find(&authorized).Error; err != nil {
 		return err
@@ -901,7 +902,7 @@ func validateAuthorizedReplayCurrent(
 }
 
 // validateReplayRequestBinding closes the part of the replay relationship that
-// SQLite cannot derive from a SHA-256 request digest. A receipt must name the
+// PostgreSQL cannot derive from a SHA-256 request digest. A receipt must name the
 // exact target and successor version authorized by the already-canonical
 // request, and state mutations must agree with the requested transition.
 func (writer *Writer) validateReplayRequestBinding(
@@ -1125,7 +1126,8 @@ func readAuthorizedReplayRegistry(
 ) (registryRecord, bool, error) {
 	query := database.Model(&registryRecord{}).
 		Where("tenant_id = ? AND knowledge_object_id = ?", prepared.scope.tenantID, objectID).
-		Where("owner_id = ?", prepared.scope.ownerID).
+		Where("(owner_id = ? OR ?)", prepared.scope.ownerID, prepared.scope.siteAdministrator).
+		Where("app_id IN (SELECT app_id FROM app_workspaces WHERE organization_id = ?)", prepared.scope.organizationID).
 		Where("app_id IN ?", prepared.scope.writableAppIDs)
 	return readRegistryRecord(query)
 }
@@ -1175,16 +1177,16 @@ func validateReplayAuditLink(
 	)
 	var widths []replayAuditWidthRecord
 	if err := query.Session(&gorm.Session{}).Select(`
-		length(CAST(tenant_id AS BLOB)) AS tenant_id_bytes,
-		length(CAST(actor_kind AS BLOB)) AS actor_kind_bytes,
-		length(CAST(actor_id AS BLOB)) AS actor_id_bytes,
-		length(CAST(actor_role AS BLOB)) AS actor_role_bytes,
-		length(CAST(action AS BLOB)) AS action_bytes,
-		length(CAST(target_kind AS BLOB)) AS target_kind_bytes,
-		length(CAST(target_id AS BLOB)) AS target_id_bytes,
-		coalesce(length(CAST(app_id AS BLOB)), 0) AS app_id_bytes,
-		coalesce(length(CAST(object_type AS BLOB)), 0) AS object_type_bytes,
-		coalesce(length(CAST(sharing_scope AS BLOB)), 0) AS sharing_scope_bytes
+		octet_length(tenant_id) AS tenant_id_bytes,
+		octet_length(actor_kind) AS actor_kind_bytes,
+		octet_length(actor_id) AS actor_id_bytes,
+		octet_length(actor_role) AS actor_role_bytes,
+		octet_length(action) AS action_bytes,
+		octet_length(target_kind) AS target_kind_bytes,
+		octet_length(target_id) AS target_id_bytes,
+		coalesce(octet_length(app_id), 0) AS app_id_bytes,
+		coalesce(octet_length(object_type), 0) AS object_type_bytes,
+		coalesce(octet_length(sharing_scope), 0) AS sharing_scope_bytes
 	`).Limit(2).Find(&widths).Error; err != nil {
 		return err
 	}

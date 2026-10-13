@@ -32,8 +32,9 @@ func (store *Store) InspectMany(
 	canonical = slices.Compact(canonical)
 
 	store.mu.Lock()
-	defer store.mu.Unlock()
-	if store.closed {
+	closed := store.closed
+	store.mu.Unlock()
+	if closed {
 		return nil, ErrClosed
 	}
 	if len(canonical) == 0 {
@@ -48,9 +49,9 @@ func (store *Store) InspectMany(
 			artifact_name, artifact_sha256, artifact_size_bytes,
 			last_accessed_at_us, expires_at_us, version
 		FROM durable_search_jobs
-		WHERE tenant_id = ? AND (owner_id = ? OR visibility = ?)
-			AND id IN (SELECT value FROM json_each(?) WHERE type = 'text')
-		ORDER BY id`, access.TenantID, access.OwnerID, VisibilityEveryone, string(encodedIDs))
+		WHERE tenant_id = $1 AND (owner_id = $2 OR visibility = $3 OR $5)
+			AND id IN (SELECT jsonb_array_elements_text($4::jsonb))
+		ORDER BY id`, access.TenantID, access.OwnerID, VisibilityEveryone, string(encodedIDs), access.SiteAdministrator)
 	if err != nil {
 		return nil, err
 	}
@@ -67,6 +68,17 @@ func (store *Store) InspectMany(
 		record, err := columns.record(now)
 		if err != nil {
 			return nil, err
+		}
+		if !access.SiteAdministrator && access.OrganizationID != "" && access.OrganizationID != record.Job.OrganizationID {
+			continue
+		}
+		if store.captureOptions.Authorize != nil {
+			if err := store.captureOptions.Authorize(ctx, record.Job); err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				continue
+			}
 		}
 		result[jobID] = record
 	}

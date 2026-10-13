@@ -4,8 +4,6 @@ package integration_test
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,9 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/testsupport/identityfixture"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
-	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
@@ -29,18 +28,18 @@ import (
 
 // paletteSmokeFlag gates the instance-palette browser smoke. It needs the
 // pinned Chromium build and a frontend build, but no Docker, ClickHouse, or
-// compiled server binary: the real browser API handler, SQLite control plane,
+// compiled server binary: the real browser API handler, PostgreSQL control plane,
 // audit journal, and static export run in this process on a loopback port.
 const (
 	paletteSmokeFlag   = "OPEN_SPLUNK_PALETTE_SMOKE"
-	paletteSmokeOwner  = "palette-smoke-owner"
+	paletteSmokeOwner  = "42"
 	paletteSmokeTenant = "palette-smoke-tenant"
 )
 
 // paletteSmokeServerSettings is the in-process twin of the server command's
 // runtimeServerSettings (cmd/open-splunk-server/server_settings_runtime.go),
 // which lives in package main and cannot be imported. Both stores are the
-// real control-plane singletons over the real SQLite file and the real audit
+// real control-plane singletons over the real PostgreSQL schema and the real audit
 // appender; only the wiring is restated here, with the same mutex discipline:
 // write durably first, publish the snapshot bootstrap serves second.
 type paletteSmokeServerSettings struct {
@@ -151,23 +150,22 @@ func TestBrowserInstancePaletteSmoke(t *testing.T) {
 	repository := repositoryRoot(t)
 	stagedRepository := buildBackendFrontend(t, ctx, repository)
 
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
-	if err != nil {
-		t.Fatalf("open palette smoke control database: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := controlDB.Close(); err != nil {
-			t.Errorf("close palette smoke control database: %v", err)
-		}
-	})
-	if _, err := controlDB.CreateIndex(ctx, control.IndexDefinition{
+	browserAddress, _ := unusedLoopbackAddressPair(t)
+	nativeIdentity := identityfixture.New(t, identityfixture.Options{Directory: t.TempDir(), PhysicalTenant: paletteSmokeTenant, Origin: "http://" + browserAddress})
+	controlDB := nativeIdentity.Database
+	registerNativeBrowserFixture(t, nativeIdentity, "http://"+browserAddress)
+	createdIndex, err := controlDB.CreateIndex(ctx, control.IndexDefinition{
 		Name:             "main",
 		DisplayName:      "Palette smoke",
 		RetentionPeriod:  time.Hour,
 		IngestionEnabled: true,
 		SearchEnabled:    true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create palette smoke index: %v", err)
+	}
+	if err := nativeIdentity.BindIndex(ctx, createdIndex.ID); err != nil {
+		t.Fatal(err)
 	}
 	auditEvents, err := audit.NewStoreWithContext(ctx, controlDB, audit.StoreOptions{
 		CursorKey: []byte("palette-smoke-audit-cursor-key!!"),
@@ -186,23 +184,19 @@ func TestBrowserInstancePaletteSmoke(t *testing.T) {
 		t.Fatalf("fresh appearance = %+v, want version 0 classic", got)
 	}
 
-	token := mintPaletteSmokeAdministratorToken(t)
-	authenticator, err := auth.NewBearerTokenAuthenticator(
-		[]byte(token), paletteSmokeTenant, paletteSmokeOwner, auth.BrowserRoleAdministrator,
-	)
-	if err != nil {
-		t.Fatalf("create palette smoke administrator authenticator: %v", err)
-	}
+	token := nativeIdentity.Session
 	handler, err := server.NewHandler(server.Config{
-		SearchJobs:           settings.jobs,
-		Indexes:              browserSearchOnlyCatalog(controlDB),
-		SavedSearches:        savedSearches,
-		ServerSettings:       settings,
-		BrowserAuthenticator: authenticator,
-		WebUI:                os.DirFS(filepath.Join(stagedRepository, "out")),
-		OwnerID:              paletteSmokeOwner,
-		TenantID:             paletteSmokeTenant,
-		MaximumPageSize:      100,
+		IdentityAuthenticator: nativeIdentity.Runtime,
+		IdentityHandler:       nativeIdentity.Runtime.Handler(),
+		Authorization:         nativeIdentity.Authorization,
+		SearchJobs:            settings.jobs,
+		Indexes:               browserSearchOnlyCatalog(controlDB),
+		SavedSearches:         savedSearches,
+		ServerSettings:        settings,
+		WebUI:                 os.DirFS(filepath.Join(stagedRepository, "out")),
+		OwnerID:               paletteSmokeOwner,
+		TenantID:              paletteSmokeTenant,
+		MaximumPageSize:       100,
 		Bootstrap: server.BootstrapConfig{
 			Features: []opensplunk.ServerFeature{
 				opensplunk.ServerFeature_SERVER_FEATURE_SEARCH,
@@ -212,7 +206,7 @@ func TestBrowserInstancePaletteSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create palette smoke HTTP handler: %v", err)
 	}
-	testServer := newIPv4LoopbackTestServer(t, handler)
+	testServer := newIPv4LoopbackTestServer(t, handler, browserAddress)
 	t.Cleanup(func() {
 		testServer.Close()
 		closeContext, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -241,7 +235,7 @@ func TestBrowserInstancePaletteSmoke(t *testing.T) {
 	if err := controlDB.SQLDB().QueryRowContext(
 		ctx,
 		`SELECT COUNT(*), COALESCE(MAX(target_version), 0) FROM audit_events
-		 WHERE action = 'server_settings.update' AND target_id = ?`,
+		 WHERE action = 'server_settings.update' AND target_id = $1`,
 		string(control.ServerSettingsTargetUIPalette),
 	).Scan(&auditedUpdates, &latestAuditedVersion); err != nil {
 		t.Fatalf("count palette audit events: %v", err)
@@ -307,17 +301,6 @@ func newPaletteSmokeServerSettings(
 	}
 }
 
-func mintPaletteSmokeAdministratorToken(t *testing.T) string {
-	t.Helper()
-	random := make([]byte, 32)
-	if _, err := rand.Read(random); err != nil {
-		t.Fatalf("generate palette smoke administrator token: %v", err)
-	}
-	token := base64.RawURLEncoding.EncodeToString(random)
-	clear(random)
-	return token
-}
-
 func runPaletteSmokeSpec(t *testing.T, ctx context.Context, repository, baseURL, token string) {
 	t.Helper()
 	browserContext, cancel := context.WithTimeout(ctx, 3*time.Minute)
@@ -334,8 +317,8 @@ func runPaletteSmokeSpec(t *testing.T, ctx context.Context, repository, baseURL,
 	configureProcessGroup(command)
 	command.Dir = repository
 	environment := environmentWithValue(os.Environ(), "OPEN_SPLUNK_PALETTE_SMOKE_BASE_URL", baseURL)
-	environment = environmentWithValue(environment, "OPEN_SPLUNK_PALETTE_SMOKE_ADMINISTRATOR_TOKEN", token)
-	command.Env = environment
+	environment = environmentWithValue(environment, "OPEN_SPLUNK_BROWSER_SESSION_COOKIE", token)
+	command.Env = nativeBrowserEnvironment(environment, baseURL)
 	logs, truncated, runErr := runCommandWithBoundedOutput(command, maximumHarnessOutputBytes)
 	if runErr != nil {
 		t.Fatalf(

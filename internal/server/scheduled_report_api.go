@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/scheduledreports"
 	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -33,20 +34,23 @@ func (handler *apiHandler) registerScheduledReportRoutes(group *apiRouteGroup, s
 func (handler *apiHandler) setSavedSearchSchedule(request *http.Request, input *opensplunk.SetSavedSearchScheduleRequest) (*opensplunk.SetSavedSearchScheduleResponse, error) {
 	id := input.GetSavedSearchId()
 	schedule := input.GetSchedule()
-	record, err := handler.savedSearches.Get(request.Context(), handler.savedSearchScope(), id)
+	record, err := handler.savedSearches.Get(request.Context(), handler.savedSearchScope(request.Context()), id)
 	if mapped := mapSavedSearchCallError(request.Context(), err); mapped != nil {
 		return nil, mapped
 	}
 	if record.GetVersion() != input.GetExpectedVersion() {
 		return nil, router.NewHTTPError(http.StatusConflict, "saved search version conflicts with current state")
 	}
-	configured, err := handler.scheduledReports.Configure(request.Context(), handler.ownerID, handler.tenantID, id, input.GetExpectedScheduleVersion(), scheduledreports.Configuration{
+	if err := handler.authorizeStoredSearchDefinition(request.Context(), record.GetDefinition().GetSearch()); err != nil {
+		return nil, err
+	}
+	configured, err := handler.scheduledReports.Configure(request.Context(), handler.scheduledReportScope(request.Context()), handler.tenantID, id, input.GetExpectedScheduleVersion(), scheduledreports.Configuration{
 		Cron: schedule.GetCron(), Timezone: schedule.GetTimezone(), DispatchTTL: schedule.GetDispatchTtl(), Enabled: schedule.GetEnabled(),
 	})
 	if err != nil {
 		return nil, mapScheduledReportCallError(request.Context(), err)
 	}
-	projected, err := handler.cloneSavedSearch(record)
+	projected, err := handler.cloneSavedSearch(record, request.Context())
 	if err != nil {
 		return nil, internalError()
 	}
@@ -55,8 +59,17 @@ func (handler *apiHandler) setSavedSearchSchedule(request *http.Request, input *
 }
 
 func (handler *apiHandler) runSavedSearch(request *http.Request, input *opensplunk.RunSavedSearchRequest) (*opensplunk.RunSavedSearchResponse, error) {
+	if handler.authorization != nil {
+		record, err := handler.savedSearches.Get(request.Context(), handler.savedSearchScope(request.Context()), input.GetSavedSearchId())
+		if err != nil {
+			return nil, mapSavedSearchCallError(request.Context(), err)
+		}
+		if err := handler.authorizeStoredSearchDefinition(request.Context(), record.GetDefinition().GetSearch()); err != nil {
+			return nil, err
+		}
+	}
 	run, err := handler.scheduledReports.RunNowOrOneOff(
-		request.Context(), handler.ownerID, handler.tenantID, input.GetSavedSearchId(),
+		request.Context(), handler.scheduledReportScope(request.Context()), handler.tenantID, input.GetSavedSearchId(),
 		scheduledreports.DefaultOneOffSchedulePeriod,
 	)
 	if err != nil {
@@ -66,10 +79,19 @@ func (handler *apiHandler) runSavedSearch(request *http.Request, input *opensplu
 }
 
 func (handler *apiHandler) listScheduledSearchRuns(request *http.Request, input *opensplunk.ListScheduledSearchRunsRequest) (*opensplunk.ListScheduledSearchRunsResponse, error) {
+	if handler.authorization != nil {
+		record, err := handler.savedSearches.Get(request.Context(), handler.savedSearchScope(request.Context()), input.GetSavedSearchId())
+		if err != nil {
+			return nil, mapSavedSearchCallError(request.Context(), err)
+		}
+		if err := handler.authorizeStoredSearchDefinition(request.Context(), record.GetDefinition().GetSearch()); err != nil {
+			return nil, err
+		}
+	}
 	pageSize := input.GetPage().GetPageSize()
 	pageToken := input.GetPage().GetPageToken()
 	includeTotal := input.GetPage().GetIncludeTotalSize()
-	result, err := handler.scheduledReports.ListRunPage(request.Context(), handler.ownerID, input.GetSavedSearchId(), scheduledreports.RunPageRequest{
+	result, err := handler.scheduledReports.ListRunPage(request.Context(), handler.scheduledReportScope(request.Context()), input.GetSavedSearchId(), scheduledreports.RunPageRequest{
 		Limit: int(pageSize), PageToken: pageToken, IncludeTotal: includeTotal,
 	})
 	if err != nil {
@@ -83,7 +105,7 @@ func (handler *apiHandler) listScheduledSearchRuns(request *http.Request, input 
 				jobIDs = append(jobIDs, run.SearchJobID)
 			}
 		}
-		retainedByJobID, err = inspector.InspectMany(request.Context(), handler.accessScope(), jobIDs)
+		retainedByJobID, err = inspector.InspectMany(request.Context(), handler.accessScope(request.Context()), jobIDs)
 		if err != nil {
 			return nil, mapSearchArtifactError(err)
 		}
@@ -124,7 +146,7 @@ func (handler *apiHandler) augmentScheduledSearches(ctx context.Context, records
 			ids = append(ids, record.GetSavedSearchId())
 		}
 	}
-	projections, err := handler.scheduledReports.CurrentProjections(ctx, handler.ownerID, ids)
+	projections, err := handler.scheduledReports.CurrentProjections(ctx, handler.scheduledReportScope(ctx), ids)
 	if err != nil {
 		return err
 	}
@@ -136,7 +158,7 @@ func (handler *apiHandler) augmentScheduledSearches(ctx context.Context, records
 				jobIDs = append(jobIDs, projection.LatestResultRun.SearchJobID)
 			}
 		}
-		retainedByJobID, err = inspector.InspectMany(ctx, handler.accessScope(), jobIDs)
+		retainedByJobID, err = inspector.InspectMany(ctx, handler.accessScope(ctx), jobIDs)
 		if err != nil {
 			return err
 		}
@@ -164,7 +186,7 @@ func (handler *apiHandler) augmentScheduledSearches(ctx context.Context, records
 		if _, batched := handler.searchArtifacts.(searchArtifactMetadataBatchInspector); batched {
 			continue
 		}
-		retained, retainedErr := handler.searchArtifacts.Get(ctx, handler.accessScope(), projection.LatestResultRun.SearchJobID, searchartifacts.AccessInspect)
+		retained, retainedErr := handler.searchArtifacts.Get(ctx, handler.accessScope(ctx), projection.LatestResultRun.SearchJobID, searchartifacts.AccessInspect)
 		if retainedErr == nil {
 			applyRetainedResultToScheduleStatus(record.ScheduleStatus, retained)
 		} else if !errors.Is(retainedErr, searchartifacts.ErrExpired) && !errors.Is(retainedErr, searchartifacts.ErrNotFound) {
@@ -323,4 +345,12 @@ func mapScheduledReportCallError(ctx context.Context, err error) error {
 	default:
 		return unavailableError("scheduled report service is unavailable")
 	}
+}
+
+func (handler *apiHandler) scheduledReportScope(ctx context.Context) scheduledreports.AccessScope {
+	scope := scheduledreports.AccessScope{OwnerID: handler.requestOwner(ctx), OrganizationID: handler.requestOrganization(ctx)}
+	if actor, ok := authorization.FromContext(ctx); ok {
+		scope.SiteAdministrator = actor.Subject.IsSiteAdmin()
+	}
+	return scope
 }

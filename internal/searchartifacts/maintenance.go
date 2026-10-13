@@ -1,6 +1,7 @@
 package searchartifacts
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -89,7 +90,7 @@ func (store *Store) Reconcile(ctx context.Context) (returnedErr error) {
 			observedItems++
 		case StateCompleted:
 			if !item.name.Valid || item.name.String != artifactName(item.id) ||
-				item.bytes <= 0 || len(item.digest) != sha256.Size || item.version <= 0 ||
+				(item.bytes < 0 || (item.bytes == 0 && store.blobs == nil)) || len(item.digest) != sha256.Size || item.version <= 0 ||
 				!store.validArtifactLocked(
 					ctx, item.id, item.name.String, item.digest, item.bytes, uint64(item.version),
 				) {
@@ -160,13 +161,13 @@ func (store *Store) Reap(ctx context.Context) (returnedErr error) {
 	now := store.nowUTC()
 	expiredRows, err := store.db.QueryContext(ctx, `
 		UPDATE durable_search_jobs
-		SET state = ?, tombstoned_at_us = ?
+		SET state = $1, tombstoned_at_us = $2
 		WHERE id IN (
 			SELECT id FROM durable_search_jobs
 			WHERE tombstoned_at_us IS NULL AND expires_at_us IS NOT NULL
-				AND expires_at_us <= ? AND state <> ?
+				AND expires_at_us <= $3 AND state <> $4
 			ORDER BY expires_at_us, id
-			LIMIT ?
+			LIMIT $5
 		)
 		RETURNING id`,
 		StateExpired, toUnixMicro(now), toUnixMicro(now), StateExpired,
@@ -194,9 +195,9 @@ func (store *Store) Reap(ctx context.Context) (returnedErr error) {
 	rows, err := store.db.QueryContext(ctx, `
 		SELECT id, artifact_name, artifact_size_bytes
 		FROM durable_search_jobs
-		WHERE state = ? AND tombstoned_at_us IS NOT NULL AND tombstoned_at_us <= ?
+		WHERE state = $1 AND tombstoned_at_us IS NOT NULL AND tombstoned_at_us <= $2
 		ORDER BY tombstoned_at_us, id
-		LIMIT ?`,
+		LIMIT $3`,
 		StateExpired, toUnixMicro(cutoff), store.reapBatchSize)
 	if err != nil {
 		return err
@@ -225,14 +226,24 @@ func (store *Store) Reap(ctx context.Context) (returnedErr error) {
 		}
 		if store.pins[item.id] != 0 {
 			if _, err := store.db.ExecContext(ctx, `
-				UPDATE durable_search_jobs SET tombstoned_at_us = ?
-				WHERE id = ? AND state = ?`,
+				UPDATE durable_search_jobs SET tombstoned_at_us = $1
+				WHERE id = $2 AND state = $3`,
 				toUnixMicro(now), item.id, StateExpired); err != nil {
 				return err
 			}
 			continue
 		}
 		store.invalidateArtifactLocked(item.id)
+		if store.blobs != nil {
+			var captureID string
+			if err := store.db.QueryRowContext(ctx, `SELECT capture_id FROM search_capture_manifests WHERE job_id=$1`, item.id).Scan(&captureID); err == nil {
+				if err := store.deleteCapture(ctx, captureID, true); err != nil {
+					return err
+				}
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
 		if item.name.Valid {
 			removedBytes, removed, err := store.removeFileLocked(item.name.String)
 			if err != nil {
@@ -244,9 +255,37 @@ func (store *Store) Reap(ctx context.Context) (returnedErr error) {
 			}
 			observedBytes = saturatingAdd(observedBytes, removedBytes)
 		}
+		// Independent export lifetimes retain current authorization inventory,
+		// while source result objects and their physical quota expire normally.
+		// Reservations also cover active downloads and incomplete object cleanup.
+		var exportNeedsAuthority bool
+		if err := store.db.QueryRowContext(ctx, `SELECT EXISTS (
+			SELECT 1 FROM durable_export_jobs e
+			WHERE e.tenant_id=(SELECT tenant_id FROM durable_search_jobs WHERE id=$1)
+			AND e.source_job_id=$1 AND (e.expires_at_us IS NULL OR e.expires_at_us>$2
+			OR EXISTS (SELECT 1 FROM search_retained_export_reservations r WHERE r.export_job_id=e.export_id))
+		)`, item.id, toUnixMicro(now)).Scan(&exportNeedsAuthority); err != nil {
+			return err
+		}
+		if exportNeedsAuthority {
+			updated, err := store.db.ExecContext(ctx, `UPDATE durable_search_jobs
+				SET artifact_name=NULL,artifact_sha256=NULL,artifact_size_bytes=0
+				WHERE id=$1 AND state=$2 AND tombstoned_at_us IS NOT NULL AND tombstoned_at_us<=$3`, item.id, StateExpired, toUnixMicro(cutoff))
+			if err != nil {
+				return err
+			}
+			if err := requireChanged(updated); err != nil {
+				return err
+			}
+			store.artifactBytes, err = subtractCapacity(store.artifactBytes, uint64(item.bytes))
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		deleted, err := store.db.ExecContext(ctx, `
 			DELETE FROM durable_search_jobs
-			WHERE id = ? AND state = ? AND tombstoned_at_us IS NOT NULL AND tombstoned_at_us <= ?`,
+			WHERE id = $1 AND state = $2 AND tombstoned_at_us IS NOT NULL AND tombstoned_at_us <= $3`,
 			item.id, StateExpired, toUnixMicro(cutoff))
 		if err != nil {
 			return err
@@ -292,6 +331,14 @@ func (store *Store) validArtifactLocked(
 	expectedBytes int64,
 	version uint64,
 ) bool {
+	if store.blobs != nil {
+		var payload, expectedDigest []byte
+		if err := store.db.QueryRowContext(ctx, `SELECT manifest,sha256 FROM search_capture_manifests WHERE job_id=$1`, jobID).Scan(&payload, &expectedDigest); err != nil {
+			return false
+		}
+		actual := sha256.Sum256(payload)
+		return len(payload) <= maximumCaptureManifestBytes && bytes.Equal(actual[:], digest) && bytes.Equal(actual[:], expectedDigest)
+	}
 	if expectedBytes <= 0 || uint64(expectedBytes) > store.maximumBytes {
 		return false
 	}
@@ -355,9 +402,9 @@ func (store *Store) markInterruptedLocked(
 	}
 	_, err = store.db.ExecContext(ctx, `
 		UPDATE durable_search_jobs
-		SET state = ?, job_payload = ?, finished_at_us = ?, expires_at_us = ?,
-			tombstoned_at_us = NULL, version = ?
-		WHERE id = ?`,
+		SET state = $1, job_payload = $2, finished_at_us = $3, expires_at_us = $4,
+			tombstoned_at_us = NULL, version = $5
+		WHERE id = $6`,
 		StateInterrupted, encoded, toUnixMicro(now), toUnixMicro(job.ExpiresAt),
 		checkedVersion(job.Version), jobID,
 	)

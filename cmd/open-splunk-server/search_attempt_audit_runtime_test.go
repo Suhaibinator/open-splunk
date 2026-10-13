@@ -23,8 +23,8 @@ import (
 
 const (
 	runtimeSearchAttemptAuditTenantID  = "tenant-search-attempt-audit"
-	runtimeSearchAttemptAuditOwnerID   = "single-user"
-	runtimeSearchAttemptAuditActorID   = "open-splunk-server"
+	runtimeSearchAttemptAuditOwnerID   = "1"
+	runtimeSearchAttemptAuditActorID   = "1"
 	runtimeSearchAttemptAuditJobID     = "job-runtime-search-attempt-audit"
 	runtimeSearchAttemptAuditSPLCanary = "__runtime_search_attempt_raw_canary_7319__"
 )
@@ -47,7 +47,7 @@ func TestRuntimeSearchAttemptAuditSurvivesHistoryDeleteAndStoreReopen(t *testing
 	masterKeyPath := filepath.Join(directory, "server.key")
 	bearerToken := bytes.Repeat(
 		[]byte("a"),
-		auth.MinimumBrowserBearerTokenBytes,
+		runtimeSessionCredentialBytes,
 	)
 
 	first := openRuntimeSearchAttemptAuditFixture(
@@ -139,7 +139,7 @@ func TestRuntimeSearchAttemptAuditSurvivesHistoryDeleteAndStoreReopen(t *testing
 
 	first.close(t)
 
-	secondDatabase, err := control.Open(ctx, databasePath)
+	secondDatabase, err := openTestControl(t, ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestRuntimeSearchAdmissionFailsClosedWithoutAttemptAuditJournal(t *testing.
 	directory := t.TempDir()
 	bearerToken := bytes.Repeat(
 		[]byte("f"),
-		auth.MinimumBrowserBearerTokenBytes,
+		runtimeSessionCredentialBytes,
 	)
 	fixture := openRuntimeSearchAttemptAuditFixture(
 		t,
@@ -265,7 +265,7 @@ func TestRuntimeSearchAdmissionFailsClosedWithoutAttemptAuditJournal(t *testing.
 		)
 	}
 	if _, err := fixture.jobs.GetFor(
-		searchjobs.AccessScope{
+		searchjobs.AccessScope{OrganizationID: "1",
 			TenantID: runtimeSearchAttemptAuditTenantID,
 			OwnerID:  runtimeSearchAttemptAuditOwnerID,
 		},
@@ -293,7 +293,7 @@ func openRuntimeSearchAttemptAuditFixture(
 ) *runtimeSearchAttemptAuditFixture {
 	t.Helper()
 	ctx := context.Background()
-	database, err := control.Open(ctx, databasePath)
+	database, err := openTestControl(t, ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +406,7 @@ func (fixture *runtimeSearchAttemptAuditFixture) close(t *testing.T) {
 
 func newRuntimeSearchAttemptAuditHandler(
 	t *testing.T,
-	authenticator auth.BrowserAuthenticator,
+	authenticator server.IdentityAuthenticator,
 	auditEvents server.SearchAttemptAuditEvents,
 	jobs server.SearchJobs,
 	history server.SearchHistory,
@@ -424,11 +424,11 @@ func newRuntimeSearchAttemptAuditHandler(
 		config.Indexes = indexes
 	}
 	config.SearchAttemptAuditEvents = auditEvents
-	config.BrowserAuthenticator = authenticator
+	config.IdentityAuthenticator = authenticator
 	config.TenantID = runtimeSearchAttemptAuditTenantID
 	config.OwnerID = runtimeSearchAttemptAuditOwnerID
 	config.AdministrativeAllowedHosts = []string{"127.0.0.1"}
-	handler, err := server.NewHandler(config)
+	handler, err := newRuntimeTestHandler(config)
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
@@ -438,9 +438,9 @@ func newRuntimeSearchAttemptAuditHandler(
 func runtimeSearchAttemptAuditAuthenticator(
 	t *testing.T,
 	bearerToken []byte,
-) auth.BrowserAuthenticator {
+) server.IdentityAuthenticator {
 	t.Helper()
-	authenticator, err := auth.NewBearerTokenAuthenticator(
+	authenticator, err := newRuntimeSessionAuthenticator(
 		bearerToken,
 		runtimeSearchAttemptAuditTenantID,
 		runtimeSearchAttemptAuditOwnerID,
@@ -494,7 +494,7 @@ func waitForRuntimeSearchAttemptAuditHistory(
 }
 
 func runtimeSearchAttemptAuditScope() searchhistory.AccessScope {
-	return searchhistory.AccessScope{
+	return searchhistory.AccessScope{OrganizationID: "1",
 		TenantID: runtimeSearchAttemptAuditTenantID,
 		OwnerID:  runtimeSearchAttemptAuditOwnerID,
 	}
@@ -554,9 +554,9 @@ func assertSingleRuntimeSearchAttemptAuditEvent(
 	}
 	event := response.GetEvents()[0]
 	if event.GetSequence() != 1 ||
-		event.GetActorKind() != opensplunk.AuditActorKind_AUDIT_ACTOR_KIND_SYSTEM ||
+		event.GetActorKind() != opensplunk.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER ||
 		event.GetActorId() != runtimeSearchAttemptAuditActorID ||
-		event.GetActorRole() != opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_SYSTEM ||
+		event.GetActorRole() != opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR ||
 		event.GetOwnerId() != runtimeSearchAttemptAuditOwnerID ||
 		event.GetSearchJobId() != runtimeSearchAttemptAuditJobID ||
 		event.GetOccurredAt() == nil ||

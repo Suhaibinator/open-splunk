@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestHECDurableStateSurvivesControlBackupRestore(t *testing.T) {
@@ -17,12 +18,13 @@ func TestHECDurableStateSurvivesControlBackupRestore(t *testing.T) {
 
 	ctx := context.Background()
 	directory := t.TempDir()
-	source, err := control.Open(ctx, filepath.Join(directory, "source.sqlite"))
+	sourceDSN := pgtest.DSN(t)
+	source, err := control.Open(ctx, sourceDSN)
 	if err != nil {
 		t.Fatalf("open source control database: %v", err)
 	}
 	t.Cleanup(func() { _ = source.Close() })
-	sourceSequencer, err := NewSQLite(ctx, source)
+	sourceSequencer, err := NewPostgreSQL(ctx, source)
 	if err != nil {
 		t.Fatalf("open source visibility sequencer: %v", err)
 	}
@@ -97,11 +99,11 @@ func TestHECDurableStateSurvivesControlBackupRestore(t *testing.T) {
 		t.Fatalf("source channel allocation ordinal = %d, want 4", wantChannel.allocationOrdinal)
 	}
 
-	backupPath := filepath.Join(directory, "restored.sqlite")
+	backupPath := filepath.Join(directory, "control.pgdump")
 	if err := source.BackupTo(ctx, backupPath); err != nil {
 		t.Fatalf("back up HEC control state: %v", err)
 	}
-	branchSequencer, err := NewSQLite(ctx, source)
+	branchSequencer, err := NewPostgreSQL(ctx, source)
 	if err != nil {
 		t.Fatalf("reopen source visibility sequencer after snapshot: %v", err)
 	}
@@ -122,7 +124,11 @@ func TestHECDurableStateSurvivesControlBackupRestore(t *testing.T) {
 	if err := branchSequencer.Close(); err != nil {
 		t.Fatalf("close post-snapshot source sequencer: %v", err)
 	}
-	restored, err := control.Open(ctx, backupPath)
+	restoredDSN := pgtest.EmptyCopy(t, sourceDSN)
+	if err := control.RestoreFrom(ctx, restoredDSN, backupPath); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := control.Open(ctx, restoredDSN)
 	if err != nil {
 		t.Fatalf("open restored HEC control state: %v", err)
 	}
@@ -130,7 +136,7 @@ func TestHECDurableStateSurvivesControlBackupRestore(t *testing.T) {
 	if err := restored.VerifyIntegrity(ctx); err != nil {
 		t.Fatalf("verify restored HEC control state: %v", err)
 	}
-	restoredSequencer, err := NewSQLite(ctx, restored)
+	restoredSequencer, err := NewPostgreSQL(ctx, restored)
 	if err != nil {
 		t.Fatalf("open restored visibility sequencer: %v", err)
 	}
@@ -154,7 +160,7 @@ func TestHECDurableStateSurvivesControlBackupRestore(t *testing.T) {
 	assertHECRecoveryInteger(t, restored.SQLDB(), 1, `
 		SELECT count(*)
 		FROM ingest_visibility_reservations
-		WHERE sequence = ?
+		WHERE sequence = $1
 		  AND state = 'reserved'
 		  AND phase = 'unsent'
 		  AND attempt_id = ''
@@ -317,7 +323,7 @@ func readHECRecoveryOutbox(t *testing.T, db *sql.DB, sequence uint64) []byte {
 	if err := db.QueryRowContext(context.Background(), `
 		SELECT outbox
 		FROM ingest_visibility_reservations
-		WHERE sequence = ?`, sequence).Scan(&result); err != nil {
+		WHERE sequence = $1`, sequence).Scan(&result); err != nil {
 		t.Fatalf("read HEC recovery outbox: %v", err)
 	}
 	return result

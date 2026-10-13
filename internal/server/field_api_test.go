@@ -92,7 +92,7 @@ func TestSearchFieldsRoundTripPreservesScopeRequestAndProfiles(t *testing.T) {
 		if ctx == nil || ctx.Err() != nil {
 			t.Fatalf("field context = %v", ctx)
 		}
-		if scope != (searchjobs.AccessScope{TenantID: "tenant-fields", OwnerID: "owner-fields"}) {
+		if scope != (searchjobs.AccessScope{OrganizationID: "1", TenantID: "tenant-fields", OwnerID: "1019", SiteAdministrator: true}) {
 			t.Fatalf("field scope = %+v", scope)
 		}
 		if request.SearchJobID != "job-1" || request.PageSize == nil || *request.PageSize != pageSize ||
@@ -119,7 +119,7 @@ func TestSearchFieldsRoundTripPreservesScopeRequestAndProfiles(t *testing.T) {
 	}
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SearchFields: service,
-		WebUI: testUI(), TenantID: "tenant-fields", OwnerID: "owner-fields",
+		WebUI: testUI(), TenantID: "tenant-fields", OwnerID: "1019",
 	})
 	response := postProto(t, handler, searchFieldsListPath, &opensplunk.ListSearchFieldsRequest{
 		SearchJobId: "  job-1  ",
@@ -594,7 +594,7 @@ func TestSearchFieldsSerializationCapacityIsNonblocking(t *testing.T) {
 		},
 	}
 	handler := &apiHandler{
-		searchFields: service, ownerID: "owner", tenantID: "tenant",
+		searchFields: service, ownerID: "1008", tenantID: "tenant",
 		maximumFieldPageSize: 10, maximumFieldCatalogFields: 100,
 		serializationGate: make(chan struct{}, 1),
 	}

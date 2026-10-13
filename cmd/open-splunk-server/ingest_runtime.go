@@ -69,11 +69,7 @@ func normalizeRuntimeOptions(config *options) error {
 	}
 	config.exportArtifactDir = strings.TrimSpace(config.exportArtifactDir)
 	if config.exportArtifactDir == "" {
-		controlDBPath := strings.TrimSpace(config.controlDBPath)
-		if controlDBPath == "" {
-			controlDBPath = "open-splunk.db"
-		}
-		config.exportArtifactDir = controlDBPath + ".exports"
+		config.exportArtifactDir = "data/export-cache"
 	}
 	if !utf8.ValidString(config.exportArtifactDir) || strings.IndexByte(config.exportArtifactDir, 0) >= 0 {
 		return errors.New("export artifact directory must be valid UTF-8 without NUL bytes")

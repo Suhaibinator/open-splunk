@@ -8,18 +8,25 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"fortio.org/safecast"
+	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const maximumIDAttempts = 4
 
 type scheduleRecord struct {
+	OrganizationID     int64  `gorm:"column:organization_id"`
 	SavedSearchID      string `gorm:"column:saved_search_id"`
 	OwnerID            string `gorm:"column:owner_id"`
 	TenantID           string `gorm:"column:tenant_id"`
@@ -37,6 +44,7 @@ type scheduleRecord struct {
 func (scheduleRecord) TableName() string { return "saved_search_schedules" }
 
 type runRecord struct {
+	OrganizationID                int64   `gorm:"column:organization_id"`
 	RunID                         string  `gorm:"column:run_id"`
 	SavedSearchID                 string  `gorm:"column:saved_search_id"`
 	OwnerID                       string  `gorm:"column:owner_id"`
@@ -61,18 +69,20 @@ func (runRecord) TableName() string { return "saved_search_schedule_runs" }
 
 // RepositoryOptions contains injectable process dependencies.
 type RepositoryOptions struct {
-	Clock       func() time.Time
-	IDGenerator func() (string, error)
-	CursorKey   []byte
+	ResolveSourceScope func(context.Context, AccessScope) (AccessScope, error)
+	Clock              func() time.Time
+	IDGenerator        func() (string, error)
+	CursorKey          []byte
 }
 
 // Repository persists schedules and immutable occurrence snapshots in the
 // control database. Versioned SQL migrations, not GORM, own the schema.
 type Repository struct {
-	orm         *gorm.DB
-	clock       func() time.Time
-	idGenerator func() (string, error)
-	cursorKey   []byte
+	resolveSourceScope func(context.Context, AccessScope) (AccessScope, error)
+	orm                *gorm.DB
+	clock              func() time.Time
+	idGenerator        func() (string, error)
+	cursorKey          []byte
 }
 
 // NewRepository constructs a repository over an already configured control
@@ -99,7 +109,7 @@ func NewRepository(orm *gorm.DB, options RepositoryOptions) (*Repository, error)
 	if len(cursorKey) < 32 {
 		return nil, fmt.Errorf("%w: cursor key must contain at least 32 bytes", ErrInvalidArgument)
 	}
-	return &Repository{orm: orm, clock: clock, idGenerator: idGenerator, cursorKey: cursorKey}, nil
+	return &Repository{orm: orm, clock: clock, idGenerator: idGenerator, cursorKey: cursorKey, resolveSourceScope: options.ResolveSourceScope}, nil
 }
 
 // Configure creates or replaces one schedule under optimistic concurrency.
@@ -107,11 +117,25 @@ func NewRepository(orm *gorm.DB, options RepositoryOptions) (*Repository, error)
 // replacement. The saved search ownership check occurs in the same transaction.
 func (repository *Repository) Configure(
 	ctx context.Context,
-	ownerID, tenantID, savedSearchID string,
+	scope AccessScope, tenantID, savedSearchID string,
 	expectedVersion uint64,
 	configuration Configuration,
 	nextRunAt *time.Time,
 ) (Schedule, error) {
+	if scope.SiteAdministrator && scope.OrganizationID == "" && expectedVersion > 0 {
+		current, err := repository.Get(ctx, scope, savedSearchID)
+		if err != nil {
+			return Schedule{}, err
+		}
+		scope.OrganizationID = current.OrganizationID
+	}
+	sourceScope, scopeErr := repository.sourceScope(ctx, scope)
+	if scopeErr != nil {
+		return Schedule{}, scopeErr
+	}
+
+	ownerID := scope.OwnerID
+
 	if err := validateIdentity(ownerID, tenantID, savedSearchID); err != nil {
 		return Schedule{}, err
 	}
@@ -119,7 +143,7 @@ func (repository *Repository) Configure(
 	if err != nil {
 		return Schedule{}, err
 	}
-	tx := repository.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginLocked(repository.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return Schedule{}, fmt.Errorf("begin schedule configuration: %w", tx.Error)
 	}
@@ -130,37 +154,41 @@ func (repository *Repository) Configure(
 		}
 	}()
 
-	var ownerCount int64
-	if err := tx.Raw(`SELECT COUNT(*) FROM saved_searches WHERE saved_search_id = ? AND owner_id = ?`, savedSearchID, ownerID).
-		Scan(&ownerCount).Error; err != nil {
-		return Schedule{}, fmt.Errorf("verify scheduled saved search: %w", err)
+	if err := validateScope(scope); err != nil {
+		return Schedule{}, err
 	}
-	if ownerCount != 1 {
-		return Schedule{}, ErrNotFound
+	if scope.OrganizationID == "" {
+		return Schedule{}, ErrInvalidArgument
+	}
+	if _, err := savedobjects.GetInTransaction(ctx, tx, sourceScope, savedSearchID); err != nil {
+		if errors.Is(err, control.ErrNotFound) {
+			return Schedule{}, ErrNotFound
+		}
+		return Schedule{}, err
 	}
 	nextMicro := timePointerToUnixMicro(nextRunAt)
 	if expectedVersion == 0 {
 		record := scheduleRecord{
-			SavedSearchID: savedSearchID, OwnerID: ownerID, TenantID: tenantID,
+			SavedSearchID: savedSearchID, OwnerID: ownerID, TenantID: tenantID, OrganizationID: scopeOrganization(scope),
 			ConfigVersion: 1, RuntimeVersion: 1, CronExpression: configuration.Cron,
 			Timezone: configuration.Timezone, DispatchTTL: configuration.DispatchTTL,
 			Enabled: configuration.Enabled, NextRunAtUnixMicro: nextMicro,
 			CreatedAtUnixMicro: now.UnixMicro(), UpdatedAtUnixMicro: now.UnixMicro(),
 		}
-		if err := tx.Create(&record).Error; err != nil {
-			var count int64
-			checkErr := tx.Model(&scheduleRecord{}).Where("saved_search_id = ?", savedSearchID).Count(&count).Error
-			if checkErr == nil && count > 0 {
-				return Schedule{}, ErrConflict
-			}
-			return Schedule{}, fmt.Errorf("create saved-search schedule: %w", err)
+		create := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&record)
+		if create.Error != nil {
+			return Schedule{}, fmt.Errorf("create saved-search schedule: %w", create.Error)
 		}
+		if create.RowsAffected != 1 {
+			return Schedule{}, ErrConflict
+		}
+
 	} else {
 		if expectedVersion > math.MaxInt64 {
 			return Schedule{}, ErrConflict
 		}
-		result := tx.Model(&scheduleRecord{}).
-			Where("saved_search_id = ? AND owner_id = ? AND config_version = ?", savedSearchID, ownerID, expectedVersion).
+		result := scopedScheduleQuery(tx.Model(&scheduleRecord{}), scope).
+			Where("saved_search_id = ? AND TRUE AND config_version = ?", savedSearchID, expectedVersion).
 			Updates(map[string]any{
 				"config_version":         gorm.Expr("config_version + 1"),
 				"runtime_version":        gorm.Expr("runtime_version + 1"),
@@ -180,7 +208,7 @@ func (repository *Repository) Configure(
 		}
 	}
 	var record scheduleRecord
-	if err := tx.Where("saved_search_id = ? AND owner_id = ?", savedSearchID, ownerID).Take(&record).Error; err != nil {
+	if err := scopedScheduleQuery(tx, scope).Where("saved_search_id = ? AND TRUE", savedSearchID).Take(&record).Error; err != nil {
 		return Schedule{}, fmt.Errorf("read configured schedule: %w", err)
 	}
 	if err := tx.Commit().Error; err != nil {
@@ -191,13 +219,18 @@ func (repository *Repository) Configure(
 }
 
 // Get returns an owner-scoped detached schedule.
-func (repository *Repository) Get(ctx context.Context, ownerID, savedSearchID string) (Schedule, error) {
+func (repository *Repository) Get(ctx context.Context, scope AccessScope, savedSearchID string) (Schedule, error) {
+	ownerID := scope.OwnerID
+
 	if strings.TrimSpace(ownerID) == "" || strings.TrimSpace(savedSearchID) == "" {
 		return Schedule{}, ErrInvalidArgument
 	}
+	if err := repository.authorizeMetadataSource(ctx, scope, savedSearchID); err != nil {
+		return Schedule{}, err
+	}
 	var record scheduleRecord
-	err := repository.orm.WithContext(ctx).
-		Where("saved_search_id = ? AND owner_id = ?", savedSearchID, ownerID).
+	err := scopedScheduleQuery(repository.orm.WithContext(ctx), scope).
+		Where("saved_search_id = ? AND TRUE", savedSearchID).
 		Take(&record).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return Schedule{}, ErrNotFound
@@ -215,9 +248,11 @@ func (repository *Repository) Get(ctx context.Context, ownerID, savedSearchID st
 // projection row.
 func (repository *Repository) ListCurrentProjections(
 	ctx context.Context,
-	ownerID string,
+	scope AccessScope,
 	savedSearchIDs []string,
 ) (map[string]CurrentProjection, error) {
+	ownerID := scope.OwnerID
+
 	if strings.TrimSpace(ownerID) == "" || len(savedSearchIDs) > MaximumProjectionBatch {
 		return nil, ErrInvalidArgument
 	}
@@ -238,8 +273,8 @@ func (repository *Repository) ListCurrentProjections(
 		return result, nil
 	}
 	var schedules []scheduleRecord
-	if err := repository.orm.WithContext(ctx).
-		Where("owner_id = ? AND saved_search_id IN ?", ownerID, ids).
+	if err := repository.visibleMetadataSources(ctx, scopedScheduleQuery(repository.orm.WithContext(ctx), scope), scope).
+		Where("TRUE AND saved_search_id IN ?", ids).
 		Find(&schedules).Error; err != nil {
 		return nil, fmt.Errorf("list current saved-search schedules: %w", err)
 	}
@@ -253,17 +288,24 @@ func (repository *Repository) ListCurrentProjections(
 	if len(result) == 0 {
 		return result, nil
 	}
+	ids = ids[:0]
+	for id := range result {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
 	var runs []runRecord
+	organizationID, _ := strconv.ParseInt(scope.OrganizationID, 10, 64)
 	if err := repository.orm.WithContext(ctx).Raw(`
 		SELECT candidate.*
 		FROM saved_search_schedule_runs AS candidate
-		WHERE candidate.owner_id = ?
+		WHERE (candidate.owner_id = ? OR ?)
+ AND (candidate.organization_id = ? OR ?)
 		  AND candidate.saved_search_id IN ?
 		  AND (
 			NOT EXISTS (
 			  SELECT 1
 			  FROM saved_search_schedule_runs AS newer
-			  WHERE newer.owner_id = candidate.owner_id
+			  WHERE newer.owner_id = candidate.owner_id AND newer.organization_id = candidate.organization_id
 				AND newer.saved_search_id = candidate.saved_search_id
 				AND (
 				  newer.claimed_at_unix_micro > candidate.claimed_at_unix_micro
@@ -280,7 +322,7 @@ func (repository *Repository) ListCurrentProjections(
 			  AND NOT EXISTS (
 				SELECT 1
 				FROM saved_search_schedule_runs AS newer_result
-				WHERE newer_result.owner_id = candidate.owner_id
+				WHERE newer_result.owner_id = candidate.owner_id AND newer_result.organization_id = candidate.organization_id
 				  AND newer_result.saved_search_id = candidate.saved_search_id
 				  AND newer_result.search_job_id IS NOT NULL
 				  AND newer_result.search_job_id <> ''
@@ -294,7 +336,7 @@ func (repository *Repository) ListCurrentProjections(
 				  )
 			  )
 			)
-		  )`, ownerID, ids).Scan(&runs).Error; err != nil {
+		  )`, ownerID, scope.SiteAdministrator, organizationID, scope.SiteAdministrator && scope.OrganizationID == "", ids).Scan(&runs).Error; err != nil {
 		return nil, fmt.Errorf("list latest scheduled-report runs: %w", err)
 	}
 	for _, record := range runs {
@@ -389,20 +431,22 @@ func (repository *Repository) ClaimRunNow(
 // future schedule.
 func (repository *Repository) ClaimOneOff(
 	ctx context.Context,
-	ownerID, tenantID, savedSearchID string,
+	scope AccessScope, tenantID, savedSearchID string,
 	claimedAt time.Time,
 	period, retention time.Duration,
 ) (Run, bool, error) {
+	ownerID := scope.OwnerID
+
 	if err := validateIdentity(ownerID, tenantID, savedSearchID); err != nil {
 		return Run{}, false, err
 	}
 	candidate := Schedule{
 		SavedSearchID: savedSearchID,
 		OwnerID:       ownerID,
-		TenantID:      tenantID,
-		Cron:          DefaultOneOffCron,
-		Timezone:      DefaultOneOffTimezone,
-		DispatchTTL:   DefaultOneOffDispatchTTL,
+		TenantID:      tenantID, OrganizationID: scope.OrganizationID,
+		Cron:        DefaultOneOffCron,
+		Timezone:    DefaultOneOffTimezone,
+		DispatchTTL: DefaultOneOffDispatchTTL,
 	}
 	return repository.claim(ctx, candidate, claimedAt, nil, claimedAt, 0, period, retention, false, false)
 }
@@ -417,6 +461,11 @@ func (repository *Repository) claim(
 	period, retention time.Duration,
 	advance, requireSchedule bool,
 ) (run Run, claimed bool, returnedErr error) {
+	sourceScope, scopeErr := repository.sourceScope(ctx, AccessScope{OwnerID: candidate.OwnerID, OrganizationID: candidate.OrganizationID})
+	if scopeErr != nil {
+		return Run{}, false, scopeErr
+	}
+
 	if period <= 0 || retention <= 0 || candidate.RuntimeVersion > math.MaxInt64 {
 		return Run{}, false, ErrInvalidArgument
 	}
@@ -435,7 +484,7 @@ func (repository *Repository) claim(
 	if err != nil {
 		return Run{}, false, err
 	}
-	tx := repository.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginLocked(repository.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return Run{}, false, fmt.Errorf("begin scheduled-report claim: %w", tx.Error)
 	}
@@ -476,17 +525,25 @@ func (repository *Repository) claim(
 		Count(&activeCount).Error; err != nil {
 		return Run{}, false, fmt.Errorf("check active scheduled-report run: %w", err)
 	}
-	var saved struct {
-		Version         int64  `gorm:"column:version"`
-		DefinitionProto []byte `gorm:"column:definition_proto"`
+	source, err := savedobjects.GetInTransaction(ctx, tx, sourceScope, candidate.SavedSearchID)
+	if err != nil {
+		if errors.Is(err, control.ErrNotFound) {
+			return Run{}, false, ErrNotFound
+		}
+		return Run{}, false, err
 	}
-	if err := tx.Raw(`SELECT version, definition_proto FROM saved_searches WHERE saved_search_id = ? AND owner_id = ?`, candidate.SavedSearchID, candidate.OwnerID).
-		Scan(&saved).Error; err != nil {
-		return Run{}, false, fmt.Errorf("snapshot scheduled saved search: %w", err)
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(source.Definition)
+	if err != nil {
+		return Run{}, false, err
 	}
-	if saved.Version < 1 || len(saved.DefinitionProto) == 0 {
-		return Run{}, false, ErrNotFound
+	sourceVersion, err := safecast.Conv[int64](source.Version)
+	if err != nil {
+		return Run{}, false, fmt.Errorf("saved source version: %w", err)
 	}
+	saved := struct {
+		Version         int64
+		DefinitionProto []byte
+	}{Version: sourceVersion, DefinitionProto: encoded}
 	outcome := RunOutcomeClaimed
 	finishedAt := (*int64)(nil)
 	if activeCount > 0 {
@@ -500,7 +557,7 @@ func (repository *Repository) claim(
 	}
 	record := runRecord{
 		RunID: runID, SavedSearchID: candidate.SavedSearchID, OwnerID: candidate.OwnerID,
-		TenantID: candidate.TenantID, DefinitionVersion: saved.Version,
+		TenantID: candidate.TenantID, DefinitionVersion: saved.Version, OrganizationID: scopeOrganization(AccessScope{OrganizationID: candidate.OrganizationID}),
 		DefinitionProto: saved.DefinitionProto, CronExpression: candidate.Cron,
 		Timezone: candidate.Timezone, DispatchTTL: candidate.DispatchTTL,
 		SchedulePeriodMicroseconds: period.Microseconds(), RetentionLifetimeMicroseconds: retention.Microseconds(),
@@ -565,7 +622,7 @@ func (repository *Repository) Finish(ctx context.Context, runID string, outcome 
 	if err != nil {
 		return err
 	}
-	tx := repository.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginLocked(repository.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return fmt.Errorf("begin scheduled-report finish: %w", tx.Error)
 	}
@@ -629,8 +686,9 @@ func (repository *Repository) InterruptActive(ctx context.Context, now time.Time
 }
 
 // ListRuns returns newest-first owner-scoped run history.
-func (repository *Repository) ListRuns(ctx context.Context, ownerID, savedSearchID string, limit int) ([]Run, error) {
-	page, err := repository.ListRunPage(ctx, ownerID, savedSearchID, RunPageRequest{Limit: limit})
+func (repository *Repository) ListRuns(ctx context.Context, scope AccessScope, savedSearchID string, limit int) ([]Run, error) {
+
+	page, err := repository.ListRunPage(ctx, scope, savedSearchID, RunPageRequest{Limit: limit})
 	return page.Runs, err
 }
 
@@ -638,20 +696,29 @@ func (repository *Repository) ListRuns(ctx context.Context, ownerID, savedSearch
 // cursor. Inserts ahead of the boundary cannot duplicate or skip older rows.
 func (repository *Repository) ListRunPage(
 	ctx context.Context,
-	ownerID, savedSearchID string,
+	scope AccessScope, savedSearchID string,
 	request RunPageRequest,
 ) (RunPage, error) {
+	ownerID := scope.OwnerID
+
 	if strings.TrimSpace(ownerID) == "" || strings.TrimSpace(savedSearchID) == "" || request.Limit < 0 || request.Limit > RunHistoryLimit {
 		return RunPage{}, ErrInvalidArgument
 	}
 	if request.Limit == 0 {
 		request.Limit = RunHistoryLimit
 	}
-	boundary, err := decodeRunCursor(repository.cursorKey, ownerID, savedSearchID, request.PageToken)
+	if err := repository.authorizeMetadataSource(ctx, scope, savedSearchID); err != nil {
+		return RunPage{}, err
+	}
+	cursorScope, err := policyCursorIdentity(ctx, scope)
 	if err != nil {
 		return RunPage{}, err
 	}
-	query := repository.orm.WithContext(ctx).Where("owner_id = ? AND saved_search_id = ?", ownerID, savedSearchID)
+	boundary, err := decodeRunCursor(repository.cursorKey, cursorScope, savedSearchID, request.PageToken)
+	if err != nil {
+		return RunPage{}, err
+	}
+	query := scopedScheduleQuery(repository.orm.WithContext(ctx), scope).Where("TRUE AND saved_search_id = ?", savedSearchID)
 	if boundary != nil {
 		query = query.Where("claimed_at_unix_micro < ? OR (claimed_at_unix_micro = ? AND run_id < ?)", boundary.ClaimedAtUnixMicro, boundary.ClaimedAtUnixMicro, boundary.RunID)
 	}
@@ -674,15 +741,15 @@ func (repository *Repository) ListRunPage(
 	page := RunPage{Runs: runs}
 	if hasNext {
 		last := records[len(records)-1]
-		page.NextPageToken, err = encodeRunCursor(repository.cursorKey, ownerID, savedSearchID, last.ClaimedAtUnixMicro, last.RunID)
+		page.NextPageToken, err = encodeRunCursor(repository.cursorKey, cursorScope, savedSearchID, last.ClaimedAtUnixMicro, last.RunID)
 		if err != nil {
 			return RunPage{}, err
 		}
 	}
 	if request.IncludeTotal {
 		var count int64
-		if err := repository.orm.WithContext(ctx).Model(&runRecord{}).
-			Where("owner_id = ? AND saved_search_id = ?", ownerID, savedSearchID).Count(&count).Error; err != nil {
+		if err := scopedScheduleQuery(repository.orm.WithContext(ctx).Model(&runRecord{}), scope).
+			Where("TRUE AND saved_search_id = ?", savedSearchID).Count(&count).Error; err != nil {
 			return RunPage{}, fmt.Errorf("count scheduled-report runs: %w", err)
 		}
 		if count < 0 {
@@ -716,6 +783,9 @@ func newRunID() (string, error) {
 }
 
 func scheduleFromRecord(record scheduleRecord) (Schedule, error) {
+	if record.OrganizationID <= 0 {
+		return Schedule{}, errors.New("persisted schedule organization is invalid")
+	}
 	if record.ConfigVersion < 1 || record.RuntimeVersion < 1 {
 		return Schedule{}, errors.New("read saved-search schedule: invalid persisted version")
 	}
@@ -727,7 +797,7 @@ func scheduleFromRecord(record scheduleRecord) (Schedule, error) {
 		next = &value
 	}
 	return Schedule{
-		SavedSearchID: record.SavedSearchID, OwnerID: record.OwnerID, TenantID: record.TenantID,
+		SavedSearchID: record.SavedSearchID, OwnerID: record.OwnerID, TenantID: record.TenantID, OrganizationID: strconv.FormatInt(record.OrganizationID, 10),
 		Cron: record.CronExpression, Timezone: record.Timezone, DispatchTTL: record.DispatchTTL,
 		Enabled: record.Enabled, ConfigVersion: uint64(record.ConfigVersion), RuntimeVersion: uint64(record.RuntimeVersion),
 		NextRunAt: next, CreatedAt: created, UpdatedAt: updated,
@@ -735,6 +805,9 @@ func scheduleFromRecord(record scheduleRecord) (Schedule, error) {
 }
 
 func runFromRecord(record runRecord) (Run, error) {
+	if record.OrganizationID <= 0 {
+		return Run{}, errors.New("persisted schedule run organization is invalid")
+	}
 	if record.DefinitionVersion < 1 || record.SchedulePeriodMicroseconds <= 0 || record.RetentionLifetimeMicroseconds <= 0 || record.SkippedOccurrenceCount < 0 {
 		return Run{}, errors.New("read scheduled-report run: invalid persisted values")
 	}
@@ -747,7 +820,7 @@ func runFromRecord(record runRecord) (Run, error) {
 		return Run{}, errors.New("read scheduled-report run: invalid persisted outcome")
 	}
 	result := Run{
-		RunID: record.RunID, SavedSearchID: record.SavedSearchID, OwnerID: record.OwnerID, TenantID: record.TenantID,
+		RunID: record.RunID, SavedSearchID: record.SavedSearchID, OwnerID: record.OwnerID, TenantID: record.TenantID, OrganizationID: strconv.FormatInt(record.OrganizationID, 10),
 		DefinitionVersion: uint64(record.DefinitionVersion), Definition: definition,
 		Cron: record.CronExpression, Timezone: record.Timezone, DispatchTTL: record.DispatchTTL,
 		SchedulePeriod:    time.Duration(record.SchedulePeriodMicroseconds) * time.Microsecond,
@@ -802,10 +875,15 @@ func pruneRunHistory(tx *gorm.DB, savedSearchID string) error {
 			WHERE saved_search_id = ?
 			  AND outcome NOT IN ('claimed', 'submitted')
 			ORDER BY claimed_at_unix_micro DESC, run_id DESC
-			LIMIT -1 OFFSET ?
+			OFFSET ?
 		  )`, savedSearchID, savedSearchID, RunHistoryLimit)
 	if result.Error != nil {
 		return fmt.Errorf("prune scheduled-report run history: %w", result.Error)
 	}
 	return nil
+}
+
+func scopeOrganization(scope AccessScope) int64 {
+	value, _ := strconv.ParseInt(scope.OrganizationID, 10, 64)
+	return value
 }

@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"gorm.io/gorm"
 )
 
@@ -224,7 +224,7 @@ func TestListIndexPageUsesIndexIDAsTimestampTieBreaker(t *testing.T) {
 	}
 }
 
-func TestListIndexPageUsesSQLiteASCIITextFolding(t *testing.T) {
+func TestListIndexPageUsesPostgreSQLUnicodeTextFolding(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -253,8 +253,8 @@ func TestListIndexPageUsesSQLiteASCIITextFolding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListIndexPage(case): %v", err)
 	}
-	if len(page.Indexes) != 0 {
-		t.Fatalf("non-ASCII case was folded by SQLite: %#v", page.Indexes)
+	if got := indexNames(page.Indexes); !slices.Equal(got, []string{"unicode"}) {
+		t.Fatalf("PostgreSQL Unicode filter = %v", got)
 	}
 
 	literalDefinition := enabledIndex("literal")
@@ -731,15 +731,17 @@ func TestIndexCatalogMarkerCannotBeResetOrReplaced(t *testing.T) {
 	}
 	if err := db.GORMDB().WithContext(ctx).
 		Exec(
-			`INSERT OR REPLACE INTO index_catalog_state (
+			`INSERT INTO index_catalog_state (
 				singleton_id,
 				revision,
 				physical_count
-			) VALUES (1, ?, ?)`,
+			) VALUES (1, ?, ?) ON CONFLICT(singleton_id) DO UPDATE SET revision=EXCLUDED.revision,physical_count=EXCLUDED.physical_count`,
 			before.Revision,
 			before.PhysicalCount,
 		).Error; err == nil {
 		t.Fatal("catalog marker replacement succeeded")
+	} else {
+		requireNativeControlGuard(t, err, "index catalog state already exists")
 	}
 	after, err := readIndexCatalogIntegrity(db.GORMDB().WithContext(ctx))
 	if err != nil {
@@ -775,7 +777,7 @@ func TestIndexCatalogIdentityCannotBeReplaced(t *testing.T) {
 	replacement.DisplayName = "replaced"
 	if err := db.GORMDB().WithContext(ctx).
 		Exec(
-			`INSERT OR REPLACE INTO indexes (
+			`INSERT INTO indexes (
 				index_id,
 				version,
 				name,
@@ -793,7 +795,7 @@ func TestIndexCatalogIdentityCannotBeReplaced(t *testing.T) {
 				state,
 				created_at_unix_micro,
 				updated_at_unix_micro
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(index_id) DO UPDATE SET version=EXCLUDED.version,display_name=EXCLUDED.display_name,created_at_unix_micro=EXCLUDED.created_at_unix_micro,updated_at_unix_micro=EXCLUDED.updated_at_unix_micro`,
 			replacement.IndexID,
 			replacement.Version,
 			replacement.Name,
@@ -813,6 +815,8 @@ func TestIndexCatalogIdentityCannotBeReplaced(t *testing.T) {
 			replacement.UpdatedAtUnixMicro,
 		).Error; err == nil {
 		t.Fatal("index identity replacement succeeded")
+	} else {
+		requireNativeControlGuard(t, err, "index catalog identity is already in use")
 	}
 	after, err := readIndexCatalogIntegrity(db.GORMDB().WithContext(ctx))
 	if err != nil {
@@ -947,7 +951,7 @@ func TestIndexCatalogRejectsStructuralCountDrift(t *testing.T) {
 	}
 
 	if err := db.GORMDB().WithContext(ctx).
-		Exec("DROP TRIGGER index_catalog_state_transition_is_valid").
+		Exec("DROP TRIGGER index_catalog_state_transition_is_valid ON index_catalog_state").
 		Error; err != nil {
 		t.Fatalf("remove test-owned marker guard: %v", err)
 	}
@@ -991,7 +995,7 @@ func TestOpenRejectsIndexCatalogStructuralCountDrift(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "control.sqlite")
+	path := pgtest.DSN(t)
 	db, err := Open(ctx, path)
 	if err != nil {
 		t.Fatalf("Open(): %v", err)
@@ -1000,7 +1004,7 @@ func TestOpenRejectsIndexCatalogStructuralCountDrift(t *testing.T) {
 		t.Fatalf("CreateIndex(): %v", err)
 	}
 	if err := db.GORMDB().WithContext(ctx).
-		Exec("DROP TRIGGER index_catalog_state_transition_is_valid").
+		Exec("DROP TRIGGER index_catalog_state_transition_is_valid ON index_catalog_state").
 		Error; err != nil {
 		t.Fatalf("remove test-owned marker guard: %v", err)
 	}
@@ -1041,7 +1045,7 @@ func TestIndexCatalogGORMStateMatchesMigratedSchema(t *testing.T) {
 		"indexes_created_id_idx": {"created_at_unix_micro", "index_id"},
 		"indexes_updated_id_idx": {"updated_at_unix_micro", "index_id"},
 	} {
-		assertSQLiteIndexColumns(t, ctx, db, name, want)
+		assertPostgreSQLIndexColumns(t, ctx, db, name, want)
 	}
 }
 
@@ -1178,7 +1182,7 @@ func assertGORMModelColumnsMatchTable(
 	rows, err := db.SQLDB().QueryContext(
 		ctx,
 		fmt.Sprintf(
-			`SELECT name FROM pragma_table_info('%s') ORDER BY cid`,
+			`SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='%s' ORDER BY ordinal_position`,
 			table,
 		),
 	)
@@ -1207,7 +1211,7 @@ func assertGORMModelColumnsMatchTable(
 	}
 }
 
-func assertSQLiteIndexColumns(
+func assertPostgreSQLIndexColumns(
 	t *testing.T,
 	ctx context.Context,
 	db *DB,
@@ -1217,25 +1221,25 @@ func assertSQLiteIndexColumns(
 	t.Helper()
 	rows, err := db.SQLDB().QueryContext(
 		ctx,
-		`SELECT name FROM pragma_index_info(?) ORDER BY seqno`,
+		`SELECT a.attname FROM pg_index i JOIN pg_class ix ON ix.oid=i.indexrelid JOIN pg_class tb ON tb.oid=i.indrelid JOIN pg_namespace ns ON ns.oid=tb.relnamespace JOIN unnest(i.indkey) WITH ORDINALITY k(attnum,ord) ON TRUE JOIN pg_attribute a ON a.attrelid=tb.oid AND a.attnum=k.attnum WHERE ns.nspname=current_schema() AND ix.relname=$1 ORDER BY k.ord`,
 		name,
 	)
 	if err != nil {
-		t.Fatalf("read SQLite index %s: %v", name, err)
+		t.Fatalf("read PostgreSQL index %s: %v", name, err)
 	}
 	defer rows.Close()
 	var got []string
 	for rows.Next() {
 		var column string
 		if err := rows.Scan(&column); err != nil {
-			t.Fatalf("scan SQLite index %s: %v", name, err)
+			t.Fatalf("scan PostgreSQL index %s: %v", name, err)
 		}
 		got = append(got, column)
 	}
 	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate SQLite index %s: %v", name, err)
+		t.Fatalf("iterate PostgreSQL index %s: %v", name, err)
 	}
 	if !slices.Equal(got, want) {
-		t.Fatalf("SQLite index %s = %v, want %v", name, got, want)
+		t.Fatalf("PostgreSQL index %s = %v, want %v", name, got, want)
 	}
 }

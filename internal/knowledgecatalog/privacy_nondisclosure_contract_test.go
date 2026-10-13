@@ -3,9 +3,11 @@ package knowledgecatalog
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 type privacyContractListSnapshot struct {
@@ -234,10 +236,7 @@ func privacyContractCloneVisibleAuthorities(t *testing.T, database *control.DB, 
 		t.Fatalf("visible authority clone count = %d", count)
 	}
 	triggerRows, err := database.SQLDB().QueryContext(t.Context(), `
-		SELECT name
-		FROM sqlite_schema
-		WHERE type = 'trigger' AND tbl_name = 'knowledge_objects'
-		ORDER BY name
+		SELECT t.tgname FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND r.relname='knowledge_objects' AND NOT t.tgisinternal AND t.tgname<>'a000_control_write_lock' ORDER BY t.tgname
 	`)
 	if err != nil {
 		t.Fatalf("enumerate visible over-cap registry triggers: %v", err)
@@ -259,29 +258,31 @@ func privacyContractCloneVisibleAuthorities(t *testing.T, database *control.DB, 
 		t.Fatalf("close visible over-cap registry triggers: %v", err)
 	}
 	for _, trigger := range triggers {
-		dropTrigger(t, database, trigger)
+		if _, err := database.SQLDB().ExecContext(t.Context(), `DROP TRIGGER "`+strings.ReplaceAll(trigger, `"`, `""`)+`" ON knowledge_objects`); err != nil {
+			t.Fatal(err)
+		}
 	}
 	connection, err := database.SQLDB().Conn(context.Background())
 	if err != nil {
 		t.Fatalf("acquire visible over-cap fixture connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(context.Background(), connection); err != nil {
 		t.Fatalf("disable visible over-cap fixture foreign keys: %v", err)
 	}
 	if _, err := connection.ExecContext(context.Background(), `
 		WITH RECURSIVE staged(sequence) AS (
 			SELECT 0
 			UNION ALL
-			SELECT sequence + 1 FROM staged WHERE sequence + 1 < ?
+			SELECT sequence + 1 FROM staged WHERE sequence + 1 < $1
 		)
-		INSERT INTO knowledge_objects (
+		INSERT INTO knowledge_objects (organization_id,
 		tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro,
 		disabled_at_unix_micro, quarantined_at_unix_micro, deleted_at_unix_micro,
 		quarantine_reason
 	)
-	SELECT source.tenant_id, printf('ko-visible-capacity-%05d', staged.sequence), source.current_version,
+	SELECT 1, source.tenant_id, 'ko-visible-capacity-' || lpad((staged.sequence)::text,5,'0') || '', source.current_version,
 		source.app_id, source.owner_id, source.object_type, source.name,
 		source.sharing_scope, source.state, source.definition_digest,
 		source.created_at_unix_micro, source.updated_at_unix_micro,
@@ -289,11 +290,11 @@ func privacyContractCloneVisibleAuthorities(t *testing.T, database *control.DB, 
 		source.deleted_at_unix_micro, source.quarantine_reason
 	FROM staged
 	JOIN knowledge_objects AS source
-	  ON source.tenant_id = ? AND source.knowledge_object_id = ?
+	  ON source.tenant_id = $2 AND source.knowledge_object_id = $3
 	`, count, testTenant, "ko-visible-capacity-seed"); err != nil {
 		t.Fatalf("insert visible over-cap registry identities: %v", err)
 	}
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`); err != nil {
+	if _, err := pgtest.RestoreForeignKeys(context.Background(), connection); err != nil {
 		t.Fatalf("restore visible over-cap fixture foreign keys: %v", err)
 	}
 }

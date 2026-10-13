@@ -14,6 +14,7 @@ import {
   hecOperationsRoutes,
   historyRoutes,
   indexRoutes,
+  indexPermissionRoutes,
   ingestionTokenRoutes,
   savedSearchRoutes,
   scheduleRoutes,
@@ -25,6 +26,12 @@ import {
 
 /** Typed wrappers around every search-workspace SRouter endpoint. */
 export class OpenSplunkApiClient {
+  public readonly indexPermissions = {
+    get: this.route(indexPermissionRoutes.get),
+    set: this.route(indexPermissionRoutes.set),
+    delete: this.route(indexPermissionRoutes.delete),
+    setOrganization: this.route(indexPermissionRoutes.setOrganization),
+  };
   public readonly system = {
     bootstrap: this.route(systemRoutes.bootstrap),
   };

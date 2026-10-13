@@ -384,7 +384,8 @@ func validSuccessfulActorForAction(actor Actor, action Action) bool {
 		return true
 	}
 	return actor.Role == ActorRoleUser &&
-		(validActionTarget(action, TargetKindSavedSearch) || action == ActionExportCreate)
+		(validActionTarget(action, TargetKindSavedSearch) || action == ActionExportCreate ||
+			(validActionTarget(action, TargetKindIndex) && action != ActionIndexCreate))
 }
 
 // Event is the complete immutable public audit projection. Sequence is dense,

@@ -10,11 +10,11 @@ import {
 } from "../gen/ts/open_splunk/saved_search_api";
 import { SearchDefinition, SearchJobOrigin } from "../gen/ts/open_splunk/search";
 import { CreateSearchJobRequest } from "../gen/ts/open_splunk/search_api";
+import { browserSessionCookie, installBrowserSession } from "./browser-session";
 
 const baseURL = loopbackOrigin(requiredEnvironment("OPEN_SPLUNK_FEATURE_COMPLETION_BASE_URL"));
 const appID = requiredEnvironment("OPEN_SPLUNK_FEATURE_COMPLETION_APP_ID");
 const savedSearchID = requiredEnvironment("OPEN_SPLUNK_FEATURE_COMPLETION_SAVED_SEARCH_ID");
-const administratorToken = secretEnvironment("OPEN_SPLUNK_FEATURE_COMPLETION_ADMINISTRATOR_TOKEN");
 const fixtureStart = requiredDate("OPEN_SPLUNK_FEATURE_COMPLETION_FIXTURE_START");
 const bulkStart = requiredDate("OPEN_SPLUNK_FEATURE_COMPLETION_BULK_START");
 const expectedBulkRows = positiveInteger("OPEN_SPLUNK_FEATURE_COMPLETION_EXPECTED_BULK_ROWS");
@@ -41,12 +41,6 @@ function requiredEnvironment(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required`);
   return value;
-}
-
-function secretEnvironment(name: string): string {
-  const value = process.env[name];
-  if (!value || value.trim().length < 32) throw new Error(`${name} is missing or invalid`);
-  return value.trim();
 }
 
 function loopbackOrigin(value: string): string {
@@ -231,20 +225,14 @@ function assertExactBulkMembers(rows: Record<string, unknown>[]): void {
 }
 
 async function signInAndInspectHEC(page: Page): Promise<void> {
-  await page.goto(featureURL("/signin/"), { waitUntil: "domcontentloaded", timeout });
-  const tokenInput = page.getByLabel("Administrator bearer token");
-  try {
-    await tokenInput.fill(administratorToken);
-    await page.getByRole("button", { name: "Open administrator session" }).click();
-  } finally {
-    if (await tokenInput.isVisible().catch(() => false)) await tokenInput.fill("");
-  }
+  await installBrowserSession(page.context(), baseURL);
+  await page.goto(featureURL("/admin/"), { waitUntil: "domcontentloaded", timeout });
   await expect(page.getByRole("heading", { name: "Administration" })).toBeVisible({ timeout });
   const tokenPersisted = await page.evaluate((token) =>
     document.body.textContent?.includes(token) === true
     || Object.values(localStorage).some((value) => value.includes(token))
-    || Object.values(sessionStorage).some((value) => value.includes(token)), administratorToken);
-  if (tokenPersisted) throw new Error("administrator credential reached rendered text or browser storage");
+    || Object.values(sessionStorage).some((value) => value.includes(token)), browserSessionCookie);
+  if (tokenPersisted) throw new Error("session credential reached rendered text or browser storage");
   await page.locator(".admin-sidebar").getByRole("button", { name: /Server settings/u }).click();
   await expect(page.getByRole("heading", { name: "Server settings" })).toBeVisible({ timeout });
   await expect(page.getByText(
@@ -471,6 +459,6 @@ test("compiled backend and embedded UI complete the advertised feature flow", as
   expect(observation.pageErrors, "uncaught browser errors").toEqual([]);
   expect(observation.failedRequests, "failed same-origin API responses").toEqual([]);
   expect(observation.externalRequests, "external browser requests").toEqual([]);
-  const tokenRendered = await page.evaluate((token) => document.body.textContent?.includes(token) === true, administratorToken);
-  if (tokenRendered) throw new Error("administrator credential reached rendered browser text");
+  const tokenRendered = await page.evaluate((token) => document.body.textContent?.includes(token) === true, browserSessionCookie);
+  if (tokenRendered) throw new Error("session credential reached rendered browser text");
 });

@@ -439,14 +439,14 @@ export function auditErrorPresentation(error: unknown, subject: string): AuditEr
   if (isHttpStatus(error, 401)) {
     return {
       title: "Authentication is required",
-      message: `Sign in with an administrator session before reading ${subject.toLowerCase()}.`,
+      message: `Sign in with your Google account before reading ${subject.toLowerCase()}.`,
       invalidTraversal: false,
     };
   }
   if (isHttpStatus(error, 403)) {
     return {
       title: "Administrator access is required",
-      message: `The current principal is not authorized to read ${subject.toLowerCase()}.`,
+      message: `Your account is not authorized to read ${subject.toLowerCase()}.`,
       invalidTraversal: false,
     };
   }

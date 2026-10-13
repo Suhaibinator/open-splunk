@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestCatalogRevisionExactSQLiteDomainBoundariesForGetAndList(t *testing.T) {
@@ -66,21 +67,21 @@ func TestExplicitMissingHistoryMakesEveryVisibleVersionRequestCorrupt(t *testing
 	if err != nil {
 		t.Fatalf("acquire history-corruption connection: %v", err)
 	}
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(context.Background(), connection); err != nil {
 		_ = connection.Close()
 		t.Fatalf("disable foreign keys: %v", err)
 	}
 	if _, err := connection.ExecContext(context.Background(), `DELETE FROM knowledge_object_dependency_seals
-		WHERE tenant_id = ? AND knowledge_object_id = 'ko-missing-history' AND object_version = 1`, testTenant); err != nil {
+		WHERE tenant_id = $1 AND knowledge_object_id = 'ko-missing-history' AND object_version = 1`, testTenant); err != nil {
 		_ = connection.Close()
 		t.Fatalf("delete historical dependency seal: %v", err)
 	}
 	if _, err := connection.ExecContext(context.Background(), `DELETE FROM knowledge_object_versions
-		WHERE tenant_id = ? AND knowledge_object_id = 'ko-missing-history' AND object_version = 1`, testTenant); err != nil {
+		WHERE tenant_id = $1 AND knowledge_object_id = 'ko-missing-history' AND object_version = 1`, testTenant); err != nil {
 		_ = connection.Close()
 		t.Fatalf("delete historical immutable version: %v", err)
 	}
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`); err != nil {
+	if _, err := pgtest.RestoreForeignKeys(context.Background(), connection); err != nil {
 		_ = connection.Close()
 		t.Fatalf("restore foreign keys: %v", err)
 	}

@@ -86,8 +86,8 @@ func TestWriterConcurrentOptimisticUpdateHasExactlyOneWinner(t *testing.T) {
 		if err := harness.database.SQLDB().QueryRowContext(t.Context(), `
 			SELECT count(*)
 			FROM knowledge_mutation_idempotency
-			WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
-			  AND route = 'objects.update' AND client_request_id = ?`,
+			WHERE tenant_id = $1 AND actor_kind = $2 AND actor_id = $3
+			  AND route = 'objects.update' AND client_request_id = $4`,
 			writerTestTenant,
 			"browser",
 			"writer-blackbox-administrator",

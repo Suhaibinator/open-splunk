@@ -124,7 +124,7 @@ func TestBackendHECSlowCompressedReadDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	administratorTokenPath, administratorToken := provisionAdministratorToken(t, work)
+	googleIdentity, googleSession := provisionGoogleSession(t, work)
 	assertEmptyDirectory(t, serverRuntimeDir)
 	serverEnvironment := clickHouseServerEnvironment(os.Environ(), clickHouse)
 	serverEnvironment = environmentWithValue(
@@ -147,9 +147,9 @@ func TestBackendHECSlowCompressedReadDeadline(t *testing.T) {
 		"-http-listen-address=" + httpAddress,
 		"-http-tls-certificate-file=" + httpTLSIdentity.CertificateFile,
 		"-http-tls-private-key-file=" + httpTLSIdentity.PrivateKeyFile,
-		"-control-database-file=" + filepath.Join(work, "control.sqlite"),
+		"-postgres-dsn=" + googleIdentity.PostgresDSN,
 		"-master-key-file=" + filepath.Join(work, "server.key"),
-		"-administrator-token-file=" + administratorTokenPath,
+
 		"-collector-grpc-listen-address=" + collectorAddress,
 		"-collector-grpc-plaintext-enabled",
 		"-tenant-id=" + backendHECTenantID,
@@ -173,7 +173,7 @@ func TestBackendHECSlowCompressedReadDeadline(t *testing.T) {
 		httpClient,
 		baseURL,
 		serverProcess,
-		administratorToken,
+		googleSession,
 		clickHouse.Password,
 		clickHouse.MigrationPassword,
 		clickHouse.RuntimePassword,
@@ -186,7 +186,7 @@ func TestBackendHECSlowCompressedReadDeadline(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		backendHECIndexName,
 		"Backend HEC slow compressed client integration",
 	)
@@ -195,10 +195,10 @@ func TestBackendHECSlowCompressedReadDeadline(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 	)
 	protectedValues := []string{
-		administratorToken,
+		googleSession,
 		plaintextToken,
 		tokenMetadata.GetTokenPrefix(),
 		clickHouse.Password,
@@ -380,12 +380,12 @@ func TestBackendHECSlowCompressedReadDeadline(t *testing.T) {
 	postGC := backendHECSlowLatestGC(t, serverProcess.Logs())
 
 	var operations opensplunk.GetHECOperationalSnapshotResponse
-	postAdministratorProto(
+	postGoogleUserProto(
 		t,
 		ctx,
 		httpClient,
 		baseURL+"/api/hec/operations/get",
-		administratorToken,
+		googleSession,
 		&opensplunk.GetHECOperationalSnapshotRequest{},
 		&operations,
 	)

@@ -384,8 +384,16 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
   );
   assert.match(
     dockerfile,
-    /golang:1\.27\.0-alpine3\.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395/,
+    /golang:1\.27\.2-alpine3\.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079/,
   );
+  assert.match(dockerfile, /^FROM --platform=\$\{TARGETPLATFORM\} postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873 AS postgres-tools$/m);
+  assert.match(dockerfile, /ldd \/usr\/local\/bin\/pg_dump \/usr\/local\/bin\/pg_restore/);
+  assert.match(dockerfile, /cp -L "\$\{library\}" "\/postgres-root\$\{library\}"/);
+  assert.match(dockerfile, /cp -a \/postgres-tools\/\. \/image-rootfs\/server\//);
+  for (const command of ["pg_dump", "pg_restore"]) {
+    assert.ok(dockerfile.includes(`chroot /image-rootfs/server /usr/local/bin/${command} --version | grep 'PostgreSQL) 18'`));
+  }
+  assert.match(dockerfile, /^ENV PATH=\/usr\/local\/bin$/m);
   assert.match(dockerfile, /^FROM scratch AS server$/m);
   assert.match(dockerfile, /^FROM scratch AS collector$/m);
   assert.equal((dockerfile.match(/^USER 65532:65532$/gm) ?? []).length, 2);
@@ -612,7 +620,7 @@ test("Docker context is a deny-by-default source allowlist", async () => {
     "!internal/**/*.go",
     "!internal/spl/completion_catalog.json",
     "!migrations/clickhouse/*.sql",
-    "!migrations/sqlite/*.sql",
+    "!migrations/postgres/*.sql",
     "!proto/**/*.proto",
     "**/*_test.go",
     "**/*.test.ts",

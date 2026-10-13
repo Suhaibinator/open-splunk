@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	"slices"
 	"strings"
 	"sync"
@@ -42,7 +44,7 @@ func (dependencies *testDependencies) options() Options {
 
 func openTestStore(t *testing.T) (*control.DB, *Store) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "control.sqlite")
+	path := pgtest.DSN(t)
 	database, err := control.Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("control.Open() error = %v", err)
@@ -98,18 +100,18 @@ func TestNewValidatesDependenciesAndClonesCursorKey(t *testing.T) {
 	}
 }
 
-func TestSavedSearchGORMModelMatchesMigratedSQLiteSchema(t *testing.T) {
+func TestSavedSearchGORMModelMatchesMigratedPostgreSQLSchema(t *testing.T) {
 	t.Parallel()
 
 	database, _ := openTestStore(t)
 	statement := &gorm.Statement{DB: database.GORMDB()}
-	if err := statement.Parse(&savedSearchRecord{}); err != nil {
+	if err := statement.Parse(&savedSearchRecord{OrganizationID: 1}); err != nil {
 		t.Fatalf("parse GORM saved-search model: %v", err)
 	}
 
 	rows, err := database.SQLDB().QueryContext(
 		context.Background(),
-		`SELECT name FROM pragma_table_info('saved_searches') ORDER BY cid`,
+		`SELECT name FROM (SELECT a.attname AS name,a.attnum-1 AS cid,CASE WHEN t.typname='int8' THEN 'BIGINT' ELSE upper(t.typname) END AS type,CASE WHEN a.attnotnull THEN 1 ELSE 0 END AS "notnull",COALESCE((SELECT array_position(c.conkey,a.attnum) FROM pg_constraint c WHERE c.conrelid=r.oid AND c.contype='p'),0) AS pk,CASE WHEN a.attgenerated='s' THEN 3 ELSE 0 END AS hidden FROM pg_attribute a JOIN pg_class r ON r.oid=a.attrelid JOIN pg_namespace n ON n.oid=r.relnamespace JOIN pg_type t ON t.oid=a.atttypid WHERE n.nspname=current_schema() AND r.relname='saved_searches' AND a.attnum>0 AND NOT a.attisdropped) AS column_metadata ORDER BY cid`,
 	)
 	if err != nil {
 		t.Fatalf("read migrated saved-search columns: %v", err)
@@ -155,7 +157,7 @@ func TestSavedSearchGORMModelMatchesMigratedSQLiteSchema(t *testing.T) {
 	var migratedDDL string
 	if err := database.SQLDB().QueryRowContext(
 		context.Background(),
-		`SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'saved_searches'`,
+		`SELECT string_agg('CONSTRAINT ' || c.conname || ' ' || pg_get_constraintdef(c.oid), ' ') AS sql FROM pg_constraint c JOIN pg_class r ON r.oid=c.conrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND r.relname='saved_searches' AND c.contype='c'`,
 	).Scan(&migratedDDL); err != nil {
 		t.Fatalf("read migrated saved-search DDL: %v", err)
 	}
@@ -165,7 +167,7 @@ func TestSavedSearchGORMModelMatchesMigratedSQLiteSchema(t *testing.T) {
 		if !exists || check.Constraint != constraint {
 			t.Errorf("GORM check %s = %#v, want %q", name, check, constraint)
 		}
-		if !strings.Contains(normalizedDDL, "CHECK ("+constraint+")") {
+		if !pgtest.ContainsCheck(normalizedDDL, constraint) {
 			t.Errorf("migrated saved-search DDL does not contain check %q", constraint)
 		}
 	}
@@ -177,29 +179,29 @@ func TestSavedSearchGORMModelMatchesMigratedSQLiteSchema(t *testing.T) {
 	}
 	expectedIndexes := map[string]indexShape{
 		"saved_searches_app_name_id_idx": {
-			columns: []string{"app_id", "name", "saved_search_id"},
-			sorts:   []string{"", "", ""},
+			columns: []string{"organization_id", "app_id", "name", "saved_search_id"},
+			sorts:   []string{"", "", "", ""},
 		},
 		"saved_searches_owner_app_name_key": {
 			class:   "UNIQUE",
-			columns: []string{"owner_id", "app_id", "name"},
-			sorts:   []string{"", "", ""},
+			columns: []string{"organization_id", "owner_id", "app_id", "name"},
+			sorts:   []string{"", "", "", ""},
 		},
 		"saved_searches_owner_created_id_idx": {
-			columns: []string{"owner_id", "created_at_unix_micro", "saved_search_id"},
-			sorts:   []string{"", "", ""},
+			columns: []string{"organization_id", "owner_id", "created_at_unix_micro", "saved_search_id"},
+			sorts:   []string{"", "", "", ""},
 		},
 		"saved_searches_owner_name_id_idx": {
-			columns: []string{"owner_id", "name", "saved_search_id"},
-			sorts:   []string{"", "", ""},
+			columns: []string{"organization_id", "owner_id", "name", "saved_search_id"},
+			sorts:   []string{"", "", "", ""},
 		},
 		"saved_searches_owner_updated_id_idx": {
-			columns: []string{"owner_id", "updated_at_unix_micro", "saved_search_id"},
-			sorts:   []string{"", "", ""},
+			columns: []string{"organization_id", "owner_id", "updated_at_unix_micro", "saved_search_id"},
+			sorts:   []string{"", "", "", ""},
 		},
 		"saved_searches_updated_idx": {
-			columns: []string{"updated_at_unix_micro", "saved_search_id"},
-			sorts:   []string{"desc", ""},
+			columns: []string{"organization_id", "updated_at_unix_micro", "saved_search_id"},
+			sorts:   []string{"", "desc", ""},
 		},
 	}
 	modelIndexes := make(map[string]indexShape)
@@ -241,7 +243,7 @@ func TestSavedSearchGORMModelMatchesMigratedSQLiteSchema(t *testing.T) {
 	assertMigratedSavedSearchUniqueKey(t, database, expectedIndexes["saved_searches_owner_app_name_key"].columns)
 }
 
-func TestSavedSearchGORMListUsesOwnerKeysetIndexes(t *testing.T) {
+func TestSavedSearchGORMSharedListUsesOrganizationKeysetIndexes(t *testing.T) {
 	t.Parallel()
 
 	database, _ := openTestStore(t)
@@ -258,33 +260,34 @@ func TestSavedSearchGORMListUsesOwnerKeysetIndexes(t *testing.T) {
 			sortBy:        opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME,
 			sortDirection: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 			cursor:        listCursor{StringKey: "middle", SavedSearch: "ss_middle"},
-			wantIndex:     "saved_searches_owner_name_id_idx",
+			wantIndex:     "saved_searches_organization_name_page",
 		},
 		{
 			name:          "created descending",
 			sortBy:        opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT,
 			sortDirection: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 			cursor:        listCursor{IntegerKey: &integerCursor, SavedSearch: "ss_middle"},
-			wantIndex:     "saved_searches_owner_created_id_idx",
+			wantIndex:     "saved_searches_organization_created_page",
 		},
 		{
 			name:          "updated ascending",
 			sortBy:        opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT,
 			sortDirection: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 			cursor:        listCursor{IntegerKey: &integerCursor, SavedSearch: "ss_middle"},
-			wantIndex:     "saved_searches_owner_updated_id_idx",
+			wantIndex:     "saved_searches_organization_updated_page",
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			request := normalizedListRequest{
-				ownerID:       "owner",
-				pageSize:      50,
-				sortBy:        test.sortBy,
-				sortDirection: test.sortDirection,
+				ownerID:        "owner",
+				organizationID: "1",
+				pageSize:       50,
+				sortBy:         test.sortBy,
+				sortDirection:  test.sortDirection,
 			}
 			query := applySavedSearchListFilters(
-				database.GORMDB().Session(&gorm.Session{DryRun: true}).Model(&savedSearchRecord{}),
+				database.GORMDB().Session(&gorm.Session{DryRun: true}).Model(&savedSearchRecord{OrganizationID: 1}),
 				request,
 			)
 			query = applySavedSearchListCursor(query, request, test.cursor)
@@ -294,21 +297,28 @@ func TestSavedSearchGORMListUsesOwnerKeysetIndexes(t *testing.T) {
 			if generated.Error != nil {
 				t.Fatalf("build GORM list query: %v", generated.Error)
 			}
-			planRows, err := database.SQLDB().QueryContext(
-				context.Background(),
-				"EXPLAIN QUERY PLAN "+generated.Statement.SQL.String(),
-				generated.Statement.Vars...,
-			)
+			connection, err := database.SQLDB().Conn(t.Context())
 			if err != nil {
-				t.Fatalf("explain GORM list query: %v", err)
+				t.Fatal(err)
+			}
+			defer connection.Close()
+			if _, err := connection.ExecContext(t.Context(), "SET enable_seqscan = off; SET enable_bitmapscan = off"); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if _, err := connection.ExecContext(context.Background(), "RESET enable_seqscan; RESET enable_bitmapscan"); err != nil {
+					t.Error(err)
+				}
+			}()
+			planRows, err := connection.QueryContext(t.Context(), "EXPLAIN "+generated.Statement.SQL.String(), generated.Statement.Vars...)
+			if err != nil {
+				t.Fatal(err)
 			}
 			var details []string
 			for planRows.Next() {
-				var id, parent, unused int64
 				var detail string
-				if err := planRows.Scan(&id, &parent, &unused, &detail); err != nil {
-					_ = planRows.Close()
-					t.Fatalf("scan GORM list query plan: %v", err)
+				if err := planRows.Scan(&detail); err != nil {
+					t.Fatal(err)
 				}
 				details = append(details, detail)
 			}
@@ -319,7 +329,7 @@ func TestSavedSearchGORMListUsesOwnerKeysetIndexes(t *testing.T) {
 			if !strings.Contains(plan, test.wantIndex) {
 				t.Errorf("GORM list query plan = %q, want index %q", plan, test.wantIndex)
 			}
-			if strings.Contains(plan, "USE TEMP B-TREE") {
+			if strings.Contains(plan, "->  Sort") {
 				t.Errorf("GORM list query plan performs a temporary sort: %q", plan)
 			}
 		})
@@ -329,7 +339,7 @@ func TestSavedSearchGORMListUsesOwnerKeysetIndexes(t *testing.T) {
 func TestCreateGetUpdateDeleteNormalizeAndDoNotAlias(t *testing.T) {
 	_, store := openTestStore(t)
 	ctx := context.Background()
-	scope := AccessScope{OwnerID: " user-1 "}
+	scope := AccessScope{OwnerID: " user-1 ", OrganizationID: "1"}
 	input := savedSearchDefinition("Errors", "search")
 	created, err := store.Create(ctx, scope, input)
 	if err != nil {
@@ -349,7 +359,7 @@ func TestCreateGetUpdateDeleteNormalizeAndDoNotAlias(t *testing.T) {
 	input.Search.Spl = "mutated input SPL"
 	created.Definition.Name = "mutated result"
 	created.Definition.Search.Spl = "mutated result SPL"
-	got, err := store.Get(ctx, AccessScope{OwnerID: "user-1"}, created.SavedSearchId)
+	got, err := store.Get(ctx, AccessScope{OwnerID: "user-1", OrganizationID: "1"}, created.SavedSearchId)
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -394,7 +404,7 @@ func TestCreateGetUpdateDeleteNormalizeAndDoNotAlias(t *testing.T) {
 
 func TestDefinitionPersistenceIsDeterministicAndDefinitionOnly(t *testing.T) {
 	database, store := openTestStore(t)
-	created, err := store.Create(context.Background(), AccessScope{OwnerID: "owner"}, savedSearchDefinition("Canonical", "app"))
+	created, err := store.Create(context.Background(), AccessScope{OwnerID: "owner", OrganizationID: "1"}, savedSearchDefinition("Canonical", "app"))
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -404,7 +414,7 @@ func TestDefinitionPersistenceIsDeterministicAndDefinitionOnly(t *testing.T) {
 	}
 	var encoded []byte
 	var name, appID, ownerID string
-	if err := database.SQLDB().QueryRowContext(context.Background(), `SELECT definition_proto, name, app_id, owner_id FROM saved_searches WHERE saved_search_id = ?`, created.SavedSearchId).Scan(&encoded, &name, &appID, &ownerID); err != nil {
+	if err := database.SQLDB().QueryRowContext(context.Background(), `SELECT definition_proto, name, app_id, owner_id FROM saved_searches WHERE saved_search_id = $1`, created.SavedSearchId).Scan(&encoded, &name, &appID, &ownerID); err != nil {
 		t.Fatalf("read raw definition: %v", err)
 	}
 	if !slices.Equal(encoded, want) || name != "Canonical" || appID != "app" || ownerID != "owner" {
@@ -425,7 +435,7 @@ func TestGORMPersistenceHonorsMigratedAppWorkspaceTriggers(t *testing.T) {
 	}
 	app, err := catalog.CreateApp(
 		context.Background(),
-		control.AppAccessScope{TenantID: "tenant"},
+		control.AppAccessScope{TenantID: "tenant", OrganizationID: 1},
 		control.AppDefinition{Slug: "search-app", DisplayName: "Search App"},
 	)
 	if err != nil {
@@ -433,7 +443,7 @@ func TestGORMPersistenceHonorsMigratedAppWorkspaceTriggers(t *testing.T) {
 	}
 	created, err := store.Create(
 		context.Background(),
-		AccessScope{OwnerID: "owner"},
+		AccessScope{OwnerID: "owner", OrganizationID: "1"},
 		savedSearchDefinition("existing canonical app", app.ID),
 	)
 	if err != nil {
@@ -446,14 +456,14 @@ func TestGORMPersistenceHonorsMigratedAppWorkspaceTriggers(t *testing.T) {
 	missingCanonicalApp := "app_AAAAAAAAAAAAAAAAAAAAAA"
 	if _, err := store.Create(
 		context.Background(),
-		AccessScope{OwnerID: "owner"},
+		AccessScope{OwnerID: "owner", OrganizationID: "1"},
 		savedSearchDefinition("missing canonical app", missingCanonicalApp),
 	); err == nil || errors.Is(err, control.ErrAlreadyExists) {
 		t.Fatalf("Create(missing canonical app) error = %v, want migrated dependency rejection", err)
 	}
 	page, err := store.List(
 		context.Background(),
-		AccessScope{OwnerID: "owner"},
+		AccessScope{OwnerID: "owner", OrganizationID: "1"},
 		ListRequest{IncludeTotal: true},
 	)
 	if err != nil {
@@ -467,7 +477,7 @@ func TestGORMPersistenceHonorsMigratedAppWorkspaceTriggers(t *testing.T) {
 func TestValidationOwnershipAndSharing(t *testing.T) {
 	_, store := openTestStore(t)
 	ctx := context.Background()
-	scope := AccessScope{OwnerID: "owner"}
+	scope := AccessScope{OwnerID: "owner", OrganizationID: "1"}
 	tests := []struct {
 		name   string
 		mutate func(*opensplunk.SavedSearchDefinition)
@@ -498,7 +508,7 @@ func TestValidationOwnershipAndSharing(t *testing.T) {
 			}
 		})
 	}
-	if _, err := store.Create(ctx, AccessScope{}, savedSearchDefinition("test", "app")); !errors.Is(err, control.ErrInvalidArgument) {
+	if _, err := store.Create(ctx, AccessScope{OrganizationID: "1"}, savedSearchDefinition("test", "app")); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Create(empty scope) error = %v", err)
 	}
 	definition := savedSearchDefinition("default sharing", "")
@@ -512,35 +522,35 @@ func TestValidationOwnershipAndSharing(t *testing.T) {
 func TestUniquenessClassificationAndOwnerIsolation(t *testing.T) {
 	_, store := openTestStore(t)
 	ctx := context.Background()
-	first, err := store.Create(ctx, AccessScope{OwnerID: "owner-a"}, savedSearchDefinition("Same", "app"))
+	first, err := store.Create(ctx, AccessScope{OwnerID: "owner-a", OrganizationID: "1"}, savedSearchDefinition("Same", "app"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Create(ctx, AccessScope{OwnerID: "owner-a"}, savedSearchDefinition("Same", "app")); !errors.Is(err, control.ErrAlreadyExists) {
+	if _, err := store.Create(ctx, AccessScope{OwnerID: "owner-a", OrganizationID: "1"}, savedSearchDefinition("Same", "app")); !errors.Is(err, control.ErrAlreadyExists) {
 		t.Fatalf("duplicate Create() error = %v, want ErrAlreadyExists", err)
 	}
-	if _, err := store.Create(ctx, AccessScope{OwnerID: "owner-a"}, savedSearchDefinition("Same", "other-app")); err != nil {
+	if _, err := store.Create(ctx, AccessScope{OwnerID: "owner-a", OrganizationID: "1"}, savedSearchDefinition("Same", "other-app")); err != nil {
 		t.Fatalf("same name in another app error = %v", err)
 	}
-	second, err := store.Create(ctx, AccessScope{OwnerID: "owner-a"}, savedSearchDefinition("Second", "app"))
+	second, err := store.Create(ctx, AccessScope{OwnerID: "owner-a", OrganizationID: "1"}, savedSearchDefinition("Second", "app"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	rename := proto.Clone(second.Definition).(*opensplunk.SavedSearchDefinition)
 	rename.Name = "Same"
-	if _, err := store.Update(ctx, AccessScope{OwnerID: "owner-a"}, second.SavedSearchId, 1, rename, nil); !errors.Is(err, control.ErrAlreadyExists) {
+	if _, err := store.Update(ctx, AccessScope{OwnerID: "owner-a", OrganizationID: "1"}, second.SavedSearchId, 1, rename, nil); !errors.Is(err, control.ErrAlreadyExists) {
 		t.Fatalf("conflicting rename error = %v, want ErrAlreadyExists", err)
 	}
-	if _, err := store.Create(ctx, AccessScope{OwnerID: "owner-b"}, savedSearchDefinition("Same", "app")); err != nil {
+	if _, err := store.Create(ctx, AccessScope{OwnerID: "owner-b", OrganizationID: "1"}, savedSearchDefinition("Same", "app")); err != nil {
 		t.Fatalf("same name for another owner error = %v", err)
 	}
-	if _, err := store.Get(ctx, AccessScope{OwnerID: "owner-b"}, first.SavedSearchId); !errors.Is(err, control.ErrNotFound) {
+	if _, err := store.Get(ctx, AccessScope{OwnerID: "owner-b", OrganizationID: "1"}, first.SavedSearchId); !errors.Is(err, control.ErrNotFound) {
 		t.Fatalf("cross-owner Get() error = %v, want ErrNotFound", err)
 	}
-	if _, err := store.Update(ctx, AccessScope{OwnerID: "owner-b"}, first.SavedSearchId, 1, first.Definition, nil); !errors.Is(err, control.ErrNotFound) {
+	if _, err := store.Update(ctx, AccessScope{OwnerID: "owner-b", OrganizationID: "1"}, first.SavedSearchId, 1, first.Definition, nil); !errors.Is(err, control.ErrNotFound) {
 		t.Fatalf("cross-owner Update() error = %v, want ErrNotFound", err)
 	}
-	if err := store.Delete(ctx, AccessScope{OwnerID: "owner-b"}, first.SavedSearchId, 1); !errors.Is(err, control.ErrNotFound) {
+	if err := store.Delete(ctx, AccessScope{OwnerID: "owner-b", OrganizationID: "1"}, first.SavedSearchId, 1); !errors.Is(err, control.ErrNotFound) {
 		t.Fatalf("cross-owner Delete() error = %v, want ErrNotFound", err)
 	}
 }
@@ -548,7 +558,7 @@ func TestUniquenessClassificationAndOwnerIsolation(t *testing.T) {
 func TestConcurrentOptimisticUpdateAllowsOneWriter(t *testing.T) {
 	_, store := openTestStore(t)
 	ctx := context.Background()
-	scope := AccessScope{OwnerID: "owner"}
+	scope := AccessScope{OwnerID: "owner", OrganizationID: "1"}
 	created, err := store.Create(ctx, scope, savedSearchDefinition("Original", "app"))
 	if err != nil {
 		t.Fatal(err)
@@ -595,7 +605,7 @@ func TestConcurrentCreateClassifiesUniqueName(t *testing.T) {
 	for range 2 {
 		wait.Go(func() {
 			<-start
-			_, err := store.Create(ctx, AccessScope{OwnerID: "owner"}, savedSearchDefinition("same", "app"))
+			_, err := store.Create(ctx, AccessScope{OwnerID: "owner", OrganizationID: "1"}, savedSearchDefinition("same", "app"))
 			results <- err
 		})
 	}
@@ -641,7 +651,7 @@ func TestGORMCreateAndDuplicateRetryIDCollisions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope := AccessScope{OwnerID: "owner"}
+	scope := AccessScope{OwnerID: "owner", OrganizationID: "1"}
 	source, err := store.Create(
 		context.Background(),
 		scope,
@@ -689,7 +699,7 @@ func TestGORMCreateAndDuplicateRetryIDCollisions(t *testing.T) {
 func TestDuplicateClonesAndClassifiesConflicts(t *testing.T) {
 	_, store := openTestStore(t)
 	ctx := context.Background()
-	scope := AccessScope{OwnerID: "owner"}
+	scope := AccessScope{OwnerID: "owner", OrganizationID: "1"}
 	source, err := store.Create(ctx, scope, savedSearchDefinition("source", "app-a"))
 	if err != nil {
 		t.Fatal(err)
@@ -710,7 +720,7 @@ func TestDuplicateClonesAndClassifiesConflicts(t *testing.T) {
 	if _, err := store.Duplicate(ctx, scope, source.SavedSearchId, "copy", &destination); !errors.Is(err, control.ErrAlreadyExists) {
 		t.Fatalf("duplicate name error = %v, want ErrAlreadyExists", err)
 	}
-	if _, err := store.Duplicate(ctx, AccessScope{OwnerID: "other"}, source.SavedSearchId, "copy", nil); !errors.Is(err, control.ErrNotFound) {
+	if _, err := store.Duplicate(ctx, AccessScope{OwnerID: "other", OrganizationID: "1"}, source.SavedSearchId, "copy", nil); !errors.Is(err, control.ErrNotFound) {
 		t.Fatalf("cross-owner Duplicate() error = %v, want ErrNotFound", err)
 	}
 }
@@ -718,7 +728,7 @@ func TestDuplicateClonesAndClassifiesConflicts(t *testing.T) {
 func TestListPaginationFiltersSortingCursorBindingAndNoAliasing(t *testing.T) {
 	_, store := openTestStore(t)
 	ctx := context.Background()
-	scope := AccessScope{OwnerID: "owner"}
+	scope := AccessScope{OwnerID: "owner", OrganizationID: "1"}
 	definitions := []*opensplunk.SavedSearchDefinition{
 		savedSearchDefinition("delta", "app-a"),
 		savedSearchDefinition("Alpha", "app-a"),
@@ -854,7 +864,7 @@ func TestListPaginationFiltersSortingCursorBindingAndNoAliasing(t *testing.T) {
 			}
 		})
 	}
-	if _, err := store.List(ctx, AccessScope{OwnerID: "other"}, ListRequest{PageSize: 1, PageToken: token}); !errors.Is(err, control.ErrInvalidArgument) {
+	if _, err := store.List(ctx, AccessScope{OwnerID: "other", OrganizationID: "1"}, ListRequest{PageSize: 1, PageToken: token}); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("cross-owner cursor error = %v, want ErrInvalidArgument", err)
 	}
 }
@@ -874,7 +884,7 @@ func readSavedSearchIndexShape(
 	t.Helper()
 	rows, err := database.SQLDB().QueryContext(
 		context.Background(),
-		`SELECT name, "desc" FROM pragma_index_xinfo(?) WHERE key = 1 ORDER BY seqno`,
+		`SELECT name, "desc" FROM (SELECT a.attname AS name,k.ordinality-1 AS seqno,1 AS "key",CASE WHEN (i.indoption[(k.ordinality-1)::int] & 1)=1 THEN 1 ELSE 0 END AS "desc" FROM pg_index i JOIN pg_class x ON x.oid=i.indexrelid JOIN pg_namespace n ON n.oid=x.relnamespace CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum,ordinality) JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum WHERE n.nspname=current_schema() AND x.relname=$1 AND k.ordinality<=i.indnkeyatts) AS index_metadata WHERE key = 1 ORDER BY seqno`,
 		indexName,
 	)
 	if err != nil {
@@ -916,7 +926,7 @@ func assertMigratedSavedSearchUniqueKey(
 	t.Helper()
 	rows, err := database.SQLDB().QueryContext(
 		context.Background(),
-		`SELECT name FROM pragma_index_list('saved_searches') WHERE "unique" = 1`,
+		`SELECT name FROM (SELECT x.relname AS name,CASE WHEN i.indisunique THEN 1 ELSE 0 END AS "unique" FROM pg_index i JOIN pg_class x ON x.oid=i.indexrelid JOIN pg_class r ON r.oid=i.indrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND r.relname='saved_searches') AS index_list WHERE "unique" = 1`,
 	)
 	if err != nil {
 		t.Fatalf("read migrated saved-search unique indexes: %v", err)
@@ -943,7 +953,7 @@ func assertMigratedSavedSearchUniqueKey(
 }
 
 func TestCursorAndRecordsSurviveReopen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "control.sqlite")
+	path := pgtest.DSN(t)
 	ctx := context.Background()
 	database, err := control.Open(ctx, path)
 	if err != nil {
@@ -955,11 +965,11 @@ func TestCursorAndRecordsSurviveReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"a", "b", "c"} {
-		if _, err := store.Create(ctx, AccessScope{OwnerID: "owner"}, savedSearchDefinition(name, "app")); err != nil {
+		if _, err := store.Create(ctx, AccessScope{OwnerID: "owner", OrganizationID: "1"}, savedSearchDefinition(name, "app")); err != nil {
 			t.Fatal(err)
 		}
 	}
-	first, err := store.List(ctx, AccessScope{OwnerID: "owner"}, ListRequest{PageSize: 1})
+	first, err := store.List(ctx, AccessScope{OwnerID: "owner", OrganizationID: "1"}, ListRequest{PageSize: 1})
 	if err != nil || first.NextPageToken == nil {
 		t.Fatalf("List() = (%+v,%v)", first, err)
 	}
@@ -975,7 +985,7 @@ func TestCursorAndRecordsSurviveReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := reopened.List(ctx, AccessScope{OwnerID: "owner"}, ListRequest{PageSize: 1, PageToken: *first.NextPageToken})
+	second, err := reopened.List(ctx, AccessScope{OwnerID: "owner", OrganizationID: "1"}, ListRequest{PageSize: 1, PageToken: *first.NextPageToken})
 	if err != nil || len(second.SavedSearches) != 1 || second.SavedSearches[0].Definition.Name != "b" {
 		t.Fatalf("List(after reopen) = (%+v,%v)", second, err)
 	}
@@ -983,7 +993,7 @@ func TestCursorAndRecordsSurviveReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := differentKeyStore.List(ctx, AccessScope{OwnerID: "owner"}, ListRequest{PageSize: 1, PageToken: *first.NextPageToken}); !errors.Is(err, control.ErrInvalidArgument) {
+	if _, err := differentKeyStore.List(ctx, AccessScope{OwnerID: "owner", OrganizationID: "1"}, ListRequest{PageSize: 1, PageToken: *first.NextPageToken}); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("List(different key) error = %v, want ErrInvalidArgument", err)
 	}
 }
@@ -991,12 +1001,12 @@ func TestCursorAndRecordsSurviveReopen(t *testing.T) {
 func TestMalformedStoredProtoAndMetadataAreRejected(t *testing.T) {
 	database, store := openTestStore(t)
 	ctx := context.Background()
-	scope := AccessScope{OwnerID: "owner"}
+	scope := AccessScope{OwnerID: "owner", OrganizationID: "1"}
 	created, err := store.Create(ctx, scope, savedSearchDefinition("valid", "app"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.SQLDB().ExecContext(ctx, `UPDATE saved_searches SET definition_proto = x'ff' WHERE saved_search_id = ?`, created.SavedSearchId); err != nil {
+	if _, err := database.SQLDB().ExecContext(ctx, `UPDATE saved_searches SET definition_proto = decode('ff','hex') WHERE saved_search_id = $1`, created.SavedSearchId); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Get(ctx, scope, created.SavedSearchId); err == nil ||
@@ -1009,7 +1019,7 @@ func TestMalformedStoredProtoAndMetadataAreRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.SQLDB().ExecContext(ctx, `UPDATE saved_searches SET name = 'mismatch' WHERE saved_search_id = ?`, other.SavedSearchId); err != nil {
+	if _, err := database.SQLDB().ExecContext(ctx, `UPDATE saved_searches SET name = 'mismatch' WHERE saved_search_id = $1`, other.SavedSearchId); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Get(ctx, scope, other.SavedSearchId); err == nil ||
@@ -1027,7 +1037,7 @@ func TestMalformedStoredProtoAndMetadataAreRejected(t *testing.T) {
 	}
 	if _, err := database.SQLDB().ExecContext(
 		ctx,
-		`UPDATE saved_searches SET definition_proto = ? WHERE saved_search_id = ?`,
+		`UPDATE saved_searches SET definition_proto = $1 WHERE saved_search_id = $2`,
 		invalidDefinitionProto,
 		invalid.SavedSearchId,
 	); err != nil {
@@ -1043,29 +1053,29 @@ func TestCancellationAndBoundedInputs(t *testing.T) {
 	_, store := openTestStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := store.Create(ctx, AccessScope{OwnerID: "owner"}, savedSearchDefinition("test", "app")); !errors.Is(err, context.Canceled) {
+	if _, err := store.Create(ctx, AccessScope{OwnerID: "owner", OrganizationID: "1"}, savedSearchDefinition("test", "app")); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Create(canceled) error = %v, want context.Canceled", err)
 	}
 	var nilContext context.Context
 
-	if _, err := store.Get(nilContext, AccessScope{OwnerID: "owner"}, "id"); !errors.Is(err, control.ErrInvalidArgument) {
+	if _, err := store.Get(nilContext, AccessScope{OwnerID: "owner", OrganizationID: "1"}, "id"); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Get(nil context) error = %v, want ErrInvalidArgument", err)
 	}
-	if _, err := store.List(context.Background(), AccessScope{OwnerID: "owner"}, ListRequest{PageSize: maximumListPageSize + 1}); !errors.Is(err, control.ErrInvalidArgument) {
+	if _, err := store.List(context.Background(), AccessScope{OwnerID: "owner", OrganizationID: "1"}, ListRequest{PageSize: maximumListPageSize + 1}); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("List(large page) error = %v", err)
 	}
-	if _, err := store.List(context.Background(), AccessScope{OwnerID: "owner"}, ListRequest{PageToken: string(make([]byte, maximumCursorBytes+1))}); !errors.Is(err, control.ErrInvalidArgument) {
+	if _, err := store.List(context.Background(), AccessScope{OwnerID: "owner", OrganizationID: "1"}, ListRequest{PageToken: string(make([]byte, maximumCursorBytes+1))}); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("List(large token) error = %v", err)
 	}
 	definition := savedSearchDefinition("test", "app")
-	created, err := store.Create(context.Background(), AccessScope{OwnerID: "owner"}, definition)
+	created, err := store.Create(context.Background(), AccessScope{OwnerID: "owner", OrganizationID: "1"}, definition)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Update(context.Background(), AccessScope{OwnerID: "owner"}, created.SavedSearchId, 1, definition, &fieldmaskpb.FieldMask{Paths: []string{"search.spl"}}); !errors.Is(err, control.ErrInvalidArgument) {
+	if _, err := store.Update(context.Background(), AccessScope{OwnerID: "owner", OrganizationID: "1"}, created.SavedSearchId, 1, definition, &fieldmaskpb.FieldMask{Paths: []string{"search.spl"}}); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Update(unsupported mask) error = %v", err)
 	}
-	if err := store.Delete(context.Background(), AccessScope{OwnerID: "owner"}, created.SavedSearchId, 0); !errors.Is(err, control.ErrInvalidArgument) {
+	if err := store.Delete(context.Background(), AccessScope{OwnerID: "owner", OrganizationID: "1"}, created.SavedSearchId, 0); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Delete(version 0) error = %v", err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 )
@@ -138,7 +139,7 @@ func (store *Store) pruneExpiredTransaction(
 	maximumRows int,
 ) (deleted int64, more bool, returnedErr error) {
 	cutoff := now.Add(-store.maximumAge).UnixMicro()
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(store.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return 0, false, mapContextError(
 			ctx,
@@ -147,14 +148,30 @@ func (store *Store) pruneExpiredTransaction(
 		)
 	}
 	defer finishGORMTx(tx, &returnedErr)
-	expired := tx.Model(&historyRecord{}).
-		Select("search_job_id").
+	var expired []historyRecord
+	selection := tx.Model(&historyRecord{}).
+		Select("search_job_id", "tenant_id", "owner_id").
 		Where("created_at_unix_micro < ?", cutoff).
 		Order("created_at_unix_micro").
 		Order("search_job_id").
-		Limit(maximumRows)
+		Limit(maximumRows).Find(&expired)
+	if selection.Error != nil {
+		return 0, false, mapContextError(ctx, "select expired search-history batch", selection.Error)
+	}
+	if err := lockHistoryOwners(tx, expired); err != nil {
+		return 0, false, mapContextError(ctx, "lock expired search-history owners", err)
+	}
+	if err := lockHistoryJobs(tx, expired); err != nil {
+		return 0, false, mapContextError(ctx, "lock expired search-history jobs", err)
+	}
+	ids := make([]string, len(expired))
+	for index, record := range expired {
+		ids[index] = record.SearchJobID
+	}
+	// Keep the candidate set fixed after locking. Repeating the discovery query
+	// could include another owner that this transaction has not protected.
 	deleteResult := tx.
-		Where("search_job_id IN (?)", expired).
+		Where("search_job_id IN ? AND created_at_unix_micro < ?", ids, cutoff).
 		Delete(&historyRecord{})
 	if deleteResult.Error != nil {
 		return 0, false, mapContextError(
@@ -190,7 +207,7 @@ func (store *Store) discoverOverflowCursor(
 		Select("tenant_id", "owner_id", "terminal_count").
 		Where("terminal_count > ?", store.maximumEntriesPerOwner)
 	if after != nil {
-		scope, err := normalizeScope(AccessScope{
+		scope, err := normalizeOwnerScope(AccessScope{
 			TenantID: after.tenantID,
 			OwnerID:  after.ownerID,
 		})
@@ -242,14 +259,14 @@ func (store *Store) pruneOverflowTransaction(
 			"prune over-capacity search history: cursor is required",
 		)
 	}
-	scope, err := normalizeScope(AccessScope{
+	scope, err := normalizeOwnerScope(AccessScope{
 		TenantID: cursor.tenantID,
 		OwnerID:  cursor.ownerID,
 	})
 	if err != nil {
 		return 0, false, invalid("search-history maintenance cursor is invalid")
 	}
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginLocked(store.orm.WithContext(ctx), "search-history:"+scope.TenantID+":"+scope.OwnerID)
 	if tx.Error != nil {
 		return 0, false, mapContextError(
 			ctx,
@@ -292,7 +309,7 @@ func (store *Store) pruneOverflowTransaction(
 }
 
 func persistedMaintenanceScope(record historyOwnerCountRecord) (AccessScope, error) {
-	scope, err := normalizeScope(AccessScope{
+	scope, err := normalizeOwnerScope(AccessScope{
 		TenantID: record.TenantID,
 		OwnerID:  record.OwnerID,
 	})
@@ -337,7 +354,7 @@ func (store *Store) deleteOldestExcess(
 	if err != nil {
 		return 0, false, err
 	}
-	if persistedScope != scope {
+	if persistedScope.TenantID != scope.TenantID || persistedScope.OwnerID != scope.OwnerID {
 		return 0, false, errors.New(
 			"search-history owner count query returned a cross-scope row",
 		)
@@ -348,18 +365,29 @@ func (store *Store) deleteOldestExcess(
 		return 0, false, nil
 	}
 	deleteLimit := min(excess, maximumRows)
-	oldest := database.Model(&historyRecord{}).
+	var oldest []historyRecord
+	selection := database.Model(&historyRecord{}).
 		Select("search_job_id").
 		Where("tenant_id = ? AND owner_id = ?", scope.TenantID, scope.OwnerID).
 		Order("created_at_unix_micro").
 		Order("search_job_id").
-		Limit(int(deleteLimit))
+		Limit(int(deleteLimit)).Find(&oldest)
+	if selection.Error != nil {
+		return 0, false, fmt.Errorf("select excess search-history rows: %w", selection.Error)
+	}
+	if err := lockHistoryJobs(database, oldest); err != nil {
+		return 0, false, fmt.Errorf("lock excess search-history jobs: %w", err)
+	}
+	ids := make([]string, len(oldest))
+	for index, record := range oldest {
+		ids[index] = record.SearchJobID
+	}
 	deleteResult := database.
 		Where(
-			"tenant_id = ? AND owner_id = ? AND search_job_id IN (?)",
+			"tenant_id = ? AND owner_id = ? AND search_job_id IN ?",
 			scope.TenantID,
 			scope.OwnerID,
-			oldest,
+			ids,
 		).
 		Delete(&historyRecord{})
 	if deleteResult.Error != nil {
@@ -385,7 +413,7 @@ func (store *Store) pruneScopeTransaction(
 	now time.Time,
 	maximumRows int,
 ) (deleted int64, more bool, returnedErr error) {
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginLocked(store.orm.WithContext(ctx), "search-history:"+scope.TenantID+":"+scope.OwnerID)
 	if tx.Error != nil {
 		return 0, false, mapContextError(
 			ctx,
@@ -440,7 +468,8 @@ func (store *Store) pruneScopeBatch(
 	remaining := int64(maximumRows) - deleted
 	if remaining > 0 {
 		cutoff := now.Add(-store.maximumAge).UnixMicro()
-		expired := database.Model(&historyRecord{}).
+		var expired []historyRecord
+		selection := database.Model(&historyRecord{}).
 			Select("search_job_id").
 			Where(
 				"tenant_id = ? AND owner_id = ? AND created_at_unix_micro < ?",
@@ -450,13 +479,23 @@ func (store *Store) pruneScopeBatch(
 			).
 			Order("created_at_unix_micro").
 			Order("search_job_id").
-			Limit(int(remaining))
+			Limit(int(remaining)).Find(&expired)
+		if selection.Error != nil {
+			return 0, false, fmt.Errorf("select search-history age retention: %w", selection.Error)
+		}
+		if err := lockHistoryJobs(database, expired); err != nil {
+			return 0, false, fmt.Errorf("lock search-history age retention jobs: %w", err)
+		}
+		ids := make([]string, len(expired))
+		for index, record := range expired {
+			ids[index] = record.SearchJobID
+		}
 		ageResult := database.
 			Where(
-				"tenant_id = ? AND owner_id = ? AND search_job_id IN (?)",
+				"tenant_id = ? AND owner_id = ? AND search_job_id IN ?",
 				scope.TenantID,
 				scope.OwnerID,
-				expired,
+				ids,
 			).
 			Delete(&historyRecord{})
 		if ageResult.Error != nil {

@@ -12,6 +12,7 @@ import (
 	"math"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -23,6 +24,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/requestidempotency"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
@@ -87,8 +89,10 @@ var appAdministrationUpdatePaths = map[string]string{
 // AppAdministrationScope is derived only from an authenticated administrator.
 // ActorID is the principal owner identity and is never accepted on the wire.
 type AppAdministrationScope struct {
-	TenantID string
-	ActorID  string
+	OrganizationID    int64
+	SiteAdministrator bool
+	TenantID          string
+	ActorID           string
 }
 
 // AppAdministrationSelector contains exactly one canonical lookup key.
@@ -203,6 +207,9 @@ func (handler *apiHandler) createApp(
 		return nil, unavailableError("app service is unavailable")
 	}
 	definition := canonicalAppAdministrationDefinition(input.GetDefinition())
+	if err := handler.authorizeAppDefaultIndexes(request.Context(), definition.DefaultIndexNames); err != nil {
+		return nil, err
+	}
 	if err := appAdministrationContextError(request.Context()); err != nil {
 		return nil, err
 	}
@@ -247,7 +254,7 @@ func (handler *apiHandler) createApp(
 	); mapped != nil {
 		return nil, mapped
 	}
-	converted, err := handler.appAdministrationWorkspaceToProto(record)
+	converted, err := handler.appAdministrationWorkspaceToProto(record, request.Context())
 	if err != nil || converted.GetVersion() == 0 ||
 		(!replayed && (converted.GetVersion() != 1 ||
 			record.State != AppAdministrationStateActive ||
@@ -312,7 +319,7 @@ func (handler *apiHandler) getApp(
 	if !appAdministrationSelectorMatches(selector, record) {
 		return nil, internalError()
 	}
-	converted, err := handler.appAdministrationWorkspaceToProto(record)
+	converted, err := handler.appAdministrationWorkspaceToProto(record, request.Context())
 	if err != nil {
 		return nil, internalError()
 	}
@@ -339,7 +346,7 @@ func (handler *apiHandler) listApps(
 	if handler.appAdmin == nil {
 		return nil, unavailableError("app service is unavailable")
 	}
-	listRequest, err := handler.appAdministrationListRequest(input)
+	listRequest, err := handler.appAdministrationListRequest(input, request.Context())
 	if err != nil {
 		if errors.Is(err, ErrAppAdministrationInvalidPageToken) {
 			return nil, badRequestError("page token is invalid")
@@ -371,7 +378,7 @@ func (handler *apiHandler) listApps(
 	); mapped != nil {
 		return nil, mapped
 	}
-	message, err := handler.appAdministrationListToProto(listRequest, result)
+	message, err := handler.appAdministrationListToProto(listRequest, result, request.Context())
 	if errors.Is(err, ErrAppAdministrationInvalidPageToken) {
 		return nil, badRequestError("page token is invalid")
 	}
@@ -427,6 +434,9 @@ func (handler *apiHandler) updateApp(
 	if err != nil {
 		return nil, badRequestError("app update is invalid")
 	}
+	if err := handler.authorizeAppDefaultIndexes(request.Context(), replacement.DefaultIndexNames); err != nil {
+		return nil, err
+	}
 	byID := AppAdministrationSelector{AppID: strings.Clone(current.AppID)}
 	expectedReplacement := cloneAppAdministrationDefinition(replacement)
 	record, operationErr := handler.appAdmin.UpdateApp(
@@ -442,7 +452,7 @@ func (handler *apiHandler) updateApp(
 	); mapped != nil {
 		return nil, mapped
 	}
-	converted, err := handler.appAdministrationWorkspaceToProto(record)
+	converted, err := handler.appAdministrationWorkspaceToProto(record, request.Context())
 	if err != nil ||
 		record.AppID != current.AppID ||
 		record.Version != input.GetExpectedVersion()+1 ||
@@ -528,7 +538,7 @@ func (handler *apiHandler) setAppState(
 		record.UpdatedAt.Before(current.UpdatedAt) {
 		return nil, internalError()
 	}
-	converted, err := handler.appAdministrationWorkspaceToProto(record)
+	converted, err := handler.appAdministrationWorkspaceToProto(record, request.Context())
 	if err != nil {
 		return nil, internalError()
 	}
@@ -620,10 +630,15 @@ func (handler *apiHandler) appAdministrationAccess(
 	if err != nil {
 		return AppAdministrationScope{}, err
 	}
-	return AppAdministrationScope{
+	result := AppAdministrationScope{
 		TenantID: principal.TenantID(),
 		ActorID:  principal.OwnerID(),
-	}, nil
+	}
+	if scope, ok := authorization.FromContext(request.Context()); ok {
+		result.OrganizationID = scope.OrganizationID
+		result.SiteAdministrator = scope.Subject.IsSiteAdmin()
+	}
+	return result, nil
 }
 
 // beginAppAdministrationMutation acquires one serialization permit and loads
@@ -932,6 +947,7 @@ func cloneAppAdministrationListRequest(
 // token still matches this tenant's filters.
 func (handler *apiHandler) appAdministrationListRequest(
 	input *opensplunk.ListAppsRequest,
+	contexts ...context.Context,
 ) (AppAdministrationListRequest, error) {
 	pageSize, pageToken, includeTotal, err := handler.pageRequest(
 		input.GetPage(),
@@ -962,7 +978,7 @@ func (handler *apiHandler) appAdministrationListRequest(
 		return AppAdministrationListRequest{}, err
 	}
 	fingerprint := appAdministrationListFingerprint(
-		handler.tenantID,
+		handler.appCursorScope(contexts...),
 		pageSize,
 		includeTotal,
 		states,
@@ -1212,6 +1228,7 @@ func appAdministrationSelectorMatches(
 
 func (handler *apiHandler) appAdministrationWorkspaceToProto(
 	record AppAdministrationWorkspace,
+	contexts ...context.Context,
 ) (*opensplunk.AppWorkspace, error) {
 	if validateBoundedIdentifier(
 		record.AppID,
@@ -1227,6 +1244,11 @@ func (handler *apiHandler) appAdministrationWorkspaceToProto(
 	)
 	if err != nil {
 		return nil, err
+	}
+	if len(contexts) > 0 {
+		if err := handler.filterAppDefaults(contexts[0], definition); err != nil {
+			return nil, err
+		}
 	}
 	state, err := appAdministrationStateToProto(record.State)
 	if err != nil {
@@ -1341,6 +1363,7 @@ func equalAppAdministrationDefinition(
 func (handler *apiHandler) appAdministrationListToProto(
 	request AppAdministrationListRequest,
 	result AppAdministrationListResult,
+	contexts ...context.Context,
 ) (*opensplunk.ListAppsResponse, error) {
 	if len(result.Apps) > int(request.PageSize) ||
 		len(result.Apps) > maximumAppAdministrationRows {
@@ -1383,7 +1406,7 @@ func (handler *apiHandler) appAdministrationListToProto(
 		if _, duplicate := seenSlugs[record.Definition.Slug]; duplicate {
 			return nil, errors.New("app page contains a duplicate")
 		}
-		converted, err := handler.appAdministrationWorkspaceToProto(record)
+		converted, err := handler.appAdministrationWorkspaceToProto(record, contexts...)
 		if err != nil {
 			return nil, err
 		}
@@ -1400,7 +1423,7 @@ func (handler *apiHandler) appAdministrationListToProto(
 			appAdministrationCursor{
 				Version: appAdministrationCursorVersion,
 				Fingerprint: appAdministrationListFingerprint(
-					handler.tenantID,
+					handler.appCursorScope(contexts...),
 					int(request.PageSize),
 					request.IncludeTotal,
 					request.StateFilters,
@@ -1597,4 +1620,39 @@ func newAppAdministrationCodec[
 			sizeError:    "app response exceeds its byte limit",
 		},
 	)
+}
+
+func (handler *apiHandler) appCursorScope(contexts ...context.Context) string {
+	if len(contexts) > 0 {
+		if scope, ok := authorization.FromContext(contexts[0]); ok {
+			return handler.tenantID + ":" + strconv.FormatInt(scope.OrganizationID, 10) + ":" + scope.Subject.OwnerID() + ":" + strconv.FormatBool(scope.Subject.IsSiteAdmin())
+		}
+	}
+	return handler.tenantID
+}
+func (handler *apiHandler) authorizeAppDefaultIndexes(ctx context.Context, names []string) error {
+	if handler.authorization == nil {
+		return nil
+	}
+	scope, ok := authorization.FromContext(ctx)
+	if !ok {
+		return mapAuthorizationError(authorization.ErrUnauthorized)
+	}
+	if scope.OrganizationID <= 0 {
+		return badRequestError("organization selection is required")
+	}
+	for _, name := range names {
+		record, err := handler.indexes.GetIndexByName(ctx, name)
+		if err != nil {
+			return forbiddenError("app index access is denied")
+		}
+		org, err := handler.authorization.OrganizationForIndex(ctx, record.ID)
+		if err != nil || org != scope.OrganizationID {
+			return forbiddenError("app indexes must belong to its organization")
+		}
+		if err = handler.authorizeIndexCapability(ctx, record.ID, metadataCapability); err != nil {
+			return mapAuthorizationError(err)
+		}
+	}
+	return nil
 }

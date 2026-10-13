@@ -5,13 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -96,9 +98,9 @@ func TestGetCurrentHistoricalAuthorizationAndDetachedResults(t *testing.T) {
 	}
 
 	for _, scope := range []ReadScope{
-		{TenantID: testTenant, OwnerID: "owner-b", ReadableAppIDs: []string{testApp}},
-		{TenantID: testTenant, OwnerID: testOwner, ReadableAppIDs: []string{testAppTwo}},
-		{TenantID: "tenant-b", OwnerID: testOwner, ReadableAppIDs: []string{testApp}},
+		{TenantID: testTenant, OwnerID: "owner-b", ReadableAppIDs: []string{testApp}, OrganizationID: 1},
+		{TenantID: testTenant, OwnerID: testOwner, ReadableAppIDs: []string{testAppTwo}, OrganizationID: 1},
+		{TenantID: "tenant-b", OwnerID: testOwner, ReadableAppIDs: []string{testApp}, OrganizationID: 1},
 	} {
 		if _, getErr := store.Get(context.Background(), scope, "ko-history", &version); !errors.Is(getErr, control.ErrNotFound) {
 			t.Errorf("Get(hidden historical, %#v) error = %v, want ErrNotFound", scope, getErr)
@@ -134,8 +136,8 @@ func TestQuarantineNeverReadsHistoricalDefinition(t *testing.T) {
 	// the bodyless current quarantine scalar without opening this blob.
 	dropTrigger(t, database, "knowledge_definition_blob_update_is_forbidden")
 	mustExec(t, database, `UPDATE knowledge_definition_blobs
-		SET definition_proto = X'00', definition_bytes = 1
-		WHERE tenant_id = ?`, testTenant)
+		SET definition_proto = decode('00','hex'), definition_bytes = 1
+		WHERE tenant_id = $1`, testTenant)
 	version := uint64(1)
 	got, err := store.Get(context.Background(), testReadScope(), "ko-quarantine", &version)
 	if err != nil {
@@ -228,7 +230,7 @@ func TestListFiltersBeforeLimitPaginatesAndBindsCursor(t *testing.T) {
 	if _, err := store.List(context.Background(), testReadScope(), changed); !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("List(rebound filter) error = %v, want ErrInvalidCursor", err)
 	}
-	if _, err := store.List(context.Background(), ReadScope{TenantID: testTenant, OwnerID: "owner-b", ReadableAppIDs: []string{testApp}}, ListRequest{PageSize: 1, IncludeTotal: true, TextFilter: &needle, PageToken: first.NextPageToken}); !errors.Is(err, ErrInvalidCursor) {
+	if _, err := store.List(context.Background(), ReadScope{TenantID: testTenant, OwnerID: "owner-b", ReadableAppIDs: []string{testApp}, OrganizationID: 1}, ListRequest{PageSize: 1, IncludeTotal: true, TextFilter: &needle, PageToken: first.NextPageToken}); !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("List(rebound scope) error = %v, want ErrInvalidCursor", err)
 	}
 	tampered := request
@@ -236,7 +238,7 @@ func TestListFiltersBeforeLimitPaginatesAndBindsCursor(t *testing.T) {
 	if _, err := store.List(context.Background(), testReadScope(), tampered); !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("List(tampered cursor) error = %v, want ErrInvalidCursor", err)
 	}
-	mustExec(t, database, `UPDATE knowledge_catalog_tenants SET catalog_revision = catalog_revision + 1 WHERE tenant_id = ?`, testTenant)
+	mustExec(t, database, `UPDATE knowledge_catalog_tenants SET catalog_revision = catalog_revision + 1 WHERE tenant_id = $1`, testTenant)
 	request.PageToken = first.NextPageToken
 	if _, err := store.List(context.Background(), testReadScope(), request); !errors.Is(err, control.ErrPageInvalidated) {
 		t.Fatalf("List(stale cursor) error = %v, want ErrPageInvalidated", err)
@@ -255,9 +257,9 @@ func TestVisibleCorruptionFailsClosedWithoutDisclosingHiddenObject(t *testing.T)
 		definition: aliasDefinition(testApp, "hidden", SharingScopePrivate, &hiddenDescription, "hidden-*"), state: StateActive, mutation: "create", timestamp: 20,
 	}}})
 	dropTrigger(t, database, "knowledge_definition_blob_update_is_forbidden")
-	mustExec(t, database, `UPDATE knowledge_definition_blobs SET definition_proto = X'00', definition_bytes = 1
-		WHERE tenant_id = ? AND definition_digest = (
-			SELECT definition_digest FROM knowledge_objects WHERE tenant_id = ? AND knowledge_object_id = 'ko-hidden'
+	mustExec(t, database, `UPDATE knowledge_definition_blobs SET definition_proto = decode('00','hex'), definition_bytes = 1
+		WHERE tenant_id = $1 AND definition_digest = (
+			SELECT definition_digest FROM knowledge_objects WHERE tenant_id = $2 AND knowledge_object_id = 'ko-hidden'
 		)`, testTenant, testTenant)
 
 	page, err := store.List(context.Background(), testReadScope(), ListRequest{})
@@ -270,7 +272,7 @@ func TestVisibleCorruptionFailsClosedWithoutDisclosingHiddenObject(t *testing.T)
 
 	dropTrigger(t, database, "knowledge_list_projection_update_is_forbidden")
 	mustExec(t, database, `UPDATE knowledge_object_list_projections SET description = 'tampered'
-		WHERE tenant_id = ? AND knowledge_object_id = 'ko-visible'`, testTenant)
+		WHERE tenant_id = $1 AND knowledge_object_id = 'ko-visible'`, testTenant)
 	if _, err := store.Get(context.Background(), testReadScope(), "ko-visible", nil); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("Get(visible corrupt projection) error = %v, want ErrCorrupt", err)
 	}
@@ -383,7 +385,7 @@ func TestConcurrentReadsReturnDetachedDefinitions(t *testing.T) {
 
 func newCatalogTestStore(t *testing.T) (*control.DB, *Store) {
 	t.Helper()
-	database, err := control.Open(context.Background(), filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := control.Open(context.Background(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
 	}
@@ -392,6 +394,9 @@ func newCatalogTestStore(t *testing.T) (*control.DB, *Store) {
 			t.Errorf("close control database: %v", err)
 		}
 	})
+	if err := database.GORMDB().Exec(`CREATE TABLE os_index_organizations (index_id TEXT PRIMARY KEY REFERENCES indexes(index_id), organization_id BIGINT NOT NULL CHECK (organization_id > 0))`).Error; err != nil {
+		t.Fatal(err)
+	}
 	ids := []string{testApp, testAppTwo}
 	var clockSequence atomic.Int64
 	var idSequence atomic.Int64
@@ -410,7 +415,7 @@ func newCatalogTestStore(t *testing.T) (*control.DB, *Store) {
 		t.Fatalf("control.NewAppCatalog(): %v", err)
 	}
 	for _, slug := range []string{"catalog-one", "catalog-two"} {
-		if _, err := apps.CreateApp(context.Background(), control.AppAccessScope{TenantID: testTenant}, control.AppDefinition{
+		if _, err := apps.CreateApp(context.Background(), control.AppAccessScope{TenantID: testTenant, OrganizationID: 1}, control.AppDefinition{
 			Slug: slug, DisplayName: slug,
 			DefaultTimeRange: &control.AppTimeRange{Earliest: new("-24h"), Latest: new("now")},
 		}); err != nil {
@@ -430,17 +435,17 @@ func insertFixtureObject(t *testing.T, database *control.DB, object fixtureObjec
 		object.owner = testOwner
 	}
 	ctx := context.Background()
-	tx, err := database.SQLDB().BeginTx(ctx, nil)
+	tx, err := pgmeta.BeginSQL(ctx, database.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin fixture transaction: %v", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_catalog_tenants (tenant_id)
-		SELECT ? WHERE NOT EXISTS (SELECT 1 FROM knowledge_catalog_tenants WHERE tenant_id = ?)`, testTenant, testTenant); err != nil {
+		SELECT $1 WHERE NOT EXISTS (SELECT 1 FROM knowledge_catalog_tenants WHERE tenant_id = $2)`, testTenant, testTenant); err != nil {
 		t.Fatalf("insert tenant ledger: %v", err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_projection_tenant_ledgers (tenant_id)
-		SELECT ? WHERE NOT EXISTS (SELECT 1 FROM knowledge_projection_tenant_ledgers WHERE tenant_id = ?)`, testTenant, testTenant); err != nil {
+		SELECT $1 WHERE NOT EXISTS (SELECT 1 FROM knowledge_projection_tenant_ledgers WHERE tenant_id = $2)`, testTenant, testTenant); err != nil {
 		t.Fatalf("insert projection ledger: %v", err)
 	}
 
@@ -472,7 +477,7 @@ func insertFixtureObject(t *testing.T, database *control.DB, object fixtureObjec
 			if _, exists := insertedDigests[normalized.Digest]; !exists {
 				if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_definition_blobs (
 					tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro
-				) VALUES (?, ?, ?, ?, ?)`, testTenant, normalized.Digest[:], normalized.Bytes, len(normalized.Bytes), version.timestamp); err != nil {
+				) VALUES ($1, $2, $3, $4, $5)`, testTenant, normalized.Digest[:], normalized.Bytes, len(normalized.Bytes), version.timestamp); err != nil {
 					t.Fatalf("insert definition blob %s v%d: %v", object.id, versionNumber, err)
 				}
 				insertedDigests[normalized.Digest] = struct{}{}
@@ -497,7 +502,7 @@ func insertFixtureObject(t *testing.T, database *control.DB, object fixtureObjec
 			tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name,
 			sharing_scope, state, definition_digest, dependency_count, mutation_kind,
 			quarantine_reason, created_at_unix_micro
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 			testTenant, object.id, versionNumber, appID, object.owner, objectType, name,
 			scope, version.state, digest, len(version.dependencies), version.mutation, version.reason, version.timestamp); err != nil {
 			t.Fatalf("insert immutable version %s v%d: %v", object.id, versionNumber, err)
@@ -506,14 +511,14 @@ func insertFixtureObject(t *testing.T, database *control.DB, object fixtureObjec
 			if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_object_dependencies (
 				tenant_id, source_object_id, source_object_version, ordinal, target_kind,
 				target_object_id, target_object_version, dependency_role
-			) VALUES (?, ?, ?, ?, 'object', ?, ?, 'field_input')`, testTenant, object.id,
+			) VALUES ($1, $2, $3, $4, 'object', $5, $6, 'field_input')`, testTenant, object.id,
 				versionNumber, ordinal, dependency.targetObjectID, dependency.targetVersion); err != nil {
 				t.Fatalf("insert dependency %s v%d[%d]: %v", object.id, versionNumber, ordinal, err)
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_object_dependency_seals (
 			tenant_id, knowledge_object_id, object_version, dependency_count
-		) VALUES (?, ?, ?, ?)`, testTenant, object.id, versionNumber, len(version.dependencies)); err != nil {
+		) VALUES ($1, $2, $3, $4)`, testTenant, object.id, versionNumber, len(version.dependencies)); err != nil {
 			t.Fatalf("seal dependencies %s v%d: %v", object.id, versionNumber, err)
 		}
 		if version.state != StateQuarantined {
@@ -554,7 +559,7 @@ func insertFixtureObject(t *testing.T, database *control.DB, object fixtureObjec
 		sharing_scope, state, description_present, description, index_selector_count,
 		host_selector_count, source_selector_count, sourcetype_selector_count,
 		selector_value_bytes, canonical_selector_bytes
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		testTenant, object.id, currentVersion, appID, object.owner, objectType, name, scope, last.state,
 		descriptionPresent, description, counts[0], counts[1], counts[2], counts[3], selectorValueBytes, canonicalSelectorBytes); err != nil {
 		t.Fatalf("insert projection %s: %v", object.id, err)
@@ -565,7 +570,7 @@ func insertFixtureObject(t *testing.T, database *control.DB, object fixtureObjec
 	projectionBytes := len(description) + selectorValueBytes
 	if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_object_list_projection_seals (
 		tenant_id, knowledge_object_id, object_version, projection_bytes, canonical_selector_bytes
-	) VALUES (?, ?, ?, ?, ?)`, testTenant, object.id, currentVersion, projectionBytes, canonicalSelectorBytes); err != nil {
+	) VALUES ($1, $2, $3, $4, $5)`, testTenant, object.id, currentVersion, projectionBytes, canonicalSelectorBytes); err != nil {
 		t.Fatalf("seal projection %s: %v", object.id, err)
 	}
 	var digest any
@@ -590,17 +595,17 @@ func insertFixtureObject(t *testing.T, database *control.DB, object fixtureObjec
 	if last.state == StateDeleted {
 		deletedAt = last.timestamp
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_objects (
+	if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_objects (organization_id,
 		tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro,
 		disabled_at_unix_micro, quarantined_at_unix_micro, deleted_at_unix_micro, quarantine_reason
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, testTenant, object.id, currentVersion,
+	) VALUES ((SELECT organization_id FROM app_workspaces WHERE tenant_id = $1 AND app_id = $4), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`, testTenant, object.id, currentVersion,
 		appID, object.owner, objectType, name, scope, last.state, digest,
 		object.versions[0].timestamp, last.timestamp, disabledAt, quarantinedAt, deletedAt, last.reason); err != nil {
 		t.Fatalf("insert registry %s: %v", object.id, err)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE knowledge_catalog_tenants
-		SET catalog_revision = catalog_revision + 1 WHERE tenant_id = ?`, testTenant); err != nil {
+		SET catalog_revision = catalog_revision + 1 WHERE tenant_id = $1`, testTenant); err != nil {
 		t.Fatalf("advance catalog revision: %v", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -646,7 +651,7 @@ func insertSelectorRows(t *testing.T, tx *sql.Tx, objectID string, version int64
 			}
 			if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_list_selector_patterns (
 				tenant_id, knowledge_object_id, object_version, dimension, ordinal, match_kind, value
-			) VALUES (?, ?, ?, ?, ?, ?, ?)`, testTenant, objectID, version, dimension.name, ordinal, matchKind, value); err != nil {
+			) VALUES ($1, $2, $3, $4, $5, $6, $7)`, testTenant, objectID, version, dimension.name, ordinal, matchKind, value); err != nil {
 				t.Fatalf("insert selector %s[%d]: %v", dimension.name, ordinal, err)
 			}
 		}
@@ -674,7 +679,7 @@ func aliasDefinition(appID, name string, scope SharingScope, description *string
 }
 
 func testReadScope() ReadScope {
-	return ReadScope{TenantID: testTenant, OwnerID: testOwner, ReadableAppIDs: []string{testApp}}
+	return ReadScope{TenantID: testTenant, OwnerID: testOwner, ReadableAppIDs: []string{testApp}, OrganizationID: 1}
 }
 
 func names(objects []Object) []string {
@@ -686,86 +691,86 @@ func names(objects []Object) []string {
 }
 
 var knowledgeCatalogTriggerDropStatements = map[string]string{
-	"app_catalog_revision_delete_is_forbidden":                          `DROP TRIGGER IF EXISTS app_catalog_revision_delete_is_forbidden`,
-	"audit_event_update_is_forbidden":                                   `DROP TRIGGER IF EXISTS audit_event_update_is_forbidden`,
-	"index_catalog_state_transition_is_valid":                           `DROP TRIGGER IF EXISTS index_catalog_state_transition_is_valid`,
-	"knowledge_active_app_workspace_cannot_be_archived":                 `DROP TRIGGER IF EXISTS knowledge_active_app_workspace_cannot_be_archived`,
-	"knowledge_active_dependency_target_transition_is_blocked":          `DROP TRIGGER IF EXISTS knowledge_active_dependency_target_transition_is_blocked`,
-	"knowledge_active_dependency_target_version_advance_is_blocked":     `DROP TRIGGER IF EXISTS knowledge_active_dependency_target_version_advance_is_blocked`,
-	"knowledge_app_active_counter_identity_collision_is_forbidden":      `DROP TRIGGER IF EXISTS knowledge_app_active_counter_identity_collision_is_forbidden`,
-	"knowledge_app_active_counter_identity_is_immutable":                `DROP TRIGGER IF EXISTS knowledge_app_active_counter_identity_is_immutable`,
-	"knowledge_catalog_revision_head_delete_is_forbidden":               `DROP TRIGGER IF EXISTS knowledge_catalog_revision_head_delete_is_forbidden`,
-	"knowledge_catalog_revision_head_transition_is_exact":               `DROP TRIGGER IF EXISTS knowledge_catalog_revision_head_transition_is_exact`,
-	"knowledge_catalog_revision_rotates_state_token":                    `DROP TRIGGER IF EXISTS knowledge_catalog_revision_rotates_state_token`,
-	"knowledge_catalog_revision_transition_is_valid":                    `DROP TRIGGER IF EXISTS knowledge_catalog_revision_transition_is_valid`,
-	"knowledge_app_active_counter_delete_is_forbidden":                  `DROP TRIGGER IF EXISTS knowledge_app_active_counter_delete_is_forbidden`,
+	"app_catalog_revision_delete_is_forbidden":                          `DROP TRIGGER IF EXISTS app_catalog_revision_delete_is_forbidden ON app_catalog_revisions`,
+	"audit_event_update_is_forbidden":                                   `DROP TRIGGER IF EXISTS audit_event_update_is_forbidden ON audit_events`,
+	"index_catalog_state_transition_is_valid":                           `DROP TRIGGER IF EXISTS index_catalog_state_transition_is_valid ON index_catalog_state`,
+	"knowledge_active_app_workspace_cannot_be_archived":                 `DROP TRIGGER IF EXISTS knowledge_active_app_workspace_cannot_be_archived ON app_workspaces`,
+	"knowledge_active_dependency_target_transition_is_blocked":          `DROP TRIGGER IF EXISTS knowledge_active_dependency_target_transition_is_blocked ON knowledge_objects`,
+	"knowledge_active_dependency_target_version_advance_is_blocked":     `DROP TRIGGER IF EXISTS knowledge_active_dependency_target_version_advance_is_blocked ON knowledge_objects`,
+	"knowledge_app_active_counter_identity_collision_is_forbidden":      `DROP TRIGGER IF EXISTS knowledge_app_active_counter_identity_collision_is_forbidden ON knowledge_app_active_counters`,
+	"knowledge_app_active_counter_identity_is_immutable":                `DROP TRIGGER IF EXISTS knowledge_app_active_counter_identity_is_immutable ON knowledge_app_active_counters`,
+	"knowledge_catalog_revision_head_delete_is_forbidden":               `DROP TRIGGER IF EXISTS knowledge_catalog_revision_head_delete_is_forbidden ON knowledge_catalog_revision_heads`,
+	"knowledge_catalog_revision_head_transition_is_exact":               `DROP TRIGGER IF EXISTS knowledge_catalog_revision_head_transition_is_exact ON knowledge_catalog_revision_heads`,
+	"knowledge_catalog_revision_rotates_state_token":                    `DROP TRIGGER IF EXISTS knowledge_catalog_revision_rotates_state_token ON knowledge_catalog_tenants`,
+	"knowledge_catalog_revision_transition_is_valid":                    `DROP TRIGGER IF EXISTS knowledge_catalog_revision_transition_is_valid ON knowledge_catalog_tenants`,
+	"knowledge_app_active_counter_delete_is_forbidden":                  `DROP TRIGGER IF EXISTS knowledge_app_active_counter_delete_is_forbidden ON knowledge_app_active_counters`,
 	"knowledge_app_type_active_counter_identity_collision_is_forbidden": `DROP TRIGGER IF EXISTS knowledge_app_type_active_counter_identity_collision_is_forbidden`,
-	"knowledge_app_type_active_counter_identity_is_immutable":           `DROP TRIGGER IF EXISTS knowledge_app_type_active_counter_identity_is_immutable`,
-	"knowledge_app_type_active_counter_delete_is_forbidden":             `DROP TRIGGER IF EXISTS knowledge_app_type_active_counter_delete_is_forbidden`,
-	"knowledge_definition_blob_after_insert":                            `DROP TRIGGER IF EXISTS knowledge_definition_blob_after_insert`,
-	"knowledge_definition_blob_capacity_is_available":                   `DROP TRIGGER IF EXISTS knowledge_definition_blob_capacity_is_available`,
-	"knowledge_definition_blob_delete_is_forbidden":                     `DROP TRIGGER IF EXISTS knowledge_definition_blob_delete_is_forbidden`,
-	"knowledge_definition_blob_identity_collision_is_forbidden":         `DROP TRIGGER IF EXISTS knowledge_definition_blob_identity_collision_is_forbidden`,
-	"knowledge_definition_blob_update_is_forbidden":                     `DROP TRIGGER IF EXISTS knowledge_definition_blob_update_is_forbidden`,
-	"knowledge_dependency_delete_is_forbidden":                          `DROP TRIGGER IF EXISTS knowledge_dependency_delete_is_forbidden`,
-	"knowledge_dependency_identity_collision_is_forbidden":              `DROP TRIGGER IF EXISTS knowledge_dependency_identity_collision_is_forbidden`,
-	"knowledge_dependency_ordinal_is_declared":                          `DROP TRIGGER IF EXISTS knowledge_dependency_ordinal_is_declared`,
-	"knowledge_dependency_seal_delete_is_forbidden":                     `DROP TRIGGER IF EXISTS knowledge_dependency_seal_delete_is_forbidden`,
-	"knowledge_dependency_seal_update_is_forbidden":                     `DROP TRIGGER IF EXISTS knowledge_dependency_seal_update_is_forbidden`,
-	"knowledge_dependency_sealed_version_is_immutable":                  `DROP TRIGGER IF EXISTS knowledge_dependency_sealed_version_is_immutable`,
-	"knowledge_dependency_update_is_forbidden":                          `DROP TRIGGER IF EXISTS knowledge_dependency_update_is_forbidden`,
-	"knowledge_list_projection_after_delete":                            `DROP TRIGGER IF EXISTS knowledge_list_projection_after_delete`,
-	"knowledge_list_projection_after_insert":                            `DROP TRIGGER IF EXISTS knowledge_list_projection_after_insert`,
-	"knowledge_list_projection_capacity_is_available":                   `DROP TRIGGER IF EXISTS knowledge_list_projection_capacity_is_available`,
-	"knowledge_list_projection_creates_order_key":                       `DROP TRIGGER IF EXISTS knowledge_list_projection_creates_order_key`,
-	"knowledge_list_projection_current_seal_delete_is_forbidden":        `DROP TRIGGER IF EXISTS knowledge_list_projection_current_seal_delete_is_forbidden`,
-	"knowledge_list_projection_delete_requires_unsealed_empty_row":      `DROP TRIGGER IF EXISTS knowledge_list_projection_delete_requires_unsealed_empty_row`,
-	"knowledge_list_projection_identity_collision_is_forbidden":         `DROP TRIGGER IF EXISTS knowledge_list_projection_identity_collision_is_forbidden`,
-	"knowledge_list_projection_update_is_forbidden":                     `DROP TRIGGER IF EXISTS knowledge_list_projection_update_is_forbidden`,
-	"knowledge_list_selector_identity_collision_is_forbidden":           `DROP TRIGGER IF EXISTS knowledge_list_selector_identity_collision_is_forbidden`,
-	"knowledge_list_selector_ordinal_is_declared":                       `DROP TRIGGER IF EXISTS knowledge_list_selector_ordinal_is_declared`,
-	"knowledge_list_selector_sealed_projection_is_immutable_insert":     `DROP TRIGGER IF EXISTS knowledge_list_selector_sealed_projection_is_immutable_insert`,
-	"knowledge_list_selector_update_is_forbidden":                       `DROP TRIGGER IF EXISTS knowledge_list_selector_update_is_forbidden`,
-	"knowledge_mutation_idempotency_after_insert":                       `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_after_insert`,
-	"knowledge_mutation_idempotency_capacity_is_available":              `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_capacity_is_available`,
-	"knowledge_mutation_idempotency_identity_collision_is_forbidden":    `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_identity_collision_is_forbidden`,
-	"knowledge_mutation_idempotency_matches_audit_authority":            `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_matches_audit_authority`,
-	"knowledge_mutation_idempotency_matches_commit_authority":           `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_matches_commit_authority`,
-	"knowledge_mutation_idempotency_update_is_forbidden":                `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_update_is_forbidden`,
-	"knowledge_owner_active_counter_delete_is_forbidden":                `DROP TRIGGER IF EXISTS knowledge_owner_active_counter_delete_is_forbidden`,
-	"knowledge_owner_active_counter_identity_collision_is_forbidden":    `DROP TRIGGER IF EXISTS knowledge_owner_active_counter_identity_collision_is_forbidden`,
-	"knowledge_owner_active_counter_identity_is_immutable":              `DROP TRIGGER IF EXISTS knowledge_owner_active_counter_identity_is_immutable`,
-	"knowledge_object_active_app_is_required_insert":                    `DROP TRIGGER IF EXISTS knowledge_object_active_app_is_required_insert`,
-	"knowledge_object_active_app_is_required_update":                    `DROP TRIGGER IF EXISTS knowledge_object_active_app_is_required_update`,
-	"knowledge_object_active_capacity_insert":                           `DROP TRIGGER IF EXISTS knowledge_object_active_capacity_insert`,
-	"knowledge_object_active_capacity_update":                           `DROP TRIGGER IF EXISTS knowledge_object_active_capacity_update`,
-	"knowledge_object_active_counters_after_insert":                     `DROP TRIGGER IF EXISTS knowledge_object_active_counters_after_insert`,
-	"knowledge_object_active_counters_after_update":                     `DROP TRIGGER IF EXISTS knowledge_object_active_counters_after_update`,
-	"knowledge_object_active_counters_before_update":                    `DROP TRIGGER IF EXISTS knowledge_object_active_counters_before_update`,
-	"knowledge_object_active_name_collision_is_forbidden":               `DROP TRIGGER IF EXISTS knowledge_object_active_name_collision_is_forbidden`,
-	"knowledge_object_active_name_update_collision_is_forbidden":        `DROP TRIGGER IF EXISTS knowledge_object_active_name_update_collision_is_forbidden`,
-	"knowledge_object_after_insert_count_identity":                      `DROP TRIGGER IF EXISTS knowledge_object_after_insert_count_identity`,
-	"knowledge_object_delete_is_forbidden":                              `DROP TRIGGER IF EXISTS knowledge_object_delete_is_forbidden`,
-	"knowledge_object_identity_capacity_is_available":                   `DROP TRIGGER IF EXISTS knowledge_object_identity_capacity_is_available`,
-	"knowledge_object_identity_collision_is_forbidden":                  `DROP TRIGGER IF EXISTS knowledge_object_identity_collision_is_forbidden`,
-	"knowledge_object_insert_requires_sealed_list_projection":           `DROP TRIGGER IF EXISTS knowledge_object_insert_requires_sealed_list_projection`,
-	"knowledge_object_registry_transition_is_valid":                     `DROP TRIGGER IF EXISTS knowledge_object_registry_transition_is_valid`,
-	"knowledge_object_update_removes_old_list_projection":               `DROP TRIGGER IF EXISTS knowledge_object_update_removes_old_list_projection`,
-	"knowledge_object_update_requires_sealed_list_projection":           `DROP TRIGGER IF EXISTS knowledge_object_update_requires_sealed_list_projection`,
-	"knowledge_object_version_delete_is_forbidden":                      `DROP TRIGGER IF EXISTS knowledge_object_version_delete_is_forbidden`,
-	"knowledge_object_version_after_insert":                             `DROP TRIGGER IF EXISTS knowledge_object_version_after_insert`,
-	"knowledge_object_version_capacity_is_available":                    `DROP TRIGGER IF EXISTS knowledge_object_version_capacity_is_available`,
-	"knowledge_object_version_creates_lifecycle":                        `DROP TRIGGER IF EXISTS knowledge_object_version_creates_lifecycle`,
-	"knowledge_object_version_creates_staged_order_key":                 `DROP TRIGGER IF EXISTS knowledge_object_version_creates_staged_order_key`,
-	"knowledge_object_version_identity_collision_is_forbidden":          `DROP TRIGGER IF EXISTS knowledge_object_version_identity_collision_is_forbidden`,
-	"knowledge_object_version_is_contiguous":                            `DROP TRIGGER IF EXISTS knowledge_object_version_is_contiguous`,
-	"knowledge_object_version_lifecycle_update_is_forbidden":            `DROP TRIGGER IF EXISTS knowledge_object_version_lifecycle_update_is_forbidden`,
-	"knowledge_object_version_transition_is_exact":                      `DROP TRIGGER IF EXISTS knowledge_object_version_transition_is_exact`,
-	"knowledge_object_version_update_is_forbidden":                      `DROP TRIGGER IF EXISTS knowledge_object_version_update_is_forbidden`,
-	"knowledge_object_version_writer_semantics_are_exact":               `DROP TRIGGER IF EXISTS knowledge_object_version_writer_semantics_are_exact`,
-	"knowledge_type_active_counter_delete_is_forbidden":                 `DROP TRIGGER IF EXISTS knowledge_type_active_counter_delete_is_forbidden`,
-	"knowledge_type_active_counter_identity_collision_is_forbidden":     `DROP TRIGGER IF EXISTS knowledge_type_active_counter_identity_collision_is_forbidden`,
-	"knowledge_type_active_counter_identity_is_immutable":               `DROP TRIGGER IF EXISTS knowledge_type_active_counter_identity_is_immutable`,
+	"knowledge_app_type_active_counter_identity_is_immutable":           `DROP TRIGGER IF EXISTS knowledge_app_type_active_counter_identity_is_immutable ON knowledge_app_type_active_counters`,
+	"knowledge_app_type_active_counter_delete_is_forbidden":             `DROP TRIGGER IF EXISTS knowledge_app_type_active_counter_delete_is_forbidden ON knowledge_app_type_active_counters`,
+	"knowledge_definition_blob_after_insert":                            `DROP TRIGGER IF EXISTS knowledge_definition_blob_after_insert ON knowledge_definition_blobs`,
+	"knowledge_definition_blob_capacity_is_available":                   `DROP TRIGGER IF EXISTS knowledge_definition_blob_capacity_is_available ON knowledge_definition_blobs`,
+	"knowledge_definition_blob_delete_is_forbidden":                     `DROP TRIGGER IF EXISTS knowledge_definition_blob_delete_is_forbidden ON knowledge_definition_blobs`,
+	"knowledge_definition_blob_identity_collision_is_forbidden":         `DROP TRIGGER IF EXISTS knowledge_definition_blob_identity_collision_is_forbidden ON knowledge_definition_blobs`,
+	"knowledge_definition_blob_update_is_forbidden":                     `DROP TRIGGER IF EXISTS knowledge_definition_blob_update_is_forbidden ON knowledge_definition_blobs`,
+	"knowledge_dependency_delete_is_forbidden":                          `DROP TRIGGER IF EXISTS knowledge_dependency_delete_is_forbidden ON knowledge_object_dependencies`,
+	"knowledge_dependency_identity_collision_is_forbidden":              `DROP TRIGGER IF EXISTS knowledge_dependency_identity_collision_is_forbidden ON knowledge_object_dependencies`,
+	"knowledge_dependency_ordinal_is_declared":                          `DROP TRIGGER IF EXISTS knowledge_dependency_ordinal_is_declared ON knowledge_object_dependencies`,
+	"knowledge_dependency_seal_delete_is_forbidden":                     `DROP TRIGGER IF EXISTS knowledge_dependency_seal_delete_is_forbidden ON knowledge_object_dependency_seals`,
+	"knowledge_dependency_seal_update_is_forbidden":                     `DROP TRIGGER IF EXISTS knowledge_dependency_seal_update_is_forbidden ON knowledge_object_dependency_seals`,
+	"knowledge_dependency_sealed_version_is_immutable":                  `DROP TRIGGER IF EXISTS knowledge_dependency_sealed_version_is_immutable ON knowledge_object_dependencies`,
+	"knowledge_dependency_update_is_forbidden":                          `DROP TRIGGER IF EXISTS knowledge_dependency_update_is_forbidden ON knowledge_object_dependencies`,
+	"knowledge_list_projection_after_delete":                            `DROP TRIGGER IF EXISTS knowledge_list_projection_after_delete ON knowledge_object_list_projections`,
+	"knowledge_list_projection_after_insert":                            `DROP TRIGGER IF EXISTS knowledge_list_projection_after_insert ON knowledge_object_list_projections`,
+	"knowledge_list_projection_capacity_is_available":                   `DROP TRIGGER IF EXISTS knowledge_list_projection_capacity_is_available ON knowledge_object_list_projections`,
+	"knowledge_list_projection_creates_order_key":                       `DROP TRIGGER IF EXISTS knowledge_list_projection_creates_order_key ON knowledge_object_list_projections`,
+	"knowledge_list_projection_current_seal_delete_is_forbidden":        `DROP TRIGGER IF EXISTS knowledge_list_projection_current_seal_delete_is_forbidden ON knowledge_object_list_projection_seals`,
+	"knowledge_list_projection_delete_requires_unsealed_empty_row":      `DROP TRIGGER IF EXISTS knowledge_list_projection_delete_requires_unsealed_empty_row ON knowledge_object_list_projections`,
+	"knowledge_list_projection_identity_collision_is_forbidden":         `DROP TRIGGER IF EXISTS knowledge_list_projection_identity_collision_is_forbidden ON knowledge_object_list_projections`,
+	"knowledge_list_projection_update_is_forbidden":                     `DROP TRIGGER IF EXISTS knowledge_list_projection_update_is_forbidden ON knowledge_object_list_projections`,
+	"knowledge_list_selector_identity_collision_is_forbidden":           `DROP TRIGGER IF EXISTS knowledge_list_selector_identity_collision_is_forbidden ON knowledge_object_list_selector_patterns`,
+	"knowledge_list_selector_ordinal_is_declared":                       `DROP TRIGGER IF EXISTS knowledge_list_selector_ordinal_is_declared ON knowledge_object_list_selector_patterns`,
+	"knowledge_list_selector_sealed_projection_is_immutable_insert":     `DROP TRIGGER IF EXISTS knowledge_list_selector_sealed_projection_is_immutable_insert ON knowledge_object_list_selector_patterns`,
+	"knowledge_list_selector_update_is_forbidden":                       `DROP TRIGGER IF EXISTS knowledge_list_selector_update_is_forbidden ON knowledge_object_list_selector_patterns`,
+	"knowledge_mutation_idempotency_after_insert":                       `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_after_insert ON knowledge_mutation_idempotency`,
+	"knowledge_mutation_idempotency_capacity_is_available":              `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_capacity_is_available ON knowledge_mutation_idempotency`,
+	"knowledge_mutation_idempotency_identity_collision_is_forbidden":    `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_identity_collision_is_forbidden ON knowledge_mutation_idempotency`,
+	"knowledge_mutation_idempotency_matches_audit_authority":            `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_matches_audit_authority ON knowledge_mutation_idempotency`,
+	"knowledge_mutation_idempotency_matches_commit_authority":           `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_matches_commit_authority ON knowledge_mutation_idempotency`,
+	"knowledge_mutation_idempotency_update_is_forbidden":                `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_update_is_forbidden ON knowledge_mutation_idempotency`,
+	"knowledge_owner_active_counter_delete_is_forbidden":                `DROP TRIGGER IF EXISTS knowledge_owner_active_counter_delete_is_forbidden ON knowledge_owner_active_counters`,
+	"knowledge_owner_active_counter_identity_collision_is_forbidden":    `DROP TRIGGER IF EXISTS knowledge_owner_active_counter_identity_collision_is_forbidden ON knowledge_owner_active_counters`,
+	"knowledge_owner_active_counter_identity_is_immutable":              `DROP TRIGGER IF EXISTS knowledge_owner_active_counter_identity_is_immutable ON knowledge_owner_active_counters`,
+	"knowledge_object_active_app_is_required_insert":                    `DROP TRIGGER IF EXISTS knowledge_object_active_app_is_required_insert ON knowledge_objects`,
+	"knowledge_object_active_app_is_required_update":                    `DROP TRIGGER IF EXISTS knowledge_object_active_app_is_required_update ON knowledge_objects`,
+	"knowledge_object_active_capacity_insert":                           `DROP TRIGGER IF EXISTS knowledge_object_active_capacity_insert ON knowledge_objects`,
+	"knowledge_object_active_capacity_update":                           `DROP TRIGGER IF EXISTS knowledge_object_active_capacity_update ON knowledge_objects`,
+	"knowledge_object_active_counters_after_insert":                     `DROP TRIGGER IF EXISTS knowledge_object_active_counters_after_insert ON knowledge_objects`,
+	"knowledge_object_active_counters_after_update":                     `DROP TRIGGER IF EXISTS knowledge_object_active_counters_after_update ON knowledge_objects`,
+	"knowledge_object_active_counters_before_update":                    `DROP TRIGGER IF EXISTS knowledge_object_active_counters_before_update ON knowledge_objects`,
+	"knowledge_object_active_name_collision_is_forbidden":               `DROP TRIGGER IF EXISTS knowledge_object_active_name_collision_is_forbidden ON knowledge_objects`,
+	"knowledge_object_active_name_update_collision_is_forbidden":        `DROP TRIGGER IF EXISTS knowledge_object_active_name_update_collision_is_forbidden ON knowledge_objects`,
+	"knowledge_object_after_insert_count_identity":                      `DROP TRIGGER IF EXISTS knowledge_object_after_insert_count_identity ON knowledge_objects`,
+	"knowledge_object_delete_is_forbidden":                              `DROP TRIGGER IF EXISTS knowledge_object_delete_is_forbidden ON knowledge_objects`,
+	"knowledge_object_identity_capacity_is_available":                   `DROP TRIGGER IF EXISTS knowledge_object_identity_capacity_is_available ON knowledge_objects`,
+	"knowledge_object_identity_collision_is_forbidden":                  `DROP TRIGGER IF EXISTS knowledge_object_identity_collision_is_forbidden ON knowledge_objects`,
+	"knowledge_object_insert_requires_sealed_list_projection":           `DROP TRIGGER IF EXISTS knowledge_object_insert_requires_sealed_list_projection ON knowledge_objects`,
+	"knowledge_object_registry_transition_is_valid":                     `DROP TRIGGER IF EXISTS knowledge_object_registry_transition_is_valid ON knowledge_objects`,
+	"knowledge_object_update_removes_old_list_projection":               `DROP TRIGGER IF EXISTS knowledge_object_update_removes_old_list_projection ON knowledge_objects`,
+	"knowledge_object_update_requires_sealed_list_projection":           `DROP TRIGGER IF EXISTS knowledge_object_update_requires_sealed_list_projection ON knowledge_objects`,
+	"knowledge_object_version_delete_is_forbidden":                      `DROP TRIGGER IF EXISTS knowledge_object_version_delete_is_forbidden ON knowledge_object_versions`,
+	"knowledge_object_version_after_insert":                             `DROP TRIGGER IF EXISTS knowledge_object_version_after_insert ON knowledge_object_versions`,
+	"knowledge_object_version_capacity_is_available":                    `DROP TRIGGER IF EXISTS knowledge_object_version_capacity_is_available ON knowledge_object_versions`,
+	"knowledge_object_version_creates_lifecycle":                        `DROP TRIGGER IF EXISTS knowledge_object_version_creates_lifecycle ON knowledge_object_versions`,
+	"knowledge_object_version_creates_staged_order_key":                 `DROP TRIGGER IF EXISTS knowledge_object_version_creates_staged_order_key ON knowledge_object_versions`,
+	"knowledge_object_version_identity_collision_is_forbidden":          `DROP TRIGGER IF EXISTS knowledge_object_version_identity_collision_is_forbidden ON knowledge_object_versions`,
+	"knowledge_object_version_is_contiguous":                            `DROP TRIGGER IF EXISTS knowledge_object_version_is_contiguous ON knowledge_object_versions`,
+	"knowledge_object_version_lifecycle_update_is_forbidden":            `DROP TRIGGER IF EXISTS knowledge_object_version_lifecycle_update_is_forbidden ON knowledge_object_version_lifecycle`,
+	"knowledge_object_version_transition_is_exact":                      `DROP TRIGGER IF EXISTS knowledge_object_version_transition_is_exact ON knowledge_object_versions`,
+	"knowledge_object_version_update_is_forbidden":                      `DROP TRIGGER IF EXISTS knowledge_object_version_update_is_forbidden ON knowledge_object_versions`,
+	"knowledge_object_version_writer_semantics_are_exact":               `DROP TRIGGER IF EXISTS knowledge_object_version_writer_semantics_are_exact ON knowledge_object_versions`,
+	"knowledge_type_active_counter_delete_is_forbidden":                 `DROP TRIGGER IF EXISTS knowledge_type_active_counter_delete_is_forbidden ON knowledge_type_active_counters`,
+	"knowledge_type_active_counter_identity_collision_is_forbidden":     `DROP TRIGGER IF EXISTS knowledge_type_active_counter_identity_collision_is_forbidden ON knowledge_type_active_counters`,
+	"knowledge_type_active_counter_identity_is_immutable":               `DROP TRIGGER IF EXISTS knowledge_type_active_counter_identity_is_immutable ON knowledge_type_active_counters`,
 }
 
 func dropTrigger(t *testing.T, database *control.DB, name string) {
@@ -799,31 +804,31 @@ func overwriteCatalogRevisionAuthority(
 		}
 	}()
 	if bypassChecks {
-		if _, err := connection.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+		if _, err := pgtest.Checks(context.Background(), connection, false); err != nil {
 			t.Fatalf("ignore revision-authority checks: %v", err)
 		}
 		defer func() {
-			if _, err := connection.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = OFF`); err != nil {
+			if _, err := pgtest.Checks(context.Background(), connection, true); err != nil {
 				t.Errorf("restore revision-authority checks: %v", err)
 			}
 		}()
 	}
-	transaction, err := connection.BeginTx(context.Background(), nil)
+	transaction, err := pgmeta.BeginSQL(context.Background(), connection, nil)
 	if err != nil {
 		t.Fatalf("begin revision-authority corruption: %v", err)
 	}
 	defer func() { _ = transaction.Rollback() }()
 	if _, err := transaction.ExecContext(context.Background(), `
 		UPDATE knowledge_catalog_tenants
-		SET catalog_revision = ?
-		WHERE tenant_id = ?
+		SET catalog_revision = $1
+		WHERE tenant_id = $2
 	`, revision, testTenant); err != nil {
 		t.Fatalf("overwrite tenant revision authority: %v", err)
 	}
 	if _, err := transaction.ExecContext(context.Background(), `
 		UPDATE knowledge_catalog_revision_heads
-		SET catalog_revision = ?
-		WHERE tenant_id = ?
+		SET catalog_revision = $1
+		WHERE tenant_id = $2
 	`, revision, testTenant); err != nil {
 		t.Fatalf("overwrite revision-head authority: %v", err)
 	}
@@ -842,7 +847,7 @@ func mustExec(t *testing.T, database *control.DB, query string, args ...any) {
 func assertTableExists(t *testing.T, database *control.DB, table string) {
 	t.Helper()
 	var count int
-	if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
+	if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT count(*) FROM pg_class r JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND r.relkind='r' AND r.relname=$1`, table).Scan(&count); err != nil {
 		t.Fatalf("inspect migrated table %s: %v", table, err)
 	}
 	if count != 1 {

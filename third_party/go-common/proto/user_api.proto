@@ -1,0 +1,127 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+import "google/protobuf/timestamp.proto";
+import "language.proto";
+import "pagination.proto";
+import "user.proto";
+
+// --- Profile Picture Management Messages ---
+
+// Request message for creating a profile picture upload URL
+message CreateProfilePictureUploadURLRequest {
+  // Filename of the image to upload
+  string filename = 1;
+  
+  // Optional content type (MIME type) of the image
+  optional string content_type = 2;
+}
+
+// Response message for profile picture upload URL creation
+message CreateProfilePictureUploadURLResponse {
+  // Presigned URL for uploading the file to MinIO
+  string upload_url = 1;
+  
+  // Form data fields required for the upload
+  map<string, string> form_data = 2;
+  
+  // The attachment ID for tracking
+  uint64 attachment_id = 3;
+  
+  // When the upload URL expires
+  google.protobuf.Timestamp expiry = 4;
+}
+
+// Request message for removing profile picture
+message RemoveProfilePictureRequest {
+  // Empty - uses authenticated user context
+}
+
+// Response message for profile picture removal
+message RemoveProfilePictureResponse {
+}
+
+// --- User Settings Management Messages ---
+
+// Request message for partially updating user settings.
+// Only fields that are present are applied; absent (unset) fields leave the
+// stored value unchanged. This avoids a read-modify-write round-trip on the
+// client and the lost-update race between concurrent partial updates.
+message UpdateUserSettingsRequest {
+  optional bool dark_mode = 1;                 // Whether dark mode is enabled
+  optional Language language = 2;              // Preferred language
+  optional bool email_notifications = 3;       // Whether email notifications are enabled
+  optional bool push_notifications = 4;        // Whether push notifications are enabled
+  optional bool marketing_emails = 5;          // Whether marketing emails are enabled
+  optional bool chat_email_notifications = 6;  // Email for new chats
+  optional bool chat_push_notifications = 7;   // Push for new chats
+}
+
+// --- Language Preference Management Messages ---
+
+// Request message for updating user language preference
+message UpdateLanguagePreferenceRequest {
+  // The new language preference
+  Language language = 1;
+}
+
+// Response message for language preference update
+message UpdateLanguagePreferenceResponse {
+  // The updated user settings (includes the new language preference)
+  UserSettings user_settings = 1;
+}
+
+// --- Phone Number Management Messages ---
+
+// Request message for removing user phone number (secure operation)
+message RemovePhoneNumberRequest {
+  // No fields needed - removes phone number for authenticated user
+}
+
+// Response message for phone number removal
+message RemovePhoneNumberResponse {
+  // The updated user without phone number
+  optional User user = 2;
+}
+
+// --- Username Management Messages ---
+
+// Request message for updating user username (secure operation)
+message UpdateUsernameRequest {
+  // The new username to set
+  string username = 1;
+}
+
+// Response message for username update
+message UpdateUsernameResponse {
+  // The updated user with new username
+  optional User user = 2;
+}
+
+// --- User Search Messages ---
+
+// Scope for user search requests.
+enum UserSearchScope {
+  USER_SEARCH_SCOPE_UNSPECIFIED = 0;
+  USER_SEARCH_SCOPE_GLOBAL = 1;
+  USER_SEARCH_SCOPE_ORGANIZATION = 2;
+}
+
+// Request to search for public users.
+message SearchPublicUsersRequest {
+  PaginationRequest pagination = 1;
+  string query = 2;
+  UserSearchScope scope = 3;
+  optional uint64 organization_id = 4;
+  bool suggestions_only = 5; // If true and query is empty, return suggestions.
+  bool exclude_self = 6; // If true, exclude the caller from results.
+}
+
+// Response for public user search.
+message SearchPublicUsersResponse {
+  repeated PublicUser users = 1;
+  PaginationResponse pagination = 2;
+}

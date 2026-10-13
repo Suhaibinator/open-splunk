@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	"slices"
 	"strings"
 	"sync"
@@ -76,6 +78,7 @@ func TestGORMModelsMatchMigratedSearchHistorySchema(t *testing.T) {
 			checks: map[string]string{
 				"search_history_job_id_length":          "length(search_job_id) BETWEEN 1 AND 256",
 				"search_history_tenant_id_length":       "length(tenant_id) BETWEEN 1 AND 1024",
+				"search_history_organization_positive":  "organization_id > 0",
 				"search_history_owner_id_length":        "length(owner_id) BETWEEN 1 AND 255",
 				"search_history_app_id_length":          "length(app_id) <= 255",
 				"search_history_saved_search_id_length": "length(saved_search_id) <= 128",
@@ -111,12 +114,13 @@ func TestGORMModelsMatchMigratedSearchHistorySchema(t *testing.T) {
 				},
 			},
 			checks: map[string]string{
-				"search_history_pending_job_id_length":       "length(search_job_id) BETWEEN 1 AND 256",
-				"search_history_pending_tenant_id_length":    "length(tenant_id) BETWEEN 1 AND 1024",
-				"search_history_pending_owner_id_length":     "length(owner_id) BETWEEN 1 AND 255",
-				"search_history_pending_state_nonterminal":   "state BETWEEN 1 AND 5",
-				"search_history_pending_entry_proto_length":  "length(entry_proto) BETWEEN 1 AND 524288",
-				"search_history_pending_entry_sha256_length": "length(entry_sha256) = 32",
+				"search_history_pending_job_id_length":         "length(search_job_id) BETWEEN 1 AND 256",
+				"search_history_pending_tenant_id_length":      "length(tenant_id) BETWEEN 1 AND 1024",
+				"search_history_pending_organization_positive": "organization_id > 0",
+				"search_history_pending_owner_id_length":       "length(owner_id) BETWEEN 1 AND 255",
+				"search_history_pending_state_nonterminal":     "state BETWEEN 1 AND 5",
+				"search_history_pending_entry_proto_length":    "length(entry_proto) BETWEEN 1 AND 524288",
+				"search_history_pending_entry_sha256_length":   "length(entry_sha256) = 32",
 			},
 		},
 	}
@@ -132,7 +136,7 @@ func TestGORMModelsMatchMigratedSearchHistorySchema(t *testing.T) {
 			}
 			var migratedColumns []columnRow
 			columns := database.GORMDB().Raw(
-				fmt.Sprintf("SELECT name FROM pragma_table_info('%s') ORDER BY cid", test.table),
+				fmt.Sprintf("SELECT name FROM (SELECT a.attname AS name,a.attnum-1 AS cid,CASE WHEN t.typname='int8' THEN 'BIGINT' ELSE upper(t.typname) END AS type,CASE WHEN a.attnotnull THEN 1 ELSE 0 END AS \"notnull\",COALESCE((SELECT array_position(c.conkey,a.attnum) FROM pg_constraint c WHERE c.conrelid=r.oid AND c.contype='p'),0) AS pk,CASE WHEN a.attgenerated='s' THEN 3 ELSE 0 END AS hidden FROM pg_attribute a JOIN pg_class r ON r.oid=a.attrelid JOIN pg_namespace n ON n.oid=r.relnamespace JOIN pg_type t ON t.oid=a.atttypid WHERE n.nspname=current_schema() AND r.relname='%s' AND a.attnum>0 AND NOT a.attisdropped) AS column_metadata ORDER BY cid", test.table),
 			).Scan(&migratedColumns)
 			if columns.Error != nil {
 				t.Fatalf("read migrated columns: %v", columns.Error)
@@ -188,14 +192,14 @@ func assertSearchHistoryChecksMatchModel(
 	}
 	var migrated schemaRow
 	query := database.GORMDB().Raw(
-		`SELECT sql AS definition FROM sqlite_schema WHERE type = 'table' AND name = ?`,
+		`SELECT string_agg('CONSTRAINT ' || c.conname || ' ' || pg_get_constraintdef(c.oid), ' ') AS definition FROM pg_constraint c JOIN pg_class r ON r.oid=c.conrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND r.relname=? AND c.contype='c'`,
 		table,
 	).Scan(&migrated)
 	if query.Error != nil {
 		t.Fatalf("read migrated table definition: %v", query.Error)
 	}
 	for name, expression := range expected {
-		if !strings.Contains(migrated.Definition, "CHECK ("+expression+")") {
+		if !pgtest.ContainsCheck(migrated.Definition, expression) {
 			t.Errorf("migrated table does not contain GORM check %s expression %q", name, expression)
 		}
 	}
@@ -234,7 +238,7 @@ func assertSearchHistoryIndexesMatchModel(
 		indexQuery := database.GORMDB().Raw(
 			fmt.Sprintf(
 				`SELECT name, "desc" AS descending
-				 FROM pragma_index_xinfo('%s')
+				 FROM (SELECT a.attname AS name,k.ordinality-1 AS seqno,1 AS "key",CASE WHEN (i.indoption[(k.ordinality-1)::int] & 1)=1 THEN 1 ELSE 0 END AS "desc" FROM pg_index i JOIN pg_class x ON x.oid=i.indexrelid JOIN pg_namespace n ON n.oid=x.relnamespace CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum,ordinality) JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum WHERE n.nspname=current_schema() AND x.relname='%s' AND k.ordinality<=i.indnkeyatts) AS index_metadata
 				 WHERE "key" = 1
 				 ORDER BY seqno`,
 				name,
@@ -259,8 +263,8 @@ func assertSearchHistoryIndexesMatchModel(
 func TestGORMStoreReopenPreservesTerminalHistoryAndCursor(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC)
-	path := filepath.Join(t.TempDir(), "search-history-reopen.sqlite")
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	path := pgtest.DSN(t)
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	options := Options{Clock: func() time.Time { return now }, CursorKey: testCursorKey}
 
 	database, err := control.Open(ctx, path)
@@ -325,7 +329,7 @@ func TestGORMListKeysetPaginationPreservesEverySortAndTieBreaker(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC)
 	_, store := openTestStore(t, Options{Clock: func() time.Time { return base.Add(time.Hour) }})
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	entries := []*opensplunk.SearchHistoryEntry{
 		historyEntry("sort-a", "index=main", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, base),
 		historyEntry("sort-b", "index=main", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, base),
@@ -452,11 +456,11 @@ func TestGORMConcurrentPendingAdmissionPreservesCapacityAndIdempotency(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		pendingRecords[index] = &pendingHistoryRecord{
+		pendingRecords[index] = &pendingHistoryRecord{OrganizationID: 1,
 			EntryProto: slices.Clone(indexed.encoded), EntrySHA256: slices.Clone(indexed.checksum[:]),
 		}
 	}
-	errs := run(AccessScope{TenantID: "tenant", OwnerID: "capacity-owner"}, pendingRecords)
+	errs := run(AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "capacity-owner"}, pendingRecords)
 	var admitted, full int
 	for _, err := range errs {
 		switch {
@@ -479,11 +483,11 @@ func TestGORMConcurrentPendingAdmissionPreservesCapacityAndIdempotency(t *testin
 	}
 	idempotentRecords := make([]*pendingHistoryRecord, workers)
 	for index := range idempotentRecords {
-		idempotentRecords[index] = &pendingHistoryRecord{
+		idempotentRecords[index] = &pendingHistoryRecord{OrganizationID: 1,
 			EntryProto: slices.Clone(indexed.encoded), EntrySHA256: slices.Clone(indexed.checksum[:]),
 		}
 	}
-	for _, err := range run(AccessScope{TenantID: "tenant", OwnerID: "idempotent-owner"}, idempotentRecords) {
+	for _, err := range run(AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "idempotent-owner"}, idempotentRecords) {
 		if err != nil {
 			t.Fatalf("concurrent idempotent admission error = %v", err)
 		}

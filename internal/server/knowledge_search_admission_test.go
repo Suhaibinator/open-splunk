@@ -34,24 +34,24 @@ func TestKnowledgeSearchAdmissionRequiresLiveAppCatalog(t *testing.T) {
 		fakeSearchJobs: &fakeSearchJobs{},
 		enabled:        true,
 	}
-	_, err := NewHandler(Config{
+	_, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:    jobs,
 		Indexes:       fakeIndexCatalog{},
 		SavedSearches: &fakeSavedSearches{},
 		WebUI:         testUI(),
 	})
 	if err == nil || !strings.Contains(err.Error(), "requires a live app catalog") {
-		t.Fatalf("NewHandler(knowledge admission without live apps) error = %v", err)
+		t.Fatalf("newAuthenticatedTestHandler(knowledge admission without live apps) error = %v", err)
 	}
 
 	jobs.enabled = false
-	if handler, err := NewHandler(Config{
+	if handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:    jobs,
 		Indexes:       fakeIndexCatalog{},
 		SavedSearches: &fakeSavedSearches{},
 		WebUI:         testUI(),
 	}); err != nil || handler == nil {
-		t.Fatalf("NewHandler(disabled knowledge admission) = (%v, %v)", handler, err)
+		t.Fatalf("newAuthenticatedTestHandler(disabled knowledge admission) = (%v, %v)", handler, err)
 	}
 }
 
@@ -73,7 +73,7 @@ func TestKnowledgeSearchAdmissionAuthorizesCurrentAppBeforeIndexesAndCreate(t *t
 		Indexes:    indexes,
 		AppCatalog: apps,
 		WebUI:      testUI(),
-		OwnerID:    "owner-1",
+		OwnerID:    "1009",
 		TenantID:   "tenant-1",
 	})
 	request := createRequest("-1h", "now", "main")
@@ -94,7 +94,7 @@ func TestKnowledgeSearchAdmissionAuthorizesCurrentAppBeforeIndexesAndCreate(t *t
 	createCalls := jobs.createCalls
 	captured := jobs.createRequest
 	jobs.mu.Unlock()
-	if createCalls != 1 || captured.AppID != appID || captured.OwnerID != "owner-1" || captured.TenantID != "tenant-1" {
+	if createCalls != 1 || captured.AppID != appID || captured.OwnerID != "1009" || captured.TenantID != "tenant-1" {
 		t.Fatalf("Create calls/request = %d/%+v", createCalls, captured)
 	}
 }
@@ -137,7 +137,7 @@ func TestKnowledgeSearchAdmissionAppAuthorizationFailsClosedBeforeIndexes(t *tes
 				Indexes:    indexes,
 				AppCatalog: test.catalog,
 				WebUI:      testUI(),
-				OwnerID:    "owner-1",
+				OwnerID:    "1009",
 				TenantID:   "tenant-1",
 			})
 			request := createRequest("-1h", "now", "main")
@@ -316,7 +316,7 @@ func TestKnowledgeSearchAdmissionRejectsMismatchedLaterLifecycleProjections(t *t
 				Indexes:    fakeIndexCatalog{},
 				AppCatalog: activeHistoryRerunAppCatalog(),
 				WebUI:      testUI(),
-				OwnerID:    "owner-1",
+				OwnerID:    "1009",
 				TenantID:   "tenant-1",
 			})
 			response := postProto(t, handler, route.path, route.request)
@@ -343,7 +343,7 @@ func TestKnowledgeSearchAdmissionListProjectsDetachedRedactedSnapshot(t *testing
 		Indexes:    fakeIndexCatalog{},
 		AppCatalog: activeHistoryRerunAppCatalog(),
 		WebUI:      testUI(),
-		OwnerID:    "owner-1",
+		OwnerID:    "1009",
 		TenantID:   "tenant-1",
 	})
 	response := postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{})

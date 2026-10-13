@@ -24,7 +24,7 @@ type runtimeAlertLifecycleConfig struct {
 	featureOperations      *runtimeFeatureOperations
 	masterKeyPath          string
 	tenantID               string
-	ownerID                string
+	identity               *runtimeIdentity
 	publicBaseURL          string
 	privateWebhookHostsCSV string
 	logger                 *zap.Logger
@@ -61,9 +61,9 @@ func newRuntimeAlertLifecycle(config runtimeAlertLifecycleConfig) (_ *runtimeAle
 		return nil, err
 	}
 	lifecycle.admission = &runtimeTrustedSearchAdmission{
-		jobs: config.jobs, indexes: config.controlDB, apps: lifecycle.appCatalog,
+		jobs: config.jobs, indexes: config.controlDB, apps: lifecycle.appCatalog, identity: config.identity,
 	}
-	repository, err := alertstore.NewSQLRepository(config.controlDB, alertstore.SQLRepositoryOptions{TenantID: config.tenantID})
+	repository, err := alertstore.NewSQLRepository(config.controlDB, alertstore.SQLRepositoryOptions{TenantID: config.tenantID, ResolveSourceScope: config.identity.alertSourceScope})
 	if err != nil {
 		return nil, fmt.Errorf("open alert repository: %w", err)
 	}
@@ -88,7 +88,7 @@ func newRuntimeAlertLifecycle(config runtimeAlertLifecycleConfig) (_ *runtimeAle
 	if err != nil {
 		return nil, fmt.Errorf("create alert service: %w", err)
 	}
-	if err := lifecycle.service.ValidateEnabledRuntime(config.ctx, config.ownerID); err != nil {
+	if err := lifecycle.service.ValidateEnabledRuntimeAll(config.ctx); err != nil {
 		return nil, fmt.Errorf("validate enabled alerts: %w", err)
 	}
 	deliverer, err := alerts.NewDeliverer(alerts.DeliveryOptions{DestinationPolicy: alerts.DestinationPolicy{

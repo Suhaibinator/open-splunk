@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"fortio.org/safecast"
-	"gorm.io/gorm"
-
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"gorm.io/gorm"
 )
 
 // New constructs a fleet store without changing the migrated SQL schema.
@@ -36,7 +36,7 @@ func (store *Store) Claim(
 	if err != nil {
 		return Collector{}, Lease{}, err
 	}
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(store.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return Collector{}, Lease{}, mapContextError(ctx, "begin collector lease claim", tx.Error)
 	}
@@ -131,6 +131,9 @@ func claimInTransaction(
 	normalized normalizedClaim,
 ) (result Collector, lease Lease, returnedErr error) {
 	ctx := tx.Statement.Context
+	if err := pgmeta.Lock(tx, "collector-fleet:"+normalized.scope.TenantID); err != nil {
+		return Collector{}, Lease{}, err
+	}
 	var fleet fleetRecord
 	queryErr := tx.
 		Where(
@@ -252,7 +255,7 @@ func claimInTransaction(
 }
 
 // Get returns one detached collector snapshot without disclosing cross-tenant
-// existence. Its short SQLite transaction keeps normalized child rows coherent
+// existence. Its short PostgreSQL transaction keeps normalized child rows coherent
 // with the base/runtime revisions.
 func (store *Store) Get(
 	ctx context.Context,
@@ -269,7 +272,7 @@ func (store *Store) Get(
 	if !validIdentifier(collectorID) {
 		return Collector{}, invalid("collector ID is not a canonical identifier")
 	}
-	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	tx := pgmeta.Begin(store.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return Collector{}, mapContextError(ctx, "begin collector read", tx.Error)
 	}
@@ -306,14 +309,29 @@ func (store *Store) InvalidatePriorBootLeases(
 	if err != nil {
 		return 0, err
 	}
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(store.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return 0, mapContextError(ctx, "begin prior-boot lease invalidation", tx.Error)
 	}
 	finished := false
 	defer finishGORMTransaction(tx, &finished, &returnedErr)
 
+	// Lock every existing tenant before the bulk update takes tuple locks.
+	// New current-boot claims are outside this startup repair boundary.
+	var tenants []string
+	if err := tx.Model(&fleetRecord{}).Distinct("tenant_id").Order("tenant_id").Pluck("tenant_id", &tenants).Error; err != nil {
+		return 0, mapContextError(ctx, "enumerate prior-boot collector tenants", err)
+	}
+	resources := make([]string, len(tenants))
+	for i, tenant := range tenants {
+		resources[i] = "collector-fleet:" + tenant
+	}
+	if err := pgmeta.Lock(tx, resources...); err != nil {
+		return 0, mapContextError(ctx, "lock prior-boot collector tenants", err)
+	}
+
 	update := tx.Model(&runtimeRecord{}).
+		Where("tenant_id IN ?", tenants).
 		Where(
 			`boot_epoch IS NOT NULL
 			 AND boot_epoch <> ?
@@ -339,11 +357,11 @@ func (store *Store) InvalidatePriorBootLeases(
 			"stream_id":          nil,
 			"active_instance_id": nil,
 			"last_seen_at_unix_micro": gorm.Expr(
-				"max(last_seen_at_unix_micro, ?)",
+				"GREATEST(last_seen_at_unix_micro, ?)",
 				receivedAt.UnixMicro(),
 			),
 			"disconnected_at_unix_micro": gorm.Expr(
-				"max(last_seen_at_unix_micro, ?)",
+				"GREATEST(last_seen_at_unix_micro, ?)",
 				receivedAt.UnixMicro(),
 			),
 		})
@@ -379,10 +397,15 @@ func (store *Store) RecordHeartbeat(
 	if err != nil {
 		return false, err
 	}
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(store.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return false, mapContextError(ctx, "begin collector heartbeat", tx.Error)
 	}
+	if err := pgmeta.Lock(tx, "collector-fleet:"+lease.TenantID); err != nil {
+		_ = tx.Rollback()
+		return false, err
+	}
+
 	finished := false
 	defer finishGORMTransaction(tx, &finished, &returnedErr)
 
@@ -461,10 +484,15 @@ func (store *Store) Disconnect(
 	if err != nil {
 		return false, err
 	}
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(store.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return false, mapContextError(ctx, "begin collector disconnect", tx.Error)
 	}
+	if err := pgmeta.Lock(tx, "collector-fleet:"+lease.TenantID); err != nil {
+		_ = tx.Rollback()
+		return false, err
+	}
+
 	finished := false
 	defer finishGORMTransaction(tx, &finished, &returnedErr)
 	current, currentLease, err := takeCurrentLease(tx, lease)
@@ -531,7 +559,7 @@ func (store *Store) GetAdministration(
 		return AdministrationSnapshot{}, invalid("collector ID is not a canonical identifier")
 	}
 	var fleet fleetRecord
-	queryErr := store.orm.WithContext(ctx).
+	queryErr := restrictCollectorIndexes(store.orm.WithContext(ctx), "collector_fleet", scope.IndexAccess).
 		Select(
 			"tenant_id",
 			"collector_id",
@@ -691,7 +719,7 @@ func (store *Store) updateAdministration(
 	if err != nil {
 		return AdministrationSnapshot{}, err
 	}
-	tx := store.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(store.orm.WithContext(ctx))
 	if tx.Error != nil {
 		return AdministrationSnapshot{}, mapContextError(
 			ctx,
@@ -699,11 +727,16 @@ func (store *Store) updateAdministration(
 			tx.Error,
 		)
 	}
+	if err := pgmeta.Lock(tx, "collector-fleet:"+scope.TenantID); err != nil {
+		_ = tx.Rollback()
+		return AdministrationSnapshot{}, err
+	}
+
 	finished := false
 	defer finishGORMTransaction(tx, &finished, &returnedErr)
 
 	var fleet fleetRecord
-	queryErr := tx.
+	queryErr := restrictCollectorIndexes(tx, "collector_fleet", scope.IndexAccess).
 		Select(
 			"tenant_id",
 			"collector_id",
@@ -1335,6 +1368,9 @@ func loadCollector(
 	scope Scope,
 	collectorID string,
 ) (Collector, error) {
+	if err := requireCollectorIndexAccess(database, scope, collectorID); err != nil {
+		return Collector{}, err
+	}
 	collectors, err := loadCollectors(
 		database,
 		scope,

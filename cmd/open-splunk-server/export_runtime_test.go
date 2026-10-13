@@ -125,14 +125,14 @@ func TestNormalizeRuntimeOptionsDerivesAndCleansExportArtifactDirectory(t *testi
 	t.Parallel()
 	config := options{
 		httpAddress:    "127.0.0.1:8080",
-		controlDBPath:  filepath.Join("state", "control.db"),
+		postgresDSN:    "postgres://fixture:fixture@localhost/control?sslmode=disable",
 		indexRetention: time.Hour,
 		tenantID:       "tenant",
 	}
 	if err := normalizeRuntimeOptions(&config); err != nil {
 		t.Fatalf("normalizeRuntimeOptions() error = %v", err)
 	}
-	if want := filepath.Join("state", "control.db.exports"); config.exportArtifactDir != want {
+	if want := filepath.Join("data", "export-cache"); config.exportArtifactDir != want {
 		t.Fatalf("derived artifact directory = %q, want %q", config.exportArtifactDir, want)
 	}
 

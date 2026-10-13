@@ -2,6 +2,7 @@ import * as ExportApi from "@/gen/ts/open_splunk/export_api";
 import * as HistoryApi from "@/gen/ts/open_splunk/history_api";
 import * as HecAdminApi from "@/gen/ts/open_splunk/hec_admin_api";
 import * as IndexApi from "@/gen/ts/open_splunk/index_api";
+import * as IndexPermissionsApi from "@/gen/ts/open_splunk/index_permissions_api";
 import * as AppApi from "@/gen/ts/open_splunk/app_api";
 import * as AlertApi from "@/gen/ts/open_splunk/alert_api";
 import * as AuditApi from "@/gen/ts/open_splunk/audit_api";
@@ -26,6 +27,13 @@ export const MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES = 9 << 20;
 export const MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES = 128 << 10;
 export const MAXIMUM_SEARCH_INSPECTION_RESPONSE_BYTES = 8 << 20;
 export const MAXIMUM_DASHBOARD_LIST_RESPONSE_BYTES = 8 << 20;
+
+export const indexPermissionRoutes = {
+  get: defineProtobufRoute("/api/indexes/permissions/get", IndexPermissionsApi.GetIndexPermissionsRequest, IndexPermissionsApi.GetIndexPermissionsResponse, { maximumResponseBytes: 1 << 20 }),
+  set: defineProtobufRoute("/api/indexes/permissions/set", IndexPermissionsApi.SetIndexPermissionRequest, IndexPermissionsApi.SetIndexPermissionResponse),
+  delete: defineProtobufRoute("/api/indexes/permissions/delete", IndexPermissionsApi.DeleteIndexPermissionRequest, IndexPermissionsApi.DeleteIndexPermissionResponse),
+  setOrganization: defineProtobufRoute("/api/indexes/organization/set", IndexPermissionsApi.SetIndexOrganizationRequest, IndexPermissionsApi.SetIndexOrganizationResponse),
+} as const;
 
 function readPreviewVarint(
   bytes: Uint8Array,

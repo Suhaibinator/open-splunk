@@ -5134,12 +5134,14 @@ func TestCompileChartOrdersRowsLikeAutomaticSort(t *testing.T) {
 
 	lexical := compileSPL(t, `index=gradethis | chart count OVER path BY level`)
 	for _, required := range []string{
-		`row_number() OVER (ORDER BY arrayElement(arrayMap((__os_sort_exact_text, __os_sort_lexical_text, __os_sort_exact_null)`,
-		`if(length(toString("__os_ch_group_row")) <= ` +
-			strconv.Itoa(MaximumExactNumericOrderingInputTextBytes),
-		`ifNull(__os_sort_lexical_text, CAST('' AS String))`,
+		`row_number() OVER (ORDER BY tuple(arrayElement(arrayMap((__os_sort_exact_text, __os_sort_lexical_text)`,
+		`length(__os_sort_lexical_text) <= ` + strconv.Itoa(MaximumExactNumericOrderingInputTextBytes),
 		`tupleElement(__os_sort_exact_key, 1) != 0`,
 		`__os_exact_order_text`,
+		`__os_sort_leading_key`,
+		`toIPv4OrNull`,
+		`toIPv6OrNull`,
+		`), "__os_ch_group_row") ASC`,
 	} {
 		if !strings.Contains(lexical.SQL, required) {
 			t.Fatalf("runtime-typed row axis lost exact numeric ordering %q:\n%s", required, lexical.SQL)
@@ -5382,11 +5384,10 @@ func assertFinalOrderDirections(t *testing.T, sql string, want ...string) {
 	t.Helper()
 
 	const orderMarker = "ORDER BY "
-	orderStart := strings.LastIndex(sql, orderMarker)
-	if orderStart < 0 {
+	_, clause, hasOrder := strings.CutLast(sql, orderMarker)
+	if !hasOrder {
 		t.Fatalf("compiled SQL has no ORDER BY clause:\n%s", sql)
 	}
-	clause := sql[orderStart+len(orderMarker):]
 	if limitStart := strings.Index(clause, " LIMIT "); limitStart >= 0 {
 		clause = clause[:limitStart]
 	}

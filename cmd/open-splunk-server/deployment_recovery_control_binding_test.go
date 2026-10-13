@@ -11,11 +11,13 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	clickhouserow "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/controlbackup"
 	"github.com/Suhaibinator/open-splunk/internal/recoveryset"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/migrations"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestDeploymentRecoveryExactFinalRetryRejectsSameReleaseControlChildSwap(t *testing.T) {
@@ -33,8 +35,8 @@ func TestDeploymentRecoveryExactFinalRetryRejectsSameReleaseControlChildSwap(t *
 		fixture.release,
 		deploymentRecoveryDependencies{
 			migrationFiles: migrations.ClickHouse(),
-			acquireDatabaseLock: func(path string) (*serverLock, error) {
-				return acquireDeploymentRecoveryTestServerLock(t, path)
+			acquireDatabaseLock: func(ctx context.Context, dsn string) (*control.MaintenanceLease, error) {
+				return acquireDeploymentRecoveryTestServerLock(t, ctx, dsn)
 			},
 			verifyRecoverySet: func(context.Context, recoveryset.VerifyOptions) (recoveryset.Verification, error) {
 				verificationCalls++
@@ -172,8 +174,8 @@ func TestDeploymentRecoveryFreshCanonicalRestoreRejectsSameReleaseControlChildSw
 		fixture.release,
 		deploymentRecoveryDependencies{
 			migrationFiles: migrations.ClickHouse(),
-			acquireDatabaseLock: func(path string) (*serverLock, error) {
-				return acquireDeploymentRecoveryTestServerLock(t, path)
+			acquireDatabaseLock: func(ctx context.Context, dsn string) (*control.MaintenanceLease, error) {
+				return acquireDeploymentRecoveryTestServerLock(t, ctx, dsn)
 			},
 			verifyRecoverySet: func(context.Context, recoveryset.VerifyOptions) (recoveryset.Verification, error) {
 				verificationCalls++
@@ -279,7 +281,7 @@ func newDeploymentRecoveryControlChildSwapFixture(
 ) deploymentRecoveryControlChildSwapFixture {
 	t.Helper()
 	fixture := newDeploymentRecoveryCommandFixture(t)
-	root := filepath.Dir(fixture.databasePath)
+	root := filepath.Dir(fixture.destination)
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -287,19 +289,16 @@ func newDeploymentRecoveryControlChildSwapFixture(
 	if err := os.Mkdir(restoreDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	fixture.databasePath = filepath.Join(restoreDirectory, "control.db")
 	fixture.masterKeyPath = filepath.Join(restoreDirectory, "master.key")
-	fixture.administratorTokenPath = filepath.Join(restoreDirectory, "administrator.token")
 	originalManifest, originalManifestSHA256 := createDeploymentControlBackupFixture(t, &fixture)
 
 	sourceDirectory := filepath.Join(root, "source-control")
 	replacementPath := filepath.Join(root, "replacement-control-plane")
 	replacementManifest, err := controlbackup.Create(t.Context(), controlbackup.CreateOptions{
-		DatabasePath:           filepath.Join(sourceDirectory, "control.db"),
-		MasterKeyPath:          filepath.Join(sourceDirectory, "master.key"),
-		AdministratorTokenPath: filepath.Join(sourceDirectory, "administrator.token"),
-		Destination:            replacementPath,
-		Release:                fixture.release,
+		PostgresDSN:   fixture.sourcePostgresDSN,
+		MasterKeyPath: filepath.Join(sourceDirectory, "master.key"),
+		Destination:   replacementPath,
+		Release:       fixture.release,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -342,13 +341,34 @@ func (fixture deploymentRecoveryControlChildSwapFixture) swapAndRestore(
 
 func (fixture deploymentRecoveryControlChildSwapFixture) requireTargetsAbsent(t *testing.T) {
 	t.Helper()
+	requireRecoverySchemaEmpty(t, fixture.command.postgresDSN)
 	for _, path := range []string{
-		fixture.command.databasePath,
 		fixture.command.masterKeyPath,
-		fixture.command.administratorTokenPath,
 	} {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("same-release control-child swap published %q: %v", path, err)
 		}
+	}
+}
+
+// A rejected recovery generation must leave both the metadata schema and its
+// private master-key publication target untouched.
+func requireRecoverySchemaEmpty(t testing.TB, dsn string) {
+	t.Helper()
+	connection, err := pgx.Connect(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := connection.Close(t.Context()); err != nil {
+			t.Error(err)
+		}
+	}()
+	var relations int
+	if err := connection.QueryRow(t.Context(), `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relkind IN ('r','p','S','v','m','f')`).Scan(&relations); err != nil {
+		t.Fatal(err)
+	}
+	if relations != 0 {
+		t.Fatalf("recovery target published %d relations before validation", relations)
 	}
 }

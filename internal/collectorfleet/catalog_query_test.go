@@ -2,6 +2,9 @@ package collectorfleet
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -78,6 +81,7 @@ func TestCollectorCatalogQueryUsesTrustedTenantAndExactPredicates(
 		strings.Fields(generated.Statement.SQL.String()),
 		" ",
 	)
+	statement = canonicalCollectorQueryMarkers(t, statement)
 	for _, fragment := range []string{
 		"FROM collector_fleet AS fleet",
 		"INNER JOIN collector_runtime AS runtime",
@@ -88,9 +92,9 @@ func TestCollectorCatalogQueryUsesTrustedTenantAndExactPredicates(
 		"authorized.tenant_id = fleet.tenant_id",
 		"authorized.index_name = ?",
 		"authorized.collector_id = fleet.collector_id",
-		"instr(lower(fleet.collector_id), lower(?)) > 0",
-		"instr(lower(fleet.display_name), lower(?)) > 0",
-		"instr(lower(runtime.hostname), lower(?)) > 0",
+		"strpos(lower(fleet.collector_id), lower(?)) > 0",
+		"strpos(lower(fleet.display_name), lower(?)) > 0",
+		"strpos(lower(runtime.hostname), lower(?)) > 0",
 		"runtime.boot_epoch IS NOT NULL",
 		"runtime.stream_id IS NOT NULL",
 		"runtime.boot_epoch = ?",
@@ -99,7 +103,7 @@ func TestCollectorCatalogQueryUsesTrustedTenantAndExactPredicates(
 		"fleet.administrative_state = ?",
 		"(runtime.hostname, runtime.collector_id) < (?, ?)",
 		"ORDER BY runtime.hostname DESC, runtime.collector_id DESC",
-		"LIMIT 5",
+		"LIMIT ?",
 	} {
 		if !strings.Contains(statement, fragment) {
 			t.Errorf("query SQL = %q, want fragment %q", statement, fragment)
@@ -109,7 +113,7 @@ func TestCollectorCatalogQueryUsesTrustedTenantAndExactPredicates(
 		t.Errorf("trusted tenant was interpolated into query SQL: %q", statement)
 	}
 	if strings.Contains(statement, "INDEXED BY") {
-		t.Errorf("query SQL pins an SQLite index: %q", statement)
+		t.Errorf("query SQL pins a database index: %q", statement)
 	}
 	if countCatalogQueryArgument(generated.Statement.Vars, "tenant-a") < 4 {
 		t.Errorf(
@@ -129,6 +133,7 @@ func TestCollectorCatalogQueryUsesTrustedTenantAndExactPredicates(
 	for _, value := range []any{
 		indexName,
 		text,
+		int(request.pageSize) + 1,
 		"collector-online",
 		"boot-online",
 		"stream-online",
@@ -242,6 +247,7 @@ func TestCollectorCatalogCursorsUseRowValueSeeks(t *testing.T) {
 						),
 						" ",
 					)
+					statement = canonicalCollectorQueryMarkers(t, statement)
 					operator := ">"
 					if direction == SortDescending {
 						operator = "<"
@@ -440,7 +446,7 @@ func TestCollectorCatalogStateFiltersAreExactAndUnioned(t *testing.T) {
 	}
 }
 
-func TestCollectorCatalogDisplayNameCursorMatchesSQLiteNullOrdering(
+func TestCollectorCatalogDisplayNameCursorMatchesExplicitNullOrdering(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -664,26 +670,7 @@ func TestCollectorCatalogUnfilteredSortsUseCompositeIndexes(t *testing.T) {
 				if generated.Error != nil {
 					t.Fatalf("build GORM query: %v", generated.Error)
 				}
-				var planRows []struct {
-					ID     int
-					Parent int
-					Unused int
-					Detail string
-				}
-				if err := database.GORMDB().
-					Raw(
-						"EXPLAIN QUERY PLAN "+
-							generated.Statement.SQL.String(),
-						generated.Statement.Vars...,
-					).
-					Scan(&planRows).Error; err != nil {
-					t.Fatalf("EXPLAIN QUERY PLAN: %v", err)
-				}
-				details := make([]string, len(planRows))
-				for index, row := range planRows {
-					details[index] = row.Detail
-				}
-				plan := strings.Join(details, "\n")
+				plan := explainCollectorCatalogQuery(t, database.GORMDB(), generated)
 				if !strings.Contains(plan, test.wantIndex) {
 					t.Errorf(
 						"query plan = %q, want index %q",
@@ -691,7 +678,7 @@ func TestCollectorCatalogUnfilteredSortsUseCompositeIndexes(t *testing.T) {
 						test.wantIndex,
 					)
 				}
-				if strings.Contains(plan, "USE TEMP B-TREE") {
+				if strings.Contains(plan, "Sort") {
 					t.Errorf(
 						"query plan performs a temporary sort: %q",
 						plan,
@@ -729,29 +716,10 @@ func TestCollectorCatalogAuthorizedIndexFilterUsesIndexedSearch(
 	if generated.Error != nil {
 		t.Fatalf("build GORM query: %v", generated.Error)
 	}
-	var planRows []struct {
-		ID     int
-		Parent int
-		Unused int
-		Detail string
-	}
-	if err := database.GORMDB().
-		Raw(
-			"EXPLAIN QUERY PLAN "+generated.Statement.SQL.String(),
-			generated.Statement.Vars...,
-		).
-		Scan(&planRows).Error; err != nil {
-		t.Fatalf("EXPLAIN QUERY PLAN: %v", err)
-	}
-	details := make([]string, len(planRows))
-	for index, row := range planRows {
-		details[index] = row.Detail
-	}
-	plan := strings.Join(details, "\n")
+	plan := explainCollectorCatalogQuery(t, database.GORMDB(), generated)
 	authorizedUsesIndexedSearch := false
-	for _, detail := range details {
-		if strings.Contains(detail, "SEARCH authorized") &&
-			strings.Contains(detail, " USING ") {
+	for detail := range strings.SplitSeq(plan, "\n") {
+		if nativePlanSearches(detail, "authorized") {
 			authorizedUsesIndexedSearch = true
 			break
 		}
@@ -802,8 +770,8 @@ func TestCollectorCatalogTextFilterPlansStayTenantAndSortIndexed(
 		pagePlan,
 		"collector_fleet_tenant_display_id_idx",
 	) ||
-		!strings.Contains(pagePlan, "SEARCH runtime") ||
-		strings.Contains(pagePlan, "USE TEMP B-TREE") {
+		!nativePlanSearches(pagePlan, "runtime") ||
+		strings.Contains(pagePlan, "Sort") {
 		t.Fatalf(
 			"text-filter page plan = %q, want tenant display index, indexed runtime join, and no temporary sort",
 			pagePlan,
@@ -824,10 +792,10 @@ func TestCollectorCatalogTextFilterPlansStayTenantAndSortIndexed(
 		database.GORMDB(),
 		generatedCount,
 	)
-	if !strings.Contains(countPlan, "SEARCH fleet") ||
-		!strings.Contains(countPlan, "SEARCH runtime") ||
-		strings.Contains(countPlan, "SCAN fleet") ||
-		strings.Contains(countPlan, "SCAN runtime") {
+	if !nativePlanSearches(countPlan, "fleet") ||
+		!nativePlanSearches(countPlan, "runtime") ||
+		strings.Contains(countPlan, "Seq Scan on collector_fleet") ||
+		strings.Contains(countPlan, "Seq Scan on collector_runtime") {
 		t.Fatalf(
 			"text-filter count plan = %q, want tenant-keyed parent searches",
 			countPlan,
@@ -835,31 +803,55 @@ func TestCollectorCatalogTextFilterPlansStayTenantAndSortIndexed(
 	}
 }
 
-func explainCollectorCatalogQuery(
-	t *testing.T,
-	database *gorm.DB,
-	generated *gorm.DB,
-) string {
+func explainCollectorCatalogQuery(t *testing.T, database *gorm.DB, generated *gorm.DB) string {
 	t.Helper()
-	var planRows []struct {
-		ID     int
-		Parent int
-		Unused int
-		Detail string
+	pool, err := database.DB()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := database.
-		Raw(
-			"EXPLAIN QUERY PLAN "+generated.Statement.SQL.String(),
-			generated.Statement.Vars...,
-		).
-		Scan(&planRows).Error; err != nil {
-		t.Fatalf("EXPLAIN QUERY PLAN: %v", err)
+	tx, err := pool.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	details := make([]string, len(planRows))
-	for index, row := range planRows {
-		details[index] = row.Detail
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			t.Error(err)
+		}
+	}()
+	// Empty fixtures have no cost signal. Prove the available indexed ordered
+	// path without forcing index names in production SQL.
+	for _, setting := range []string{"SET LOCAL enable_seqscan=off", "SET LOCAL enable_sort=off", "SET LOCAL enable_hashjoin=off", "SET LOCAL enable_mergejoin=off"} {
+		if _, err := tx.ExecContext(context.Background(), setting); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := tx.QueryContext(context.Background(), "EXPLAIN (COSTS OFF) "+generated.Statement.SQL.String(), generated.Statement.Vars...)
+	if err != nil {
+		t.Fatalf("native EXPLAIN: %v", err)
+	}
+	defer rows.Close()
+	var details []string
+	for rows.Next() {
+		var detail string
+		if err := rows.Scan(&detail); err != nil {
+			t.Fatal(err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
 	}
 	return strings.Join(details, "\n")
+}
+func canonicalCollectorQueryMarkers(t *testing.T, statement string) string {
+	t.Helper()
+	if strings.Contains(statement, "?") {
+		t.Fatalf("query contains nonnative bind markers: %s", statement)
+	}
+	return regexp.MustCompile(`\$[0-9]+`).ReplaceAllString(statement, "?")
+}
+func nativePlanSearches(plan, alias string) bool {
+	return regexp.MustCompile(`(?:Index Scan|Index Only Scan|Bitmap Index Scan|Bitmap Heap Scan)[^\n]*\b` + regexp.QuoteMeta(alias) + `(?:\s|$)`).MatchString(plan)
 }
 
 func claimCatalogQueryCollector(

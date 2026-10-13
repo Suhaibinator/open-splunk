@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -24,27 +25,29 @@ func TestReapQueriesUseDedicatedMaintenanceIndexes(t *testing.T) {
 		{indexName: "durable_search_jobs_expiry", query: `
 			SELECT id FROM durable_search_jobs
 			WHERE tombstoned_at_us IS NULL AND expires_at_us IS NOT NULL
-				AND expires_at_us <= ? AND state <> ?
+				AND expires_at_us <= $1 AND state <> $2
 			ORDER BY expires_at_us, id
-			LIMIT ?`, arguments: []any{toUnixMicro(clock.now), StateExpired, DefaultReapBatchSize}},
+			LIMIT $3`, arguments: []any{toUnixMicro(clock.now), StateExpired, DefaultReapBatchSize}},
 		{indexName: "durable_search_jobs_tombstone", query: `
 			SELECT id, artifact_name, artifact_size_bytes
 			FROM durable_search_jobs
-			WHERE state = ? AND tombstoned_at_us IS NOT NULL AND tombstoned_at_us <= ?
+			WHERE state = $1 AND tombstoned_at_us IS NOT NULL AND tombstoned_at_us <= $2
 			ORDER BY tombstoned_at_us, id
-			LIMIT ?`, arguments: []any{StateExpired, toUnixMicro(clock.now), DefaultReapBatchSize}},
+			LIMIT $3`, arguments: []any{StateExpired, toUnixMicro(clock.now), DefaultReapBatchSize}},
+	}
+	if _, err := database.SQLDB().ExecContext(ctx, "SET enable_seqscan=off"); err != nil {
+		t.Fatal(err)
 	}
 	for _, test := range queries {
-		rows, err := database.SQLDB().QueryContext(ctx, "EXPLAIN QUERY PLAN "+test.query,
+		rows, err := database.SQLDB().QueryContext(ctx, "EXPLAIN (COSTS OFF) "+test.query,
 			test.arguments...)
 		if err != nil {
 			t.Fatalf("explain %s: %v", test.indexName, err)
 		}
 		var plan strings.Builder
 		for rows.Next() {
-			var id, parent, unused int
 			var detail string
-			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			if err := rows.Scan(&detail); err != nil {
 				_ = rows.Close()
 				t.Fatalf("scan %s plan: %v", test.indexName, err)
 			}
@@ -63,7 +66,7 @@ func TestCapacityCountersAndBoundedReapRemainExactAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	clock := &testClock{now: time.Date(2026, 8, 30, 15, 0, 0, 0, time.UTC)}
 	directory := filepath.Join(t.TempDir(), "artifacts")
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +98,7 @@ func TestCapacityCountersAndBoundedReapRemainExactAcrossRestart(t *testing.T) {
 	old := toUnixMicro(clock.now)
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE durable_search_jobs
-		SET state = ?, expires_at_us = ?, tombstoned_at_us = ?`, StateExpired, old, old); err != nil {
+		SET state = $1, expires_at_us = $2, tombstoned_at_us = $3`, StateExpired, old, old); err != nil {
 		t.Fatal(err)
 	}
 	clock.now = clock.now.Add(2 * time.Minute)

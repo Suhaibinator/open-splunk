@@ -30,8 +30,9 @@ const (
 )
 
 type targetKey struct {
-	kind targetKind
-	id   string
+	access searchjobs.AccessScope
+	kind   targetKind
+	id     string
 }
 
 func (key targetKey) protobuf() *opensplunk.JobTarget {
@@ -363,6 +364,10 @@ func (service *Service) loadProjectionWithPermit(
 	key targetKey,
 	previewRows uint32,
 ) (targetProjection, error) {
+	access := service.config.access
+	if service.config.accessForRequest != nil {
+		access = key.access
+	}
 	now := canonicalTime(service.config.now())
 	if key.kind == targetKindSearch {
 		var (
@@ -373,7 +378,7 @@ func (service *Service) loadProjectionWithPermit(
 		if previewRows > 0 {
 			previewBytes := min(service.config.maximumFrameBytes, service.config.maximumReplayBytes)
 			snapshot, previewErr := service.config.searches.PreviewForBytesContext(
-				ctx, service.config.access, key.id, int(previewRows), previewBytes,
+				ctx, access, key.id, int(previewRows), previewBytes,
 			)
 			if previewErr == nil {
 				job = snapshot.Job
@@ -381,18 +386,23 @@ func (service *Service) loadProjectionWithPermit(
 			} else if errors.Is(previewErr, searchjobs.ErrResultsNotReady) ||
 				errors.Is(previewErr, searchjobs.ErrResultsUnavailable) ||
 				errors.Is(previewErr, searchjobs.ErrExpired) {
-				job, err = service.config.searches.GetForContext(ctx, service.config.access, key.id)
+				job, err = service.config.searches.GetForContext(ctx, access, key.id)
 			} else {
 				err = previewErr
 			}
 		} else {
-			job, err = service.config.searches.GetForContext(ctx, service.config.access, key.id)
+			job, err = service.config.searches.GetForContext(ctx, access, key.id)
 		}
 		if err != nil || job.ID != key.id {
 			if contextErr := ctx.Err(); contextErr != nil {
 				return targetProjection{}, contextErr
 			}
 			return targetProjection{}, errTargetNotFound
+		}
+		if service.config.authorizeJob != nil {
+			if err := service.config.authorizeJob(ctx, access, job); err != nil {
+				return targetProjection{}, errTargetNotFound
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return targetProjection{}, err
@@ -409,12 +419,17 @@ func (service *Service) loadProjectionWithPermit(
 		}
 		return projection, nil
 	}
-	job, err := service.config.exports.Snapshot(ctx, service.config.access, key.id)
+	job, err := service.config.exports.Snapshot(ctx, access, key.id)
 	if err != nil || job.ID != key.id {
 		if ctx.Err() != nil {
 			return targetProjection{}, ctx.Err()
 		}
 		return targetProjection{}, errTargetNotFound
+	}
+	if service.config.authorizeExport != nil {
+		if err := service.config.authorizeExport(ctx, access, job); err != nil {
+			return targetProjection{}, errTargetNotFound
+		}
 	}
 	projection, err := projectExport(job, now)
 	if err != nil {
@@ -659,7 +674,7 @@ func (target *targetState) refreshForSubscription(
 	exclusiveBootstrap := currentSnapshot && len(target.subscriptions) == 0
 	forceFull := previewRows != target.projectedPreviews ||
 		(exclusiveBootstrap && !target.currentEventsContinuousLocked()) ||
-		target.revalidateUntilRemoved
+		target.revalidateUntilRemoved || target.service.config.accessForRequest != nil
 	if !forceFull {
 		target.mu.Unlock()
 		return nil
@@ -959,7 +974,7 @@ func (target *targetState) applyProjection(projection targetProjection, initial 
 	target.projectedPreviews = projection.previewRows
 	target.terminal = projection.terminal
 	target.refreshAt = projection.refreshAt
-	target.revalidateUntilRemoved = projection.revalidateUntilRemoved
+	target.revalidateUntilRemoved = projection.revalidateUntilRemoved || target.service.config.accessForRequest != nil
 	subscribers := make([]*subscription, 0, len(target.subscriptions))
 	for subscription := range target.subscriptions {
 		subscribers = append(subscribers, subscription)

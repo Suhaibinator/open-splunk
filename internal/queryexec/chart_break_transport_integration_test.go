@@ -49,6 +49,14 @@ func TestChartBreakTransportRowCeilingAgainstClickHouse(t *testing.T) {
 		"--env", "CLICKHOUSE_USER=open_splunk",
 		"--env", "CLICKHOUSE_PASSWORD="+password,
 		"--env", "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
+		"--env", "HTTP_PROXY=",
+		"--env", "HTTPS_PROXY=",
+		"--env", "ALL_PROXY=",
+		"--env", "http_proxy=",
+		"--env", "https_proxy=",
+		"--env", "all_proxy=",
+		"--env", "NO_PROXY=127.0.0.1,localhost",
+		"--env", "no_proxy=127.0.0.1,localhost",
 		image,
 	)
 	t.Cleanup(func() {
@@ -248,6 +256,14 @@ func TestChartBreakTransportCeilingLabelDomainAgainstClickHouse(t *testing.T) {
 		"--env", "CLICKHOUSE_USER=open_splunk",
 		"--env", "CLICKHOUSE_PASSWORD="+password,
 		"--env", "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
+		"--env", "HTTP_PROXY=",
+		"--env", "HTTPS_PROXY=",
+		"--env", "ALL_PROXY=",
+		"--env", "http_proxy=",
+		"--env", "https_proxy=",
+		"--env", "all_proxy=",
+		"--env", "NO_PROXY=127.0.0.1,localhost",
+		"--env", "no_proxy=127.0.0.1,localhost",
 		image,
 	)
 	t.Cleanup(func() {

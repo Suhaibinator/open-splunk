@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"gorm.io/gorm"
 )
 
@@ -243,7 +245,7 @@ func TestLoadCollectorsRejectsMissingOrCorruptPersistence(t *testing.T) {
 		if _, err := database.SQLDB().ExecContext(
 			ctx,
 			`DELETE FROM collector_runtime
-			 WHERE tenant_id = ? AND collector_id = ?`,
+			 WHERE tenant_id = $1 AND collector_id = $2`,
 			collector.TenantID,
 			collector.CollectorID,
 		); err != nil {
@@ -307,7 +309,7 @@ func TestLoadCollectorsRejectsMissingOrCorruptPersistence(t *testing.T) {
 		if _, err := database.SQLDB().ExecContext(
 			ctx,
 			`DELETE FROM collector_authorized_indexes
-			 WHERE tenant_id = ? AND collector_id = ?`,
+			 WHERE tenant_id = $1 AND collector_id = $2`,
 			collector.TenantID,
 			collector.CollectorID,
 		); err != nil {
@@ -586,11 +588,11 @@ func addCapabilityRowsForBatchTest(
 
 func beginIgnoredCheckTransaction(t *testing.T, database *gorm.DB) *gorm.DB {
 	t.Helper()
-	tx := database.Begin()
+	tx := pgmeta.Begin(database)
 	if tx.Error != nil {
 		t.Fatalf("begin corruption fixture transaction: %v", tx.Error)
 	}
-	if err := tx.Exec("PRAGMA ignore_check_constraints = ON").Error; err != nil {
+	if err := collectorGORMTestChecks(t, tx, false); err != nil {
 		_ = tx.Rollback().Error
 		t.Fatalf("disable check constraints for fixture: %v", err)
 	}
@@ -599,10 +601,24 @@ func beginIgnoredCheckTransaction(t *testing.T, database *gorm.DB) *gorm.DB {
 
 func rollbackIgnoredCheckTransaction(t *testing.T, tx *gorm.DB) {
 	t.Helper()
-	if err := tx.Exec("PRAGMA ignore_check_constraints = OFF").Error; err != nil {
+	if err := collectorGORMTestChecks(t, tx, true); err != nil {
 		t.Errorf("restore check constraints after fixture: %v", err)
 	}
 	if err := tx.Rollback().Error; err != nil {
 		t.Errorf("roll back corruption fixture: %v", err)
 	}
+}
+
+func collectorGORMTestChecks(t *testing.T, tx *gorm.DB, enabled bool) error {
+	t.Helper()
+	executor, ok := tx.Statement.ConnPool.(pgtest.SQLExecutor)
+	if !ok {
+		t.Fatal("collector corruption fixture requires a native SQL transaction")
+	}
+	ctx := tx.Statement.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_, err := collectorTestChecks(ctx, executor, enabled)
+	return err
 }

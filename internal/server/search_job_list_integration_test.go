@@ -11,8 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"strconv"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
@@ -71,7 +74,7 @@ func (clock *searchJobListIntegrationClock) Set(now time.Time) {
 
 func TestSearchJobListRealManagerBoundsLongParseFailure(t *testing.T) {
 	const (
-		ownerID  = "owner-long-failure"
+		ownerID  = "1024"
 		tenantID = "tenant-long-failure"
 	)
 	anchor := time.Date(2026, time.July, 23, 11, 0, 0, 0, time.UTC)
@@ -103,7 +106,7 @@ func TestSearchJobListRealManagerBoundsLongParseFailure(t *testing.T) {
 		}
 	})
 
-	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{
+	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{OrganizationID: "1",
 		SPL:               "index=main | " + strings.Repeat("x", 5<<10),
 		OwnerID:           ownerID,
 		TenantID:          tenantID,
@@ -114,7 +117,7 @@ func TestSearchJobListRealManagerBoundsLongParseFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	access := searchjobs.AccessScope{OwnerID: ownerID, TenantID: tenantID}
+	access := searchjobs.AccessScope{OrganizationID: "1", OwnerID: ownerID, TenantID: tenantID}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		job, getErr := manager.GetFor(access, created.ID)
@@ -134,12 +137,14 @@ func TestSearchJobListRealManagerBoundsLongParseFailure(t *testing.T) {
 	}
 
 	handler := newTestHandler(t, Config{
-		SearchJobs: manager,
-		Indexes:    fakeIndexCatalog{},
-		WebUI:      testUI(),
-		OwnerID:    ownerID,
-		TenantID:   tenantID,
-		Now:        clock.Now,
+		SearchJobs:            manager,
+		AppCatalog:            &fakeBootstrapAppCatalog{result: AppCatalogResult{Complete: true, Apps: []AppCatalogSummary{validBootstrapCatalogApp("app-errors", "errors", "Errors", "main"), validBootstrapCatalogApp("app-operations", "operations", "Operations", "main"), validBootstrapCatalogApp("app-hidden", "hidden", "Hidden", "main")}}},
+		Indexes:               fakeIndexCatalog{indexes: []control.Index{validationTestIndex("main")}},
+		WebUI:                 testUI(),
+		OwnerID:               ownerID,
+		IdentityAuthenticator: serverFixtureUserIdentity(t, func() uint64 { id, _ := strconv.ParseUint(ownerID, 10, 64); return id }()),
+		TenantID:              tenantID,
+		Now:                   clock.Now,
 	})
 	response := postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{})
 	if response.Code != http.StatusOK {
@@ -159,7 +164,7 @@ func TestSearchJobListRealManagerBoundsLongParseFailure(t *testing.T) {
 
 func TestSearchJobListRealManagerHTTPIntegration(t *testing.T) {
 	const (
-		ownerID      = "owner-list-integration"
+		ownerID      = "1023"
 		otherOwnerID = "other-list-integration"
 		tenantID     = "tenant-list-integration"
 	)
@@ -200,7 +205,7 @@ func TestSearchJobListRealManagerHTTPIntegration(t *testing.T) {
 
 	admit := func(owner, appID, spl string) searchjobs.Job {
 		t.Helper()
-		job, createErr := manager.Create(context.Background(), searchjobs.CreateRequest{
+		job, createErr := manager.Create(context.Background(), searchjobs.CreateRequest{OrganizationID: "1",
 			SPL:               spl,
 			OwnerID:           owner,
 			TenantID:          tenantID,
@@ -227,12 +232,14 @@ func TestSearchJobListRealManagerHTTPIntegration(t *testing.T) {
 	hidden := admit(otherOwnerID, "app-hidden", "index=main level=WARN | table message")
 
 	handler := newTestHandler(t, Config{
-		SearchJobs: manager,
-		Indexes:    fakeIndexCatalog{},
-		WebUI:      testUI(),
-		OwnerID:    ownerID,
-		TenantID:   tenantID,
-		Now:        clock.Now,
+		SearchJobs:            manager,
+		AppCatalog:            &fakeBootstrapAppCatalog{result: AppCatalogResult{Complete: true, Apps: []AppCatalogSummary{validBootstrapCatalogApp("app-errors", "errors", "Errors", "main"), validBootstrapCatalogApp("app-operations", "operations", "Operations", "main"), validBootstrapCatalogApp("app-hidden", "hidden", "Hidden", "main")}}},
+		Indexes:               fakeIndexCatalog{indexes: []control.Index{validationTestIndex("main")}},
+		WebUI:                 testUI(),
+		OwnerID:               ownerID,
+		IdentityAuthenticator: serverFixtureUserIdentity(t, func() uint64 { id, _ := strconv.ParseUint(ownerID, 10, 64); return id }()),
+		TenantID:              tenantID,
+		Now:                   clock.Now,
 	})
 
 	firstPageSize := uint32(1)

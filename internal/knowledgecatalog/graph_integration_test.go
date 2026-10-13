@@ -9,8 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestGraphOutgoingExactVersionPrivacyPaginationAndDetachedAuthority(t *testing.T) {
@@ -84,10 +87,10 @@ func TestGraphOutgoingExactVersionPrivacyPaginationAndDetachedAuthority(t *testi
 	}})
 	dropTrigger(t, database, "knowledge_definition_blob_update_is_forbidden")
 	mustExec(t, database, `UPDATE knowledge_definition_blobs
-		SET definition_proto = X'00', definition_bytes = 1
-		WHERE tenant_id = ? AND definition_digest = (
+		SET definition_proto = decode('00','hex'), definition_bytes = 1
+		WHERE tenant_id = $1 AND definition_digest = (
 			SELECT definition_digest FROM knowledge_objects
-			WHERE tenant_id = ? AND knowledge_object_id = 'ko-graph-target-hidden'
+			WHERE tenant_id = $2 AND knowledge_object_id = 'ko-graph-target-hidden'
 		)`, testTenant, testTenant)
 
 	current, err := store.ListDependencies(context.Background(), testReadScope(), DependencyListRequest{
@@ -199,10 +202,10 @@ func TestGraphIncomingCurrentSourcesAllLifecycleStatesAndExactTargetVersion(t *t
 	}}})
 	dropTrigger(t, database, "knowledge_definition_blob_update_is_forbidden")
 	mustExec(t, database, `UPDATE knowledge_definition_blobs
-		SET definition_proto = X'00', definition_bytes = 1
-		WHERE tenant_id = ? AND definition_digest = (
+		SET definition_proto = decode('00','hex'), definition_bytes = 1
+		WHERE tenant_id = $1 AND definition_digest = (
 			SELECT definition_digest FROM knowledge_objects
-			WHERE tenant_id = ? AND knowledge_object_id = 'ko-incoming-hidden'
+			WHERE tenant_id = $2 AND knowledge_object_id = 'ko-incoming-hidden'
 		)`, testTenant, testTenant)
 
 	current, err := store.ListDependents(context.Background(), testReadScope(), DependencyListRequest{
@@ -271,7 +274,7 @@ func TestGraphRootAuthorizationQuarantineCursorInvalidationAndCancellation(t *te
 		} else if _, found := AuthorizedContextFromError(err); found {
 			t.Errorf("quarantined root carried authorized context: %v", err)
 		}
-		hiddenScope := ReadScope{TenantID: testTenant, OwnerID: "owner-b", ReadableAppIDs: []string{testApp}}
+		hiddenScope := ReadScope{TenantID: testTenant, OwnerID: "owner-b", ReadableAppIDs: []string{testApp}, OrganizationID: 1}
 		if _, err := method(context.Background(), hiddenScope, DependencyListRequest{
 			KnowledgeObjectID: "ko-graph-guard",
 		}); !errors.Is(err, control.ErrNotFound) {
@@ -351,14 +354,14 @@ func TestGraphCursorInvalidatesAtSameRevisionWithDifferentStateToken(t *testing.
 	}
 	var oldToken []byte
 	if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT state_token FROM knowledge_catalog_revision_heads
-		WHERE tenant_id = ?`, testTenant).Scan(&oldToken); err != nil {
+		WHERE tenant_id = $1`, testTenant).Scan(&oldToken); err != nil {
 		t.Fatalf("read old catalog state token: %v", err)
 	}
 	newToken := bytes.Clone(oldToken)
 	newToken[0] ^= 0xff
 	dropTrigger(t, database, "knowledge_catalog_revision_head_transition_is_exact")
-	mustExec(t, database, `UPDATE knowledge_catalog_revision_heads SET state_token = ?
-		WHERE tenant_id = ?`, newToken, testTenant)
+	mustExec(t, database, `UPDATE knowledge_catalog_revision_heads SET state_token = $1
+		WHERE tenant_id = $2`, newToken, testTenant)
 	request.PageToken = first.NextPageToken
 	if _, err := store.ListDependencies(context.Background(), testReadScope(), request); !errors.Is(err, control.ErrPageInvalidated) {
 		t.Fatalf("ListDependencies(equal revision divergent state) error = %v, want ErrPageInvalidated", err)
@@ -383,17 +386,27 @@ func TestIncomingGraphRejectsOversizedPersistedRoleBeforePayloadDisclosure(t *te
 	if err != nil {
 		t.Fatalf("acquire oversized graph connection: %v", err)
 	}
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(context.Background(), connection, false); err != nil {
 		_ = connection.Close()
 		t.Fatalf("disable graph dependency checks: %v", err)
 	}
+	// The deliberately corrupt 1 MiB role cannot fit PostgreSQL's unique btree.
+	// Suspend only that physical fixture barrier; the normal domain guard and
+	// clipping read below must still refuse the persisted payload.
+	var roleConstraint string
+	if err := connection.QueryRowContext(t.Context(), `SELECT conname FROM pg_constraint WHERE conrelid='knowledge_object_dependencies'::regclass AND contype='u' AND strpos(pg_get_constraintdef(oid),'dependency_role')>0`).Scan(&roleConstraint); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.ExecContext(t.Context(), "ALTER TABLE knowledge_object_dependencies DROP CONSTRAINT "+pgx.Identifier{roleConstraint}.Sanitize()); err != nil {
+		t.Fatal(err)
+	}
 	const marker = "SECRET-GRAPH-ROLE-"
 	if _, err := connection.ExecContext(context.Background(), `UPDATE knowledge_object_dependencies
-		SET dependency_role = ? || CAST(zeroblob(?) AS TEXT)
-		WHERE tenant_id = ? AND source_object_id = ?`, marker, 1<<20, testTenant, "ko-graph-wide-source"); err != nil {
+		SET dependency_role = $1 || repeat('x', ($2)::integer)
+		WHERE tenant_id = $3 AND source_object_id = $4`, marker, 1<<20, testTenant, "ko-graph-wide-source"); err != nil {
 		t.Fatalf("inject oversized graph role: %v", err)
 	}
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = OFF`); err != nil {
+	if _, err := pgtest.Checks(context.Background(), connection, true); err != nil {
 		_ = connection.Close()
 		t.Fatalf("restore graph dependency checks: %v", err)
 	}
@@ -440,30 +453,30 @@ func TestGraphIgnoresHiddenTenantLedgerAndPhysicalIdentityCorruption(t *testing.
 	}
 
 	mustExec(t, database, `UPDATE knowledge_catalog_tenants
-		SET identity_count = identity_count - 1 WHERE tenant_id = ?`, testTenant)
+		SET identity_count = identity_count - 1 WHERE tenant_id = $1`, testTenant)
 	dropTableTriggers(t, database, "knowledge_objects")
 	connection, err := database.SQLDB().Conn(context.Background())
 	if err != nil {
 		t.Fatalf("acquire hidden graph corruption connection: %v", err)
 	}
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(context.Background(), connection); err != nil {
 		_ = connection.Close()
 		t.Fatalf("disable hidden graph foreign keys: %v", err)
 	}
-	if _, err := connection.ExecContext(context.Background(), `INSERT INTO knowledge_objects (
+	if _, err := connection.ExecContext(context.Background(), `INSERT INTO knowledge_objects (organization_id,
 		tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro,
 		disabled_at_unix_micro, quarantined_at_unix_micro, deleted_at_unix_micro, quarantine_reason
 	)
-	SELECT tenant_id, 'ko-graph-hidden-orphan', current_version, app_id, 'owner-hidden',
+	SELECT 1, tenant_id, 'ko-graph-hidden-orphan', current_version, app_id, 'owner-hidden',
 		object_type, name, 'private', state, definition_digest,
 		created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro,
 		quarantined_at_unix_micro, deleted_at_unix_micro, quarantine_reason
-	FROM knowledge_objects WHERE tenant_id = ? AND knowledge_object_id = ?`,
+	FROM knowledge_objects WHERE tenant_id = $1 AND knowledge_object_id = $2`,
 		testTenant, "ko-graph-private-source"); err != nil {
 		t.Fatalf("insert hidden graph physical corruption: %v", err)
 	}
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`); err != nil {
+	if _, err := pgtest.RestoreForeignKeys(context.Background(), connection); err != nil {
 		_ = connection.Close()
 		t.Fatalf("restore hidden graph foreign keys: %v", err)
 	}

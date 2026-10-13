@@ -475,7 +475,7 @@ func TestKnowledgeValidateHandlerMissingCreateAppIsUniformAndJournaled(
 	var appID, objectID sql.NullString
 	if err := harness.database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT action, reason, app_id, knowledge_object_id
-		FROM knowledge_attempt_audit_events WHERE tenant_id = ?`,
+		FROM knowledge_attempt_audit_events WHERE tenant_id = $1`,
 		knowledgeBoundaryTenantID,
 	).Scan(&action, &reason, &appID, &objectID); err != nil {
 		t.Fatalf("read missing-app validation attempt: %v", err)
@@ -548,7 +548,7 @@ func TestKnowledgeValidateHandlerUpdateConflictJournalsExactObject(
 	if err := harness.database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT action, reason, app_id, knowledge_object_id,
 		       object_type, object_version, sharing_scope
-		FROM knowledge_attempt_audit_events WHERE tenant_id = ?`,
+		FROM knowledge_attempt_audit_events WHERE tenant_id = $1`,
 		knowledgeBoundaryTenantID,
 	).Scan(
 		&action,
@@ -582,12 +582,12 @@ func TestKnowledgeValidateHandlerUpdateConflictJournalsExactObject(
 
 func TestKnowledgeValidationScopeCloneIsIndependent(t *testing.T) {
 	scopes := knowledgeScopes{
-		read: knowledgecatalog.ReadScope{
-			TenantID: "tenant", OwnerID: "owner",
+		read: knowledgecatalog.ReadScope{OrganizationID: 1,
+			TenantID: "tenant", OwnerID: "1008",
 			ReadableAppIDs: []string{"app-one", "app-two"},
 		},
-		write: knowledgecatalog.WriteScope{
-			TenantID: "tenant", OwnerID: "owner",
+		write: knowledgecatalog.WriteScope{OrganizationID: 1,
+			TenantID: "tenant", OwnerID: "1008",
 			WritableAppIDs: []string{"app-one", "app-two"},
 		},
 		apps: []string{"app-one", "app-two"},

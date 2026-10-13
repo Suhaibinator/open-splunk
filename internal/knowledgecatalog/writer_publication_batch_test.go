@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
@@ -48,8 +50,8 @@ func TestWriterPublicationBatchesCeilingRowsAndHooks(t *testing.T) {
 	trace := &writerPublicationBatchTrace{}
 	registerWriterPublicationBatchCapture(t, harness, trace)
 
-	tx := harness.database.GORMDB().Session(&gorm.Session{Logger: trace}).
-		WithContext(harness.actorContext).Begin()
+	tx := pgmeta.Begin(harness.database.GORMDB().Session(&gorm.Session{Logger: trace}).
+		WithContext(harness.actorContext))
 	if tx.Error != nil {
 		t.Fatalf("begin publication batch transaction: %v", tx.Error)
 	}
@@ -128,8 +130,8 @@ func TestWriterPublicationBatchesSkipZeroRows(t *testing.T) {
 	trace := &writerPublicationBatchTrace{}
 	registerWriterPublicationBatchCapture(t, harness, trace)
 
-	tx := harness.database.GORMDB().Session(&gorm.Session{Logger: trace}).
-		WithContext(harness.actorContext).Begin()
+	tx := pgmeta.Begin(harness.database.GORMDB().Session(&gorm.Session{Logger: trace}).
+		WithContext(harness.actorContext))
 	if tx.Error != nil {
 		t.Fatalf("begin empty publication batch transaction: %v", tx.Error)
 	}
@@ -180,8 +182,8 @@ func TestWriterPublicationLaterBatchFailureRollsBackOuterTransaction(t *testing.
 	harness.writer.hook = writerPublicationBatchHook(trace)
 
 	publishErr := func() (returnedErr error) {
-		tx := harness.database.GORMDB().Session(&gorm.Session{Logger: trace}).
-			WithContext(harness.actorContext).Begin()
+		tx := pgmeta.Begin(harness.database.GORMDB().Session(&gorm.Session{Logger: trace}).
+			WithContext(harness.actorContext))
 		if tx.Error != nil {
 			return fmt.Errorf("begin later-batch failure transaction: %w", tx.Error)
 		}
@@ -189,12 +191,9 @@ func TestWriterPublicationLaterBatchFailureRollsBackOuterTransaction(t *testing.
 		prepared, plan := prepareWriterPublicationBatchPlan(
 			t, harness, tx, publicationInsertBatchSize+1, 0,
 		)
-		if err := tx.Exec(`CREATE TRIGGER writer_test_fail_later_dependency_batch
-			BEFORE INSERT ON knowledge_object_dependencies
-			WHEN NEW.ordinal = 64
-			BEGIN
-				SELECT RAISE(ABORT, 'injected later dependency batch failure');
-			END`).Error; err != nil {
+		if err := tx.Exec(`CREATE FUNCTION writer_test_fail_later_dependency_batch_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected later dependency batch failure' USING ERRCODE='23514'; END; $$;
+CREATE TRIGGER writer_test_fail_later_dependency_batch BEFORE INSERT ON knowledge_object_dependencies
+FOR EACH ROW WHEN (NEW.ordinal = 64) EXECUTE FUNCTION writer_test_fail_later_dependency_batch_fn()`).Error; err != nil {
 			return fmt.Errorf("install later-batch failure trigger: %w", err)
 		}
 		trace.reset()
@@ -295,8 +294,8 @@ func prepareWriterPublicationBatchPlan(
 			definition_digest, dependency_count, mutation_kind,
 			quarantine_reason, created_at_unix_micro
 		)
-		SELECT ?, printf('ko_writer_batch_target_%04d', ordinal), 1,
-		       ?, ?, 'field_alias', printf('writer-batch-target-%04d', ordinal),
+		SELECT ?, 'ko_writer_batch_target_' || lpad((ordinal)::text,4,'0') || '', 1,
+		       ?, ?, 'field_alias', 'writer-batch-target-' || lpad((ordinal)::text,4,'0') || '',
 		       'private', 'draft', ?, 0, 'create', NULL, 9000
 		FROM target`,
 			dependencyCount,
@@ -315,7 +314,7 @@ func prepareWriterPublicationBatchPlan(
 		INSERT INTO knowledge_object_dependency_seals (
 			tenant_id, knowledge_object_id, object_version, dependency_count
 		)
-		SELECT ?, printf('ko_writer_batch_target_%04d', ordinal), 1, 0
+		SELECT ?, 'ko_writer_batch_target_' || lpad((ordinal)::text,4,'0') || '', 1, 0
 		FROM target`, dependencyCount, writerFaultTenant); result.Error != nil {
 			t.Fatalf("seal publication dependency targets: %v", result.Error)
 		}
@@ -332,8 +331,8 @@ func prepareWriterPublicationBatchPlan(
 			source_selector_count, sourcetype_selector_count,
 			selector_value_bytes, canonical_selector_bytes
 		)
-		SELECT ?, printf('ko_writer_batch_target_%04d', ordinal), 1,
-		       ?, ?, 'field_alias', printf('writer-batch-target-%04d', ordinal),
+		SELECT ?, 'ko_writer_batch_target_' || lpad((ordinal)::text,4,'0') || '', 1,
+		       ?, ?, 'field_alias', 'writer-batch-target-' || lpad((ordinal)::text,4,'0') || '',
 		       'private', 'draft', 0, '', 0, 0, 0, 0, 0, 43
 		FROM target`,
 			dependencyCount,
@@ -352,7 +351,7 @@ func prepareWriterPublicationBatchPlan(
 			tenant_id, knowledge_object_id, object_version,
 			projection_bytes, canonical_selector_bytes
 		)
-		SELECT ?, printf('ko_writer_batch_target_%04d', ordinal), 1, 0, 43
+		SELECT ?, 'ko_writer_batch_target_' || lpad((ordinal)::text,4,'0') || '', 1, 0, 43
 		FROM target`, dependencyCount, writerFaultTenant); result.Error != nil {
 			t.Fatalf("seal publication dependency target projections: %v", result.Error)
 		}
@@ -361,15 +360,15 @@ func prepareWriterPublicationBatchPlan(
 			UNION ALL
 			SELECT ordinal + 1 FROM target WHERE ordinal + 1 < ?
 		)
-		INSERT INTO knowledge_objects (
+		INSERT INTO knowledge_objects (organization_id,
 			tenant_id, knowledge_object_id, current_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
 			definition_digest, created_at_unix_micro, updated_at_unix_micro,
 			disabled_at_unix_micro, quarantined_at_unix_micro,
 			deleted_at_unix_micro, quarantine_reason
 		)
-		SELECT ?, printf('ko_writer_batch_target_%04d', ordinal), 1,
-		       ?, ?, 'field_alias', printf('writer-batch-target-%04d', ordinal),
+		SELECT 1, ?, 'ko_writer_batch_target_' || lpad((ordinal)::text,4,'0') || '', 1,
+		       ?, ?, 'field_alias', 'writer-batch-target-' || lpad((ordinal)::text,4,'0') || '',
 		       'private', 'draft', ?, 9000, 9000, NULL, NULL, NULL, NULL
 		FROM target`,
 			dependencyCount,

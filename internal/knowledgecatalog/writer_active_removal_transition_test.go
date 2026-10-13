@@ -181,7 +181,7 @@ func TestWriterRecognizedActiveRemovalRequiresCompleteAppInventory(t *testing.T)
 	mustExec(
 		t,
 		harness.database,
-		"DELETE FROM app_catalog_revisions WHERE tenant_id = ?",
+		"DELETE FROM app_catalog_revisions WHERE tenant_id = $1",
 		testTenant,
 	)
 	stable := readWriterForwardCompatAuthoritySnapshot(t, harness.database)
@@ -212,7 +212,7 @@ func TestWriterActiveDependentConflictPrecedesMalformedTransitionInventory(t *te
 	mustExec(
 		t,
 		harness.database,
-		"DELETE FROM app_catalog_revisions WHERE tenant_id = ?",
+		"DELETE FROM app_catalog_revisions WHERE tenant_id = $1",
 		testTenant,
 	)
 	stable := readWriterForwardCompatAuthoritySnapshot(t, harness.database)

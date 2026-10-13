@@ -74,7 +74,7 @@ func TestCatalogScopeAndFilterNormalizationAreCanonicalAndDetached(t *testing.T)
 			testAppTwo,
 			testApp,
 			testAppTwo,
-		},
+		}, OrganizationID: 1,
 	}
 	request := ListRequest{
 		PageSize:            17,
@@ -102,7 +102,7 @@ func TestCatalogScopeAndFilterNormalizationAreCanonicalAndDetached(t *testing.T)
 		t.Fatalf("normalized request = %#v", normalized)
 	}
 
-	canonicalScope := ReadScope{TenantID: testTenant, OwnerID: testOwner, ReadableAppIDs: []string{testApp, testAppTwo}}
+	canonicalScope := ReadScope{TenantID: testTenant, OwnerID: testOwner, ReadableAppIDs: []string{testApp, testAppTwo}, OrganizationID: 1}
 	canonicalAppFilter := testApp
 	canonicalOwnerFilter := testOwner
 	canonicalRequest := ListRequest{
@@ -199,7 +199,7 @@ func TestPublicListRequestValidatorPinsStoreBoundsWithoutMutation(t *testing.T) 
 func TestCatalogFingerprintBindsEverySemanticInputButNotToken(t *testing.T) {
 	t.Parallel()
 
-	baseScope := ReadScope{TenantID: "tenant-a", OwnerID: "owner-a", ReadableAppIDs: []string{"app-a", "app-b"}}
+	baseScope := ReadScope{TenantID: "tenant-a", OwnerID: "owner-a", ReadableAppIDs: []string{"app-a", "app-b"}, OrganizationID: 1}
 	base := ListRequest{
 		PageSize: 7, IncludeTotal: true,
 		AppIDFilter: new("app-a"), OwnerIDFilter: new("owner-a"),
@@ -241,9 +241,9 @@ func TestCatalogFingerprintBindsEverySemanticInputButNotToken(t *testing.T) {
 		scope   ReadScope
 		request ListRequest
 	}{
-		{name: "tenant", scope: ReadScope{TenantID: "tenant-b", OwnerID: "owner-a", ReadableAppIDs: []string{"app-a", "app-b"}}, request: base},
-		{name: "owner", scope: ReadScope{TenantID: "tenant-a", OwnerID: "owner-b", ReadableAppIDs: []string{"app-a", "app-b"}}, request: base},
-		{name: "readable apps", scope: ReadScope{TenantID: "tenant-a", OwnerID: "owner-a", ReadableAppIDs: []string{"app-a"}}, request: base},
+		{name: "tenant", scope: ReadScope{TenantID: "tenant-b", OwnerID: "owner-a", ReadableAppIDs: []string{"app-a", "app-b"}, OrganizationID: 1}, request: base},
+		{name: "owner", scope: ReadScope{TenantID: "tenant-a", OwnerID: "owner-b", ReadableAppIDs: []string{"app-a", "app-b"}, OrganizationID: 1}, request: base},
+		{name: "readable apps", scope: ReadScope{TenantID: "tenant-a", OwnerID: "owner-a", ReadableAppIDs: []string{"app-a"}, OrganizationID: 1}, request: base},
 	}
 	appendVariant := func(name string, mutate func(*ListRequest)) {
 		candidate := base

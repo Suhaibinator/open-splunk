@@ -9,32 +9,31 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 )
 
 const (
-	manifestFormatVersion          = uint32(1)
-	artifactManifestFormatVersion  = uint32(2)
-	maximumManifestBytes           = 16 << 10
-	maximumDatabaseBytes           = uint64(1 << 40)
-	maximumSearchArtifactFiles     = uint64(100_000)
-	maximumSearchArtifactBytes     = uint64(1 << 30)
-	maximumTimestampUnixMicro      = int64(253_402_300_799_999_999)
-	recoverySetIDBytes             = 16
-	recoverySetIDHexBytes          = recoverySetIDBytes * 2
-	serverMasterKeyBytes           = uint64(auth.ServerMasterKeyBytes)
-	minimumAdministratorTokenBytes = uint64(auth.MinimumBrowserBearerTokenBytes)
-	maximumAdministratorTokenBytes = uint64(auth.MaximumBrowserBearerTokenBytes)
+	manifestFormatVersion         = uint32(3)
+	artifactManifestFormatVersion = uint32(3)
+	maximumManifestBytes          = 16 << 10
+	maximumDatabaseBytes          = uint64(1 << 40)
+	maximumSearchArtifactFiles    = uint64(100_000)
+	maximumSearchArtifactBytes    = uint64(1 << 40)
+	maximumTimestampUnixMicro     = int64(253_402_300_799_999_999)
+	recoverySetIDBytes            = 16
+	recoverySetIDHexBytes         = recoverySetIDBytes * 2
+	serverMasterKeyBytes          = uint64(auth.ServerMasterKeyBytes)
 
-	manifestSubject            = "control-plane backup manifest"
-	controlPlaneOnlyScope      = "control-plane-only"
-	databaseFilename           = "control.sqlite"
-	masterKeyFilename          = "master.key"
-	administratorTokenFilename = "administrator.token"
-	manifestFilename           = "manifest.json"
-	searchArtifactsFilename    = "search-artifacts"
+	manifestSubject         = "control-plane backup manifest"
+	controlPlaneOnlyScope   = "control-plane-only"
+	databaseFilename        = "control.pgdump"
+	masterKeyFilename       = "master.key"
+	manifestFilename        = "manifest.json"
+	searchArtifactsFilename = "objects"
+	blobCatalogFilename     = "object-references.json"
 )
 
 // MigrationIdentity binds a contiguous migration ledger to the exact source
@@ -66,27 +65,29 @@ type DirectoryIdentity struct {
 // schema-based and does not include a product version.
 type ReleaseIdentity struct {
 	SourceRevision       string
-	SQLiteMigrations     MigrationIdentity
+	PostgresMigrations   MigrationIdentity
 	ClickHouseMigrations MigrationIdentity
 }
 
 // Manifest is the canonical recovery-bundle manifest. ClickHouseIncluded is
 // required to be false: a control-plane bundle is not a deployment backup.
 type Manifest struct {
-	FormatVersion               uint32             `json:"format_version"`
-	CreatedAtUnixMicro          int64              `json:"created_at_unix_micro"`
-	RecoverySetID               string             `json:"recovery_set_id"`
-	Scope                       string             `json:"scope"`
-	ClickHouseIncluded          bool               `json:"clickhouse_included"`
-	SourceRevision              string             `json:"source_revision"`
-	SQLiteMigrations            MigrationIdentity  `json:"sqlite_migrations"`
-	SQLiteMigrationLedgerSHA256 string             `json:"sqlite_migration_ledger_sha256"`
-	ClickHouseMigrations        MigrationIdentity  `json:"clickhouse_migrations"`
-	Database                    FileIdentity       `json:"database"`
-	MasterKey                   FileIdentity       `json:"master_key"`
-	AdministratorToken          FileIdentity       `json:"administrator_token"`
-	MasterKeyFingerprintSHA256  string             `json:"master_key_fingerprint_sha256"`
-	SearchArtifacts             *DirectoryIdentity `json:"search_artifacts,omitempty"`
+	FormatVersion                 uint32             `json:"format_version"`
+	CreatedAtUnixMicro            int64              `json:"created_at_unix_micro"`
+	RecoverySetID                 string             `json:"recovery_set_id"`
+	Scope                         string             `json:"scope"`
+	ClickHouseIncluded            bool               `json:"clickhouse_included"`
+	SourceRevision                string             `json:"source_revision"`
+	PostgresMigrations            MigrationIdentity  `json:"postgres_migrations"`
+	PostgresMigrationLedgerSHA256 string             `json:"postgres_migration_ledger_sha256"`
+	ClickHouseMigrations          MigrationIdentity  `json:"clickhouse_migrations"`
+	Database                      FileIdentity       `json:"database"`
+	MasterKey                     FileIdentity       `json:"master_key"`
+	MasterKeyFingerprintSHA256    string             `json:"master_key_fingerprint_sha256"`
+	Objects                       *DirectoryIdentity `json:"objects"`
+	BlobCatalog                   FileIdentity       `json:"object_catalog"`
+	MaxAllocatedVisibility        uint64             `json:"max_allocated_visibility"`
+	CommittedCutoff               uint64             `json:"committed_cutoff"`
 }
 
 // ReleaseIdentity returns the exact release compatibility fields recorded by
@@ -94,7 +95,7 @@ type Manifest struct {
 func (manifest Manifest) ReleaseIdentity() ReleaseIdentity {
 	return ReleaseIdentity{
 		SourceRevision:       manifest.SourceRevision,
-		SQLiteMigrations:     manifest.SQLiteMigrations,
+		PostgresMigrations:   manifest.PostgresMigrations,
 		ClickHouseMigrations: manifest.ClickHouseMigrations,
 	}
 }
@@ -162,21 +163,22 @@ func unmarshalManifest(encoded []byte) (Manifest, error) {
 }
 
 func validateManifest(manifest Manifest) error {
-	if manifest.FormatVersion != manifestFormatVersion &&
-		manifest.FormatVersion != artifactManifestFormatVersion {
-		return fmt.Errorf("control-plane backup manifest format version %d is unsupported; create a fresh backup", manifest.FormatVersion)
+	if manifest.FormatVersion != manifestFormatVersion {
+		return errors.New("unsupported control-plane backup format; create a native PostgreSQL backup")
 	}
-	if manifest.FormatVersion == manifestFormatVersion && manifest.SearchArtifacts != nil {
-		return errors.New("control-plane backup legacy manifest cannot contain search artifacts")
+	if manifest.Objects == nil {
+		return errors.New("control-plane backup object archive is missing")
 	}
-	if manifest.FormatVersion == artifactManifestFormatVersion {
-		if manifest.SearchArtifacts == nil {
-			return errors.New("control-plane backup search-artifact identity is missing")
-		}
-		if err := validateDirectoryIdentity(*manifest.SearchArtifacts); err != nil {
-			return fmt.Errorf("control-plane backup search artifacts: %w", err)
-		}
+	if err := validateDirectoryIdentity(*manifest.Objects); err != nil {
+		return err
 	}
+	if err := ValidateFileIdentity(manifest.BlobCatalog, blobCatalogFilename, 1, maximumObjectCatalogBytes); err != nil {
+		return err
+	}
+	if manifest.MaxAllocatedVisibility > math.MaxInt64 || manifest.CommittedCutoff != manifest.MaxAllocatedVisibility {
+		return errors.New("control-plane backup visibility state is not drained")
+	}
+
 	if manifest.CreatedAtUnixMicro <= 0 || manifest.CreatedAtUnixMicro > maximumTimestampUnixMicro {
 		return errors.New("control-plane backup manifest creation time is invalid")
 	}
@@ -189,11 +191,11 @@ func validateManifest(manifest Manifest) error {
 	if _, err := buildinfo.Parse(manifest.SourceRevision); err != nil {
 		return fmt.Errorf("control-plane backup manifest source identity is invalid: %w", err)
 	}
-	if err := validateMigrationIdentity("SQLite", manifest.SQLiteMigrations); err != nil {
+	if err := validateMigrationIdentity("Postgres", manifest.PostgresMigrations); err != nil {
 		return err
 	}
-	if !buildinfo.ValidSHA256(manifest.SQLiteMigrationLedgerSHA256) {
-		return errors.New("control-plane backup SQLite migration-ledger identity is invalid")
+	if !buildinfo.ValidSHA256(manifest.PostgresMigrationLedgerSHA256) {
+		return errors.New("control-plane backup Postgres migration-ledger identity is invalid")
 	}
 	if err := validateMigrationIdentity("ClickHouse", manifest.ClickHouseMigrations); err != nil {
 		return err
@@ -204,14 +206,7 @@ func validateManifest(manifest Manifest) error {
 	if err := ValidateFileIdentity(manifest.MasterKey, masterKeyFilename, serverMasterKeyBytes, serverMasterKeyBytes); err != nil {
 		return fmt.Errorf("control-plane backup master key: %w", err)
 	}
-	if err := ValidateFileIdentity(
-		manifest.AdministratorToken,
-		administratorTokenFilename,
-		minimumAdministratorTokenBytes,
-		maximumAdministratorTokenBytes,
-	); err != nil {
-		return fmt.Errorf("control-plane backup administrator token: %w", err)
-	}
+
 	if !buildinfo.ValidSHA256(manifest.MasterKeyFingerprintSHA256) {
 		return errors.New("control-plane backup manifest master-key identity is invalid")
 	}
@@ -249,7 +244,7 @@ func ValidateReleaseIdentity(identity ReleaseIdentity) error {
 	if _, err := buildinfo.Parse(identity.SourceRevision); err != nil {
 		return fmt.Errorf("source identity is invalid: %w", err)
 	}
-	if err := validateReleaseMigrationIdentity("SQLite", identity.SQLiteMigrations); err != nil {
+	if err := validateReleaseMigrationIdentity("Postgres", identity.PostgresMigrations); err != nil {
 		return err
 	}
 	return validateReleaseMigrationIdentity("ClickHouse", identity.ClickHouseMigrations)

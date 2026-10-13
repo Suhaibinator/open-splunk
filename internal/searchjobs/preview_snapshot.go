@@ -72,7 +72,7 @@ func (manager *Manager) PreviewForBytes(
 
 	manager.acquireRead()
 	defer manager.releaseRead()
-	return manager.previewForBytesWithPermit(nil, access, id, limit, maximumBytes)
+	return manager.previewForBytesWithPermit(context.Background(), nil, access, id, limit, maximumBytes)
 }
 
 // PreviewForBytesContext applies the same row and byte bounds as
@@ -110,6 +110,7 @@ func (manager *Manager) PreviewForBytesContext(
 	}
 	defer manager.releaseRead()
 	return manager.previewForBytesWithPermit(
+		ctx,
 		func() error { return manager.operationContextError(ctx) },
 		access,
 		id,
@@ -119,13 +120,14 @@ func (manager *Manager) PreviewForBytesContext(
 }
 
 func (manager *Manager) previewForBytesWithPermit(
+	ctx context.Context,
 	contextError func() error,
 	access AccessScope,
 	id string,
 	limit int,
 	maximumBytes uint64,
 ) (PreviewSnapshot, error) {
-	entry, err := manager.lockEntryForAccess(access, id, false, contextError)
+	entry, err := manager.lockEntryForAccess(access, id, false, contextError, ctx)
 	if err != nil {
 		return PreviewSnapshot{}, err
 	}
@@ -139,7 +141,7 @@ func (manager *Manager) previewForBytesWithPermit(
 		return PreviewSnapshot{}, ErrResultsUnavailable
 	case StateCompleted:
 		if entry.resultSchema == nil || entry.job.Schema == nil || entry.resultGeneration == 0 ||
-			uint64(len(entry.rows)) != entry.job.RowCount {
+			(!entry.job.CaptureComplete && uint64(len(entry.rows)) != entry.job.RowCount) {
 			entry.mu.Unlock()
 			return PreviewSnapshot{}, ErrResultsUnavailable
 		}
@@ -148,7 +150,7 @@ func (manager *Manager) previewForBytesWithPermit(
 			entry.mu.Unlock()
 			return PreviewSnapshot{}, ErrResultsNotReady
 		}
-		if uint64(len(entry.rows)) != entry.job.RowCount {
+		if !entry.capturing && uint64(len(entry.rows)) != entry.job.RowCount {
 			entry.mu.Unlock()
 			return PreviewSnapshot{}, ErrResultsUnavailable
 		}
@@ -169,7 +171,7 @@ func (manager *Manager) previewForBytesWithPermit(
 	// writer lock while preserving this exact revision.
 	jobSource := entry.job
 	revision := entry.resultRevision
-	truncated := entry.job.ResultsTruncated || end < len(entry.rows)
+	truncated := entry.job.ResultsTruncated || entry.job.PreviewTruncated || end < len(entry.rows)
 	rows := entry.rows[:end:end]
 	entry.mu.Unlock()
 

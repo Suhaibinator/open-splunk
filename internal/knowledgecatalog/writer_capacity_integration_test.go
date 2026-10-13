@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"google.golang.org/protobuf/proto"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
@@ -364,17 +366,16 @@ func TestWriterIdempotencyReclaimUsesCoveringRetentionIndexWithoutTempSort(t *te
 		{
 			name: "width preflight",
 			query: `SELECT
-					length(CAST(tenant_id AS BLOB)),
-					length(CAST(actor_kind AS BLOB)),
-					length(CAST(actor_id AS BLOB)),
-					length(CAST(route AS BLOB)),
-					length(CAST(client_request_id AS BLOB)),
-					length(CAST(mutation_kind AS BLOB)),
+					length(convert_to((tenant_id)::text,'UTF8')),
+					length(convert_to((actor_kind)::text,'UTF8')),
+					length(convert_to((actor_id)::text,'UTF8')),
+					length(convert_to((route)::text,'UTF8')),
+					length(convert_to((client_request_id)::text,'UTF8')),
+					length(convert_to((mutation_kind)::text,'UTF8')),
 					length(request_digest), length(outcome_proto),
 					length(committed_catalog_state_token),
-					length(CAST(knowledge_object_id AS BLOB))
+					length(convert_to((knowledge_object_id)::text,'UTF8'))
 				FROM knowledge_mutation_idempotency
-				INDEXED BY knowledge_mutation_idempotency_retention_idx
 				WHERE tenant_id = ? AND retain_until_unix_micro <= ?
 				ORDER BY retain_until_unix_micro, created_at_unix_micro,
 				         actor_kind, actor_id, route, client_request_id
@@ -394,10 +395,10 @@ func TestWriterIdempotencyReclaimUsesCoveringRetentionIndexWithoutTempSort(t *te
 			if !strings.Contains(plan, "KNOWLEDGE_MUTATION_IDEMPOTENCY_RETENTION_IDX") {
 				t.Fatalf("idempotency reclaim %s does not use its retention index:\n%s", test.name, plan)
 			}
-			if test.wantCovering && !strings.Contains(plan, "USING COVERING INDEX") {
+			if test.wantCovering && !strings.Contains(plan, "INDEX ONLY SCAN") {
 				t.Fatalf("idempotency reclaim %s does not use a covering access path:\n%s", test.name, plan)
 			}
-			if strings.Contains(plan, "USE TEMP B-TREE") {
+			if strings.Contains(plan, "SORT") {
 				t.Fatalf("idempotency reclaim %s performs a temporary sort:\n%s", test.name, plan)
 			}
 		})
@@ -503,8 +504,8 @@ func TestWriterRetentionUsesDatabaseAnchorAndShortenedFenceCannotReexecute(t *te
 		SELECT created_at_unix_micro, retention_anchor_unix_micro,
 		       retain_until_unix_micro, outcome_proto
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND route = 'objects.create'
-		  AND client_request_id = ?`,
+		WHERE tenant_id = $1 AND route = 'objects.create'
+		  AND client_request_id = $2`,
 		writerTestTenant,
 		staleRequest.GetClientRequestId(),
 	).Scan(&occurredAt, &retentionAnchor, &retainUntil, &encodedOutcome); err != nil {
@@ -526,13 +527,11 @@ func TestWriterRetentionUsesDatabaseAnchorAndShortenedFenceCannotReexecute(t *te
 
 	var receiptTriggerSQL string
 	if err := harness.database.SQLDB().QueryRowContext(t.Context(), `
-		SELECT sql FROM sqlite_schema
-		WHERE type = 'trigger'
-		  AND name = 'knowledge_mutation_idempotency_update_is_forbidden'`).Scan(&receiptTriggerSQL); err != nil {
+		SELECT pg_get_triggerdef(t.oid)||';'||pg_get_functiondef(t.tgfoid) FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND NOT t.tgisinternal AND t.tgname='knowledge_mutation_idempotency_update_is_forbidden'`).Scan(&receiptTriggerSQL); err != nil {
 		t.Fatalf("read receipt immutability trigger: %v", err)
 	}
 	if _, err := harness.database.SQLDB().ExecContext(t.Context(), `
-		DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden`); err != nil {
+		DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden ON knowledge_mutation_idempotency`); err != nil {
 		t.Fatalf("drop receipt immutability trigger: %v", err)
 	}
 	shortenedRetainUntil := occurredAt + int64(7*24*time.Hour/time.Microsecond)
@@ -545,10 +544,10 @@ func TestWriterRetentionUsesDatabaseAnchorAndShortenedFenceCannotReexecute(t *te
 	}
 	if _, err := harness.database.SQLDB().ExecContext(t.Context(), `
 		UPDATE knowledge_mutation_idempotency
-		SET outcome_proto = ?, retention_anchor_unix_micro = ?,
-		    retain_until_unix_micro = ?
-		WHERE tenant_id = ? AND route = 'objects.create'
-		  AND client_request_id = ?`,
+		SET outcome_proto = $1, retention_anchor_unix_micro = $2,
+		    retain_until_unix_micro = $3
+		WHERE tenant_id = $4 AND route = 'objects.create'
+		  AND client_request_id = $5`,
 		shortenedOutcome,
 		occurredAt,
 		shortenedRetainUntil,
@@ -605,13 +604,15 @@ func TestWriterRetentionUsesDatabaseAnchorAndShortenedFenceCannotReexecute(t *te
 		t.Fatalf("exact retry with shortened fence = (%v, %v), want nil/ErrCorrupt; original=%v", replayed, err, committed)
 	}
 
+	if _, err := harness.database.SQLDB().ExecContext(t.Context(), `DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden ON knowledge_mutation_idempotency`); err != nil {
+		t.Fatalf("drop retained receipt update guard: %v", err)
+	}
 	if _, err := harness.database.SQLDB().ExecContext(t.Context(), `
-		DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden;
 		UPDATE knowledge_mutation_idempotency
-		SET outcome_proto = ?, retention_anchor_unix_micro = ?,
-		    retain_until_unix_micro = ?
-		WHERE tenant_id = ? AND route = 'objects.create'
-		  AND client_request_id = ?`,
+		SET outcome_proto = $1, retention_anchor_unix_micro = $2,
+		    retain_until_unix_micro = $3
+		WHERE tenant_id = $4 AND route = 'objects.create'
+		  AND client_request_id = $5`,
 		encodedOutcome,
 		retentionAnchor,
 		retainUntil,
@@ -643,7 +644,7 @@ func TestWriterIdempotencyLedgerMismatchFailsClosedWithoutMutation(t *testing.T)
 	if _, err := harness.database.SQLDB().ExecContext(t.Context(), `
 		UPDATE knowledge_catalog_tenants
 		SET idempotency_count = idempotency_count + 1
-		WHERE tenant_id = ?`, writerTestTenant); err != nil {
+		WHERE tenant_id = $1`, writerTestTenant); err != nil {
 		t.Fatalf("stage idempotency ledger mismatch: %v", err)
 	}
 	stable := readWriterAuthoritySnapshot(t, harness.database)
@@ -703,25 +704,28 @@ func TestWriterIdempotencyReclaimRejectsOversizedOldestKeyBeforeDelete(t *testin
 		t.Fatalf("acquire reclaim-width corruption connection: %v", err)
 	}
 	if _, err := connection.ExecContext(t.Context(), `
-		DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden`); err != nil {
+		DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden ON knowledge_mutation_idempotency`); err != nil {
 		_ = connection.Close()
 		t.Fatalf("drop immutable receipt update trigger: %v", err)
 	}
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(t.Context(), connection); err != nil {
 		_ = connection.Close()
 		t.Fatalf("disable receipt foreign keys: %v", err)
 	}
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(t.Context(), connection, false); err != nil {
 		_ = connection.Close()
 		t.Fatalf("disable receipt key checks: %v", err)
 	}
 	const hostileActorPayloadBytes = 4 << 20
+	if err := pgtest.AllowOversizedIndexedValue(t.Context(), connection, "knowledge_mutation_idempotency", "actor_id"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := connection.ExecContext(t.Context(), `
 		UPDATE knowledge_mutation_idempotency
-		SET actor_id = 'WIDE-' || CAST(zeroblob(?) AS TEXT)
-		WHERE tenant_id = ? AND actor_kind = 'browser'
+		SET actor_id = 'WIDE-' || repeat('x',$1::int)
+		WHERE tenant_id = $2 AND actor_kind = 'browser'
 		  AND actor_id = 'writer-blackbox-administrator'
-		  AND route = 'objects.create' AND client_request_id = ?`,
+		  AND route = 'objects.create' AND client_request_id = $3`,
 		hostileActorPayloadBytes,
 		writerTestTenant,
 		hostileRequestID,
@@ -729,11 +733,11 @@ func TestWriterIdempotencyReclaimRejectsOversizedOldestKeyBeforeDelete(t *testin
 		_ = connection.Close()
 		t.Fatalf("inject oversized oldest receipt actor: %v", err)
 	}
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = OFF`); err != nil {
+	if _, err := pgtest.Checks(t.Context(), connection, true); err != nil {
 		_ = connection.Close()
 		t.Fatalf("restore receipt key checks: %v", err)
 	}
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
+	if _, err := pgtest.RestoreForeignKeys(t.Context(), connection); err != nil {
 		_ = connection.Close()
 		t.Fatalf("restore receipt foreign keys: %v", err)
 	}
@@ -816,12 +820,12 @@ func TestWriterIdempotencyReclaimSemanticPreflightRejectsEqualWidthCorruptKeys(t
 		t.Fatalf("acquire reclaim-semantic corruption connection: %v", err)
 	}
 	if _, err := connection.ExecContext(t.Context(), `
-		DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden`); err != nil {
+		DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden ON knowledge_mutation_idempotency`); err != nil {
 		_ = connection.Close()
 		t.Fatalf("drop immutable receipt update trigger: %v", err)
 	}
 	if _, err := connection.ExecContext(t.Context(), `
-		DROP TRIGGER audit_event_update_is_forbidden`); err != nil {
+		DROP TRIGGER audit_event_update_is_forbidden ON audit_events`); err != nil {
 		_ = connection.Close()
 		t.Fatalf("drop audit event update trigger: %v", err)
 	}
@@ -830,8 +834,8 @@ func TestWriterIdempotencyReclaimSemanticPreflightRejectsEqualWidthCorruptKeys(t
 	if err := connection.QueryRowContext(t.Context(), `
 		SELECT successful_audit_sequence
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND route = 'objects.create'
-		  AND client_request_id = ?`, writerTestTenant, hostileRequestID).Scan(&auditSequence); err != nil {
+		WHERE tenant_id = $1 AND route = 'objects.create'
+		  AND client_request_id = $2`, writerTestTenant, hostileRequestID).Scan(&auditSequence); err != nil {
 		_ = connection.Close()
 		t.Fatalf("read semantic reclaim audit sequence: %v", err)
 	}
@@ -913,10 +917,10 @@ func TestWriterIdempotencyReclaimSemanticPreflightRejectsEqualWidthCorruptKeys(t
 			}
 			defer caseConnection.Close()
 			assertCapacityForeignKeys(t, caseConnection, 1)
-			if _, err := caseConnection.ExecContext(t.Context(), test.corruptSQL, test.corruptArgs...); err == nil {
+			if _, err := caseConnection.ExecContext(t.Context(), pgtest.Parameters(test.corruptSQL), test.corruptArgs...); err == nil {
 				t.Fatalf("row-only %s corruption succeeded with foreign keys enabled", test.name)
 			}
-			if _, err := caseConnection.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); err != nil {
+			if _, err := pgtest.DropForeignKeys(t.Context(), caseConnection); err != nil {
 				t.Fatalf("disable %s corruption foreign keys: %v", test.name, err)
 			}
 			assertCapacityForeignKeys(t, caseConnection, 0)
@@ -925,19 +929,19 @@ func TestWriterIdempotencyReclaimSemanticPreflightRejectsEqualWidthCorruptKeys(t
 				if !corrupted {
 					return
 				}
-				_, _ = caseConnection.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`)
-				_, _ = caseConnection.ExecContext(t.Context(), test.restoreSQL, test.restoreArgs...)
+				_, _ = pgtest.DropForeignKeys(t.Context(), caseConnection)
+				_, _ = caseConnection.ExecContext(t.Context(), pgtest.Parameters(test.restoreSQL), test.restoreArgs...)
 				if test.restoreAuditSQL != "" {
-					_, _ = caseConnection.ExecContext(t.Context(), test.restoreAuditSQL, test.restoreAuditArgs...)
+					_, _ = caseConnection.ExecContext(t.Context(), pgtest.Parameters(test.restoreAuditSQL), test.restoreAuditArgs...)
 				}
-				_, _ = caseConnection.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`)
+				_, _ = pgtest.RestoreForeignKeys(t.Context(), caseConnection)
 			}()
 			if test.corruptAuditSQL != "" {
-				assertOneCapacityRowUpdated(t, caseConnection, test.corruptAuditSQL, test.corruptAuditArgs...)
+				assertOneCapacityRowUpdated(t, caseConnection, pgtest.Parameters(test.corruptAuditSQL), test.corruptAuditArgs...)
 			}
-			assertOneCapacityRowUpdated(t, caseConnection, test.corruptSQL, test.corruptArgs...)
+			assertOneCapacityRowUpdated(t, caseConnection, pgtest.Parameters(test.corruptSQL), test.corruptArgs...)
 			corrupted = true
-			if _, err := caseConnection.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
+			if _, err := pgtest.RestoreForeignKeys(t.Context(), caseConnection); err != nil {
 				t.Fatalf("restore %s corruption foreign keys: %v", test.name, err)
 			}
 			assertCapacityForeignKeys(t, caseConnection, 1)
@@ -961,9 +965,9 @@ func TestWriterIdempotencyReclaimSemanticPreflightRejectsEqualWidthCorruptKeys(t
 			if after := readOldestCapacityReceiptKey(t, harness.database); after != corruptKey {
 				t.Fatalf("oldest corrupt key changed across failed reclaim:\n before %#v\n  after %#v", corruptKey, after)
 			}
-			assertOneCapacityRowUpdated(t, caseConnection, test.restoreSQL, test.restoreArgs...)
+			assertOneCapacityRowUpdated(t, caseConnection, pgtest.Parameters(test.restoreSQL), test.restoreArgs...)
 			if test.restoreAuditSQL != "" {
-				assertOneCapacityRowUpdated(t, caseConnection, test.restoreAuditSQL, test.restoreAuditArgs...)
+				assertOneCapacityRowUpdated(t, caseConnection, pgtest.Parameters(test.restoreAuditSQL), test.restoreAuditArgs...)
 			}
 			corrupted = false
 		})
@@ -1022,17 +1026,15 @@ func TestWriterIdempotencyReclaimCannotSkipCorruptExpiredPrefixForLaterValidRece
 	defer connection.Close()
 	var receiptTriggerSQL string
 	if err := connection.QueryRowContext(t.Context(), `
-		SELECT sql FROM sqlite_schema
-		WHERE type = 'trigger'
-		  AND name = 'knowledge_mutation_idempotency_update_is_forbidden'`).Scan(&receiptTriggerSQL); err != nil {
+		SELECT pg_get_triggerdef(t.oid)||';'||pg_get_functiondef(t.tgfoid) FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND NOT t.tgisinternal AND t.tgname='knowledge_mutation_idempotency_update_is_forbidden'`).Scan(&receiptTriggerSQL); err != nil {
 		t.Fatalf("read receipt immutability trigger: %v", err)
 	}
 	var originalToken []byte
 	if err := connection.QueryRowContext(t.Context(), `
 		SELECT committed_catalog_state_token
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND route = 'objects.create'
-		  AND client_request_id = ?`,
+		WHERE tenant_id = $1 AND route = 'objects.create'
+		  AND client_request_id = $2`,
 		writerTestTenant,
 		corruptRequestID,
 	).Scan(&originalToken); err != nil {
@@ -1041,11 +1043,11 @@ func TestWriterIdempotencyReclaimCannotSkipCorruptExpiredPrefixForLaterValidRece
 	if len(originalToken) != 32 {
 		t.Fatalf("reclaim-prefix state token bytes = %d, want 32", len(originalToken))
 	}
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(t.Context(), connection); err != nil {
 		t.Fatalf("disable reclaim-prefix foreign keys: %v", err)
 	}
 	if _, err := connection.ExecContext(t.Context(), `
-		DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden`); err != nil {
+		DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden ON knowledge_mutation_idempotency`); err != nil {
 		t.Fatalf("drop receipt immutability trigger: %v", err)
 	}
 	corruptToken := bytes.Repeat([]byte{0x5a}, len(originalToken))
@@ -1054,9 +1056,9 @@ func TestWriterIdempotencyReclaimCannotSkipCorruptExpiredPrefixForLaterValidRece
 	}
 	assertOneCapacityRowUpdated(t, connection, `
 		UPDATE knowledge_mutation_idempotency
-		SET committed_catalog_state_token = ?
-		WHERE tenant_id = ? AND route = 'objects.create'
-		  AND client_request_id = ?`,
+		SET committed_catalog_state_token = $1
+		WHERE tenant_id = $2 AND route = 'objects.create'
+		  AND client_request_id = $3`,
 		corruptToken,
 		writerTestTenant,
 		corruptRequestID,
@@ -1064,7 +1066,7 @@ func TestWriterIdempotencyReclaimCannotSkipCorruptExpiredPrefixForLaterValidRece
 	if _, err := connection.ExecContext(t.Context(), receiptTriggerSQL); err != nil {
 		t.Fatalf("restore receipt immutability trigger: %v", err)
 	}
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
+	if _, err := pgtest.RestoreForeignKeys(t.Context(), connection); err != nil {
 		t.Fatalf("restore reclaim-prefix foreign keys: %v", err)
 	}
 
@@ -1090,18 +1092,18 @@ func TestWriterIdempotencyReclaimCannotSkipCorruptExpiredPrefixForLaterValidRece
 	assertCapacityReceiptExists(t, harness.database, corruptRequestID)
 	assertCapacityReceiptExists(t, harness.database, oldRequest.GetClientRequestId())
 
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(t.Context(), connection); err != nil {
 		t.Fatalf("disable foreign keys for reclaim-prefix restore: %v", err)
 	}
 	if _, err := connection.ExecContext(t.Context(), `
-		DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden`); err != nil {
+		DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden ON knowledge_mutation_idempotency`); err != nil {
 		t.Fatalf("drop receipt trigger for reclaim-prefix restore: %v", err)
 	}
 	assertOneCapacityRowUpdated(t, connection, `
 		UPDATE knowledge_mutation_idempotency
-		SET committed_catalog_state_token = ?
-		WHERE tenant_id = ? AND route = 'objects.create'
-		  AND client_request_id = ?`,
+		SET committed_catalog_state_token = $1
+		WHERE tenant_id = $2 AND route = 'objects.create'
+		  AND client_request_id = $3`,
 		originalToken,
 		writerTestTenant,
 		corruptRequestID,
@@ -1109,7 +1111,7 @@ func TestWriterIdempotencyReclaimCannotSkipCorruptExpiredPrefixForLaterValidRece
 	if _, err := connection.ExecContext(t.Context(), receiptTriggerSQL); err != nil {
 		t.Fatalf("restore final receipt immutability trigger: %v", err)
 	}
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
+	if _, err := pgtest.RestoreForeignKeys(t.Context(), connection); err != nil {
 		t.Fatalf("restore final reclaim-prefix foreign keys: %v", err)
 	}
 	assertWriterCatalogIntegrity(t, harness.database)
@@ -1196,7 +1198,7 @@ func TestWriterReclaimsSchemaValidExpiredQuarantineReceiptAtNormalCapacity(t *te
 	var recoveryCount int
 	if err := harness.database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT count(*) FROM knowledge_recovery_audit
-		WHERE tenant_id = ? AND knowledge_object_id = ?
+		WHERE tenant_id = $1 AND knowledge_object_id = $2
 		  AND object_version = 2 AND recovery_reason = 'root_corruption'`,
 		writerTestTenant,
 		oldResponse.GetKnowledgeObject().GetKnowledgeObjectId(),
@@ -1224,7 +1226,7 @@ func stageSchemaValidExpiredQuarantineReceipt(
 	requestID string,
 ) {
 	t.Helper()
-	tx, err := database.SQLDB().BeginTx(t.Context(), nil)
+	tx, err := pgmeta.BeginSQL(t.Context(), database.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin schema-valid quarantine publication: %v", err)
 	}
@@ -1236,7 +1238,7 @@ func stageSchemaValidExpiredQuarantineReceipt(
 		SELECT app_id, owner_id, object_type, name, sharing_scope,
 		       state, current_version, created_at_unix_micro
 		FROM knowledge_objects
-		WHERE tenant_id = ? AND knowledge_object_id = ?`,
+		WHERE tenant_id = $1 AND knowledge_object_id = $2`,
 		writerTestTenant,
 		objectID,
 	).Scan(
@@ -1262,8 +1264,8 @@ func stageSchemaValidExpiredQuarantineReceipt(
 			app_id, owner_id, object_type, name, sharing_scope, state,
 			definition_digest, dependency_count, mutation_kind,
 			quarantine_reason, created_at_unix_micro
-		) VALUES (?, ?, 2, ?, ?, ?, ?, ?, 'quarantined',
-		          NULL, 0, 'quarantine', 'root_corruption', ?)`,
+		) VALUES ($1, $2, 2, $3, $4, $5, $6, $7, 'quarantined',
+		          NULL, 0, 'quarantine', 'root_corruption', $8)`,
 		writerTestTenant,
 		objectID,
 		appID,
@@ -1276,7 +1278,7 @@ func stageSchemaValidExpiredQuarantineReceipt(
 	assertOneCapacityRowUpdated(t, tx, `
 		INSERT INTO knowledge_object_dependency_seals (
 			tenant_id, knowledge_object_id, object_version, dependency_count
-		) VALUES (?, ?, 2, 0)`, writerTestTenant, objectID)
+		) VALUES ($1, $2, 2, 0)`, writerTestTenant, objectID)
 	assertOneCapacityRowUpdated(t, tx, `
 		INSERT INTO knowledge_object_list_projections (
 			tenant_id, knowledge_object_id, object_version,
@@ -1285,7 +1287,7 @@ func stageSchemaValidExpiredQuarantineReceipt(
 			index_selector_count, host_selector_count,
 			source_selector_count, sourcetype_selector_count,
 			selector_value_bytes, canonical_selector_bytes
-		) VALUES (?, ?, 2, ?, ?, ?, ?, ?, 'quarantined',
+		) VALUES ($1, $2, 2, $3, $4, $5, $6, $7, 'quarantined',
 		          0, '', 0, 0, 0, 0, 0, 0)`,
 		writerTestTenant,
 		objectID,
@@ -1299,18 +1301,18 @@ func stageSchemaValidExpiredQuarantineReceipt(
 		INSERT INTO knowledge_object_list_projection_seals (
 			tenant_id, knowledge_object_id, object_version,
 			projection_bytes, canonical_selector_bytes
-		) VALUES (?, ?, 2, 0, 0)`, writerTestTenant, objectID)
+		) VALUES ($1, $2, 2, 0, 0)`, writerTestTenant, objectID)
 	assertOneCapacityRowUpdated(t, tx, `
 		UPDATE knowledge_objects
 		SET current_version = 2,
 		    state = 'quarantined',
 		    definition_digest = NULL,
-		    updated_at_unix_micro = ?,
+		    updated_at_unix_micro = $1,
 		    disabled_at_unix_micro = NULL,
-		    quarantined_at_unix_micro = ?,
+		    quarantined_at_unix_micro = $2,
 		    deleted_at_unix_micro = NULL,
 		    quarantine_reason = 'root_corruption'
-		WHERE tenant_id = ? AND knowledge_object_id = ?
+		WHERE tenant_id = $3 AND knowledge_object_id = $4
 		  AND current_version = 1 AND state = 'draft'`,
 		quarantinedAtUnixMicro,
 		quarantinedAtUnixMicro,
@@ -1320,14 +1322,14 @@ func stageSchemaValidExpiredQuarantineReceipt(
 	assertOneCapacityRowUpdated(t, tx, `
 		UPDATE knowledge_catalog_tenants
 		SET catalog_revision = catalog_revision + 1
-		WHERE tenant_id = ?`, writerTestTenant)
+		WHERE tenant_id = $1`, writerTestTenant)
 	assertOneCapacityRowUpdated(t, tx, `
 		INSERT INTO knowledge_recovery_audit (
 			tenant_id, sequence, knowledge_object_id, object_version,
 			actor_kind, actor_id, actor_role, app_id, object_type,
 			sharing_scope, recovery_reason, occurred_at_unix_micro
-		) VALUES (?, 1, ?, 2, 'system', 'open-splunk-server', 'system',
-		          ?, ?, ?, 'root_corruption', ?)`,
+		) VALUES ($1, 1, $2, 2, 'system', 'open-splunk-server', 'system',
+		          $3, $4, $5, 'root_corruption', $6)`,
 		writerTestTenant,
 		objectID,
 		appID,
@@ -1344,7 +1346,7 @@ func stageSchemaValidExpiredQuarantineReceipt(
 		JOIN knowledge_catalog_revision_heads AS head
 		  ON head.tenant_id = tenant.tenant_id
 		 AND head.catalog_revision = tenant.catalog_revision
-		WHERE tenant.tenant_id = ?`, writerTestTenant).Scan(&revision, &token); err != nil {
+		WHERE tenant.tenant_id = $1`, writerTestTenant).Scan(&revision, &token); err != nil {
 		t.Fatalf("read quarantine commit state: %v", err)
 	}
 	if revision < 1 || len(token) != 32 {
@@ -1358,8 +1360,8 @@ func stageSchemaValidExpiredQuarantineReceipt(
 			knowledge_object_id, object_version, occurred_at_unix_micro,
 			retention_anchor_unix_micro, retain_until_unix_micro,
 			successful_audit_sequence, recovery_audit_sequence
-		) VALUES (?, 'system', 'open-splunk-server', 'objects.quarantine', ?,
-		          zeroblob(32), ?, ?, 'quarantine', ?, 2, ?, ?, ?, NULL, 1)`,
+		) VALUES ($1, 'system', 'open-splunk-server', 'objects.quarantine', $2,
+		          decode(repeat('00', (32)::int), 'hex'), $3, $4, 'quarantine', $5, 2, $6, $7, $8, NULL, 1)`,
 		writerTestTenant,
 		requestID,
 		revision,
@@ -1400,9 +1402,9 @@ func stageSchemaValidExpiredQuarantineReceipt(
 			successful_audit_sequence, recovery_audit_sequence,
 			created_at_unix_micro, retention_anchor_unix_micro,
 			retain_until_unix_micro
-		) VALUES (?, 'system', 'open-splunk-server', 'objects.quarantine', ?,
-		          'quarantine', 1, zeroblob(32), 1, ?, ?, ?, ?, 2,
-		          NULL, 1, ?, ?, ?)`,
+		) VALUES ($1, 'system', 'open-splunk-server', 'objects.quarantine', $2,
+		          'quarantine', 1, decode(repeat('00', (32)::int), 'hex'), 1, $3, $4, $5, $6, 2,
+		          NULL, 1, $7, $8, $9)`,
 		writerTestTenant,
 		requestID,
 		quarantineOutcome,
@@ -1427,37 +1429,29 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 		seed.Retention < 7*24*time.Hour || seed.Retention > 365*24*time.Hour {
 		t.Fatalf("invalid capacity receipt seed: %#v", seed)
 	}
-	tx, err := database.SQLDB().BeginTx(t.Context(), nil)
+	tx, err := pgmeta.BeginSQL(t.Context(), database.SQLDB(), nil)
 	if err != nil {
 		t.Fatalf("begin capacity receipt seed: %v", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	var receiptUpdateTriggerSQL string
 	if err := tx.QueryRowContext(t.Context(), `
-		SELECT sql FROM sqlite_schema
-		WHERE type = 'trigger'
-		  AND name = 'knowledge_mutation_idempotency_update_is_forbidden'`).Scan(&receiptUpdateTriggerSQL); err != nil {
+		SELECT pg_get_triggerdef(t.oid)||';'||pg_get_functiondef(t.tgfoid) FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND NOT t.tgisinternal AND t.tgname='knowledge_mutation_idempotency_update_is_forbidden'`).Scan(&receiptUpdateTriggerSQL); err != nil {
 		t.Fatalf("read receipt immutability trigger: %v", err)
 	}
 	var commitUpdateTriggerSQL string
 	if err := tx.QueryRowContext(t.Context(), `
-		SELECT sql FROM sqlite_schema
-		WHERE type = 'trigger'
-		  AND name = 'knowledge_mutation_commit_authority_update_is_forbidden'`).Scan(&commitUpdateTriggerSQL); err != nil {
+		SELECT pg_get_triggerdef(t.oid)||';'||pg_get_functiondef(t.tgfoid) FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND NOT t.tgisinternal AND t.tgname='knowledge_mutation_commit_authority_update_is_forbidden'`).Scan(&commitUpdateTriggerSQL); err != nil {
 		t.Fatalf("read commit-authority immutability trigger: %v", err)
 	}
 	var commitExactTriggerSQL string
 	if err := tx.QueryRowContext(t.Context(), `
-		SELECT sql FROM sqlite_schema
-		WHERE type = 'trigger'
-		  AND name = 'knowledge_mutation_commit_authority_is_exact'`).Scan(&commitExactTriggerSQL); err != nil {
+		SELECT pg_get_triggerdef(t.oid)||';'||pg_get_functiondef(t.tgfoid) FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND NOT t.tgisinternal AND t.tgname='knowledge_mutation_commit_authority_is_exact'`).Scan(&commitExactTriggerSQL); err != nil {
 		t.Fatalf("read commit-authority exactness trigger: %v", err)
 	}
 	var commitCollisionTriggerSQL string
 	if err := tx.QueryRowContext(t.Context(), `
-		SELECT sql FROM sqlite_schema
-		WHERE type = 'trigger'
-		  AND name = 'knowledge_mutation_commit_authority_collision_is_forbidden'`).Scan(&commitCollisionTriggerSQL); err != nil {
+		SELECT pg_get_triggerdef(t.oid)||';'||pg_get_functiondef(t.tgfoid) FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND NOT t.tgisinternal AND t.tgname='knowledge_mutation_commit_authority_collision_is_forbidden'`).Scan(&commitCollisionTriggerSQL); err != nil {
 		t.Fatalf("read commit-authority collision trigger: %v", err)
 	}
 	receiptInsertTriggerNames := []string{
@@ -1471,7 +1465,7 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 	for _, name := range receiptInsertTriggerNames {
 		var statement string
 		if err := tx.QueryRowContext(t.Context(), `
-			SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?`, name).Scan(&statement); err != nil {
+			SELECT pg_get_triggerdef(t.oid)||';'||pg_get_functiondef(t.tgfoid) FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND NOT t.tgisinternal AND t.tgname=$1`, name).Scan(&statement); err != nil {
 			t.Fatalf("read %s trigger: %v", name, err)
 		}
 		receiptInsertTriggerSQL = append(receiptInsertTriggerSQL, statement)
@@ -1482,9 +1476,9 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 	if err := tx.QueryRowContext(t.Context(), `
 		SELECT outcome_proto, created_at_unix_micro, committed_catalog_revision
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND actor_kind = 'browser'
+		WHERE tenant_id = $1 AND actor_kind = 'browser'
 		  AND actor_id = 'writer-blackbox-administrator'
-		  AND route = 'objects.create' AND client_request_id = ?`,
+		  AND route = 'objects.create' AND client_request_id = $2`,
 		writerTestTenant,
 		seed.SourceRequestID,
 	).Scan(&sourceOutcome, &sourceOccurred, &sourceRevision); err != nil {
@@ -1503,25 +1497,25 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 		t.Fatalf("encode source capacity outcome: %v", err)
 	}
 	if _, err := tx.ExecContext(t.Context(), `
-		DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden`); err != nil {
+		DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden ON knowledge_mutation_idempotency`); err != nil {
 		t.Fatalf("drop receipt immutability trigger for historical fixture: %v", err)
 	}
 	if _, err := tx.ExecContext(t.Context(), `
-		DROP TRIGGER knowledge_mutation_commit_authority_update_is_forbidden`); err != nil {
+		DROP TRIGGER knowledge_mutation_commit_authority_update_is_forbidden ON knowledge_mutation_commit_authorities`); err != nil {
 		t.Fatalf("drop commit-authority immutability trigger for historical fixture: %v", err)
 	}
 	if _, err := tx.ExecContext(t.Context(), `
-		DROP TRIGGER knowledge_mutation_commit_authority_is_exact`); err != nil {
+		DROP TRIGGER knowledge_mutation_commit_authority_is_exact ON knowledge_mutation_commit_authorities`); err != nil {
 		t.Fatalf("drop commit-authority exactness trigger for synthetic fixture: %v", err)
 	}
 	if _, err := tx.ExecContext(t.Context(), `
-		DROP TRIGGER knowledge_mutation_commit_authority_collision_is_forbidden`); err != nil {
+		DROP TRIGGER knowledge_mutation_commit_authority_collision_is_forbidden ON knowledge_mutation_commit_authorities`); err != nil {
 		t.Fatalf("drop commit-authority collision trigger for synthetic fixture: %v", err)
 	}
 	if _, err := tx.ExecContext(t.Context(), `
 		UPDATE knowledge_mutation_commit_authorities
-		SET retention_anchor_unix_micro = ?, retain_until_unix_micro = ?
-		WHERE tenant_id = ? AND catalog_revision = ?`,
+		SET retention_anchor_unix_micro = $1, retain_until_unix_micro = $2
+		WHERE tenant_id = $3 AND catalog_revision = $4`,
 		sourceOccurred,
 		retainUntil,
 		writerTestTenant,
@@ -1531,11 +1525,11 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 	}
 	if _, err := tx.ExecContext(t.Context(), `
 		UPDATE knowledge_mutation_idempotency
-		SET outcome_proto = ?, retention_anchor_unix_micro = ?,
-		    retain_until_unix_micro = ?
-		WHERE tenant_id = ? AND actor_kind = 'browser'
+		SET outcome_proto = $1, retention_anchor_unix_micro = $2,
+		    retain_until_unix_micro = $3
+		WHERE tenant_id = $4 AND actor_kind = 'browser'
 		  AND actor_id = 'writer-blackbox-administrator'
-		  AND route = 'objects.create' AND client_request_id = ?`,
+		  AND route = 'objects.create' AND client_request_id = $5`,
 		canonicalOutcome,
 		sourceOccurred,
 		retainUntil,
@@ -1545,7 +1539,7 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 		t.Fatalf("stage historical source capacity receipt: %v", err)
 	}
 	for _, name := range receiptInsertTriggerNames {
-		if _, err := tx.ExecContext(t.Context(), "DROP TRIGGER "+name); err != nil {
+		if _, err := tx.ExecContext(t.Context(), "DROP TRIGGER "+name+" ON "+writerTriggerTable(name)); err != nil {
 			t.Fatalf("drop %s for bounded synthetic fixture: %v", name, err)
 		}
 	}
@@ -1554,7 +1548,7 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 	if err := tx.QueryRowContext(t.Context(), `
 		SELECT max(catalog_revision)
 		FROM knowledge_mutation_commit_authorities
-		WHERE tenant_id = ? AND catalog_revision >= ?`,
+		WHERE tenant_id = $1 AND catalog_revision >= $2`,
 		writerTestTenant,
 		syntheticRevisionFloor,
 	).Scan(&maximumSyntheticRevision); err != nil {
@@ -1570,11 +1564,11 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 	}
 	if _, err := tx.ExecContext(t.Context(), `
 		CREATE TEMP TABLE writer_capacity_receipt_seed (
-			request_id TEXT NOT NULL COLLATE BINARY PRIMARY KEY,
-			catalog_revision INTEGER NOT NULL,
-			catalog_state_token BLOB NOT NULL CHECK (length(catalog_state_token) = 32),
-			outcome_proto BLOB NOT NULL
-		) STRICT, WITHOUT ROWID`); err != nil {
+			request_id TEXT NOT NULL COLLATE "C" PRIMARY KEY,
+			catalog_revision BIGINT NOT NULL,
+			catalog_state_token BYTEA NOT NULL CHECK (length(catalog_state_token) = 32),
+			outcome_proto BYTEA NOT NULL
+		)`); err != nil {
 		t.Fatalf("create synthetic capacity staging table: %v", err)
 	}
 	type stagedCapacityReceipt struct {
@@ -1609,14 +1603,14 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 	insertReceipt, err := tx.PrepareContext(t.Context(), `
 		INSERT INTO writer_capacity_receipt_seed (
 			request_id, catalog_revision, catalog_state_token, outcome_proto
-		) VALUES (?, ?, ?, ?)`)
+		) VALUES ($1, $2, $3, $4)`)
 	if err != nil {
 		t.Fatalf("prepare synthetic capacity receipt insert: %v", err)
 	}
 	defer insertReceipt.Close()
 	for index, record := range staged {
 		if _, err := insertReceipt.ExecContext(
-			t.Context(), record.requestID, record.revision, record.token, record.outcome,
+			t.Context(), pgtest.Parameters(record.requestID), record.revision, record.token, record.outcome,
 		); err != nil {
 			t.Fatalf("stage synthetic capacity receipt %d: %v", index, err)
 		}
@@ -1639,7 +1633,7 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 		       source.recovery_audit_sequence
 		FROM knowledge_mutation_commit_authorities AS source
 		CROSS JOIN writer_capacity_receipt_seed AS seed
-		WHERE source.tenant_id = ? AND source.catalog_revision = ?`,
+		WHERE source.tenant_id = $1 AND source.catalog_revision = $2`,
 		writerTestTenant,
 		sourceRevision,
 	)
@@ -1671,9 +1665,9 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 		       source.retain_until_unix_micro
 		FROM knowledge_mutation_idempotency AS source
 		CROSS JOIN writer_capacity_receipt_seed AS seed
-		WHERE source.tenant_id = ? AND source.actor_kind = 'browser'
+		WHERE source.tenant_id = $1 AND source.actor_kind = 'browser'
 		  AND source.actor_id = 'writer-blackbox-administrator'
-		  AND source.route = 'objects.create' AND source.client_request_id = ?`,
+		  AND source.route = 'objects.create' AND source.client_request_id = $2`,
 		writerTestTenant,
 		seed.SourceRequestID,
 	)
@@ -1690,9 +1684,9 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 		UPDATE knowledge_catalog_tenants
 		SET idempotency_count = (
 			SELECT count(*) FROM knowledge_mutation_idempotency
-			WHERE tenant_id = ?
+			WHERE tenant_id = $1
 		)
-		WHERE tenant_id = ?`, writerTestTenant, writerTestTenant); err != nil {
+		WHERE tenant_id = $2`, writerTestTenant, writerTestTenant); err != nil {
 		t.Fatalf("close synthetic capacity ledger: %v", err)
 	}
 	for index, statement := range receiptInsertTriggerSQL {
@@ -1784,9 +1778,9 @@ func assertCapacityReceiptExists(t *testing.T, database *control.DB, requestID s
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT count(*)
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND actor_kind = 'browser'
+		WHERE tenant_id = $1 AND actor_kind = 'browser'
 		  AND actor_id = 'writer-blackbox-administrator'
-		  AND route = 'objects.create' AND client_request_id = ?`,
+		  AND route = 'objects.create' AND client_request_id = $2`,
 		writerTestTenant,
 		requestID,
 	).Scan(&count); err != nil {
@@ -1809,7 +1803,7 @@ func assertCapacityReceiptRouteCount(
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT count(*)
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND route = ? AND client_request_id = ?`,
+		WHERE tenant_id = $1 AND route = $2 AND client_request_id = $3`,
 		writerTestTenant,
 		route,
 		requestID,
@@ -1848,8 +1842,8 @@ func assertCapacityReceiptSuffixReclaimed(
 	rows, err := database.SQLDB().QueryContext(t.Context(), `
 		SELECT client_request_id
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND client_request_id GLOB ?
-		ORDER BY client_request_id`, writerTestTenant, prefix+"*")
+		WHERE tenant_id = $1 AND starts_with(client_request_id, $2)
+		ORDER BY client_request_id`, writerTestTenant, prefix)
 	if err != nil {
 		t.Fatalf("read surviving capacity receipts for %q: %v", prefix, err)
 	}
@@ -1880,7 +1874,7 @@ func assertReceiptPrefixCount(t *testing.T, database *control.DB, prefix string,
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT count(*)
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND client_request_id GLOB ?`, writerTestTenant, prefix+"*").Scan(&got); err != nil {
+		WHERE tenant_id = $1 AND starts_with(client_request_id, $2)`, writerTestTenant, prefix).Scan(&got); err != nil {
 		t.Fatalf("count capacity receipt prefix %q: %v", prefix, err)
 	}
 	if got != want {
@@ -1894,9 +1888,9 @@ func capacityReceiptRetention(t *testing.T, database *control.DB, requestID stri
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT retain_until_unix_micro - retention_anchor_unix_micro
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND actor_kind = 'browser'
+		WHERE tenant_id = $1 AND actor_kind = 'browser'
 		  AND actor_id = 'writer-blackbox-administrator'
-		  AND route = 'objects.create' AND client_request_id = ?`,
+		  AND route = 'objects.create' AND client_request_id = $2`,
 		writerTestTenant,
 		requestID,
 	).Scan(&retentionMicros); err != nil {
@@ -1909,9 +1903,9 @@ func readCapacityReceiptActorBytes(t *testing.T, database *control.DB, requestID
 	t.Helper()
 	var actor []byte
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
-		SELECT CAST(actor_id AS BLOB)
+		SELECT convert_to((actor_id)::text,'UTF8')
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND route = 'objects.create' AND client_request_id = ?`,
+		WHERE tenant_id = $1 AND route = 'objects.create' AND client_request_id = $2`,
 		writerTestTenant,
 		requestID,
 	).Scan(&actor); err != nil {
@@ -1934,8 +1928,8 @@ func readOldestCapacityReceiptKey(t *testing.T, database *control.DB) capacityRe
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT actor_kind, actor_id, route, client_request_id, mutation_kind
 		FROM knowledge_mutation_idempotency
-		WHERE tenant_id = ? AND retain_until_unix_micro <=
-		      CAST(unixepoch('subsec') * 1000000 AS INTEGER)
+		WHERE tenant_id = $1 AND retain_until_unix_micro <=
+		      (extract(epoch FROM clock_timestamp())*1000000)::bigint
 		ORDER BY retain_until_unix_micro,
 		         created_at_unix_micro,
 		         actor_kind,
@@ -1961,7 +1955,7 @@ type capacityContextExecer interface {
 func assertCapacityForeignKeys(t *testing.T, connection *sql.Conn, want int) {
 	t.Helper()
 	var got int
-	if err := connection.QueryRowContext(t.Context(), `PRAGMA foreign_keys`).Scan(&got); err != nil {
+	if err := connection.QueryRowContext(t.Context(), `SELECT CASE WHEN EXISTS(SELECT 1 FROM pg_constraint c JOIN pg_class r ON r.oid=c.conrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname=current_schema() AND c.contype='f') THEN 1 ELSE 0 END`).Scan(&got); err != nil {
 		t.Fatalf("read foreign-key state: %v", err)
 	}
 	if got != want {
@@ -1971,7 +1965,7 @@ func assertCapacityForeignKeys(t *testing.T, connection *sql.Conn, want int) {
 
 func assertOneCapacityRowUpdated(t *testing.T, connection capacityContextExecer, query string, args ...any) {
 	t.Helper()
-	result, err := connection.ExecContext(t.Context(), query, args...)
+	result, err := connection.ExecContext(t.Context(), pgtest.Parameters(query), args...)
 	if err != nil {
 		t.Fatalf("update capacity corruption fixture: %v", err)
 	}
@@ -1983,22 +1977,5 @@ func assertOneCapacityRowUpdated(t *testing.T, connection capacityContextExecer,
 
 func explainCapacityQueryPlan(t *testing.T, database *sql.DB, query string, args ...any) string {
 	t.Helper()
-	rows, err := database.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
-	if err != nil {
-		t.Fatalf("explain capacity query plan: %v", err)
-	}
-	defer rows.Close()
-	var details []string
-	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
-			t.Fatalf("scan capacity query plan: %v", err)
-		}
-		details = append(details, detail)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate capacity query plan: %v", err)
-	}
-	return strings.ToUpper(strings.Join(details, "\n"))
+	return writerNativeQueryPlan(t, database, pgtest.Parameters(query), args...)
 }

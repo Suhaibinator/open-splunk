@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+import "language.proto"; // Importing the language.proto file for language enums
+
+message UserSettings {
+  uint64 user_id = 1;           // ID of the user these settings belong to (serves as primary key)
+  bool dark_mode = 2;           // Whether dark mode is enabled
+  Language language = 3;        // Preferred language
+  bool email_notifications = 4; // Whether email notifications are enabled
+  bool push_notifications = 5;  // Whether push notifications are enabled
+  bool marketing_emails = 6;    // Whether marketing emails are enabled
+  bool chat_email_notifications = 10;    // Email for new chats (default: true)
+  bool chat_push_notifications = 11;     // Push for new chats (default: true)
+}
+
+// Bands and tiers identify ordered user types; enabled features and permissions
+// come from configuration/application policy, not a fixed feature set per enum.
+enum UserType {
+  USER_TYPE_UNSPECIFIED = 0;            // Default unspecified state (no privileges)
+  
+  // Lite users (tiers 0-10) - Basic feature access
+  USER_TYPE_LITE_TIER_0 = 1;            // Lite user (tier 0)
+  USER_TYPE_LITE_TIER_1 = 2;            // Lite user (tier 1)
+  USER_TYPE_LITE_TIER_2 = 3;            // Lite user (tier 2)
+  USER_TYPE_LITE_TIER_3 = 4;            // Lite user (tier 3)
+  USER_TYPE_LITE_TIER_4 = 5;            // Lite user (tier 4)
+  USER_TYPE_LITE_TIER_5 = 6;            // Lite user (tier 5)
+  USER_TYPE_LITE_TIER_6 = 7;            // Lite user (tier 6)
+  USER_TYPE_LITE_TIER_7 = 8;            // Lite user (tier 7)
+  USER_TYPE_LITE_TIER_8 = 9;            // Lite user (tier 8)
+  USER_TYPE_LITE_TIER_9 = 10;           // Lite user (tier 9)
+  USER_TYPE_LITE_TIER_10 = 11;          // Lite user (tier 10)
+  
+  // Regular users (tiers 0-10) - Standard feature access
+  USER_TYPE_REGULAR_TIER_0 = 12;        // Regular user (tier 0)
+  USER_TYPE_REGULAR_TIER_1 = 13;        // Regular user (tier 1)
+  USER_TYPE_REGULAR_TIER_2 = 14;        // Regular user (tier 2)
+  USER_TYPE_REGULAR_TIER_3 = 15;        // Regular user (tier 3)
+  USER_TYPE_REGULAR_TIER_4 = 16;        // Regular user (tier 4)
+  USER_TYPE_REGULAR_TIER_5 = 17;        // Regular user (tier 5)
+  USER_TYPE_REGULAR_TIER_6 = 18;        // Regular user (tier 6)
+  USER_TYPE_REGULAR_TIER_7 = 19;        // Regular user (tier 7)
+  USER_TYPE_REGULAR_TIER_8 = 20;        // Regular user (tier 8)
+  USER_TYPE_REGULAR_TIER_9 = 21;        // Regular user (tier 9)
+  USER_TYPE_REGULAR_TIER_10 = 22;       // Regular user (tier 10)
+  
+  // Premium users (tiers 0-10) - Enhanced feature access
+  USER_TYPE_PREMIUM_TIER_0 = 23;        // Premium user (tier 0 - entry-level premium)
+  USER_TYPE_PREMIUM_TIER_1 = 24;        // Premium user (tier 1)
+  USER_TYPE_PREMIUM_TIER_2 = 25;        // Premium user (tier 2)
+  USER_TYPE_PREMIUM_TIER_3 = 26;        // Premium user (tier 3)
+  USER_TYPE_PREMIUM_TIER_4 = 27;        // Premium user (tier 4)
+  USER_TYPE_PREMIUM_TIER_5 = 28;        // Premium user (tier 5)
+  USER_TYPE_PREMIUM_TIER_6 = 29;        // Premium user (tier 6)
+  USER_TYPE_PREMIUM_TIER_7 = 30;        // Premium user (tier 7)
+  USER_TYPE_PREMIUM_TIER_8 = 31;        // Premium user (tier 8)
+  USER_TYPE_PREMIUM_TIER_9 = 32;        // Premium user (tier 9)
+  USER_TYPE_PREMIUM_TIER_10 = 33;       // Premium user (tier 10)
+  
+  // Admin users (tiers 0-10) - Administrative access
+  USER_TYPE_ADMIN_TIER_0 = 34;          // Admin user (tier 0 - minimal admin access)
+  USER_TYPE_ADMIN_TIER_1 = 35;          // Admin user (tier 1)
+  USER_TYPE_ADMIN_TIER_2 = 36;          // Admin user (tier 2)
+  USER_TYPE_ADMIN_TIER_3 = 37;          // Admin user (tier 3)
+  USER_TYPE_ADMIN_TIER_4 = 38;          // Admin user (tier 4)
+  USER_TYPE_ADMIN_TIER_5 = 39;          // Admin user (tier 5)
+  USER_TYPE_ADMIN_TIER_6 = 40;          // Admin user (tier 6)
+  USER_TYPE_ADMIN_TIER_7 = 41;          // Admin user (tier 7)
+  USER_TYPE_ADMIN_TIER_8 = 42;          // Admin user (tier 8)
+  USER_TYPE_ADMIN_TIER_9 = 43;          // Admin user (tier 9)
+  USER_TYPE_ADMIN_TIER_10 = 44;         // Admin user (tier 10 - highest admin access)
+}
+
+// User identifier types for display purposes
+enum UserIdentifierType {
+  USER_IDENTIFIER_TYPE_UNSPECIFIED = 0;  // Default unspecified
+  USER_IDENTIFIER_TYPE_USERNAME = 1;     // Display username
+  USER_IDENTIFIER_TYPE_EMAIL = 2;        // Display email address
+  USER_IDENTIFIER_TYPE_REAL_NAME = 3;    // Display first_name + last_name combined
+  USER_IDENTIFIER_TYPE_USER_ID = 4;      // Display user ID number
+  USER_IDENTIFIER_TYPE_FIRST_NAME = 5;   // Display first_name only
+  USER_IDENTIFIER_TYPE_FIRST_NAME_LAST_INITIAL = 6; // Display first_name + last initial
+  USER_IDENTIFIER_TYPE_INITIALS_ONLY = 7; // Display initials only
+}
+
+message User {
+  uint64 id = 1;           // Unique identifier for the user
+  string username = 2;     // Display username
+  string avatar_url = 3;   // URL to the user's avatar image (optional)
+  UserType user_type = 4;  // User type across lite, regular, premium, and admin bands
+  string email = 5;        // Email address of the user
+  bool banned = 6;         // Whether the user is banned
+  string first_name = 7;   // User's first name
+  string last_name = 8;    // User's last name
+  optional string phone_number = 9; // Phone number in E.164 international format (optional)
+  bool is_bot = 10;        // Whether this is a bot/automated account
+}
+
+message PublicUser {
+  uint64 id = 1;           // Unique identifier for the user
+  UserType user_type = 2;  // User type across lite, regular, premium, and admin bands
+  bool banned = 3;         // Whether the user is banned
+  string display_primary = 4;   // Primary display string based on configured identifier type
+  string display_secondary = 5; // Secondary display string based on configured identifier type (optional)
+  string avatar_url = 6;   // URL to the user's avatar image (optional)
+  bool is_bot = 7;         // Whether this is a bot/automated account
+}
+
+// Response for the current-user profile endpoint (GET /user/me). Wraps the
+// shared User message with session-bootstrap data that only this endpoint
+// resolves.
+message GetCurrentUserResponse {
+  User user = 1;           // The authenticated user's profile
+  // The user's active personal workspace root organization. Absent when
+  // organizations are disabled, the workspace is not yet provisioned, or the
+  // workspace is archived. Corrupt workspace state is logged and omitted; other
+  // workspace lookup failures fail the endpoint.
+  optional int64 personal_workspace_root_organization_id = 2;
+}
+
+// --- Username Availability Check Messages ---
+
+// Request to check if a username is available for registration.
+message CheckUsernameAvailabilityRequest {
+  // The username to check for availability.
+  string username = 1;
+}
+
+// Response indicating whether the username is available.
+message CheckUsernameAvailabilityResponse {
+  // Whether the username is available for registration.
+  bool available = 1;
+  // Optional message providing additional context (e.g., "Username already taken", "Username is reserved").
+  string message = 2;
+}

@@ -11,12 +11,13 @@ import (
 	"time"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 )
 
 type provenanceIntegrationExecutor struct {
@@ -67,7 +68,7 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 
 	ctx := context.Background()
 	const (
-		ownerID   = "owner-1"
+		ownerID   = "1009"
 		tenantID  = "tenant-1"
 		appID     = "search-app"
 		savedID   = "saved-integration"
@@ -82,7 +83,7 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	wantEarliest := anchor.In(location).AddDate(0, 0, -1).UTC()
 	cursorKey := []byte("0123456789abcdef0123456789abcdef")
 
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := openTestControl(t, ctx, filepath.Join(t.TempDir(), "control.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +112,7 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	}
 	saved, err := savedSearches.Create(
 		ctx,
-		savedobjects.AccessScope{OwnerID: ownerID},
+		savedobjects.AccessScope{OrganizationID: "1", OwnerID: ownerID},
 		savedDefinition,
 	)
 	if err != nil {
@@ -156,25 +157,23 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	})
 	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 
-	browserAuthenticator, err := auth.NewBearerTokenAuthenticator(
-		[]byte(adminIntegrationBearerToken),
-		tenantID,
-		ownerID,
-		auth.BrowserRoleAdministrator,
+	const sessionCredential = "google-provenance-fixture-session"
+	browserAuthenticator, err := testsupport.NewSessionAuthenticator(
+		1009, authorization.SiteAdminUserType, []byte(sessionCredential),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	handler := newTestHandler(t, Config{
-		SearchJobs:           manager,
-		Indexes:              database,
-		SavedSearches:        savedSearches,
-		SearchHistory:        history,
-		BrowserAuthenticator: browserAuthenticator,
-		WebUI:                testUI(),
-		OwnerID:              ownerID,
-		TenantID:             tenantID,
-		Now:                  func() time.Time { return anchor },
+		SearchJobs:            manager,
+		Indexes:               database,
+		SavedSearches:         savedSearches,
+		SearchHistory:         history,
+		IdentityAuthenticator: browserAuthenticator,
+		WebUI:                 testUI(),
+		OwnerID:               ownerID,
+		TenantID:              tenantID,
+		Now:                   func() time.Time { return anchor },
 	})
 	timezone := location.String()
 	request := &opensplunk.CreateSearchJobRequest{
@@ -190,7 +189,7 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 			SavedSearchId: new(saved.GetSavedSearchId()),
 		},
 	}
-	response := postProto(t, handler, "/api/search/jobs/create", request)
+	response := postProtoHeaders(t, handler, "/api/search/jobs/create", request, map[string]string{"Cookie": "session_token=" + sessionCredential, "X-OpenSplunk-Organization-ID": "1"})
 	if response.Code != http.StatusOK {
 		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -203,13 +202,13 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("executor did not start")
 	}
-	if err := savedSearches.Delete(ctx, savedobjects.AccessScope{OwnerID: ownerID}, savedID, saved.GetVersion()); err != nil {
+	if err := savedSearches.Delete(ctx, savedobjects.AccessScope{OrganizationID: "1", OwnerID: ownerID}, savedID, saved.GetVersion()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := savedSearches.Get(ctx, savedobjects.AccessScope{OwnerID: ownerID}, savedID); !errors.Is(err, control.ErrNotFound) {
+	if _, err := savedSearches.Get(ctx, savedobjects.AccessScope{OrganizationID: "1", OwnerID: ownerID}, savedID); !errors.Is(err, control.ErrNotFound) {
 		t.Fatalf("deleted saved-search lookup error = %v, want ErrNotFound", err)
 	}
-	response = postProto(t, handler, "/api/search/jobs/get", &opensplunk.GetSearchJobRequest{SearchJobId: jobID})
+	response = postProtoHeaders(t, handler, "/api/search/jobs/get", &opensplunk.GetSearchJobRequest{SearchJobId: jobID}, map[string]string{"Cookie": "session_token=" + sessionCredential, "X-OpenSplunk-Organization-ID": "1"})
 	if response.Code != http.StatusOK {
 		t.Fatalf("post-deletion job status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -226,13 +225,13 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("completed history finalization did not return")
 	}
-	historyEntry, err := history.Get(ctx, searchhistory.AccessScope{TenantID: tenantID, OwnerID: ownerID}, jobID)
+	historyEntry, err := history.Get(ctx, searchhistory.AccessScope{OrganizationID: "1", TenantID: tenantID, OwnerID: ownerID}, jobID)
 	if err != nil {
 		t.Fatalf("get finalized history: %v", err)
 	}
 	assertHistoryProvenanceSnapshot(t, historyEntry, jobID, appID, savedID, searchSPL, wantEarliest, anchor)
 
-	response = postProto(t, handler, "/api/search/history/get", &opensplunk.GetSearchHistoryEntryRequest{SearchJobId: jobID})
+	response = postProtoHeaders(t, handler, "/api/search/history/get", &opensplunk.GetSearchHistoryEntryRequest{SearchJobId: jobID}, map[string]string{"Cookie": "session_token=" + sessionCredential, "X-OpenSplunk-Organization-ID": "1"})
 	if response.Code != http.StatusOK {
 		t.Fatalf("history status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -240,7 +239,7 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	unmarshalResponse(t, response, &historyResponse)
 	assertHistoryProvenanceSnapshot(t, historyResponse.GetHistoryEntry(), jobID, appID, savedID, searchSPL, wantEarliest, anchor)
 
-	listed, err := history.List(ctx, searchhistory.AccessScope{TenantID: tenantID, OwnerID: ownerID}, searchhistory.ListRequest{
+	listed, err := history.List(ctx, searchhistory.AccessScope{OrganizationID: "1", TenantID: tenantID, OwnerID: ownerID}, searchhistory.ListRequest{
 		PageSize: 1, AppIDFilter: new(appID), SavedSearchIDFilter: new(savedID),
 	})
 	if err != nil {

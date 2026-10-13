@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
@@ -18,7 +19,7 @@ import (
 
 func openTestJournal(t *testing.T) (*Store, *control.DB) {
 	t.Helper()
-	db, err := control.Open(context.Background(), filepath.Join(t.TempDir(), "control.db"))
+	db, err := control.Open(context.Background(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +44,7 @@ func journalFixture(t *testing.T) (context.Context, searchjobs.AccessScope, expo
 	if err != nil {
 		t.Fatal(err)
 	}
-	access := searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	access := searchjobs.AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	job := exportjobs.Job{ID: "export-accepted", Version: 1, SearchJobID: "search-1", Format: exportjobs.FormatCSV, Columns: []string{"_raw"}, RowLimit: 100, ByteLimit: 1024, State: exportjobs.StateQueued, CreatedAt: now, Progress: exportjobs.Progress{UpdatedAt: now}}
 	intent, err := requestidempotency.NewIntent("tenant", "browser", "owner", requestidempotency.RouteCreateExportJob, "logical-export-request", &opensplunk.CreateExportJobRequest{Definition: &opensplunk.ExportDefinition{SearchJobId: "search-1"}})
@@ -94,7 +95,7 @@ func TestJournalAdmissionCommitsTargetReceiptAndOneAudit(t *testing.T) {
 func TestJournalReceiptFailureRollsBackTargetAndAudit(t *testing.T) {
 	store, db := openTestJournal(t)
 	ctx, access, job, intent := journalFixture(t)
-	if err := db.GORMDB().Exec(`CREATE TRIGGER test_reject_receipt BEFORE INSERT ON api_mutation_receipts BEGIN SELECT RAISE(ABORT,'injected receipt failure'); END`).Error; err != nil {
+	if err := db.GORMDB().Exec(`CREATE FUNCTION test_reject_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected receipt failure'; END $$; CREATE TRIGGER test_reject_receipt BEFORE INSERT ON api_mutation_receipts FOR EACH ROW EXECUTE FUNCTION test_reject_receipt()`).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := store.AdmitIdempotent(ctx, access, job, intent); err == nil {

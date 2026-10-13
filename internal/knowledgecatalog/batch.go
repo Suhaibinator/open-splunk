@@ -360,17 +360,17 @@ func readCurrentVersionRecordsBatch(
 			Order("version.knowledge_object_id ASC")
 		var sizes []versionSizeRecord
 		if err := query.Session(&gorm.Session{}).Select(`
-			length(CAST(version.knowledge_object_id AS BLOB)) AS knowledge_object_id_bytes,
-			length(CAST(version.tenant_id AS BLOB)) AS tenant_id_bytes,
-			length(CAST(version.app_id AS BLOB)) AS app_id_bytes,
-			length(CAST(version.owner_id AS BLOB)) AS owner_id_bytes,
-			length(CAST(version.object_type AS BLOB)) AS object_type_bytes,
-			length(CAST(version.name AS BLOB)) AS name_bytes,
-			length(CAST(version.sharing_scope AS BLOB)) AS sharing_scope_bytes,
-			length(CAST(version.state AS BLOB)) AS state_bytes,
+			octet_length(version.knowledge_object_id) AS knowledge_object_id_bytes,
+			octet_length(version.tenant_id) AS tenant_id_bytes,
+			octet_length(version.app_id) AS app_id_bytes,
+			octet_length(version.owner_id) AS owner_id_bytes,
+			octet_length(version.object_type) AS object_type_bytes,
+			octet_length(version.name) AS name_bytes,
+			octet_length(version.sharing_scope) AS sharing_scope_bytes,
+			octet_length(version.state) AS state_bytes,
 			coalesce(length(version.definition_digest), 0) AS digest_bytes,
-			coalesce(length(CAST(version.quarantine_reason AS BLOB)), 0) AS quarantine_reason_bytes,
-			length(CAST(version.mutation_kind AS BLOB)) AS mutation_kind_bytes
+			coalesce(octet_length(version.quarantine_reason), 0) AS quarantine_reason_bytes,
+			octet_length(version.mutation_kind) AS mutation_kind_bytes
 		`).Limit(len(chunk) + 1).Find(&sizes).Error; err != nil {
 			return err
 		}
@@ -445,10 +445,10 @@ func readCurrentSelectorRecordsBatch(
 		}
 		var sizes []batchSelectorSizeRecord
 		if err := preflightQuery.Session(&gorm.Session{}).Select(`
-			length(CAST(selector.knowledge_object_id AS BLOB)) AS object_id_bytes,
-			length(CAST(selector.dimension AS BLOB)) AS dimension_bytes,
-			length(CAST(selector.match_kind AS BLOB)) AS match_kind_bytes,
-			length(CAST(selector.value AS BLOB)) AS value_bytes
+			octet_length(selector.knowledge_object_id) AS object_id_bytes,
+			octet_length(selector.dimension) AS dimension_bytes,
+			octet_length(selector.match_kind) AS match_kind_bytes,
+			octet_length(selector.value) AS value_bytes
 		`).Limit(int(remaining + 1)).Find(&sizes).Error; err != nil {
 			return err
 		}
@@ -505,20 +505,21 @@ func readCurrentSelectorRecordsBatch(
 }
 
 func currentSelectorRecordBaseQuery(database *gorm.DB, tenantID string, objectIDs []string) *gorm.DB {
-	return database.Table("knowledge_object_list_selector_patterns AS selector").
-		Joins(`JOIN knowledge_objects AS object
-			ON object.tenant_id = selector.tenant_id
-		   AND object.knowledge_object_id = selector.knowledge_object_id
-		   AND object.current_version = selector.object_version`).
-		Where("selector.tenant_id = ? AND selector.knowledge_object_id IN ?", tenantID, objectIDs)
+	return database.Table("knowledge_objects AS object").
+		Joins(`JOIN LATERAL (
+			SELECT selector.* FROM knowledge_object_list_selector_patterns AS selector
+			WHERE selector.tenant_id = object.tenant_id
+			AND selector.knowledge_object_id = object.knowledge_object_id
+			AND selector.object_version = object.current_version
+			OFFSET 0
+		) AS selector ON true`).
+		Where("object.tenant_id = ? AND object.knowledge_object_id IN ?", tenantID, objectIDs)
 }
 
 func currentSelectorRecordPreflightQuery(database *gorm.DB, tenantID string, objectIDs []string) *gorm.DB {
-	return currentSelectorRecordBaseQuery(database, tenantID, objectIDs).
-		Order("selector.knowledge_object_id ASC").
-		Order("selector.object_version ASC").
-		Order("selector.dimension ASC").
-		Order("selector.ordinal ASC")
+	// Physical widths and cardinality have no ordering requirement. PostgreSQL
+	// must reach the caller's LIMIT before any canonical payload sort.
+	return currentSelectorRecordBaseQuery(database, tenantID, objectIDs)
 }
 
 type batchBlobSizeRecord struct {
@@ -545,7 +546,7 @@ func readDefinitionBlobsBatch(
 			Order("definition_digest ASC")
 		var sizes []batchBlobSizeRecord
 		if err := query.Session(&gorm.Session{}).Select(`
-			length(CAST(tenant_id AS BLOB)) AS tenant_id_bytes,
+			octet_length(tenant_id) AS tenant_id_bytes,
 			length(definition_digest) AS digest_bytes,
 			length(definition_proto) AS proto_bytes,
 			definition_bytes AS definition_bytes
@@ -637,7 +638,7 @@ func validateCurrentDependenciesBatch(
 		if remaining < 0 {
 			return fmt.Errorf("%w: dependency row budget exceeded", control.ErrCapacityExceeded)
 		}
-		// A grouped aggregate cannot enforce a physical work bound: SQLite must
+		// A grouped aggregate cannot enforce a physical work bound: PostgreSQL must
 		// consume the entire group before LIMIT can apply.  Walk the source and
 		// dependency primary keys first, retaining one LEFT-JOIN sentinel for a
 		// dependency-free source so the same bounded query also proves its seal.
@@ -649,9 +650,9 @@ func validateCurrentDependenciesBatch(
 			CASE WHEN seal.knowledge_object_id IS NULL THEN 0 ELSE 1 END AS seal_found,
 			coalesce(seal.dependency_count, -1) AS seal_dependency_count,
 			CASE WHEN dependency.ordinal IS NULL THEN 0 ELSE 1 END AS dependency_found,
-			coalesce(length(CAST(dependency.target_kind AS BLOB)), -1) AS target_kind_bytes,
-			coalesce(length(CAST(dependency.target_object_id AS BLOB)), -1) AS target_id_bytes,
-			coalesce(length(CAST(dependency.dependency_role AS BLOB)), -1) AS dependency_role_bytes
+			coalesce(octet_length(dependency.target_kind), -1) AS target_kind_bytes,
+			coalesce(octet_length(dependency.target_object_id), -1) AS target_id_bytes,
+			coalesce(octet_length(dependency.dependency_role), -1) AS dependency_role_bytes
 		`).Limit(int(remaining) + len(chunk) + 1).Find(&physical).Error; err != nil {
 			return err
 		}
@@ -723,17 +724,13 @@ func validateCurrentDependenciesBatch(
 				coalesce(max(dependency.ordinal), -1) AS maximum_ordinal,
 				coalesce(sum(dependency.ordinal), 0) AS ordinal_sum,
 				coalesce(sum(CASE WHEN dependency.ordinal IS NOT NULL AND (
-					length(CAST(dependency.tenant_id AS BLOB)) NOT BETWEEN 1 AND 255
-					OR length(CAST(dependency.source_object_id AS BLOB)) NOT BETWEEN 1 AND 128
+					octet_length(dependency.tenant_id) NOT BETWEEN 1 AND 255
+					OR octet_length(dependency.source_object_id) NOT BETWEEN 1 AND 128
 					OR dependency.ordinal NOT BETWEEN 0 AND 1023
 					OR dependency.target_kind <> 'object'
-					OR length(CAST(dependency.target_object_id AS BLOB)) NOT BETWEEN 1 AND 128
-					OR instr(CAST(dependency.target_object_id AS BLOB), X'00') <> 0
+					OR octet_length(dependency.target_object_id) NOT BETWEEN 1 AND 128
 					OR dependency.target_object_id <> trim(dependency.target_object_id)
-					OR dependency.target_object_id GLOB (
-						'*[' || char(1) || '-' || char(31)
-						|| char(127) || '-' || char(159) || ']*'
-					)
+					OR dependency.target_object_id ~ '[[:cntrl:]]'
 					OR dependency.target_object_version < 1
 					OR dependency.dependency_role <> 'field_input'
 					OR target.knowledge_object_id IS NULL
@@ -841,19 +838,23 @@ func validateCurrentDependenciesBatch(
 
 func currentDependencyPhysicalPreflightQuery(database *gorm.DB, tenantID string, objectIDs []string) *gorm.DB {
 	return database.Table("knowledge_objects AS source_registry").
-		Joins(`JOIN knowledge_object_versions AS source
-			ON source.tenant_id = source_registry.tenant_id
-		   AND source.knowledge_object_id = source_registry.knowledge_object_id
-		   AND source.object_version = source_registry.current_version`).
+		Joins(`JOIN LATERAL (
+			SELECT source.* FROM knowledge_object_versions AS source
+			WHERE source.tenant_id = source_registry.tenant_id
+			AND source.knowledge_object_id = source_registry.knowledge_object_id
+			AND source.object_version = source_registry.current_version
+			LIMIT 1
+		) AS source ON true`).
 		Joins(`LEFT JOIN knowledge_object_dependency_seals AS seal
 			ON seal.tenant_id = source.tenant_id
 		   AND seal.knowledge_object_id = source.knowledge_object_id
 		   AND seal.object_version = source.object_version`).
-		Joins(`LEFT JOIN knowledge_object_dependencies AS dependency
-			ON dependency.tenant_id = source.tenant_id
-		   AND dependency.source_object_id = source.knowledge_object_id
-		   AND dependency.source_object_version = source.object_version`).
-		Where("source_registry.tenant_id = ? AND source_registry.knowledge_object_id IN ?", tenantID, objectIDs).
-		Order("source_registry.knowledge_object_id ASC").
-		Order("dependency.ordinal ASC")
+		Joins(`LEFT JOIN LATERAL (
+			SELECT dependency.* FROM knowledge_object_dependencies AS dependency
+			WHERE dependency.tenant_id = source.tenant_id
+			AND dependency.source_object_id = source.knowledge_object_id
+			AND dependency.source_object_version = source.object_version
+			OFFSET 0
+		) AS dependency ON true`).
+		Where("source_registry.tenant_id = ? AND source_registry.knowledge_object_id IN ?", tenantID, objectIDs)
 }

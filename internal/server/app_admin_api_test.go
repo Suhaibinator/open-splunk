@@ -15,6 +15,8 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -198,8 +200,10 @@ func TestAppAdministrationCreateDerivesScopeAndProjectsEveryField(
 			t.Fatalf("CreateApp context = %v", err)
 		}
 		if scope != (AppAdministrationScope{
-			TenantID: browserGateTenantID,
-			ActorID:  browserGateOwnerID,
+			OrganizationID:    1,
+			SiteAdministrator: true,
+			TenantID:          browserGateTenantID,
+			ActorID:           browserGateOwnerID,
 		}) {
 			t.Fatalf("CreateApp scope = %#v", scope)
 		}
@@ -463,8 +467,10 @@ func TestAppAdministrationUpdateStateAndDeleteSemantics(t *testing.T) {
 		selector AppAdministrationSelector,
 	) (AppAdministrationWorkspace, error) {
 		if scope != (AppAdministrationScope{
-			TenantID: browserGateTenantID,
-			ActorID:  browserGateOwnerID,
+			OrganizationID:    1,
+			SiteAdministrator: true,
+			TenantID:          browserGateTenantID,
+			ActorID:           browserGateOwnerID,
 		}) {
 			t.Fatalf("GetApp scope = %#v", scope)
 		}
@@ -1735,7 +1741,7 @@ func TestAppAdministrationFeaturesTypedNilAndCursorKeyConfiguration(
 		opensplunk.ServerFeature_SERVER_FEATURE_APP_ADMIN,
 	}}
 	enabled := newAppAdministrationTestHandler(t, service, requested)
-	bootstrap := postProto(
+	bootstrap := postAppAdministrationProto(
 		t,
 		enabled,
 		"/api/system/bootstrap",
@@ -1751,7 +1757,7 @@ func TestAppAdministrationFeaturesTypedNilAndCursorKeyConfiguration(
 	}
 
 	var typedNil *fakeAppAdministration
-	disabled, err := NewHandler(Config{
+	disabled, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:                 &fakeSearchJobs{},
 		Indexes:                    fakeIndexCatalog{},
 		SavedSearches:              &fakeSavedSearches{},
@@ -1763,7 +1769,7 @@ func TestAppAdministrationFeaturesTypedNilAndCursorKeyConfiguration(
 	if err != nil {
 		t.Fatalf("typed-nil AppAdmin: %v", err)
 	}
-	bootstrap = postProto(
+	bootstrap = postAppAdministrationProto(
 		t,
 		disabled,
 		"/api/system/bootstrap",
@@ -1799,14 +1805,14 @@ func TestAppAdministrationFeaturesTypedNilAndCursorKeyConfiguration(
 		},
 		"cursor": {
 			AppAdmin: service,
-			BrowserAuthenticator: &appAdministrationAuthenticator{
+			IdentityAuthenticator: adaptTestBrowserAuthenticator(&appAdministrationAuthenticator{
 				principal: principal,
-			},
+			}),
 		},
 		"short cursor": {
-			AppAdmin:             service,
-			AppCursorKey:         bytes.Repeat([]byte{1}, 31),
-			BrowserAuthenticator: &appAdministrationAuthenticator{principal: principal},
+			AppAdmin:              service,
+			AppCursorKey:          bytes.Repeat([]byte{1}, 31),
+			IdentityAuthenticator: adaptTestBrowserAuthenticator(&appAdministrationAuthenticator{principal: principal}),
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1817,6 +1823,7 @@ func TestAppAdministrationFeaturesTypedNilAndCursorKeyConfiguration(
 			config.TenantID = browserGateTenantID
 			config.OwnerID = browserGateOwnerID
 			config.AdministrativeAllowedHosts = []string{"example.com"}
+			config.Authorization = testsupport.AuthorizationFixture(browserGateTenantID)
 			if _, err := NewHandler(config); err == nil {
 				t.Fatal("NewHandler error = nil")
 			}
@@ -1949,12 +1956,12 @@ func TestAppAdministrationSerializationCapacityPrecedesMutation(
 		browserGateOwnerID,
 		auth.BrowserRoleAdministrator,
 	)
-	handler, err := NewHandler(Config{
+	handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:                 &fakeSearchJobs{},
 		Indexes:                    fakeIndexCatalog{},
 		SavedSearches:              &fakeSavedSearches{},
 		AppAdmin:                   service,
-		BrowserAuthenticator:       &appAdministrationAuthenticator{principal: principal},
+		IdentityAuthenticator:      adaptTestBrowserAuthenticator(&appAdministrationAuthenticator{principal: principal}),
 		AppCursorKey:               appAdministrationCursorKey,
 		WebUI:                      testUI(),
 		TenantID:                   browserGateTenantID,
@@ -2171,7 +2178,7 @@ func newAppAdministrationTestHandler(
 func newAppAdministrationHandlerWithAuthenticator(
 	t *testing.T,
 	service AppAdministration,
-	authenticator auth.BrowserAuthenticator,
+	authenticator fixtureBrowserAuthenticator,
 	bootstrap ...BootstrapConfig,
 ) *Handler {
 	t.Helper()
@@ -2179,12 +2186,12 @@ func newAppAdministrationHandlerWithAuthenticator(
 	if len(bootstrap) != 0 {
 		configuredBootstrap = bootstrap[0]
 	}
-	handler, err := NewHandler(Config{
+	handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:                 &fakeSearchJobs{},
-		Indexes:                    fakeIndexCatalog{},
+		Indexes:                    fakeIndexCatalog{indexes: []control.Index{validationTestIndex("main"), validationTestIndex("audit"), validationTestIndex("secondary")}},
 		SavedSearches:              &fakeSavedSearches{},
 		AppAdmin:                   service,
-		BrowserAuthenticator:       authenticator,
+		IdentityAuthenticator:      adaptTestBrowserAuthenticator(authenticator),
 		AppCursorKey:               slices.Clone(appAdministrationCursorKey),
 		WebUI:                      testUI(),
 		Bootstrap:                  configuredBootstrap,
@@ -2205,19 +2212,19 @@ func newAppAdministrationHandlerWithKey(
 	key []byte,
 ) *Handler {
 	t.Helper()
-	handler, err := NewHandler(Config{
+	handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:    &fakeSearchJobs{},
-		Indexes:       fakeIndexCatalog{},
+		Indexes:       fakeIndexCatalog{indexes: []control.Index{validationTestIndex("main"), validationTestIndex("audit"), validationTestIndex("secondary")}},
 		SavedSearches: &fakeSavedSearches{},
 		AppAdmin:      service,
-		BrowserAuthenticator: &appAdministrationAuthenticator{
+		IdentityAuthenticator: adaptTestBrowserAuthenticator(&appAdministrationAuthenticator{
 			principal: browserGatePrincipal(
 				t,
 				browserGateTenantID,
 				browserGateOwnerID,
 				auth.BrowserRoleAdministrator,
 			),
-		},
+		}),
 		AppCursorKey:               key,
 		WebUI:                      testUI(),
 		TenantID:                   browserGateTenantID,

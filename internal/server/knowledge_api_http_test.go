@@ -20,6 +20,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -240,9 +241,9 @@ func newKnowledgeHTTPHandler(
 ) (*apiHandler, http.Handler) {
 	t.Helper()
 	handler := &apiHandler{
-		browserAuthenticator: &knowledgeBoundaryAuthenticator{
+		identityAuthenticator: adaptTestBrowserAuthenticator(&knowledgeBoundaryAuthenticator{
 			principal: knowledgeBoundaryPrincipal(t, role),
-		},
+		}),
 		knowledgeCatalog:     catalog,
 		knowledgeWriter:      writer,
 		knowledgeApps:        apps,
@@ -259,6 +260,10 @@ func newKnowledgeHTTPHandler(
 		administratorRoutes: map[string]struct{}{},
 		routeTimeout:        2 * time.Second,
 	}
+	adapter := handler.identityAuthenticator.(*testBrowserIdentityAdapter)
+	adapter.defaultOrganization = true
+	adapter.tenant = knowledgeBoundaryTenantID
+	handler.authorization = testsupport.AuthorizationFixture(knowledgeBoundaryTenantID)
 	return handler, newKnowledgeHTTPRouter(t, handler)
 }
 
@@ -1473,7 +1478,7 @@ func TestKnowledgeHTTPExactRouteAndOriginChecksPrecedeAuthentication(t *testing.
 
 	appender := &knowledgeBoundaryAppender{}
 	handler, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, &knowledgeHTTPWriter{}, knowledgeHTTPApps(), appender)
-	authenticator := handler.browserAuthenticator.(*knowledgeBoundaryAuthenticator)
+	authenticator := handler.identityAuthenticator.(*testBrowserIdentityAdapter).legacy.(*knowledgeBoundaryAuthenticator)
 	tests := []struct {
 		name       string
 		method     string
@@ -1574,7 +1579,7 @@ func TestKnowledgeHTTPRouteDeadlineBoundsBlockingAuthenticationBeforeDecode(
 	appender := &knowledgeBoundaryAppender{}
 	apps := knowledgeHTTPApps()
 	handler, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, &knowledgeHTTPWriter{}, apps, appender)
-	handler.browserAuthenticator = &knowledgeHTTPBlockingAuthenticator{}
+	handler.identityAuthenticator = adaptTestBrowserAuthenticator(&knowledgeHTTPBlockingAuthenticator{})
 	handler.routeTimeout = 20 * time.Millisecond
 	body := newKnowledgeBoundaryObservedBody("unread definition secret", nil)
 	request := knowledgeBoundaryRequest(context.Background(), knowledgeObjectsCreatePath, body)
@@ -1711,7 +1716,7 @@ func TestKnowledgeHTTPReadScopeAcceptsTenantGlobalObjectFromUnreadableSourceApp(
 
 	global := knowledgeHTTPObject()
 	global.AppID = knowledgeHTTPOtherAppID
-	global.OwnerID = "owner-global-object-provenance"
+	global.OwnerID = "1108"
 	global.SharingScope = knowledgecatalog.SharingScopeGlobal
 	global.Definition.AppId = knowledgeHTTPOtherAppID
 	global.Definition.SharingScope =
@@ -1846,11 +1851,7 @@ func knowledgeHTTPDirectAdministratorRequest(t *testing.T, path string) *http.Re
 	t.Helper()
 	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, nil)
 	principal := knowledgeBoundaryPrincipal(t, auth.BrowserRoleAdministrator)
-	return request.WithContext(context.WithValue(
-		request.Context(),
-		browserPrincipalContextKey{},
-		principal,
-	))
+	return request.WithContext(serverFixturePrincipalContext(request.Context(), principal))
 }
 
 func TestKnowledgeHTTPCodecEnforcesResponseBoundAndAlwaysReleasesPermit(

@@ -6,7 +6,7 @@ TypeScript follows `gen/ts/open_splunk`. Major-version-zero releases do not
 stabilize this namespace; it may change between v0 releases.
 
 The `.proto` files are the field-level source of truth. This document records
-the public transports and invariants. Persistent SQLite rows and ClickHouse
+the public transports and invariants. Persistent PostgreSQL rows and ClickHouse
 tables are not wire contracts.
 
 ## Browser protobuf HTTP
@@ -43,13 +43,30 @@ family prefix are already complete relative to `/api`.
 | Audit | `/audit/events/list`, `/audit/search-attempts/list` |
 | HEC administration | `/hec/operations/get` |
 
-Administrative families require `Authorization: Bearer <administrator-token>`.
-They include apps, indexes, collectors, ingestion tokens, knowledge and lookup
-management, audit, HEC operations, server settings, search inspection, and
-alerts. Missing or invalid credentials return 401 with
-`WWW-Authenticate: Bearer realm="open-splunk-admin"`. Browser search, saved
-search, dashboard, history, and export routes use the fixed trusted single-user
-scope advertised by bootstrap; request fields are not an authority boundary.
+Browser families authenticate the GoCommon HttpOnly session cookie. Google
+OAuth is mounted under `/api/identity`: provider listing, state creation and
+callback exchange use GoCommon's native protobuf contracts. The static frontend
+callback lives at `/auth/oauth/callback/`. The identity prefix also exposes the
+native current-user, logout, organization and membership contracts. OpenSplunk
+uses the actual `GoCommonClient`; there are no password sign-in or browser
+administrator-token routes.
+
+Ordinary requests select an organization using `X-OpenSplunk-Organization-ID`.
+WebSocket and native download requests use an `organization_id` query value.
+The server verifies membership and index permissions; request fields cannot
+create authority. Site administrators have unrestricted access. Organization
+roles are Viewer (1), Admin (23), Owner (44); index role/user deny rules override
+allows, and a user grant cannot bypass membership.
+
+Index permissions use generated contracts at `/indexes/permissions/get`,
+`/set`, `/delete`, and ownership assignment at `/indexes/organization/set`.
+The read returns an opaque `revision`, explicit rules and effective operation
+ decisions with reasons. Every mutation repeats `expected_revision`; a stale
+value returns 409 and callers reload before retrying. Search, ingest, manage
+and `manage_grants` are separate capabilities. Organization creation with an explicit
+initial owner is the narrow JSON boundary
+`/api/identity/organizations/create-with-owner`; it still uses GoCommon's
+sanitizers, transactional creation and parent membership checks.
 
 Bootstrap is the capability authority. It reports build identity, including the
 product version when present, the source revision, and the capabilities
@@ -86,11 +103,8 @@ key contains 16–128 printable ASCII characters, including spaces, and is
 case-sensitive. Browser clients retain a UUID for one logical action and reuse
 both its key and definition after an ambiguous response.
 
-Receipts are scoped to the tenant and operation, plus the authenticated actor
-for administrative creates or the configured single-user owner for public
-search, export, saved-search create, and saved-search duplicate routes. Public
-receipts do not add a sign-in requirement or treat the owner as an authenticated
-administrator. A retry with the same canonical client intent returns the same resource ID, its current
+Receipts are scoped to the selected organization, operation and authenticated
+user. A retry remains subject to the user's current authorization. A retry with the same canonical client intent returns the same resource ID, its current
 authorized metadata, and `replayed = true`. Reusing the key for different intent
 returns HTTP 409. Receipt lookup precedes dynamic defaults, source resolution,
 and create-only quota checks. A deleted or unavailable target is reported as
@@ -152,9 +166,11 @@ TCP connection. A reconnect supplies the last processed sequence; the server
 replays retained events or sends `ResynchronizationRequired`, after which the
 client reads authoritative job/results routes.
 
-Export download is a raw `GET` response, not protobuf. The short-lived path and
-bearer grant are returned by the export API. The token belongs in the
-`Authorization` header, never a query string.
+Export download is a raw cookie-authenticated `GET` response at
+`/api/search/exports/download?export_job_id=<id>&organization_id=<id>`, not
+protobuf. The server checks current access and streams the private pinned object
+version with Content-Disposition. The browser never receives a download bearer
+token or buffers the whole artifact as a Blob.
 
 Workspace exports use the server's default byte limit (currently 256 MiB),
 which the admitted job returns in its definition. The dialog displays that
@@ -193,7 +209,7 @@ source tree:
 - Result rows have exactly one cell per `ResultSchema` column. Missing and
   explicit null remain distinct.
 - Time intent and the resolved half-open interval remain separate messages.
-- Plaintext ingestion tokens and download grants are one-time or short-lived
+- Plaintext ingestion tokens are one-time; browser downloads use current session access
   secrets and must not be logged.
 
 Regenerate and validate the complete surface with `make proto`. Generated

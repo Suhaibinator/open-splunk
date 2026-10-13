@@ -49,6 +49,7 @@ type Service struct {
 }
 
 type CreateInput struct {
+	OrganizationID  string
 	OwnerID         string
 	ClientRequestID string
 	Definition      Definition
@@ -56,6 +57,7 @@ type CreateInput struct {
 }
 
 type UpdateInput struct {
+	Scope           AccessScope
 	ID              string
 	OwnerID         string
 	ExpectedVersion uint64
@@ -99,6 +101,11 @@ func NewService(repository Repository, cipher SensitiveCipher, options ServiceOp
 }
 
 func (service *Service) Create(ctx context.Context, input CreateInput) (IssuedAlert, error) {
+	scoped, scopeErr := WithAccessScope(ctx, AccessScope{OwnerID: input.OwnerID, OrganizationID: input.OrganizationID})
+	if scopeErr != nil {
+		return IssuedAlert{}, scopeErr
+	}
+	ctx = scoped
 	if err := validateOwner(input.OwnerID); err != nil {
 		return IssuedAlert{}, err
 	}
@@ -158,7 +165,7 @@ func (service *Service) Create(ctx context.Context, input CreateInput) (IssuedAl
 	}
 	now := service.clock().UTC()
 	created, err := service.repository.Create(ctx, CreateRecord{
-		ID: id, OwnerID: input.OwnerID, ClientRequestID: input.ClientRequestID, RequestFingerprint: fingerprint,
+		ID: id, OwnerID: input.OwnerID, OrganizationID: input.OrganizationID, ClientRequestID: input.ClientRequestID, RequestFingerprint: fingerprint,
 		State: AlertDisabled, Definition: cloneDefinition(input.Definition),
 		Endpoint: endpoint, EndpointGeneration: generation,
 		WebhookHostname:  destination.Hostname,
@@ -182,6 +189,12 @@ func (service *Service) Create(ctx context.Context, input CreateInput) (IssuedAl
 }
 
 func (service *Service) Update(ctx context.Context, input UpdateInput) (Alert, error) {
+	scoped, scopeErr := WithAccessScope(ctx, input.Scope)
+	if scopeErr != nil {
+		return Alert{}, scopeErr
+	}
+	ctx = scoped
+	input.OwnerID = input.Scope.OwnerID
 	if err := validateIdentity(input.ID, input.OwnerID, input.ExpectedVersion); err != nil {
 		return Alert{}, err
 	}
@@ -224,7 +237,14 @@ func (service *Service) Update(ctx context.Context, input UpdateInput) (Alert, e
 	})
 }
 
-func (service *Service) SetEnabled(ctx context.Context, ownerID, id string, expectedVersion uint64, enabled bool) (Alert, error) {
+func (service *Service) SetEnabled(ctx context.Context, scope AccessScope, id string, expectedVersion uint64, enabled bool) (Alert, error) {
+	scoped, scopeErr := WithAccessScope(ctx, scope)
+	if scopeErr != nil {
+		return Alert{}, scopeErr
+	}
+	ctx = scoped
+	ownerID := scope.OwnerID
+
 	if err := validateIdentity(id, ownerID, expectedVersion); err != nil {
 		return Alert{}, err
 	}
@@ -241,7 +261,14 @@ func (service *Service) SetEnabled(ctx context.Context, ownerID, id string, expe
 	})
 }
 
-func (service *Service) RotateSecret(ctx context.Context, ownerID, id string, expectedVersion uint64) (IssuedAlert, error) {
+func (service *Service) RotateSecret(ctx context.Context, scope AccessScope, id string, expectedVersion uint64) (IssuedAlert, error) {
+	scoped, scopeErr := WithAccessScope(ctx, scope)
+	if scopeErr != nil {
+		return IssuedAlert{}, scopeErr
+	}
+	ctx = scoped
+	ownerID := scope.OwnerID
+
 	if err := validateIdentity(id, ownerID, expectedVersion); err != nil {
 		return IssuedAlert{}, err
 	}
@@ -285,7 +312,14 @@ func (service *Service) RotateSecret(ctx context.Context, ownerID, id string, ex
 	return IssuedAlert{Alert: rotated, PlaintextSecret: plaintext}, nil
 }
 
-func (service *Service) Delete(ctx context.Context, ownerID, id string, expectedVersion uint64) error {
+func (service *Service) Delete(ctx context.Context, scope AccessScope, id string, expectedVersion uint64) error {
+	scoped, scopeErr := WithAccessScope(ctx, scope)
+	if scopeErr != nil {
+		return scopeErr
+	}
+	ctx = scoped
+	ownerID := scope.OwnerID
+
 	if err := validateIdentity(id, ownerID, expectedVersion); err != nil {
 		return err
 	}
@@ -297,6 +331,15 @@ func (service *Service) Delete(ctx context.Context, ownerID, id string, expected
 // attempt before decrypting its immutable snapshot. A crash after authorization
 // is intentionally an unknown best-effort outcome and is never retried.
 func (service *Service) AuthorizeAndOpenDelivery(ctx context.Context, snapshot RunSnapshot, generateDeliveryID func() (string, error)) (OpenedDeliverySecrets, error) {
+	sourceScope, scopeErr := service.resolveSourceScope(ctx, AccessScope{OwnerID: snapshot.OwnerID, OrganizationID: snapshot.OrganizationID})
+	if scopeErr != nil {
+		return OpenedDeliverySecrets{}, scopeErr
+	}
+	scoped, scopeErr := WithAccessScope(ctx, sourceScope)
+	if scopeErr != nil {
+		return OpenedDeliverySecrets{}, scopeErr
+	}
+	ctx = scoped
 	if strings.TrimSpace(snapshot.AlertRunID) == "" || generateDeliveryID == nil {
 		return OpenedDeliverySecrets{}, fmt.Errorf("%w: alert run and delivery ID generator are required", ErrInvalidArgument)
 	}
@@ -353,7 +396,14 @@ func (service *Service) AuthorizeAndOpenDelivery(ctx context.Context, snapshot R
 
 // OpenTestDeliverySecrets opens the current generation for the explicit test
 // webhook route. It does not consume an alert-run delivery attempt.
-func (service *Service) OpenTestDeliverySecrets(ctx context.Context, ownerID, id string) (OpenedDeliverySecrets, error) {
+func (service *Service) OpenTestDeliverySecrets(ctx context.Context, scope AccessScope, id string) (OpenedDeliverySecrets, error) {
+	scoped, scopeErr := WithAccessScope(ctx, scope)
+	if scopeErr != nil {
+		return OpenedDeliverySecrets{}, scopeErr
+	}
+	ctx = scoped
+	ownerID := scope.OwnerID
+
 	if err := validateOwner(ownerID); err != nil {
 		return OpenedDeliverySecrets{}, err
 	}
@@ -384,7 +434,14 @@ func (service *Service) OpenTestDeliverySecrets(ctx context.Context, ownerID, id
 	return OpenedDeliverySecrets{Endpoint: string(endpoint), Secret: secret}, nil
 }
 
-func (service *Service) Get(ctx context.Context, ownerID, id string) (AlertSummary, error) {
+func (service *Service) Get(ctx context.Context, scope AccessScope, id string) (AlertSummary, error) {
+	scoped, scopeErr := WithAccessScope(ctx, scope)
+	if scopeErr != nil {
+		return AlertSummary{}, scopeErr
+	}
+	ctx = scoped
+	ownerID := scope.OwnerID
+
 	if err := validateOwner(ownerID); err != nil {
 		return AlertSummary{}, err
 	}
@@ -394,7 +451,14 @@ func (service *Service) Get(ctx context.Context, ownerID, id string) (AlertSumma
 	return service.repository.GetSummary(ctx, ownerID, id)
 }
 
-func (service *Service) List(ctx context.Context, ownerID string, limit int) ([]AlertSummary, error) {
+func (service *Service) List(ctx context.Context, scope AccessScope, limit int) ([]AlertSummary, error) {
+	scoped, scopeErr := WithAccessScope(ctx, scope)
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
+	ctx = scoped
+	ownerID := scope.OwnerID
+
 	if err := validateOwner(ownerID); err != nil {
 		return nil, err
 	}
@@ -407,7 +471,7 @@ func (service *Service) ValidateEnabledRuntime(ctx context.Context, ownerID stri
 	if ctx == nil {
 		return ErrInvalidArgument
 	}
-	summaries, err := service.List(ctx, ownerID, MaximumAlertsPerOwner)
+	summaries, err := service.List(ctx, AccessScope{OwnerID: ownerID, SiteAdministrator: true}, MaximumAlertsPerOwner)
 	if err != nil {
 		return err
 	}
@@ -526,4 +590,34 @@ func encryptString(cipher SensitiveCipher, secretContext SecretContext, value st
 	plaintext := []byte(value)
 	defer clear(plaintext)
 	return cipher.Encrypt(secretContext, plaintext)
+}
+
+// ValidateEnabledRuntimeAll checks enabled alerts owned by every persisted
+// user before background scheduling starts after a deployment restart.
+func (service *Service) ValidateEnabledRuntimeAll(ctx context.Context) error {
+	if ctx == nil {
+		return ErrInvalidArgument
+	}
+	owners, ok := service.repository.(runtimeOwnerRepository)
+	if !ok {
+		return fmt.Errorf("%w: repository must enumerate runtime alert owners", ErrInvalidArgument)
+	}
+	page, err := owners.ListRuntimeOwners(ctx, "", 1)
+	if err != nil {
+		return err
+	}
+	if len(page) == 0 {
+		return nil
+	}
+	if err := ValidatePublicBaseURL(service.publicBaseURL); err != nil {
+		return fmt.Errorf("%w: enabled alerts require a public base URL", err)
+	}
+	return nil
+}
+
+func (service *Service) resolveSourceScope(ctx context.Context, scope AccessScope) (AccessScope, error) {
+	if resolver, ok := service.repository.(sourceScopeRepository); ok {
+		return resolver.ResolveSourceScope(ctx, scope)
+	}
+	return NormalizeAccessScope(scope)
 }

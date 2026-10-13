@@ -72,7 +72,7 @@ func TestOpenSearchHistoryStorePropagatesRetentionOptions(t *testing.T) {
 
 	ctx := context.Background()
 	directory := t.TempDir()
-	database, err := control.Open(ctx, filepath.Join(directory, "control.db"))
+	database, err := openTestControl(t, ctx, filepath.Join(directory, "control.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestOpenSearchHistoryStorePropagatesRetentionOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	scope := searchhistory.AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := searchhistory.AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "1"}
 	expired := runtimeSearchHistoryEntry(
 		"expired",
 		opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
@@ -131,7 +131,7 @@ func TestSearchHistoryTerminalAndPendingLimitsAreIndependent(t *testing.T) {
 
 	ctx := context.Background()
 	directory := t.TempDir()
-	database, err := control.Open(ctx, filepath.Join(directory, "control.db"))
+	database, err := openTestControl(t, ctx, filepath.Join(directory, "control.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestSearchHistoryTerminalAndPendingLimitsAreIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope := searchhistory.AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := searchhistory.AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "1"}
 	now := time.Now().UTC()
 	if _, err := store.Record(
 		ctx,

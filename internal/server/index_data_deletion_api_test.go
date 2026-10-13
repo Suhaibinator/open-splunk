@@ -1128,9 +1128,9 @@ func TestDeleteIndexDataAdmissionSurvivesControlPlaneRestart(t *testing.T) {
 
 	const tenantID = "restart-delete-tenant"
 	path := t.TempDir() + "/control.sqlite"
-	firstDB, err := control.Open(context.Background(), path)
+	firstDB, err := openTestControl(t, context.Background(), path)
 	if err != nil {
-		t.Fatalf("control.Open(first): %v", err)
+		t.Fatalf("openTestControl(t, first): %v", err)
 	}
 	firstWaker := &indexDataDeletionWakeRecorder{}
 	firstHandler := newIndexDataDeletionHandlerWithDB(
@@ -1165,9 +1165,9 @@ func TestDeleteIndexDataAdmissionSurvivesControlPlaneRestart(t *testing.T) {
 		t.Fatalf("close first control DB: %v", err)
 	}
 
-	reopened, err := control.Open(context.Background(), path)
+	reopened, err := openTestControl(t, context.Background(), path)
 	if err != nil {
-		t.Fatalf("control.Open(restart): %v", err)
+		t.Fatalf("openTestControl(t, restart): %v", err)
 	}
 	t.Cleanup(func() {
 		if closeErr := reopened.Close(); closeErr != nil {
@@ -1297,10 +1297,10 @@ func TestNewHandlerRequiresCompleteIndexDataDeletionServices(t *testing.T) {
 				WebUI:         testUI(),
 			}
 			configure(&config)
-			if handler, err := NewHandler(config); err == nil ||
+			if handler, err := newAuthenticatedTestHandler(config); err == nil ||
 				handler != nil {
 				t.Fatalf(
-					"NewHandler(%s) = (%v, %v), want configuration error",
+					"newAuthenticatedTestHandler(%s) = (%v, %v), want configuration error",
 					name,
 					handler,
 					err,
@@ -1309,7 +1309,7 @@ func TestNewHandlerRequiresCompleteIndexDataDeletionServices(t *testing.T) {
 		})
 	}
 
-	handler, err := NewHandler(Config{
+	handler, err := newAuthenticatedTestHandler(Config{
 		SearchJobs:                 &fakeSearchJobs{},
 		Indexes:                    fakeIndexCatalog{},
 		IndexDataDeletionAdmission: typedNilAdmission,
@@ -1318,10 +1318,10 @@ func TestNewHandlerRequiresCompleteIndexDataDeletionServices(t *testing.T) {
 		WebUI:                      testUI(),
 	})
 	if err != nil {
-		t.Fatalf("NewHandler(both deletion services typed nil): %v", err)
+		t.Fatalf("newAuthenticatedTestHandler(both deletion services typed nil): %v", err)
 	}
 	if handler == nil {
-		t.Fatal("NewHandler(both deletion services typed nil) returned nil")
+		t.Fatal("newAuthenticatedTestHandler(both deletion services typed nil) returned nil")
 	}
 }
 
@@ -1371,7 +1371,7 @@ func newIndexDataDeletionTestHandler(
 ) (*adminIntegrationHandler, *control.DB) {
 	t.Helper()
 
-	db, err := control.Open(
+	db, err := openTestControl(t,
 		context.Background(),
 		t.TempDir()+"/control.sqlite",
 	)
@@ -1407,10 +1407,10 @@ func newIndexDataDeletionHandlerWithDB(
 	if admission == nil {
 		admission = db
 	}
-	browserAuthenticator, err := auth.NewBearerTokenAuthenticator(
+	browserAuthenticator, err := newTestBearerTokenAuthenticator(
 		[]byte(adminIntegrationBearerToken),
 		tenantID,
-		"single-user",
+		"1030",
 		auth.BrowserRoleAdministrator,
 	)
 	if err != nil {
@@ -1424,9 +1424,9 @@ func newIndexDataDeletionHandlerWithDB(
 		SavedSearches:              &fakeSavedSearches{},
 		WebUI:                      testUI(),
 		TenantID:                   tenantID,
-		OwnerID:                    "single-user",
+		OwnerID:                    "1030",
 		AdministrativeAllowedHosts: []string{"example.com"},
-		BrowserAuthenticator:       browserAuthenticator,
+		IdentityAuthenticator:      adaptTestBrowserAuthenticator(browserAuthenticator),
 	})
 	return &adminIntegrationHandler{
 		raw:   raw,

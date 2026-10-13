@@ -100,14 +100,11 @@ func (handler *apiHandler) inspectSearchJob(
 func (handler *apiHandler) searchInspectionAccess(
 	request *http.Request,
 ) (searchjobs.AccessScope, error) {
-	principal, err := handler.administratorPrincipal(request)
+	_, err := handler.administratorPrincipal(request)
 	if err != nil {
 		return searchjobs.AccessScope{}, err
 	}
-	return searchjobs.AccessScope{
-		TenantID: principal.TenantID(),
-		OwnerID:  principal.OwnerID(),
-	}, nil
+	return handler.accessScope(request.Context()), nil
 }
 
 func validSearchInspectionJobID(value string) bool {

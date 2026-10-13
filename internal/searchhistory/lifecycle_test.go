@@ -3,7 +3,9 @@ package searchhistory
 import (
 	"context"
 	"errors"
-	"path/filepath"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	"testing"
 	"time"
 
@@ -32,9 +34,9 @@ func pendingHistoryEntry(id, spl string, created time.Time) *opensplunk.SearchHi
 func TestBeginAttemptIsDurableIdempotentScopedAndNotYetVisible(t *testing.T) {
 	database, store := openTestStore(t, Options{})
 	ctx := context.Background()
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	// Keep a deliberately sub-microsecond resolved bound. created_at is
-	// canonicalized to SQLite's microsecond precision, while resolved search
+	// canonicalized to PostgreSQL microsecond precision, while resolved search
 	// bounds retain nanoseconds as part of the immutable search intent.
 	created := time.Date(2026, time.July, 27, 12, 34, 56, 123_456_789, time.UTC)
 	pending := pendingHistoryEntry("job-pending", "  index=main | head 1\n", created)
@@ -76,7 +78,7 @@ func TestBeginAttemptIsDurableIdempotentScopedAndNotYetVisible(t *testing.T) {
 	if _, err := store.BeginAttempt(ctx, scope, changed); !errors.Is(err, control.ErrVersionConflict) {
 		t.Fatalf("changed BeginAttempt() error = %v, want ErrVersionConflict", err)
 	}
-	if _, err := store.BeginAttempt(ctx, AccessScope{TenantID: "tenant", OwnerID: "other"}, original); !errors.Is(err, control.ErrAlreadyExists) {
+	if _, err := store.BeginAttempt(ctx, AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "other"}, original); !errors.Is(err, control.ErrAlreadyExists) {
 		t.Fatalf("cross-owner BeginAttempt() error = %v, want ErrAlreadyExists", err)
 	}
 }
@@ -84,7 +86,7 @@ func TestBeginAttemptIsDurableIdempotentScopedAndNotYetVisible(t *testing.T) {
 func TestCompleteAttemptAtomicallyMovesPendingToTerminalHistory(t *testing.T) {
 	database, store := openTestStore(t, Options{})
 	ctx := context.Background()
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	created := time.Now().UTC().Add(-time.Minute)
 	pending := pendingHistoryEntry("job-complete", "index=main | head 1", created)
 	if _, err := store.BeginAttempt(ctx, scope, pending); err != nil {
@@ -120,7 +122,7 @@ func TestCompleteAttemptAtomicallyMovesPendingToTerminalHistory(t *testing.T) {
 func TestCompleteAttemptRejectsChangedImmutableAdmission(t *testing.T) {
 	_, store := openTestStore(t, Options{})
 	ctx := context.Background()
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	created := time.Now().UTC().Add(-time.Minute)
 	pending := pendingHistoryEntry("job-changed", "index=main", created)
 	if _, err := store.BeginAttempt(ctx, scope, pending); err != nil {
@@ -139,7 +141,7 @@ func TestRecoverInterruptedFinalizesPendingAttempts(t *testing.T) {
 	now := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
 	_, store := openTestStore(t, Options{Clock: func() time.Time { return now }})
 	ctx := context.Background()
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	pending := pendingHistoryEntry("job-interrupted", "\nindex=main | head 1\n", now.Add(-time.Minute))
 	pending.StartedAt = timestamppb.New(now.Add(-30 * time.Second))
 	if _, err := store.BeginAttempt(ctx, scope, pending); err != nil {
@@ -169,8 +171,8 @@ func TestRecoverInterruptedPreservesProvenanceAndExactRangeAcrossRestart(t *test
 
 	ctx := context.Background()
 	now := time.Date(2026, time.March, 8, 19, 0, 0, 987654321, time.UTC)
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
-	databasePath := filepath.Join(t.TempDir(), "control.sqlite")
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
+	databasePath := pgtest.DSN(t)
 	database, err := control.Open(ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
@@ -252,7 +254,7 @@ func TestPendingAttemptValidation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			entry := proto.Clone(base).(*opensplunk.SearchHistoryEntry)
 			mutate(entry)
-			if _, err := store.BeginAttempt(context.Background(), AccessScope{TenantID: "tenant", OwnerID: "owner"}, entry); !errors.Is(err, control.ErrInvalidArgument) {
+			if _, err := store.BeginAttempt(context.Background(), AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}, entry); !errors.Is(err, control.ErrInvalidArgument) {
 				t.Fatalf("BeginAttempt() error = %v, want ErrInvalidArgument", err)
 			}
 		})
@@ -263,7 +265,7 @@ func TestPendingAttemptCapacityIsScopedAndIdempotent(t *testing.T) {
 	_, store := openTestStore(t, Options{MaximumEntriesPerOwner: 1})
 	ctx := context.Background()
 	created := time.Now().UTC()
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	first := pendingHistoryEntry("capacity-first", "index=main", created)
 	if _, err := store.BeginAttempt(ctx, scope, first); err != nil {
 		t.Fatal(err)
@@ -274,7 +276,7 @@ func TestPendingAttemptCapacityIsScopedAndIdempotent(t *testing.T) {
 	if _, err := store.BeginAttempt(ctx, scope, pendingHistoryEntry("capacity-second", "index=main", created)); !errors.Is(err, ErrCapacity) {
 		t.Fatalf("BeginAttempt(over capacity) error = %v, want ErrCapacity", err)
 	}
-	if _, err := store.BeginAttempt(ctx, AccessScope{TenantID: "tenant", OwnerID: "other"}, pendingHistoryEntry("capacity-other", "index=main", created)); err != nil {
+	if _, err := store.BeginAttempt(ctx, AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "other"}, pendingHistoryEntry("capacity-other", "index=main", created)); err != nil {
 		t.Fatalf("BeginAttempt(other owner) error = %v", err)
 	}
 }
@@ -282,7 +284,7 @@ func TestPendingAttemptCapacityIsScopedAndIdempotent(t *testing.T) {
 func TestRecoverInterruptedRollsBackScopeOnCorruption(t *testing.T) {
 	database, store := openTestStore(t, Options{})
 	ctx := context.Background()
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	created := time.Now().UTC().Add(-time.Minute)
 	for _, id := range []string{"a-valid", "z-corrupt"} {
 		if _, err := store.BeginAttempt(ctx, scope, pendingHistoryEntry(id, "index=main", created)); err != nil {
@@ -290,8 +292,8 @@ func TestRecoverInterruptedRollsBackScopeOnCorruption(t *testing.T) {
 		}
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
-		UPDATE search_history_pending SET entry_sha256 = zeroblob(32)
-		WHERE search_job_id = ?`, "z-corrupt"); err != nil {
+		UPDATE search_history_pending SET entry_sha256 = decode(repeat('00', (32)::int), 'hex')
+		WHERE search_job_id = $1`, "z-corrupt"); err != nil {
 		t.Fatal(err)
 	}
 	if recovered, err := store.RecoverInterrupted(ctx, scope); err == nil || recovered != 0 {
@@ -312,7 +314,7 @@ func TestRecoverInterruptedRollsBackScopeOnCorruption(t *testing.T) {
 func TestRecordCompletesExistingPendingAttempt(t *testing.T) {
 	database, store := openTestStore(t, Options{})
 	ctx := context.Background()
-	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 	created := time.Now().UTC().Add(-time.Minute)
 	pending := pendingHistoryEntry("record-completes", "index=main", created)
 	if _, err := store.BeginAttempt(ctx, scope, pending); err != nil {
@@ -328,5 +330,32 @@ func TestRecordCompletesExistingPendingAttempt(t *testing.T) {
 	}
 	if pendingRows != 0 {
 		t.Fatalf("pending rows = %d, want 0", pendingRows)
+	}
+}
+
+func TestRecoverInterruptedTenantIncludesAllOwnersAndKeepsOtherTenants(t *testing.T) {
+	now := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	_, store := openTestStore(t, Options{Clock: func() time.Time { return now }})
+	for _, scope := range []AccessScope{{OrganizationID: "1", TenantID: "tenant", OwnerID: "alice"}, {OrganizationID: "1", TenantID: "tenant", OwnerID: "bob"}, {OrganizationID: "1", TenantID: "other-tenant", OwnerID: "alice"}} {
+		entry := pendingHistoryEntry(scope.TenantID+"-"+scope.OwnerID, "index=main", now.Add(-time.Minute))
+		if _, err := store.BeginAttempt(t.Context(), scope, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count, err := store.RecoverInterruptedTenant(t.Context(), "tenant")
+	if err != nil || count != 2 {
+		t.Fatalf("all owner recovery=(%d,%v)", count, err)
+	}
+	for _, owner := range []string{"alice", "bob"} {
+		entry, err := store.Get(t.Context(), AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: owner}, "tenant-"+owner)
+		if err != nil || entry.GetFinalState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED {
+			t.Fatalf("owner %s was not recovered: %v", owner, err)
+		}
+	}
+	if count, err := store.RecoverInterruptedTenant(t.Context(), "other-tenant"); err != nil || count != 1 {
+		t.Fatalf("other tenant was prematurely recovered: %d %v", count, err)
+	}
+	if count, err := store.RecoverInterruptedTenant(t.Context(), "tenant"); err != nil || count != 0 {
+		t.Fatalf("recovery was not idempotent: %d %v", count, err)
 	}
 }

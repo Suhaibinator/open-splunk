@@ -233,6 +233,76 @@ func (snapshot Snapshot) Summary() *opensplunk.KnowledgeSnapshotSummary {
 	}
 }
 
+// ObjectIDs returns the complete immutable registry inventory without loading
+// definitions or truncating it to the public summary prefix.
+func (snapshot Snapshot) ObjectIDs() []string {
+	if snapshot.message == nil {
+		return nil
+	}
+	result := make([]string, len(snapshot.message.GetObjects()))
+	for index, object := range snapshot.message.GetObjects() {
+		result[index] = strings.Clone(object.GetKnowledgeObjectId())
+	}
+	return result
+}
+
+// NormalizeObjectIDs reconstructs missing inventory only when the authorized
+// summary discloses every object. A redacted or truncated prefix is insufficient.
+func NormalizeObjectIDs(summary *opensplunk.KnowledgeSnapshotSummary, ids []string) ([]string, error) {
+	if len(ids) == 0 && summary != nil {
+		if err := ValidateSummary(summary); err != nil {
+			return nil, err
+		}
+		if int(summary.GetRef().GetObjectCount()) != len(summary.GetObjects()) {
+			return nil, ErrInvalidInput
+		}
+		ids = make([]string, len(summary.GetObjects()))
+		for index, object := range summary.GetObjects() {
+			if object.GetAuthorizedObject() == nil {
+				return nil, ErrInvalidInput
+			}
+			ids[index] = object.GetAuthorizedObject().GetKnowledgeObjectId()
+		}
+	}
+	if err := ValidateObjectIDs(summary, ids); err != nil {
+		return nil, err
+	}
+	return append([]string(nil), ids...), nil
+}
+
+// ValidateObjectIDs checks the retained private inventory against the finalized
+// summary's count and disclosed prefix. Database guards keep it immutable.
+func ValidateObjectIDs(summary *opensplunk.KnowledgeSnapshotSummary, ids []string) error {
+	if summary == nil {
+		if len(ids) != 0 {
+			return ErrInvalidInput
+		}
+		return nil
+	}
+	if err := ValidateSummary(summary); err != nil {
+		return err
+	}
+	if len(ids) != int(summary.GetRef().GetObjectCount()) || len(ids) > MaximumExecutableObjects {
+		return ErrInvalidInput
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for index, id := range ids {
+		if !validIdentity(id, maximumObjectIDBytes) {
+			return ErrInvalidInput
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return ErrInvalidInput
+		}
+		seen[id] = struct{}{}
+		if index < len(summary.GetObjects()) {
+			if disclosed := summary.GetObjects()[index].GetAuthorizedObject(); disclosed != nil && disclosed.GetKnowledgeObjectId() != id {
+				return ErrInvalidInput
+			}
+		}
+	}
+	return nil
+}
+
 // Equal reports exact finalized authority equality. The digest is a fast
 // rejection path; canonical bytes remain the final equality authority.
 func (snapshot Snapshot) Equal(other Snapshot) bool {

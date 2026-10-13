@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"fortio.org/safecast"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 )
 
 // HECReadinessSnapshot is the constant-shape projection used by the public
@@ -42,7 +43,7 @@ type HECOperationalSnapshot struct {
 // HECReadiness performs only the bounded pending-usage read and an indexed
 // existence probe for unresolved terminal HEC failures. Public health probes
 // therefore do not count retained channel or acknowledgment history.
-func (sequencer *SQLiteSequencer) HECReadiness(
+func (sequencer *PostgreSQLSequencer) HECReadiness(
 	ctx context.Context,
 ) (snapshot HECReadinessSnapshot, resultErr error) {
 	if err := sequencer.beginOperation(); err != nil {
@@ -79,12 +80,12 @@ func pendingHECQueueAvailable(usage PendingUsage) bool {
 func readHECAcknowledgmentAvailability(ctx context.Context, database queryer) (bool, error) {
 	var terminalFailureExists int
 	if err := database.QueryRowContext(ctx, `
-		SELECT EXISTS (
+		SELECT CASE WHEN EXISTS (
 			SELECT 1
 			FROM hec_requests
 			WHERE state = 'terminal_failure'
 			LIMIT 1
-		)`).Scan(&terminalFailureExists); err != nil {
+		) THEN 1 ELSE 0 END`).Scan(&terminalFailureExists); err != nil {
 		return false, fmt.Errorf("read HEC acknowledgment readiness: %w", err)
 	}
 	return terminalFailureExists == 0, nil
@@ -93,7 +94,7 @@ func readHECAcknowledgmentAvailability(ctx context.Context, database queryer) (b
 // HECOperationalHealth reads bounded aggregate state without performing a
 // ClickHouse write. Any corrupt count or query failure fails the observation
 // closed and returns an error.
-func (sequencer *SQLiteSequencer) HECOperationalHealth(
+func (sequencer *PostgreSQLSequencer) HECOperationalHealth(
 	ctx context.Context,
 ) (snapshot HECOperationalSnapshot, resultErr error) {
 	if err := sequencer.beginOperation(); err != nil {
@@ -103,11 +104,12 @@ func (sequencer *SQLiteSequencer) HECOperationalHealth(
 	if err := validateContext(ctx); err != nil {
 		return HECOperationalSnapshot{}, err
 	}
-	// Every field belongs to one SQLite read snapshot. Without this boundary,
+	// Every field belongs to one PostgreSQL read snapshot. Without this boundary,
 	// reconciliation or terminal pruning between queries could publish
 	// contradictory counts and availability bits under one observed_at value.
-	tx, err := sequencer.db.BeginTx(
-		ctx,
+	tx, err := pgmeta.BeginSQL(
+		ctx, sequencer.db,
+
 		&sql.TxOptions{Isolation: sql.LevelSerializable, ReadOnly: true},
 	)
 	if err != nil {
@@ -157,13 +159,13 @@ func (sequencer *SQLiteSequencer) HECOperationalHealth(
 	if err := tx.QueryRowContext(ctx, `
 		SELECT
 			(SELECT count(*) FROM hec_requests),
-			(SELECT NOT EXISTS (
+			(SELECT CASE WHEN NOT EXISTS (
 				 SELECT 1
 				 FROM hec_requests
 				 GROUP BY tenant_id, ingestion_token_id
-				 HAVING count(*) >= ?
+				 HAVING count(*) >= $1
 				 LIMIT 1
-			 )),
+			 ) THEN 1 ELSE 0 END),
 			(SELECT count(*) FROM hec_channels),
 			(SELECT count(*)
 			 FROM hec_channels AS channel
@@ -178,7 +180,7 @@ func (sequencer *SQLiteSequencer) HECOperationalHealth(
 				   AND acknowledgment.ingestion_token_id = channel.ingestion_token_id
 				   AND acknowledgment.channel_id = channel.channel_id
 				   AND (request.state = 'pending'
-				        OR request.terminal_at_unix_micro >= ?)
+				        OR request.terminal_at_unix_micro >= $2)
 			 )),
 			(SELECT count(*)
 			 FROM hec_acknowledgments AS acknowledgment
@@ -194,7 +196,7 @@ func (sequencer *SQLiteSequencer) HECOperationalHealth(
 			  AND request.ingestion_token_id = acknowledgment.ingestion_token_id
 			  AND request.request_sequence = acknowledgment.request_sequence
 			 WHERE request.state = 'indexed'
-			   AND request.terminal_at_unix_micro >= ?),
+			   AND request.terminal_at_unix_micro >= $3),
 			(SELECT count(*)
 			 FROM hec_acknowledgments AS acknowledgment
 			 JOIN hec_requests AS request
@@ -202,7 +204,7 @@ func (sequencer *SQLiteSequencer) HECOperationalHealth(
 			  AND request.ingestion_token_id = acknowledgment.ingestion_token_id
 			  AND request.request_sequence = acknowledgment.request_sequence
 			 WHERE request.state IN ('indexed', 'terminal_failure')
-			   AND request.terminal_at_unix_micro < ?),
+			   AND request.terminal_at_unix_micro < $4),
 			(SELECT count(*) FROM hec_requests WHERE state = 'terminal_failure')`,
 		MaxHECRequestsPerToken,
 		terminalBefore,

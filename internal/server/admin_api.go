@@ -34,6 +34,7 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/asciifold"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/authorization"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
@@ -168,19 +169,29 @@ func (handler *apiHandler) protectBrowserAPIRoutes(next http.Handler) http.Handl
 			writeAPIError(response, http.StatusForbidden, "browser request origin is not trusted")
 			return
 		}
-		if _, protected := handler.administratorRoutes[request.URL.Path]; protected {
-			ctx, cancel := context.WithTimeout(
-				request.Context(),
-				handler.routeTimeout,
-			)
+		if isNilDependency(handler.identityAuthenticator) || handler.authorization == nil {
+			writeAPIError(response, http.StatusServiceUnavailable, "user authentication is unavailable")
+			return
+		}
+		if handler.routeTimeout > 0 && request.URL.Path != searchWebSocketPath && request.URL.Path != exportDownloadPath {
+			ctx, cancel := context.WithTimeout(request.Context(), handler.routeTimeout)
 			defer cancel()
 			request = request.WithContext(ctx)
-			var authorized bool
-			request, authorized = handler.authorizeBrowserAdministrator(
-				response,
-				request,
-			)
-			if !authorized {
+		}
+		var authenticated bool
+		request, authenticated = handler.authenticateIdentity(response, request)
+		if !authenticated {
+			return
+		}
+		if siteAdministratorRoute(request.URL.Path) && !handler.requireSiteAdministrator(request) {
+			writeAPIError(response, http.StatusForbidden, "site administrator access is required")
+			return
+		}
+		request = request.WithContext(context.WithValue(request.Context(), capabilityContextKey{}, indexRouteCapability(request.URL.Path)))
+		if _, protected := handler.administratorRoutes[request.URL.Path]; protected && !strings.HasPrefix(request.URL.Path, "/api/indexes/") && !strings.HasPrefix(request.URL.Path, "/api/ingestion-tokens/") {
+			principal, ok := browserPrincipalFromRequest(request)
+			if !ok || !principal.IsAdministrator() {
+				writeAPIError(response, http.StatusForbidden, "organization administrator access is required")
 				return
 			}
 		}
@@ -343,6 +354,15 @@ func (handler *apiHandler) registerIngestionTokenRoutes(group *apiRouteGroup, re
 }
 
 func (handler *apiHandler) createIndex(request *http.Request, input *opensplunk.CreateIndexRequest) (*opensplunk.CreateIndexResponse, error) {
+	if handler.authorization != nil {
+		scope, ok := authorization.FromContext(request.Context())
+		if !ok {
+			return nil, mapAuthorizationError(authorization.ErrUnauthorized)
+		}
+		if err := handler.authorization.AuthorizeOrganization(request.Context(), scope.Subject, scope.OrganizationID, authorization.AdminRole); err != nil {
+			return nil, mapAuthorizationError(err)
+		}
+	}
 	canonical := proto.Clone(input).(*opensplunk.CreateIndexRequest)
 	canonical.ClientRequestId = nil
 	intent, err := handler.mutationIntent(
@@ -528,6 +548,10 @@ func indexStatisticsToProto(
 }
 
 func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunk.ListIndexesRequest) (*serializedIndexListResponse, error) {
+	authorizedIDs, authorizationFingerprint, err := handler.authorizedIndexList(request.Context())
+	if err != nil {
+		return nil, mapAuthorizationError(err)
+	}
 	pageSize, pageToken, includeTotal := handler.adminPageProjection(
 		input.GetPage(),
 		maximumIndexRowsPerResponse,
@@ -554,7 +578,7 @@ func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunk.
 		textFilter,
 		int32(sortBy),
 		int32(direction),
-		"",
+		authorizationFingerprint,
 		input.GetIncludeStats(),
 	)
 	var cursor *control.IndexListCursor
@@ -572,6 +596,7 @@ func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunk.
 		cursor = resolved
 	}
 	listRequest := control.IndexListRequest{
+		AuthorizedIndexIDs: authorizedIDs,
 
 		PageSize:     safecast.MustConv[uint32](pageSize),
 		Cursor:       cloneIndexListCursor(cursor),
@@ -738,6 +763,7 @@ func cloneIndexListRequest(
 	input control.IndexListRequest,
 ) control.IndexListRequest {
 	result := input
+	result.AuthorizedIndexIDs = slices.Clone(input.AuthorizedIndexIDs)
 	result.Cursor = cloneIndexListCursor(input.Cursor)
 	result.StateFilters = slices.Clone(input.StateFilters)
 	if input.TextFilter != nil {
@@ -942,6 +968,9 @@ func indexListRecordMatchesRequest(
 	request control.IndexListRequest,
 	textMatcher *asciifold.Matcher,
 ) bool {
+	if request.AuthorizedIndexIDs != nil && !slices.Contains(request.AuthorizedIndexIDs, record.ID) {
+		return false
+	}
 	if len(request.StateFilters) != 0 &&
 		!slices.Contains(request.StateFilters, record.State) {
 		return false
@@ -1408,6 +1437,9 @@ func validIndexDeletionAdmission(
 }
 
 func (handler *apiHandler) createIngestionToken(request *http.Request, input *opensplunk.CreateIngestionTokenRequest) (*opensplunk.CreateIngestionTokenResponse, error) {
+	if err := handler.authorizeIngestionTokenAdministrator(request.Context()); err != nil {
+		return nil, err
+	}
 	canonical := proto.Clone(input).(*opensplunk.CreateIngestionTokenRequest)
 	canonical.ClientRequestId = nil
 	intent, err := handler.mutationIntent(
@@ -1422,6 +1454,16 @@ func (handler *apiHandler) createIngestionToken(request *http.Request, input *op
 	definition, err := tokenDefinitionFromProto(input.GetDefinition())
 	if err != nil {
 		return nil, badRequestError(err.Error())
+	}
+	if scope, ok := authorization.FromContext(request.Context()); ok {
+		definition.OrganizationID = scope.OrganizationID
+		definition.IssuerUserID = scope.Subject.UserID
+	}
+	if err := handler.authorizeIngestionTokenIndexes(request.Context(), definition.AllowedIndexNames); err != nil {
+		return nil, err
+	}
+	if err := handler.authorizeIngestionTokenCollectorBinding(request, definition.BoundCollectorID); err != nil {
+		return nil, err
 	}
 	var issued auth.IssuedCollectorToken
 	replayed := false
@@ -1442,6 +1484,9 @@ func (handler *apiHandler) createIngestionToken(request *http.Request, input *op
 	if err := mapAdministrativeCallError(request.Context(), err, "ingestion token"); err != nil {
 		return nil, err
 	}
+	if err := handler.authorizeIngestionTokenRecord(request.Context(), issued.Token); err != nil {
+		return nil, err
+	}
 	converted, err := tokenToProto(issued.Token)
 	plaintext := issued.Secret.Plaintext()
 	if err != nil || converted.GetVersion() == 0 ||
@@ -1459,8 +1504,16 @@ func (handler *apiHandler) createIngestionToken(request *http.Request, input *op
 }
 
 func (handler *apiHandler) getIngestionToken(request *http.Request, input *opensplunk.GetIngestionTokenRequest) (*opensplunk.GetIngestionTokenResponse, error) {
+	if err := handler.authorizeIngestionTokenAdministrator(request.Context()); err != nil {
+		return nil, err
+	}
 	id := input.GetIngestionTokenId()
 	record, err := handler.ingestionTokens.GetCollectorToken(request.Context(), id)
+	if err == nil {
+		if accessErr := handler.authorizeIngestionTokenRecord(request.Context(), record); accessErr != nil {
+			return nil, accessErr
+		}
+	}
 	if err := mapAdministrativeCallError(request.Context(), err, "ingestion token"); err != nil {
 		return nil, err
 	}
@@ -1472,6 +1525,9 @@ func (handler *apiHandler) getIngestionToken(request *http.Request, input *opens
 }
 
 func (handler *apiHandler) listIngestionTokens(request *http.Request, input *opensplunk.ListIngestionTokensRequest) (*serializedTokenListResponse, error) {
+	if err := handler.authorizeIngestionTokenAdministrator(request.Context()); err != nil {
+		return nil, err
+	}
 	pageSize, pageToken, includeTotal := handler.adminPageProjection(
 		input.GetPage(),
 		maximumTokenRowsPerResponse,
@@ -1497,6 +1553,20 @@ func (handler *apiHandler) listIngestionTokens(request *http.Request, input *ope
 		return nil, err
 	}
 	filtered := filterAndSortTokens(records, states, indexFilter, textFilter, sortBy, direction)
+	if handler.authorization != nil {
+		visible := make([]auth.CollectorToken, 0, len(filtered))
+		for _, record := range filtered {
+			if accessErr := handler.authorizeIngestionTokenRecord(request.Context(), record); accessErr == nil {
+				visible = append(visible, record)
+			} else {
+				var httpError *router.HTTPError
+				if !errors.As(accessErr, &httpError) || httpError.StatusCode != http.StatusForbidden {
+					return nil, accessErr
+				}
+			}
+		}
+		filtered = visible
+	}
 	fingerprint := adminFilterFingerprint(
 		"tokens",
 		pageSize,
@@ -1507,6 +1577,7 @@ func (handler *apiHandler) listIngestionTokens(request *http.Request, input *ope
 		int32(direction),
 		indexFilter,
 	)
+	fingerprint += ":" + ingestionTokenScopeFingerprint(request.Context())
 	snapshot := tokenSnapshot(filtered)
 	start, err := handler.adminPageStart(pageToken, "tokens", fingerprint, snapshot, len(filtered))
 	if err != nil {
@@ -1534,8 +1605,16 @@ func (handler *apiHandler) listIngestionTokens(request *http.Request, input *ope
 }
 
 func (handler *apiHandler) updateIngestionToken(request *http.Request, input *opensplunk.UpdateIngestionTokenRequest) (*opensplunk.UpdateIngestionTokenResponse, error) {
+	if err := handler.authorizeIngestionTokenAdministrator(request.Context()); err != nil {
+		return nil, err
+	}
 	id := input.GetIngestionTokenId()
 	current, err := handler.ingestionTokens.GetCollectorToken(request.Context(), id)
+	if err == nil {
+		if accessErr := handler.authorizeIngestionTokenRecord(request.Context(), current); accessErr != nil {
+			return nil, accessErr
+		}
+	}
 	if err := mapAdministrativeCallError(request.Context(), err, "ingestion token"); err != nil {
 		return nil, err
 	}
@@ -1550,6 +1629,12 @@ func (handler *apiHandler) updateIngestionToken(request *http.Request, input *op
 			return nil, router.NewHTTPError(http.StatusConflict, "HEC token acknowledgment mode is immutable")
 		}
 		return nil, badRequestError(err.Error())
+	}
+	if accessErr := handler.authorizeIngestionTokenIndexes(request.Context(), replacement.AllowedIndexNames); accessErr != nil {
+		return nil, accessErr
+	}
+	if err := handler.authorizeIngestionTokenCollectorBinding(request, replacement.BoundCollectorID); err != nil {
+		return nil, err
 	}
 	record, err := handler.ingestionTokens.UpdateCollectorToken(request.Context(), id, input.GetExpectedVersion(), replacement)
 	if err := mapAdministrativeCallError(request.Context(), err, "ingestion token"); err != nil {
@@ -1566,7 +1651,24 @@ func (handler *apiHandler) setIngestionTokenEnabled(
 	request *http.Request,
 	input *opensplunk.SetIngestionTokenEnabledRequest,
 ) (*opensplunk.SetIngestionTokenEnabledResponse, error) {
+	if err := handler.authorizeIngestionTokenAdministrator(request.Context()); err != nil {
+		return nil, err
+	}
 	id := input.GetIngestionTokenId()
+	if handler.authorization != nil {
+		current, err := handler.ingestionTokens.GetCollectorToken(request.Context(), id)
+		if err != nil {
+			return nil, mapAdministrativeCallError(request.Context(), err, "ingestion token")
+		}
+		if err := handler.authorizeIngestionTokenRecord(request.Context(), current); err != nil {
+			return nil, err
+		}
+		if input.GetEnabled() {
+			if err := handler.authorizeIngestionTokenIndexes(request.Context(), current.AllowedIndexNames); err != nil {
+				return nil, err
+			}
+		}
+	}
 	record, err := handler.ingestionTokens.SetCollectorTokenEnabled(
 		request.Context(),
 		id,
@@ -1627,7 +1729,19 @@ func (handler *apiHandler) setIngestionTokenEnabled(
 }
 
 func (handler *apiHandler) revokeIngestionToken(request *http.Request, input *opensplunk.RevokeIngestionTokenRequest) (*opensplunk.RevokeIngestionTokenResponse, error) {
+	if err := handler.authorizeIngestionTokenAdministrator(request.Context()); err != nil {
+		return nil, err
+	}
 	id := input.GetIngestionTokenId()
+	if handler.authorization != nil {
+		current, err := handler.ingestionTokens.GetCollectorToken(request.Context(), id)
+		if err != nil {
+			return nil, mapAdministrativeCallError(request.Context(), err, "ingestion token")
+		}
+		if err := handler.authorizeIngestionTokenRecord(request.Context(), current); err != nil {
+			return nil, err
+		}
+	}
 	record, err := handler.ingestionTokens.RevokeCollectorToken(request.Context(), id, input.GetExpectedVersion())
 	if err := mapAdministrativeCallError(request.Context(), err, "ingestion token"); err != nil {
 		return nil, err
@@ -1643,14 +1757,27 @@ func (handler *apiHandler) revokeIngestionToken(request *http.Request, input *op
 // to exactly one populated, canonical arm. The default arm stays as a
 // fail-closed guard for a selector that never reached a route sanitizer.
 func (handler *apiHandler) resolveIndex(ctx context.Context, selector *opensplunk.IndexSelector) (control.Index, error) {
+	var record control.Index
+	var err error
 	switch selected := selector.GetSelector().(type) {
 	case *opensplunk.IndexSelector_IndexId:
-		return handler.indexAdmin.GetIndex(ctx, selected.IndexId)
+		record, err = handler.indexAdmin.GetIndex(ctx, selected.IndexId)
 	case *opensplunk.IndexSelector_IndexName:
-		return handler.indexAdmin.GetIndexByName(ctx, selected.IndexName)
+		record, err = handler.indexAdmin.GetIndexByName(ctx, selected.IndexName)
 	default:
 		return control.Index{}, fmt.Errorf("%w: index selector is required", control.ErrInvalidArgument)
 	}
+	if err != nil {
+		return control.Index{}, err
+	}
+	capability, ok := ctx.Value(capabilityContextKey{}).(authorization.Capability)
+	if !ok {
+		capability = authorization.Search
+	}
+	if err := handler.authorizeIndexCapability(ctx, record.ID, capability); err != nil {
+		return control.Index{}, mapAuthorizationError(err)
+	}
+	return record, nil
 }
 
 func indexDefinitionFromProto(input *opensplunk.IndexDefinition) (control.IndexDefinition, error) {

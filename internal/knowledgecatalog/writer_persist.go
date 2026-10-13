@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"fortio.org/safecast"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 
@@ -301,6 +302,7 @@ func (writer *Writer) publishMutation(
 	}
 
 	registry := registryRecord{
+		OrganizationID:      prepared.scope.organizationID,
 		TenantID:            prepared.scope.tenantID,
 		KnowledgeObjectID:   plan.objectID,
 		CurrentVersion:      plan.version,
@@ -484,7 +486,7 @@ func writerRetentionAnchor(tx *gorm.DB, mutationMicros int64) (int64, error) {
 		return 0, fmt.Errorf("%w: knowledge mutation occurrence is invalid", ErrCorrupt)
 	}
 	var databaseMicros int64
-	if err := tx.Raw(`SELECT CAST(unixepoch('subsec') * 1000000 AS INTEGER)`).Scan(&databaseMicros).Error; err != nil {
+	if err := tx.Raw(`SELECT CAST(EXTRACT(EPOCH FROM clock_timestamp()) * 1000000 AS BIGINT)`).Scan(&databaseMicros).Error; err != nil {
 		return 0, writerError(tx.Statement.Context, "read retention clock", err)
 	}
 	if _, err := canonicalTime(databaseMicros); err != nil {
@@ -576,7 +578,7 @@ func (writer *Writer) reconcileCommittedMutation(
 	}
 	reconcileContext, cancel := context.WithTimeout(base, writerCommitReconcileTimeout)
 	defer cancel()
-	tx := writer.orm.WithContext(reconcileContext).Begin()
+	tx := pgmeta.BeginLocked(writer.orm.WithContext(reconcileContext), pgmeta.Catalog)
 	if tx.Error != nil {
 		return outcome, tx.Error
 	}
@@ -657,7 +659,7 @@ func validatePublicationInputs(
 		len(plan.definition.digest) != persistedKnowledgeDefinitionDigestBytes {
 		return invalid("definition authority is invalid")
 	}
-	if !validIdentity(plan.ownerID, maximumOwnerIDBytes) || plan.ownerID != prepared.scope.ownerID {
+	if !validIdentity(plan.ownerID, maximumOwnerIDBytes) || (!prepared.scope.siteAdministrator && plan.ownerID != prepared.scope.ownerID) {
 		return invalid("owner authority is invalid")
 	}
 	if !prepared.scope.canWriteApp(plan.definition.appID) {

@@ -270,7 +270,7 @@ func (reader *IndexStatisticsReader) GetIndexStatistics(
 	defer func() {
 		resultErr = preserveIndexStatisticsReadCause(operationContext, resultErr)
 	}()
-	// Catalog-backed admission may wait on SQLite. Keep that work outside the
+	// Catalog-backed admission may wait on PostgreSQL. Keep that work outside the
 	// single native-session gate while retaining one overall operation deadline.
 	if err := reader.acquireOperation(operationContext); err != nil {
 		return IndexStatisticsResult{}, err
@@ -411,7 +411,7 @@ func (reader *IndexStatisticsReader) GetIndexStatisticsBatch(
 	defer func() {
 		resultErr = preserveIndexStatisticsReadCause(operationContext, resultErr)
 	}()
-	// Catalog-backed admission may wait on SQLite. Keep that work outside the
+	// Catalog-backed admission may wait on PostgreSQL. Keep that work outside the
 	// single native-session gate while retaining one overall operation deadline.
 	if err := reader.acquireOperation(operationContext); err != nil {
 		return nil, err

@@ -16,7 +16,7 @@ func TestPersistedTerminalCorruptionIsNotCallerInvalidArgument(t *testing.T) {
 	t.Run("checksum-valid semantic corruption", func(t *testing.T) {
 		database, store := openTestStore(t, Options{})
 		ctx := context.Background()
-		scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+		scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 		created := time.Now().UTC().Add(-time.Minute)
 		entry := historyEntry(
 			"terminal-semantic-corruption",
@@ -59,7 +59,7 @@ func TestPersistedTerminalCorruptionIsNotCallerInvalidArgument(t *testing.T) {
 	t.Run("persisted scope corruption", func(t *testing.T) {
 		database, store := openTestStore(t, Options{})
 		ctx := context.Background()
-		scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+		scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 		created := time.Now().UTC().Add(-time.Minute)
 		terminal := historyEntry(
 			"terminal-scope-corruption",
@@ -96,7 +96,7 @@ func TestPersistedPendingCorruptionIsNotCallerInvalidArgument(t *testing.T) {
 	t.Run("checksum-valid semantic corruption", func(t *testing.T) {
 		database, store := openTestStore(t, Options{})
 		ctx := context.Background()
-		scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+		scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 		created := time.Now().UTC().Add(-time.Minute)
 		pending := pendingHistoryEntry("pending-semantic-corruption", "index=main", created)
 		if _, err := store.BeginAttempt(ctx, scope, pending); err != nil {
@@ -135,7 +135,7 @@ func TestPersistedPendingCorruptionIsNotCallerInvalidArgument(t *testing.T) {
 	t.Run("persisted scope corruption", func(t *testing.T) {
 		database, store := openTestStore(t, Options{})
 		ctx := context.Background()
-		scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+		scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
 		created := time.Now().UTC().Add(-time.Minute)
 		pending := pendingHistoryEntry("pending-scope-corruption", "index=main", created)
 		if _, err := store.BeginAttempt(ctx, scope, pending); err != nil {
@@ -216,5 +216,52 @@ func assertPersistedCorruption(t *testing.T, operation string, err error) {
 	}
 	if errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("%s error = %v, must not retain ErrInvalidArgument", operation, err)
+	}
+}
+
+func TestPersistedSourceIndexMetadataCannotRebindHistory(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		name := "terminal"
+		if pending {
+			name = "pending"
+		}
+		t.Run(name, func(t *testing.T) {
+			database, store := openTestStore(t, Options{})
+			ctx := t.Context()
+			scope := AccessScope{OrganizationID: "1", TenantID: "tenant", OwnerID: "owner"}
+			created := time.Now().UTC().Add(-time.Minute)
+			const jobID = "source-metadata-rebinding"
+			if pending {
+				entry := pendingHistoryEntry(jobID, "index=main", created)
+				if _, err := store.BeginAttempt(ctx, scope, entry); err != nil {
+					t.Fatal(err)
+				}
+				update := database.GORMDB().Model(&pendingHistoryRecord{}).Where("search_job_id = ?", jobID).Update("source_index_names", []byte(`["other-index"]`))
+				if update.Error != nil || update.RowsAffected != 1 {
+					t.Fatalf("rewrite source metadata=%d,%v", update.RowsAffected, update.Error)
+				}
+				var row pendingHistoryRecord
+				if err := database.GORMDB().Where("search_job_id = ?", jobID).Take(&row).Error; err != nil {
+					t.Fatal(err)
+				}
+				_, err := pendingAttemptFromRecord(row)
+				assertPersistedCorruption(t, "pending source index rebinding", err)
+			} else {
+				entry := historyEntry(jobID, "index=main", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
+				if _, err := store.Record(ctx, scope, entry); err != nil {
+					t.Fatal(err)
+				}
+				update := database.GORMDB().Model(&historyRecord{}).Where("search_job_id = ?", jobID).Update("source_index_names", []byte(`["other-index"]`))
+				if update.Error != nil || update.RowsAffected != 1 {
+					t.Fatalf("rewrite source metadata=%d,%v", update.RowsAffected, update.Error)
+				}
+				var row historyRecord
+				if err := database.GORMDB().Where("search_job_id = ?", jobID).Take(&row).Error; err != nil {
+					t.Fatal(err)
+				}
+				_, err := historyEntryFromRecord(row)
+				assertPersistedCorruption(t, "terminal source index rebinding", err)
+			}
+		})
 	}
 }

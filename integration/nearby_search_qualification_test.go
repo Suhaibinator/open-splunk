@@ -73,12 +73,12 @@ var (
 )
 
 type nearbyQualificationServer struct {
-	name       string
-	baseURL    string
-	adminToken string
-	client     *http.Client
-	process    *managedProcess
-	expectsRef bool
+	name          string
+	baseURL       string
+	googleSession string
+	client        *http.Client
+	process       *managedProcess
+	expectsRef    bool
 }
 
 type nearbyQualificationSearch struct {
@@ -420,7 +420,7 @@ func nearbyQualificationStartServer(
 	if err := os.Mkdir(runtimeDirectory, 0o700); err != nil {
 		t.Fatalf("create %s runtime directory: %v", server.name, err)
 	}
-	administratorTokenPath, administratorToken := provisionAdministratorToken(t, work)
+	googleIdentity, googleSession := provisionGoogleSession(t, work)
 	httpAddress, collectorAddress := unusedLoopbackAddressPair(t)
 	environment := clickHouseServerEnvironment(os.Environ(), clickHouse)
 	environment = environmentWithValue(environment, "PATH", filepath.Join(runtimeDirectory, "no-external-runtime"))
@@ -428,9 +428,9 @@ func nearbyQualificationStartServer(
 		binary,
 		"-http-listen-address=" + httpAddress,
 		"-server-lock-file=" + filepath.Join(runtimeDirectory, "server.lock"),
-		"-control-database-file=" + filepath.Join(work, "control.sqlite"),
+		"-postgres-dsn=" + googleIdentity.PostgresDSN,
 		"-master-key-file=" + filepath.Join(work, "server.key"),
-		"-administrator-token-file=" + administratorTokenPath,
+
 		"-collector-grpc-listen-address=" + collectorAddress,
 		"-collector-grpc-plaintext-enabled",
 		"-tenant-id=" + nearbyQualificationTenant,
@@ -439,12 +439,12 @@ func nearbyQualificationStartServer(
 	arguments = append(arguments, clickHouseServerArguments(clickHouse)...)
 	process := startProcess(t, runtimeDirectory, arguments, environment)
 	server.baseURL = "http://" + httpAddress
-	server.adminToken = administratorToken
+	server.googleSession = googleSession
 	server.client = &http.Client{Timeout: 15 * time.Second}
 	server.process = process
-	waitForHealth(t, ctx, server.client, server.baseURL, process, administratorToken)
+	waitForHealth(t, ctx, server.client, server.baseURL, process, googleSession)
 	createBackendIndex(
-		t, ctx, server.client, server.baseURL, administratorToken,
+		t, ctx, server.client, server.baseURL, googleSession,
 		nearbyQualificationIndex, "Nearby qualification fixture",
 	)
 }
@@ -506,8 +506,8 @@ func nearbyQualificationAdvanceVisibility(
 	defaultSource := "visibility-primer.log"
 	defaultSourcetype := "qualification"
 	var created opensplunk.CreateIngestionTokenResponse
-	postAdministratorProto(
-		t, ctx, server.client, server.baseURL+"/api/ingestion-tokens/create", server.adminToken,
+	postGoogleUserProto(
+		t, ctx, server.client, server.baseURL+"/api/ingestion-tokens/create", server.googleSession,
 		&opensplunk.CreateIngestionTokenRequest{Definition: &opensplunk.IngestionTokenDefinition{
 			Name:        "Nearby qualification visibility primer",
 			Purpose:     opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
@@ -888,7 +888,7 @@ func nearbyQualificationObserveError(
 	if retained.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED || !proto.Equal(job.GetFailure(), retained.GetFailure()) {
 		return "", fmt.Errorf("durable failure differs from live failure: live=%v durable=%s/%v", job.GetFailure(), retained.GetState(), retained.GetFailure())
 	}
-	results, err := performProtoRequestWithBearer(ctx, server.client, server.baseURL+"/api/search/jobs/results", "",
+	results, err := performProtoRequestWithSession(ctx, server.client, server.baseURL+"/api/search/jobs/results", "",
 		&opensplunk.GetSearchResultsRequest{SearchJobId: jobID, Page: &opensplunk.PageRequest{PageSize: new(uint32(1))}})
 	if err != nil {
 		return "", err

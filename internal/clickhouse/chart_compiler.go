@@ -2165,12 +2165,7 @@ func compileCountChart(
 	if rowKind == ChartRowKindMixed {
 		rowKeySQL = "tuple(" + rowKeySQL + ", " + rowSemanticBytes + ")"
 	}
-	rowSortSQL := row
-	if rowDynamic || rowField.numericSort {
-		// Automatic numeric-aware ordering: the exact order sort 0 +<field>
-		// produces on the published column.
-		rowSortSQL = dynamicSortValue(row, false)
-	}
+	rowSortSQL := chartRowSortSQL(row, rowKind)
 
 	var sql strings.Builder
 	sql.Grow(len(relation.sql) + 8_192)
@@ -3029,10 +3024,7 @@ func compileCountChart(
 		sql.WriteString(groupRow)
 		sql.WriteString("), ")
 
-		bareRowSortSQL := groupRow
-		if rowDynamic || rowField.numericSort {
-			bareRowSortSQL = dynamicSortValue(groupRow, false)
-		}
+		bareRowSortSQL := chartRowSortSQL(groupRow, rowKind)
 		sql.WriteString(rowDomain)
 		sql.WriteString(" AS (SELECT *, toUInt8(")
 		sql.WriteString(invalid)
@@ -3383,10 +3375,7 @@ func compileNumericChart(
 	if rowKind == ChartRowKindMixed {
 		rowKeySQL = "tuple(" + rowKeySQL + ", " + rowSemanticBytes + ")"
 	}
-	rowSortSQL := row
-	if rowDynamic || rowField.numericSort {
-		rowSortSQL = dynamicSortValue(row, false)
-	}
+	rowSortSQL := chartRowSortSQL(row, rowKind)
 
 	var scoreSQL string
 	var publishSQL string

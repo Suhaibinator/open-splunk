@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -13,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
@@ -240,7 +241,7 @@ type writerFaultHarness struct {
 
 func newWriterFaultHarness(t *testing.T) *writerFaultHarness {
 	t.Helper()
-	harness := &writerFaultHarness{path: filepath.Join(t.TempDir(), "control.sqlite")}
+	harness := &writerFaultHarness{path: pgtest.DSN(t)}
 	database, err := control.Open(t.Context(), harness.path)
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
@@ -254,6 +255,10 @@ func newWriterFaultHarness(t *testing.T) *writerFaultHarness {
 		}
 	})
 
+	if err := database.GORMDB().Exec(`CREATE TABLE os_index_organizations (index_id TEXT PRIMARY KEY REFERENCES indexes(index_id), organization_id BIGINT NOT NULL CHECK (organization_id > 0))`).Error; err != nil {
+		t.Fatalf("create native index ownership fixture: %v", err)
+	}
+
 	apps, err := control.NewAppCatalog(database, control.AppCatalogOptions{
 		CursorKey: writerFaultCursorKey,
 		Clock: func() time.Time {
@@ -264,7 +269,7 @@ func newWriterFaultHarness(t *testing.T) *writerFaultHarness {
 	if err != nil {
 		t.Fatalf("control.NewAppCatalog(): %v", err)
 	}
-	if _, err := apps.CreateApp(t.Context(), control.AppAccessScope{TenantID: writerFaultTenant}, control.AppDefinition{
+	if _, err := apps.CreateApp(t.Context(), control.AppAccessScope{TenantID: writerFaultTenant, OrganizationID: 1}, control.AppDefinition{
 		Slug:        "writer-fault-app",
 		DisplayName: "Writer fault app",
 	}); err != nil {
@@ -286,7 +291,7 @@ func newWriterFaultHarness(t *testing.T) *writerFaultHarness {
 	harness.scope = WriteScope{
 		TenantID:       writerFaultTenant,
 		OwnerID:        writerFaultOwner,
-		WritableAppIDs: []string{writerFaultApp},
+		WritableAppIDs: []string{writerFaultApp}, OrganizationID: 1,
 	}
 	writer, err := NewWriter(database, auditStore, WriterOptions{
 		Clock: func() time.Time {
@@ -434,7 +439,7 @@ func readWriterFaultSnapshot(t *testing.T, database *control.DB) writerFaultSnap
 	snapshot := make(writerFaultSnapshot, len(writerFaultSnapshotTables))
 	for _, table := range writerFaultSnapshotTables {
 		query := `SELECT * FROM "` + table + `" WHERE tenant_id = ?`
-		rows, err := database.SQLDB().QueryContext(t.Context(), query, writerFaultTenant)
+		rows, err := database.SQLDB().QueryContext(t.Context(), pgtest.Parameters(query), writerFaultTenant)
 		if err != nil {
 			t.Fatalf("snapshot %s: %v", table, err)
 		}
@@ -518,7 +523,7 @@ func assertWriterFaultCommittedCounts(t *testing.T, database *control.DB, versio
 	for table, expected := range want {
 		var count int64
 		query := `SELECT count(*) FROM "` + table + `" WHERE tenant_id = ?`
-		if err := database.SQLDB().QueryRowContext(t.Context(), query, writerFaultTenant).Scan(&count); err != nil {
+		if err := database.SQLDB().QueryRowContext(t.Context(), pgtest.Parameters(query), writerFaultTenant).Scan(&count); err != nil {
 			t.Fatalf("count %s: %v", table, err)
 		}
 		if count != expected {
@@ -529,22 +534,5 @@ func assertWriterFaultCommittedCounts(t *testing.T, database *control.DB, versio
 
 func assertWriterFaultIntegrity(t *testing.T, database *control.DB) {
 	t.Helper()
-	var integrity string
-	if err := database.SQLDB().QueryRowContext(t.Context(), `PRAGMA integrity_check`).Scan(&integrity); err != nil {
-		t.Fatalf("PRAGMA integrity_check: %v", err)
-	}
-	if integrity != "ok" {
-		t.Fatalf("PRAGMA integrity_check = %q, want ok", integrity)
-	}
-	rows, err := database.SQLDB().QueryContext(t.Context(), `PRAGMA foreign_key_check`)
-	if err != nil {
-		t.Fatalf("PRAGMA foreign_key_check: %v", err)
-	}
-	defer rows.Close()
-	if rows.Next() {
-		t.Fatal("PRAGMA foreign_key_check reported a violation")
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate PRAGMA foreign_key_check: %v", err)
-	}
+	pgtest.AssertIntegrity(t, database.SQLDB())
 }

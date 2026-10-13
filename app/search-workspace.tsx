@@ -1,5 +1,6 @@
 "use client";
 
+import { useIdentity } from "./_components/identity-provider";
 import {
   type ChangeEvent,
   type Dispatch,
@@ -69,9 +70,8 @@ import {
   appCatalogKey,
   appCatalogStore,
   SearchWebSocketClient,
-  clearAdministratorBearerToken,
   createOpenSplunkApiClient,
-  currentAdministratorSessionRevision,
+  currentSessionRevision,
   getSystemBootstrap,
   isHttpError,
   isHttpStatus,
@@ -840,6 +840,7 @@ export function SearchWorkspace({
     currentThemePreference,
     () => "system" as const,
   );
+  const identity = useIdentity();
   const [query, setQuery] = useState(initialWorkspaceQuery);
   const [submittedQuery, setSubmittedQuery] = useState(initialWorkspaceQuery);
   const [defaultSearchQuery, setDefaultSearchQuery] = useState(initialWorkspaceQuery);
@@ -2092,7 +2093,7 @@ export function SearchWorkspace({
   }, [appSwitchingId, backendEnabled, objectMutation, persistedLaunchPending, sharedAppCatalog.bootstrap, sharedAppCatalog.stale, sharedAppCatalog.state]);
 
   async function loadSharedWorkspaceBootstrap(requestedAppId: string | undefined, signal: AbortSignal) {
-    const key = appCatalogKey(apiBaseUrl, requestedAppId, currentAdministratorSessionRevision());
+    const key = appCatalogKey(apiBaseUrl, requestedAppId, currentSessionRevision());
     async function awaitCurrentCatalog(): Promise<SystemBootstrapModel> {
       if (signal.aborted) throw new DOMException("The bootstrap request was canceled.", "AbortError");
       await appCatalogStore.load(key);
@@ -2435,7 +2436,12 @@ export function SearchWorkspace({
   }, [apiClient, backendEnabled]);
 
   function replaceBackendNotices(job: SearchJob) {
-    setBackendNotices(uniqueMessages(job.warnings.map((warning) => warning.message)));
+    const notices = job.warnings.map((warning) => warning.message);
+    if (job.captureRows > 0n) notices.push(`Result capture: ${NUMBER_FORMAT.format(job.captureRows)} rows (${NUMBER_FORMAT.format(job.captureBytes)} bytes)${job.captureComplete ? " complete" : " processed"}.`);
+    if (job.previewTruncated) notices.push(job.captureComplete
+      ? "Showing a bounded preview. Download an export to retrieve the full results."
+      : "Showing a bounded preview. Full results are not ready to export yet.");
+    setBackendNotices(uniqueMessages(notices));
     const source = job.definition?.spl;
     if (source === undefined) return;
     const diagnostics = [...job.diagnostics, ...(job.failure?.diagnostics ?? [])];
@@ -3378,6 +3384,10 @@ export function SearchWorkspace({
       : BACKEND_PHASE_PROGRESS[presentationPhase];
     setProgress(Math.max(0, Math.min(100, effectivePercent)));
     setElapsed(formatDuration(jobProgress.elapsed));
+    if (jobProgress.captureRows > 0n) {
+      const captureNotice = `Result capture: ${NUMBER_FORMAT.format(jobProgress.captureRows)} rows (${NUMBER_FORMAT.format(jobProgress.captureBytes)} bytes)${jobProgress.captureComplete ? " complete" : " processed"}.`;
+      setBackendNotices((current) => uniqueMessages([...current.filter((notice) => !notice.startsWith("Result capture: ")), captureNotice]));
+    }
     const reportedScannedRows = jobProgress.scannedRows;
     const scannedRowsOverflow = reportedScannedRows > MAXIMUM_SAFE_INTEGER_BIGINT;
     setScannedRows(scannedRowsOverflow
@@ -4872,7 +4882,7 @@ export function SearchWorkspace({
       };
       const clientRequestId = searchCreateAction.requestId({
         ...createIntent,
-        sessionRevision: currentAdministratorSessionRevision(),
+        sessionRevision: currentSessionRevision(),
       });
       if (definition !== undefined && pendingSearchCreateIdRef.current !== clientRequestId) {
         const validation = await apiClient.search.validate(
@@ -5007,7 +5017,7 @@ export function SearchWorkspace({
     const currentCatalog = appCatalogStore.getSnapshot(appCatalogKey(
       apiBaseUrl,
       preferredAppId,
-      currentAdministratorSessionRevision(),
+      currentSessionRevision(),
     ));
     if (backendBootstrapRef.current !== null && (
       currentCatalog.state !== "available"
@@ -5965,7 +5975,7 @@ export function SearchWorkspace({
           description: trimmedDescription,
           search,
           sharingScope: saveSharingScope,
-          clientRequestId: savedCreateAction.requestId({ definition: savedSearchCreateIntent(createSavedIntent), sessionRevision: currentAdministratorSessionRevision() }),
+          clientRequestId: savedCreateAction.requestId({ definition: savedSearchCreateIntent(createSavedIntent), sessionRevision: currentSessionRevision() }),
         })
         : await updateServerSavedSearch(apiClient, bootstrap.response, {
           id: existing.id,
@@ -6425,7 +6435,7 @@ export function SearchWorkspace({
             id,
             candidate,
             savedAppId,
-            { clientRequestId: savedDuplicateAction.requestId({ id: id.trim(), candidate: candidate.trim(), appId: savedAppId?.trim(), sessionRevision: currentAdministratorSessionRevision() }) },
+            { clientRequestId: savedDuplicateAction.requestId({ id: id.trim(), candidate: candidate.trim(), appId: savedAppId?.trim(), sessionRevision: currentSessionRevision() }) },
           );
         } catch (error) {
           if (!isHttpStatus(error, 409)) throw error;
@@ -6843,7 +6853,7 @@ export function SearchWorkspace({
         csvHeaderMode: "field-names",
         jsonIntegerEncoding: "string",
       } as const;
-      const clientRequestId = exportCreateAction.requestId({ ...exportIntent, sessionRevision: currentAdministratorSessionRevision() });
+      const clientRequestId = exportCreateAction.requestId({ ...exportIntent, sessionRevision: currentSessionRevision() });
       const created = await createServerExport(apiClient, bootstrap.response, {
         ...exportIntent,
         clientRequestId,
@@ -6946,19 +6956,13 @@ export function SearchWorkspace({
           throw new Error("The secure export download endpoint is unavailable.");
         }
         if (controller.signal.aborted || exportEpochRef.current !== downloadEpoch) return;
-        const url = URL.createObjectURL(downloaded.value.blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = downloaded.value.fileName;
-        anchor.click();
-        window.setTimeout(() => URL.revokeObjectURL(url), 0);
         setExportDownloadState({ status: "idle" });
         setModal(null);
         setExportStage("configure");
         setExportRequestId(null);
         serverExportJobRef.current = null;
         setServerExportJob(null);
-        showToast(`Downloaded ${downloaded.value.fileName}.`, "success");
+        showToast(`Download started: ${downloaded.value.fileName}.`, "success");
       } catch (error) {
         if (controller.signal.aborted || exportEpochRef.current !== downloadEpoch) return;
         setExportDownloadState({
@@ -7537,13 +7541,13 @@ export function SearchWorkspace({
         <button type="submit" aria-label="Run Find"><AppIcon name="search" size="sm" /></button>
       </form>
       <div className="suite-menu-anchor">
-        <button className="suite-user-button" type="button" aria-label="User menu" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={() => setMenu(menu === "user" ? null : "user")} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}><span>A</span><b>Administrator</b><AppIcon name="chevron-down" size="xs" /></button>
+        <button className="suite-user-button" type="button" aria-label="User menu" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={() => setMenu(menu === "user" ? null : "user")} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}><span>{identity.user?.name.slice(0, 1) ?? "P"}</span><b>{identity.user?.name ?? "Preview account"}</b><AppIcon name="chevron-down" size="xs" /></button>
         {menu === "user" ? (
           <div className="floating-menu utility-menu user-menu" role="menu">
-            <div className="user-summary"><span>A</span><strong>Administrator</strong><small>admin@localhost</small></div>
+            <div className="user-summary"><span>{identity.user?.name.slice(0, 1) ?? "P"}</span><strong>{identity.user?.name ?? "Preview account"}</strong><small>{identity.user?.email ?? "Frontend preview"}</small></div>
             <Link role="menuitem" href={productHref("/admin/")}>Account settings</Link>
-            <button role="menuitem" type="button" onClick={() => showToast("Open Splunk is running in trusted-network mode.")}>Session details</button>
-            <Link role="menuitem" tabIndex={0} href="/signin/" onClick={clearAdministratorBearerToken}>Sign out</Link>
+            <button role="menuitem" type="button" onClick={() => showToast("Access is determined by your account and organization membership.")}>Session details</button>
+            <Link role="menuitem" tabIndex={0} href="/organizations/">Organization access</Link>
             <ThemeMenu preference={themePreference} onSelect={setThemePreference} />
           </div>
         ) : null}
@@ -7811,7 +7815,6 @@ export function SearchWorkspace({
       shellId="search"
       shellTestId="search-workspace"
       utilities={productUtilities}
-      onSignOut={clearAdministratorBearerToken}
     >
       <header className="search-title-row">
         <div className="search-title">

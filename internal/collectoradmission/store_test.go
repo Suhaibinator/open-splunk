@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -15,6 +14,9 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const testCollectorID = "123e4567-e89b-12d3-a456-426614174000"
@@ -32,8 +34,7 @@ func openAdmissionFixture(t *testing.T, indexNames ...string) admissionFixture {
 	t.Helper()
 	ctx := context.Background()
 	database, err := control.Open(
-		ctx,
-		filepath.Join(t.TempDir(), "control.sqlite"),
+		ctx, pgtest.DSN(t),
 	)
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)
@@ -83,7 +84,7 @@ func issueToken(
 	t.Helper()
 	issued, err := fixture.tokens.CreateCollectorToken(
 		context.Background(),
-		auth.CreateCollectorTokenRequest{
+		auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 42,
 			Name:              name,
 			BoundCollectorID:  collectorID,
 			AllowedIndexNames: indexNames,
@@ -428,7 +429,7 @@ func TestAdmitInactiveCredentialsLeaveFleetAndTokenUseUnchanged(t *testing.T) {
 			expiresAt := time.Now().UTC().Add(time.Hour)
 			issued, err := fixture.tokens.CreateCollectorToken(
 				context.Background(),
-				auth.CreateCollectorTokenRequest{
+				auth.CreateCollectorTokenRequest{OrganizationID: 1, IssuerUserID: 42,
 					Name:              "expired collector",
 					BoundCollectorID:  testCollectorID,
 					AllowedIndexNames: []string{"main"},
@@ -929,7 +930,7 @@ func TestAdmitRejectsCorruptTotalScopeCardinalityWithoutUnboundedProjection(
 				}
 				indexIDs = append(indexIDs, created.ID)
 			}
-			tx, err := fixture.database.SQLDB().BeginTx(ctx, nil)
+			tx, err := pgmeta.BeginSQL(ctx, fixture.database.SQLDB(), nil)
 			if err != nil {
 				t.Fatalf("BeginTx(): %v", err)
 			}
@@ -939,7 +940,7 @@ func TestAdmitRejectsCorruptTotalScopeCardinalityWithoutUnboundedProjection(
 					`INSERT INTO ingestion_token_indexes (
 						ingestion_token_id,
 						index_id
-					) VALUES (?, ?)`,
+					) VALUES ($1, $2)`,
 					issued.Token.ID,
 					indexID,
 				); err != nil {
@@ -994,35 +995,49 @@ func TestAdmitRejectsOversizedPersistedTokenIDBeforeProjection(t *testing.T) {
 		t.Fatalf("SQLDB().Conn(): %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(
-		ctx,
-		`PRAGMA foreign_keys = OFF`,
+	if _, err := pgtest.DropForeignKeys(
+		ctx, connection,
 	); err != nil {
 		t.Fatalf("disable foreign keys: %v", err)
 	}
 	if _, err := connection.ExecContext(
 		ctx,
 		`UPDATE ingestion_token_indexes
-		 SET ingestion_token_id = ?
-		 WHERE ingestion_token_id = ?`,
+		 SET ingestion_token_id = $1
+		 WHERE ingestion_token_id = $2`,
 		oversizedTokenID,
 		issued.Token.ID,
 	); err != nil {
-		t.Fatalf("corrupt token membership ID: %v", err)
+		var native *pgconn.PgError
+		if !errors.As(err, &native) || native.Code != "54000" {
+			t.Fatalf("oversized native index write: %v", err)
+		}
+	} else {
+		t.Fatal("PostgreSQL accepted a megabyte indexed token identity")
+	}
+	var surviving int
+	if err := connection.QueryRowContext(ctx, `SELECT COUNT(*) FROM ingestion_token_indexes WHERE ingestion_token_id = $1`, issued.Token.ID).Scan(&surviving); err != nil || surviving != 1 {
+		t.Fatalf("oversized index write changed original membership: count=%d, error=%v", surviving, err)
+	}
+	// PostgreSQL rejects the megabyte identity at the index boundary. A corrupt
+	// identity above the application's bound but below the native index ceiling
+	// separately exercises the bounded projection and admission rejection.
+	oversizedTokenID = strings.Repeat("x", 1024)
+	if _, err := connection.ExecContext(ctx, `UPDATE ingestion_token_indexes SET ingestion_token_id = $1 WHERE ingestion_token_id = $2`, oversizedTokenID, issued.Token.ID); err != nil {
+		t.Fatalf("install bounded corrupt token membership ID: %v", err)
 	}
 	if _, err := connection.ExecContext(
 		ctx,
 		`UPDATE ingestion_tokens
-		 SET ingestion_token_id = ?
-		 WHERE ingestion_token_id = ?`,
+		 SET ingestion_token_id = $1
+		 WHERE ingestion_token_id = $2`,
 		oversizedTokenID,
 		issued.Token.ID,
 	); err != nil {
 		t.Fatalf("corrupt token ID: %v", err)
 	}
-	if _, err := connection.ExecContext(
-		ctx,
-		`PRAGMA foreign_keys = ON`,
+	if _, err := pgtest.RestoreForeignKeys(
+		ctx, connection,
 	); err != nil {
 		t.Fatalf("restore foreign keys: %v", err)
 	}
@@ -1042,7 +1057,7 @@ func TestAdmitRejectsOversizedPersistedTokenIDBeforeProjection(t *testing.T) {
 		ctx,
 		`SELECT last_used_at_unix_micro
 		 FROM ingestion_tokens
-		 WHERE ingestion_token_id = ?`,
+		 WHERE ingestion_token_id = $1`,
 		oversizedTokenID,
 	).Scan(&lastUsedAt); err != nil {
 		t.Fatalf("read corrupt token use: %v", err)
@@ -1108,7 +1123,7 @@ func TestCanceledAdmissionWaitingForWriterLeavesNoPartialState(t *testing.T) {
 	ctx := context.Background()
 	fixture := openAdmissionFixture(t, "main")
 	issued := issueToken(t, fixture, "collector", testCollectorID, "main")
-	blocker := fixture.database.GORMDB().WithContext(ctx).Begin()
+	blocker := pgmeta.Begin(fixture.database.GORMDB().WithContext(ctx))
 	if blocker.Error != nil {
 		t.Fatalf("begin blocking transaction: %v", blocker.Error)
 	}

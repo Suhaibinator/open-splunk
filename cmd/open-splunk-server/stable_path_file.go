@@ -180,3 +180,11 @@ func readStablePathFile(config stablePathFileReadConfig) ([]byte, error) {
 	returnContents = true
 	return contents, nil
 }
+
+// sameStableFileState verifies both descriptor identity and bounded content state.
+func sameStableFileState(left, right os.FileInfo) bool {
+	if left == nil || right == nil || !os.SameFile(left, right) {
+		return false
+	}
+	return left.Mode() == right.Mode() && left.Size() == right.Size() && left.ModTime().Equal(right.ModTime())
+}

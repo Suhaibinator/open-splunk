@@ -46,13 +46,15 @@ type ResultLease interface {
 }
 
 type resultLease struct {
-	manager         *Manager
-	entry           *jobEntry
-	schema          *Schema
-	rowCount        uint64
-	truncated       bool
-	generation      uint64
-	resultAuthority *executionResultAuthority
+	remote           ResultLease
+	releaseRemoteRow func()
+	manager          *Manager
+	entry            *jobEntry
+	schema           *Schema
+	rowCount         uint64
+	truncated        bool
+	generation       uint64
+	resultAuthority  *executionResultAuthority
 
 	mu          sync.Mutex
 	closeOnce   sync.Once
@@ -142,7 +144,7 @@ func (manager *Manager) acquireResultLeaseFor(
 	includeExecution bool,
 ) (*resultLease, ExecutionSnapshot, error) {
 	// Admission follows the manager -> entry -> budget lock order.
-	entry, err := manager.lockEntryForAccess(access, id, true, func() error { return ctx.Err() })
+	entry, err := manager.lockEntryForAccess(access, id, true, func() error { return ctx.Err() }, ctx)
 	if err != nil {
 		return nil, ExecutionSnapshot{}, err
 	}
@@ -159,7 +161,7 @@ func (manager *Manager) acquireResultLeaseFor(
 		entry.mu.Unlock()
 		return nil, ExecutionSnapshot{}, ErrResultsNotReady
 	}
-	if entry.resultSchema == nil || entry.resultGeneration == 0 || uint64(len(entry.rows)) != entry.job.RowCount {
+	if entry.resultSchema == nil || entry.resultGeneration == 0 || (!entry.job.CaptureComplete && uint64(len(entry.rows)) != entry.job.RowCount) {
 		entry.mu.Unlock()
 		return nil, ExecutionSnapshot{}, ErrResultsUnavailable
 	}
@@ -183,7 +185,7 @@ func (manager *Manager) acquireResultLeaseFor(
 		manager:         manager,
 		entry:           entry,
 		schema:          entry.resultSchema,
-		rowCount:        uint64(len(entry.rows)),
+		rowCount:        entry.job.RowCount,
 		truncated:       entry.job.ResultsTruncated,
 		generation:      entry.resultGeneration,
 		resultAuthority: resultAuthority,
@@ -197,6 +199,25 @@ func (manager *Manager) acquireResultLeaseFor(
 		return nil, ExecutionSnapshot{}, err
 	}
 	entry.mu.Unlock()
+	if manager.captureFactory != nil && lease.entry.job.CaptureComplete {
+		var remote ResultLease
+		var err error
+		if bounded, ok := manager.captureFactory.(boundedCaptureFactory); ok {
+			remote, err = bounded.AcquireCaptureBounded(ctx, access, id, manager.reserveCaptureMemory)
+		} else {
+			remote, err = manager.captureFactory.AcquireCapture(ctx, access, id)
+		}
+		if err != nil {
+			_ = lease.Close()
+			return nil, ExecutionSnapshot{}, err
+		}
+		if remote.Generation() != lease.generation || remote.RowCount() != lease.rowCount {
+			_ = remote.Close()
+			_ = lease.Close()
+			return nil, ExecutionSnapshot{}, ErrResultsUnavailable
+		}
+		lease.remote = remote
+	}
 
 	// Background contexts have no cancellation signal and therefore need no
 	// watcher. For cancelable contexts, context.AfterFunc has no dedicated
@@ -255,6 +276,23 @@ func (lease *resultLease) Next(ctx context.Context) (row ResultRow, ok bool, err
 	if lease.next >= lease.rowCount {
 		return ResultRow{}, false, nil
 	}
+	if lease.remote != nil {
+		if lease.releaseRemoteRow != nil {
+			lease.releaseRemoteRow()
+			lease.releaseRemoteRow = nil
+		}
+		if bounded, supported := lease.remote.(interface {
+			NextBounded(context.Context) (ResultRow, bool, uint64, func(), error)
+		}); supported {
+			row, ok, _, lease.releaseRemoteRow, err = bounded.NextBounded(ctx)
+		} else {
+			row, ok, err = lease.remote.Next(ctx)
+		}
+		if ok {
+			lease.next++
+		}
+		return row, ok, err
+	}
 
 	// The entry lock makes the storage lifetime relationship explicit. A pin
 	// prevents reclamation, and completed result rows never mutate.
@@ -288,6 +326,10 @@ func (lease *resultLease) Close() error {
 	lease.closeOnce.Do(func() {
 		lease.mu.Lock()
 		lease.closed = true
+		if lease.releaseRemoteRow != nil {
+			lease.releaseRemoteRow()
+			lease.releaseRemoteRow = nil
+		}
 		stopContext := lease.stopContext
 		lease.stopContext = nil
 		lease.mu.Unlock()
@@ -299,7 +341,39 @@ func (lease *resultLease) Close() error {
 			stopContext()
 		}
 		lease.manager.releaseResultPin(lease.entry)
+		if lease.remote != nil {
+			_ = lease.remote.Close()
+		}
 	})
+	return nil
+}
+
+// Seek preserves captured row ordinals and immutable generation across pages.
+func (lease *resultLease) Seek(ctx context.Context, offset uint64) error {
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if lease.closed {
+		return ErrResultLeaseClosed
+	}
+	if offset > lease.rowCount {
+		return ErrInvalidCursor
+	}
+	if lease.releaseRemoteRow != nil {
+		lease.releaseRemoteRow()
+		lease.releaseRemoteRow = nil
+	}
+	if lease.remote != nil {
+		seekable, ok := lease.remote.(interface {
+			Seek(context.Context, uint64) error
+		})
+		if !ok {
+			return ErrResultsUnavailable
+		}
+		if err := seekable.Seek(ctx, offset); err != nil {
+			return err
+		}
+	}
+	lease.next = offset
 	return nil
 }
 

@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package go_common.v1;
+option go_package = "./proto_models";
+
+import "chat.proto";
+import "inference.proto";
+
+message InferenceSessionPinVersion {
+  uint64 agent_session_id = 1;
+  uint64 expected_pin_version = 2;
+}
+
+message RetargetInferenceSessionRequest {
+  uint64 agent_session_id = 1;
+  uint64 expected_pin_version = 2;
+  uint64 inference_model_id = 3;
+  optional InferenceAPI api = 4;
+  bool site_override = 5;
+}
+
+message RetargetInferenceSessionResponse {
+  AgentSessionSummary session = 1;
+}
+
+message RetargetInferenceSessionsRequest {
+  uint64 organization_id = 1;
+  repeated InferenceSessionPinVersion sessions = 2;
+  uint64 inference_model_id = 3;
+  optional InferenceAPI api = 4;
+  bool site_override = 5;
+}
+
+message RetargetInferenceSessionsResponse {
+  repeated AgentSessionSummary sessions = 1;
+}

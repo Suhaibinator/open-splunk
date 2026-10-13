@@ -20,6 +20,15 @@ import (
 
 func (manager *Manager) durableEntryLocked(entry *jobEntry) (DurableJob, error) {
 	result := DurableJob{Access: entry.access, Job: cloneJob(entry.job), MetadataBytes: entry.accountedMetadata}
+	if entry.remoteIdentity != nil {
+		encoded, err := remoteProjection(entry.remoteIdentity)
+		if err != nil {
+			return DurableJob{}, err
+		}
+		result.ArtifactName = encoded
+		result.ArtifactSHA256 = append([]byte(nil), entry.remoteDigest...)
+		return result, nil
+	}
 	if entry.job.State != StateCompleted || entry.artifactPath == "" {
 		return result, nil
 	}
@@ -44,16 +53,18 @@ func (manager *Manager) durableEntryLocked(entry *jobEntry) (DurableJob, error) 
 
 // Call with entry.mu held. A persistence failure makes the artifact unavailable
 // rather than exposing an unrecorded completed outcome after restart.
-func (manager *Manager) persistEntryLocked(entry *jobEntry) {
+func (manager *Manager) persistEntryLocked(entry *jobEntry) error {
 	if manager.journal == nil {
-		return
+		entry.journalPending = false
+		return nil
 	}
 	projection, err := manager.durableEntryLocked(entry)
 	if err == nil {
 		err = manager.journal.Update(context.Background(), projection)
 	}
 	if err == nil {
-		return
+		entry.journalPending = false
+		return nil
 	}
 	if entry.cancel != nil {
 		entry.cancel()
@@ -65,9 +76,15 @@ func (manager *Manager) persistEntryLocked(entry *jobEntry) {
 	entry.job.FinishedAt = manager.nowUTC()
 	entry.job.ExpiresAt = entry.job.FinishedAt.Add(manager.artifactTTL)
 	entry.job.Progress.UpdatedAt = entry.job.FinishedAt
-	projection = DurableJob{Access: entry.access, Job: cloneJob(entry.job), MetadataBytes: entry.accountedMetadata}
-	retryErr := manager.journal.Update(context.Background(), projection)
+	projection, projectionErr := manager.durableEntryLocked(entry)
+	retryErr := projectionErr
+	if retryErr == nil {
+		retryErr = manager.journal.Update(context.Background(), projection)
+	}
+	entry.journalPending = retryErr != nil
+	manager.noteCleanupStateChange()
 	manager.reportCleanupError(errors.Join(err, retryErr))
+	return errors.Join(err, retryErr)
 }
 
 func (manager *Manager) restoreJournal(ctx context.Context) error {
@@ -87,6 +104,7 @@ func (manager *Manager) restoreJournal(ctx context.Context) error {
 			return err
 		}
 		job := cloneJob(retained.Job)
+		job.OrganizationID = retained.Access.OrganizationID
 		now := manager.observeTime(maxTime(job.CreatedAt, job.Progress.UpdatedAt))
 		entryContext, cancel := context.WithCancel(manager.ctx)
 		entry := &jobEntry{access: retained.Access, job: job, ctx: entryContext, cancel: cancel, workerDone: true, leaseReleased: true}
@@ -95,6 +113,20 @@ func (manager *Manager) restoreJournal(ctx context.Context) error {
 			return err
 		}
 		entry.accountedMetadata = max(metadata+patternMetadataBytes(job.Pattern), retained.MetadataBytes)
+		if manager.blobs != nil && retained.ArtifactName != "" {
+			identity, ok := parseRemoteProjection(retained.ArtifactName)
+			if !ok {
+				return fmt.Errorf("restore export cleanup identity: %w", ErrArtifactUnavailable)
+			}
+			entry.remoteIdentity = &identity
+			entry.remoteDigest = append([]byte(nil), retained.ArtifactSHA256...)
+			entry.artifactPath = identity.Key
+		}
+		if manager.retentionQuota != nil && entry.remoteIdentity == nil && job.State != StateCompleted {
+			if err := manager.retentionQuota.ReleaseExport(ctx, job.ID); err != nil {
+				return err
+			}
+		}
 		unavailable := job.State == StateQueued || job.State == StateRunning
 		if job.State == StateCompleted {
 			unavailable = !manager.restoreArtifact(entry, retained)
@@ -107,16 +139,22 @@ func (manager *Manager) restoreJournal(ctx context.Context) error {
 			entry.job.FinishedAt = maxTime(now, job.CreatedAt)
 			entry.job.ExpiresAt = entry.job.FinishedAt.Add(manager.artifactTTL)
 			entry.job.Progress.UpdatedAt = entry.job.FinishedAt
-			entry.artifactPath = ""
+			if manager.blobs == nil {
+				entry.artifactPath = ""
+			}
 			entry.accountedBytes = 0
-			manager.persistEntryLocked(entry)
+			if err := manager.persistEntryLocked(entry); err != nil {
+				return fmt.Errorf("persist interrupted export state: %w", err)
+			}
 		}
 		if !entry.job.ExpiresAt.IsZero() && !entry.job.ExpiresAt.After(now) {
 			entry.job.State = StateExpired
 			entry.job.Artifact = nil
 			entry.job.Version++
 			entry.expiredAt = now
-			manager.persistEntryLocked(entry)
+			if err := manager.persistEntryLocked(entry); err != nil {
+				return fmt.Errorf("persist expired export state: %w", err)
+			}
 		}
 		if entry.accountedMetadata > manager.maxTotalMetadata-manager.totalMetadata || entry.accountedBytes > manager.maxTotalBytes-manager.totalBytes {
 			return ErrCapacity
@@ -132,6 +170,29 @@ func (manager *Manager) restoreJournal(ctx context.Context) error {
 }
 
 func (manager *Manager) restoreArtifact(entry *jobEntry, retained DurableJob) bool {
+	if manager.blobs != nil {
+		identity, ok := parseRemoteProjection(retained.ArtifactName)
+		if !ok || identity.Bytes < 0 || entry.job.Artifact == nil || uint64(identity.Bytes) != entry.job.Artifact.SizeBytes || len(retained.ArtifactSHA256) != sha256.Size {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(manager.ctx, time.Minute)
+		defer cancel()
+		reader, err := manager.blobs.Open(ctx, identity)
+		if err != nil {
+			return false
+		}
+		hash := sha256.New()
+		count, readErr := io.Copy(hash, io.LimitReader(reader, identity.Bytes+1))
+		closeErr := reader.Close()
+		if readErr != nil || closeErr != nil || count != identity.Bytes || !bytes.Equal(hash.Sum(nil), retained.ArtifactSHA256) {
+			return false
+		}
+		entry.remoteIdentity = &identity
+		entry.remoteDigest = append([]byte(nil), retained.ArtifactSHA256...)
+		entry.artifactPath = identity.Key
+		entry.accountedBytes = uint64(identity.Bytes)
+		return true
+	}
 	job := entry.job
 	expectedName, _, _ := CanonicalArtifactMetadata(job.ID, job.Format)
 	if retained.ArtifactName != expectedName || len(retained.ArtifactSHA256) != sha256.Size || job.Artifact == nil {

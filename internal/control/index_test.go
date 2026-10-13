@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"math"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/indexname"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 func TestIndexLifecycleNormalizesNameAndUsesOptimisticVersions(t *testing.T) {
@@ -50,7 +50,7 @@ func TestIndexLifecycleNormalizesNameAndUsesOptimisticVersions(t *testing.T) {
 	if !created.CreatedAt.Equal(created.UpdatedAt) || created.CreatedAt.IsZero() {
 		t.Fatalf("created timestamps = %v / %v", created.CreatedAt, created.UpdatedAt)
 	}
-	if _, err := db.SQLDB().ExecContext(ctx, `UPDATE indexes SET name = 'renamed-directly' WHERE index_id = ?`, created.ID); err == nil {
+	if _, err := db.SQLDB().ExecContext(ctx, `UPDATE indexes SET name = 'renamed-directly' WHERE index_id = $1`, created.ID); err == nil {
 		t.Fatal("direct immutable index-name update unexpectedly succeeded")
 	}
 
@@ -201,6 +201,7 @@ func TestDeleteIndexKeepDataCreatesTerminalTombstone(t *testing.T) {
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		INSERT INTO ingestion_tokens (
+ organization_id,issuer_user_id,
 			ingestion_token_id,
 			version,
 			name,
@@ -211,11 +212,11 @@ func TestDeleteIndexKeepDataCreatesTerminalTombstone(t *testing.T) {
 			updated_at_unix_micro,
 			bound_collector_id
 		) VALUES (
-			'token-retained',
+			1,42,'token-retained',
 			1,
 			'retained',
 			'prefix123',
-			zeroblob(32),
+			decode(repeat('00',32),'hex'),
 			'active',
 			1,
 			1,
@@ -226,7 +227,7 @@ func TestDeleteIndexKeepDataCreatesTerminalTombstone(t *testing.T) {
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
-		VALUES ('token-retained', ?)`,
+		VALUES ('token-retained', $1)`,
 		created.ID,
 	); err != nil {
 		t.Fatalf("seed ingestion token index: %v", err)
@@ -268,7 +269,7 @@ func TestDeleteIndexKeepDataCreatesTerminalTombstone(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `
 		SELECT state, name
 		FROM indexes
-		WHERE index_id = ?`,
+		WHERE index_id = $1`,
 		archived.ID,
 	).Scan(&storedState, &storedName); err != nil {
 		t.Fatalf("read retained index row: %v", err)
@@ -292,7 +293,7 @@ func TestDeleteIndexKeepDataCreatesTerminalTombstone(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM ingestion_token_indexes
-		WHERE ingestion_token_id = 'token-retained' AND index_id = ?`,
+		WHERE ingestion_token_id = 'token-retained' AND index_id = $1`,
 		archived.ID,
 	).Scan(&tokenReferenceCount); err != nil {
 		t.Fatalf("count retained token references: %v", err)
@@ -497,7 +498,7 @@ func TestIndexDeletionTombstoneSQLGuards(t *testing.T) {
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		INSERT INTO index_deletion_tombstones (
 			index_id, name, deleted_version, deleted_at_unix_micro
-		) VALUES (?, ?, ?, ?)`,
+		) VALUES ($1, $2, $3, $4)`,
 		active.ID,
 		active.Definition.Name,
 		active.Version,
@@ -508,7 +509,7 @@ func TestIndexDeletionTombstoneSQLGuards(t *testing.T) {
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		INSERT INTO index_deletion_tombstones (
 			index_id, name, deleted_version, deleted_at_unix_micro
-		) VALUES ('missing', 'missing', 1, ?)`,
+		) VALUES ('missing', 'missing', 1, $1)`,
 		time.Now().UnixMicro(),
 	); err == nil {
 		t.Fatal("tombstone for missing index unexpectedly succeeded")
@@ -521,7 +522,7 @@ func TestIndexDeletionTombstoneSQLGuards(t *testing.T) {
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		INSERT INTO index_deletion_tombstones (
 			index_id, name, deleted_version, deleted_at_unix_micro
-		) VALUES (?, 'wrong-name', ?, ?)`,
+		) VALUES ($1, 'wrong-name', $2, $3)`,
 		archived.ID,
 		archived.Version,
 		time.Now().UnixMicro(),
@@ -735,13 +736,13 @@ func TestIndexReadsRejectCorruptRecordsWithoutLeakingFields(t *testing.T) {
 		t.Fatalf("acquire corruption connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(ctx, connection, false); err != nil {
 		t.Fatalf("disable test-only check constraints: %v", err)
 	}
 	if _, err := connection.ExecContext(ctx, `
 		UPDATE indexes
 		SET ingestion_enabled = 2
-		WHERE index_id = ?`, created.ID); err != nil {
+		WHERE index_id = $1`, created.ID); err != nil {
 		t.Fatalf("corrupt index record: %v", err)
 	}
 
@@ -769,13 +770,13 @@ func TestIndexReadsRejectCorruptIngestionRateLimits(t *testing.T) {
 		t.Fatalf("acquire corruption connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(ctx, connection, false); err != nil {
 		t.Fatalf("disable test-only check constraints: %v", err)
 	}
 	if _, err := connection.ExecContext(ctx, `
 		UPDATE indexes
-		SET max_ingest_events_per_second = ?
-		WHERE index_id = ?`, ingestquota.HardMaxEventsPerSecond+1, created.ID); err != nil {
+		SET max_ingest_events_per_second = $1
+		WHERE index_id = $2`, ingestquota.HardMaxEventsPerSecond+1, created.ID); err != nil {
 		t.Fatalf("corrupt index ingestion rate: %v", err)
 	}
 
@@ -797,8 +798,8 @@ func TestIndexReadsRejectRetentionPastStorageHorizon(t *testing.T) {
 
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		UPDATE indexes
-		SET retention_nanoseconds = ?
-		WHERE index_id = ?`, int64(8_000_000_000*time.Second), created.ID); err != nil {
+		SET retention_nanoseconds = $1
+		WHERE index_id = $2`, int64(8_000_000_000*time.Second), created.ID); err != nil {
 		t.Fatalf("corrupt retention: %v", err)
 	}
 
@@ -811,7 +812,7 @@ func TestIndexReadsRejectRetentionPastStorageHorizon(t *testing.T) {
 func openTestDB(t *testing.T) *DB {
 	t.Helper()
 
-	db, err := Open(context.Background(), filepath.Join(t.TempDir(), "control.sqlite"))
+	db, err := Open(context.Background(), pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("Open(): %v", err)
 	}

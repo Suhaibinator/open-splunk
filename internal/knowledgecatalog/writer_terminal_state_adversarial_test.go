@@ -33,8 +33,8 @@ func TestWriterQuarantinedTerminalStateWinsBeforeDefinitionHydration(t *testing.
 	// hydration is observable while the tenant remains otherwise healthy.
 	dropTrigger(t, database, "knowledge_definition_blob_update_is_forbidden")
 	mustExec(t, database, `UPDATE knowledge_definition_blobs
-		SET definition_proto = zeroblob(definition_bytes)
-		WHERE tenant_id = ?`, testTenant)
+		SET definition_proto = decode(repeat('00', (definition_bytes)::int), 'hex')
+		WHERE tenant_id = $1`, testTenant)
 
 	auditStore, err := audit.NewStore(database, audit.StoreOptions{})
 	if err != nil {
@@ -54,7 +54,7 @@ func TestWriterQuarantinedTerminalStateWinsBeforeDefinitionHydration(t *testing.
 	if err != nil {
 		t.Fatalf("audit.WithActor: %v", err)
 	}
-	scope := WriteScope{TenantID: testTenant, OwnerID: testOwner, WritableAppIDs: []string{testApp}}
+	scope := WriteScope{TenantID: testTenant, OwnerID: testOwner, WritableAppIDs: []string{testApp}, OrganizationID: 1}
 	before := readTerminalWriterSnapshot(t, database)
 	updatedDescription := "must not be read"
 
@@ -164,7 +164,7 @@ func TestWriterActiveDependentsBlockDisableAndDeleteAtomically(t *testing.T) {
 			if err != nil {
 				t.Fatalf("audit.WithActor: %v", err)
 			}
-			scope := WriteScope{TenantID: testTenant, OwnerID: testOwner, WritableAppIDs: []string{testApp}}
+			scope := WriteScope{TenantID: testTenant, OwnerID: testOwner, WritableAppIDs: []string{testApp}, OrganizationID: 1}
 			before := readTerminalWriterSnapshot(t, database)
 			if route == "disable" {
 				_, err = writer.SetState(ctx, scope, &opensplunk.SetKnowledgeObjectStateRequest{
@@ -212,7 +212,7 @@ func readTerminalWriterSnapshot(t *testing.T, database *control.DB) terminalWrit
 	JOIN knowledge_catalog_revision_heads AS head
 	  ON head.tenant_id = tenant.tenant_id
 	 AND head.catalog_revision = tenant.catalog_revision
-	WHERE tenant.tenant_id = ?`, testTenant).Scan(
+	WHERE tenant.tenant_id = $1`, testTenant).Scan(
 		&snapshot.Revision,
 		&snapshot.VersionCount,
 		&snapshot.Idempotency,

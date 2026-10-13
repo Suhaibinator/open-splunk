@@ -20,7 +20,7 @@ import (
 
 const (
 	runtimeIndexAuditTenantID   = "tenant-a"
-	runtimeIndexAuditOwnerID    = "administrator"
+	runtimeIndexAuditOwnerID    = "1"
 	runtimeIndexAuditEventCount = 9
 )
 
@@ -31,7 +31,7 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 	masterKeyPath := filepath.Join(directory, "server.key")
 	bearerToken := bytes.Repeat(
 		[]byte("i"),
-		auth.MinimumBrowserBearerTokenBytes,
+		runtimeSessionCredentialBytes,
 	)
 	authenticator := newRuntimeIndexAuditAuthenticator(
 		t,
@@ -39,7 +39,7 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 		runtimeIndexAuditTenantID,
 	)
 
-	firstDatabase, err := control.Open(ctx, databasePath)
+	firstDatabase, err := openTestControl(t, ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 	}
 	firstDatabaseClosed = true
 
-	secondDatabase, err := control.Open(ctx, databasePath)
+	secondDatabase, err := openTestControl(t, ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +387,7 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 
 	wrongBearerToken := bytes.Repeat(
 		[]byte("w"),
-		auth.MinimumBrowserBearerTokenBytes,
+		runtimeSessionCredentialBytes,
 	)
 	wrongScopeHandler := newRuntimeIndexAuditHandlerForTest(
 		t,
@@ -395,7 +395,7 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 		secondAdministration,
 		secondStores.auditEvents,
 		newRuntimeIndexAuditAuthenticator(t, wrongBearerToken, "tenant-b"),
-		nil,
+		nil, "tenant-b",
 	)
 	wrongScopeResponse := postRuntimeAppProto(
 		t,
@@ -404,18 +404,23 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 		&opensplunk.ListAuditEventsRequest{},
 		wrongBearerToken,
 	)
-	if wrongScopeResponse.Code != http.StatusForbidden {
+	if wrongScopeResponse.Code != http.StatusOK {
 		t.Fatalf(
-			"wrong-tenant audit list status = %d, body = %s",
+			"other physical-tenant audit list status = %d, body = %s",
 			wrongScopeResponse.Code,
 			wrongScopeResponse.Body.String(),
 		)
+	}
+	var foreign opensplunk.ListAuditEventsResponse
+	unmarshalRuntimeAppResponse(t, wrongScopeResponse, &foreign)
+	if len(foreign.GetAuditEvents()) != 0 {
+		t.Fatal("foreign physical-tenant audit events leaked")
 	}
 }
 
 func TestRuntimeIndexAdministrationAuditFailureRollsBack(t *testing.T) {
 	ctx := context.Background()
-	database, err := control.Open(
+	database, err := openTestControl(t,
 		ctx,
 		filepath.Join(t.TempDir(), "control.db"),
 	)
@@ -439,7 +444,7 @@ func TestRuntimeIndexAdministrationAuditFailureRollsBack(t *testing.T) {
 	}
 	bearerToken := bytes.Repeat(
 		[]byte("f"),
-		auth.MinimumBrowserBearerTokenBytes,
+		runtimeSessionCredentialBytes,
 	)
 	handler := newRuntimeIndexAuditHandlerForTest(
 		t,
@@ -589,9 +594,9 @@ func newRuntimeIndexAuditAuthenticator(
 	t *testing.T,
 	bearerToken []byte,
 	tenantID string,
-) auth.BrowserAuthenticator {
+) server.IdentityAuthenticator {
 	t.Helper()
-	authenticator, err := auth.NewBearerTokenAuthenticator(
+	authenticator, err := newRuntimeSessionAuthenticator(
 		bearerToken,
 		tenantID,
 		runtimeIndexAuditOwnerID,
@@ -608,23 +613,27 @@ func newRuntimeIndexAuditHandlerForTest(
 	database *control.DB,
 	administration *control.AuditedIndexAdministration,
 	auditEvents server.AuditEvents,
-	authenticator auth.BrowserAuthenticator,
+	authenticator server.IdentityAuthenticator,
 	waker server.IndexDataDeletionWaker,
+	physicalTenants ...string,
 ) *server.Handler {
 	t.Helper()
 	config := runtimeServerConfig()
 	config.Indexes = database
 	config.IndexAdmin = administration
 	config.AuditEvents = auditEvents
-	config.BrowserAuthenticator = authenticator
+	config.IdentityAuthenticator = authenticator
 	config.TenantID = runtimeIndexAuditTenantID
+	if len(physicalTenants) > 0 {
+		config.TenantID = physicalTenants[0]
+	}
 	config.OwnerID = runtimeIndexAuditOwnerID
 	config.AdministrativeAllowedHosts = []string{"127.0.0.1"}
 	if waker != nil {
 		config.IndexDataDeletionAdmission = administration
 		config.IndexDataDeletionWaker = waker
 	}
-	handler, err := server.NewHandler(config)
+	handler, err := newRuntimeTestHandler(config)
 	if err != nil {
 		t.Fatal(err)
 	}

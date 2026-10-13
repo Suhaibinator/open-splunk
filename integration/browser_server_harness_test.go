@@ -14,6 +14,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/server"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport/identityfixture"
 )
 
 const browserSearchAppID = "app_000000000000000000001Q"
@@ -24,6 +25,7 @@ type browserSearchControlPlane struct {
 	appCatalog server.AppCatalog
 	history    *searchhistory.Store
 	journal    searchjobs.JobJournal
+	capture    searchjobs.CaptureFactory
 }
 
 type browserControlAppCatalog struct {
@@ -37,7 +39,7 @@ func (catalog browserControlAppCatalog) ListActiveApps(
 ) (server.AppCatalogResult, error) {
 	result, err := catalog.catalog.ListApps(
 		ctx,
-		control.AppAccessScope{TenantID: tenantID},
+		control.AppAccessScope{TenantID: tenantID, OrganizationID: 1, SiteAdministrator: true},
 		control.AppListRequest{
 			PageSize:     maximum,
 			StateFilters: []control.AppState{control.AppStateActive},
@@ -66,6 +68,7 @@ func newBrowserSearchControlPlane(
 	database *control.DB,
 	tenantID, indexName string,
 	anchor time.Time,
+	nativeIdentity *identityfixture.Fixture,
 ) browserSearchControlPlane {
 	t.Helper()
 	appCatalog, err := control.NewAppCatalog(database, control.AppCatalogOptions{
@@ -80,7 +83,7 @@ func newBrowserSearchControlPlane(
 	}
 	if _, err := appCatalog.CreateApp(
 		ctx,
-		control.AppAccessScope{TenantID: tenantID},
+		control.AppAccessScope{TenantID: tenantID, OrganizationID: 1, SiteAdministrator: true},
 		control.AppDefinition{
 			Slug:           "browser-search",
 			DisplayName:    "Browser search",
@@ -110,6 +113,8 @@ func newBrowserSearchControlPlane(
 	}
 	artifacts, err := searchartifacts.New(ctx, searchartifacts.Config{
 		DB:              database.SQLDB(),
+		Blobs:           nativeIdentity.Blobs,
+		CaptureOptions:  searchartifacts.CaptureOptions{Authorize: nativeIdentity.AuthorizeCapture},
 		Directory:       filepath.Join(t.TempDir(), "search-artifacts"),
 		Clock:           func() time.Time { return anchor },
 		CleanupInterval: -1,
@@ -126,6 +131,7 @@ func newBrowserSearchControlPlane(
 		appCatalog: browserControlAppCatalog{catalog: appCatalog},
 		history:    history,
 		journal:    searchjobs.NewCompositeJournal(artifacts, historyJournal),
+		capture:    artifacts,
 	}
 }
 

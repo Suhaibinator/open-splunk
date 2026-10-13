@@ -71,7 +71,7 @@ func TestAdministrativePatchAPIsPreserveIndependentFieldsAndClearDisplay(t *test
 	if err := database.SQLDB().QueryRowContext(ctx, `
 		SELECT updated_at_unix_micro
 		FROM collector_fleet
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	).Scan(&displayUpdatedAt); err != nil {
@@ -99,7 +99,7 @@ func TestAdministrativePatchAPIsPreserveIndependentFieldsAndClearDisplay(t *test
 	if err := database.SQLDB().QueryRowContext(ctx, `
 		SELECT updated_at_unix_micro
 		FROM collector_fleet
-		WHERE tenant_id = ? AND collector_id = ?`,
+		WHERE tenant_id = $1 AND collector_id = $2`,
 		lease.TenantID,
 		lease.CollectorID,
 	).Scan(&stateUpdatedAt); err != nil {
@@ -484,8 +484,8 @@ func TestAdministrativePatchTerminalCapacitySemantics(t *testing.T) {
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_fleet
-		SET admin_version = ?
-		WHERE tenant_id = ? AND collector_id = ?`,
+		SET admin_version = $1
+		WHERE tenant_id = $2 AND collector_id = $3`,
 		int64(math.MaxInt64),
 		lease.TenantID,
 		lease.CollectorID,
@@ -494,8 +494,8 @@ func TestAdministrativePatchTerminalCapacitySemantics(t *testing.T) {
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
 		UPDATE collector_runtime
-		SET telemetry_revision = ?
-		WHERE tenant_id = ? AND collector_id = ?`,
+		SET telemetry_revision = $1
+		WHERE tenant_id = $2 AND collector_id = $3`,
 		int64(math.MaxInt64),
 		lease.TenantID,
 		lease.CollectorID,
@@ -685,7 +685,8 @@ func TestAdministrativePatchEnableRequiresValidInactiveRuntime(t *testing.T) {
 		ctx,
 		`UPDATE collector_runtime
 		 SET observed_at_unix_micro = 1
-		 WHERE tenant_id = ? AND collector_id = ?`,
+		 WHERE tenant_id = $1 AND collector_id = $2`,
+
 		lease.TenantID,
 		lease.CollectorID,
 	)
@@ -724,14 +725,16 @@ func TestAdministrativeProjectionAndDisableSurviveUnrelatedCorruption(t *testing
 			name: "runtime telemetry",
 			statement: `UPDATE collector_runtime
 				    SET queued_events = -1
-				    WHERE tenant_id = ? AND collector_id = ?`,
+				    WHERE tenant_id = $1 AND collector_id = $2`,
+
 			wantFullError: "negative collector telemetry",
 		},
 		{
 			name: "child capability",
 			statement: `UPDATE collector_capabilities
 				    SET capability = 0
-				    WHERE tenant_id = ? AND collector_id = ? AND capability = 1`,
+				    WHERE tenant_id = $1 AND collector_id = $2 AND capability = 1`,
+
 			wantFullError: "invalid collector capability",
 		},
 	}
@@ -845,10 +848,10 @@ func adminPatchInstallCorruption(
 	checksIgnored := false
 	defer func() {
 		if checksIgnored {
-			_, _ = connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`)
+			_, _ = collectorTestChecks(ctx, connection, true)
 		}
 	}()
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := collectorTestChecks(ctx, connection, false); err != nil {
 		t.Fatalf("disable check constraints for corruption fixture: %v", err)
 	}
 	checksIgnored = true
@@ -863,7 +866,7 @@ func adminPatchInstallCorruption(
 	if rowsAffected != 1 {
 		t.Fatalf("corruption fixture updated %d rows, want 1", rowsAffected)
 	}
-	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`); err != nil {
+	if _, err := collectorTestChecks(ctx, connection, true); err != nil {
 		t.Fatalf("restore check constraints after corruption fixture: %v", err)
 	}
 	checksIgnored = false

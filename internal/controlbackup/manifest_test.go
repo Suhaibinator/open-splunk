@@ -2,6 +2,7 @@ package controlbackup
 
 import (
 	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +23,7 @@ func TestManifestRoundTripIsCanonicalAndStrict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded != manifest {
+	if !reflect.DeepEqual(decoded, manifest) {
 		t.Fatalf("manifest round trip = %#v, want %#v", decoded, manifest)
 	}
 	reencoded, err := marshalManifest(decoded)
@@ -47,6 +48,9 @@ func TestManifestRejectsNoncanonicalUnknownDuplicateAndOversizedInput(t *testing
 		},
 		"trailing whitespace": func(input []byte) []byte {
 			return append(input, ' ')
+		},
+		"obsolete administrator token": func(input []byte) []byte {
+			return bytes.Replace(input, []byte("{\n"), []byte("{\n  \"administrator_token\": {},\n"), 1)
 		},
 		"unknown field": func(input []byte) []byte {
 			return bytes.Replace(input, []byte("{\n"), []byte("{\n  \"unknown\": true,\n"), 1)
@@ -81,27 +85,28 @@ func TestManifestValidationRejectsEveryBoundedContractViolation(t *testing.T) {
 		"scope":                    func(value *Manifest) { value.Scope = "deployment" },
 		"clickhouse included":      func(value *Manifest) { value.ClickHouseIncluded = true },
 		"source revision":          func(value *Manifest) { value.SourceRevision = "main" },
-		"sqlite digest":            func(value *Manifest) { value.SQLiteMigrations.SHA256 = "bad" },
-		"sqlite version":           func(value *Manifest) { value.SQLiteMigrations.LatestVersion = 0 },
-		"sqlite ledger digest":     func(value *Manifest) { value.SQLiteMigrationLedgerSHA256 = "bad" },
+		"postgres digest":          func(value *Manifest) { value.PostgresMigrations.SHA256 = "bad" },
+		"postgres version":         func(value *Manifest) { value.PostgresMigrations.LatestVersion = 0 },
+		"postgres ledger digest":   func(value *Manifest) { value.PostgresMigrationLedgerSHA256 = "bad" },
 		"clickhouse digest":        func(value *Manifest) { value.ClickHouseMigrations.SHA256 = "bad" },
 		"clickhouse version":       func(value *Manifest) { value.ClickHouseMigrations.LatestVersion = 0 },
-		"database name":            func(value *Manifest) { value.Database.Name = "../control.sqlite" },
+		"database name":            func(value *Manifest) { value.Database.Name = "../control.postgres" },
 		"database empty":           func(value *Manifest) { value.Database.SizeBytes = 0 },
 		"database oversized":       func(value *Manifest) { value.Database.SizeBytes = maximumDatabaseBytes + 1 },
 		"database digest":          func(value *Manifest) { value.Database.SHA256 = "bad" },
 		"master key name":          func(value *Manifest) { value.MasterKey.Name = "MASTER.KEY" },
 		"master key size":          func(value *Manifest) { value.MasterKey.SizeBytes-- },
 		"master key digest":        func(value *Manifest) { value.MasterKey.SHA256 = "bad" },
-		"administrator token name": func(value *Manifest) { value.AdministratorToken.Name = "token" },
-		"administrator token small": func(value *Manifest) {
-			value.AdministratorToken.SizeBytes = minimumAdministratorTokenBytes - 1
+		"object catalog name":      func(value *Manifest) { value.BlobCatalog.Name = "../catalog" },
+		"object catalog digest":    func(value *Manifest) { value.BlobCatalog.SHA256 = "bad" },
+		"object archive absent":    func(value *Manifest) { value.Objects = nil },
+		"object archive oversized": func(value *Manifest) { value.Objects.SizeBytes = maximumSearchArtifactBytes + 1 },
+		"visibility cutoff":        func(value *Manifest) { value.CommittedCutoff++ },
+		"visibility overflow": func(value *Manifest) {
+			value.MaxAllocatedVisibility = 1 << 63
+			value.CommittedCutoff = value.MaxAllocatedVisibility
 		},
-		"administrator token large": func(value *Manifest) {
-			value.AdministratorToken.SizeBytes = maximumAdministratorTokenBytes + 1
-		},
-		"administrator token digest": func(value *Manifest) { value.AdministratorToken.SHA256 = "bad" },
-		"master key identity":        func(value *Manifest) { value.MasterKeyFingerprintSHA256 = "bad" },
+		"master key identity": func(value *Manifest) { value.MasterKeyFingerprintSHA256 = "bad" },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -125,10 +130,10 @@ func TestManifestRequiresExactExpectedSourceAndMigrations(t *testing.T) {
 	}
 	for name, mutate := range map[string]func(*ReleaseIdentity){
 		"source revision": func(value *ReleaseIdentity) { value.SourceRevision = strings.Repeat("b", 40) },
-		"sqlite digest": func(value *ReleaseIdentity) {
-			value.SQLiteMigrations.SHA256 = strings.Repeat("b", 64)
+		"postgres digest": func(value *ReleaseIdentity) {
+			value.PostgresMigrations.SHA256 = strings.Repeat("b", 64)
 		},
-		"sqlite version": func(value *ReleaseIdentity) { value.SQLiteMigrations.LatestVersion++ },
+		"postgres version": func(value *ReleaseIdentity) { value.PostgresMigrations.LatestVersion++ },
 		"clickhouse digest": func(value *ReleaseIdentity) {
 			value.ClickHouseMigrations.SHA256 = strings.Repeat("c", 64)
 		},
@@ -147,26 +152,23 @@ func TestManifestRequiresExactExpectedSourceAndMigrations(t *testing.T) {
 
 func validTestManifest() Manifest {
 	return Manifest{
-		FormatVersion:               manifestFormatVersion,
-		CreatedAtUnixMicro:          time.Date(2026, 8, 2, 1, 2, 3, 4_000, time.UTC).UnixMicro(),
-		RecoverySetID:               strings.Repeat("a", recoverySetIDHexBytes),
-		Scope:                       controlPlaneOnlyScope,
-		ClickHouseIncluded:          false,
-		SourceRevision:              "development",
-		SQLiteMigrations:            MigrationIdentity{SHA256: strings.Repeat("1", 64), LatestVersion: 1},
-		SQLiteMigrationLedgerSHA256: strings.Repeat("7", 64),
-		ClickHouseMigrations:        MigrationIdentity{SHA256: strings.Repeat("2", 64), LatestVersion: 1},
+		FormatVersion:                 manifestFormatVersion,
+		CreatedAtUnixMicro:            time.Date(2026, 8, 2, 1, 2, 3, 4_000, time.UTC).UnixMicro(),
+		RecoverySetID:                 strings.Repeat("a", recoverySetIDHexBytes),
+		Scope:                         controlPlaneOnlyScope,
+		ClickHouseIncluded:            false,
+		SourceRevision:                "development",
+		PostgresMigrations:            MigrationIdentity{SHA256: strings.Repeat("1", 64), LatestVersion: 1},
+		PostgresMigrationLedgerSHA256: strings.Repeat("7", 64),
+		ClickHouseMigrations:          MigrationIdentity{SHA256: strings.Repeat("2", 64), LatestVersion: 1},
 		Database: FileIdentity{
 			Name: databaseFilename, SizeBytes: 4096, SHA256: strings.Repeat("3", 64),
 		},
 		MasterKey: FileIdentity{
 			Name: masterKeyFilename, SizeBytes: serverMasterKeyBytes, SHA256: strings.Repeat("4", 64),
 		},
-		AdministratorToken: FileIdentity{
-			Name:      administratorTokenFilename,
-			SizeBytes: minimumAdministratorTokenBytes,
-			SHA256:    strings.Repeat("5", 64),
-		},
+		BlobCatalog:                FileIdentity{Name: blobCatalogFilename, SizeBytes: 3, SHA256: strings.Repeat("5", 64)},
+		Objects:                    &DirectoryIdentity{Name: searchArtifactsFilename, SHA256: strings.Repeat("8", 64)},
 		MasterKeyFingerprintSHA256: strings.Repeat("6", 64),
 	}
 }

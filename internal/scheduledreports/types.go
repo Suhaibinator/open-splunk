@@ -108,6 +108,7 @@ func (outcome RunOutcome) terminal() bool {
 // scheduler claims and is used for compare-and-swap without causing UI edits to
 // conflict merely because an occurrence ran.
 type Schedule struct {
+	OrganizationID string
 	SavedSearchID  string
 	OwnerID        string
 	TenantID       string
@@ -132,6 +133,7 @@ type Configuration struct {
 
 // Run is an immutable occurrence snapshot plus mutable execution outcome.
 type Run struct {
+	OrganizationID         string
 	RunID                  string
 	SavedSearchID          string
 	OwnerID                string
@@ -180,6 +182,7 @@ type RunPage struct {
 // admission. The adapter must resolve current app/index authority and relative
 // time; the scheduler never manufactures those values itself.
 type AdmissionRequest struct {
+	OrganizationID    string
 	RunID             string
 	SavedSearchID     string
 	DefinitionVersion uint64

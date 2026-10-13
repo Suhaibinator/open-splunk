@@ -16,6 +16,10 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport/identityfixture"
 )
 
 // TestDevelopmentWorkflow exercises the documented host-server/containerized-
@@ -78,6 +82,32 @@ func TestDevelopmentWorkflow(t *testing.T) {
 
 	stateRoot := filepath.Join(temporaryRoot, "state")
 	exportRoot := filepath.Join(temporaryRoot, "exports")
+	privateRoot := filepath.Join(stateRoot, "private")
+	if err := os.MkdirAll(privateRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fixture := identityfixture.New(t, identityfixture.Options{Directory: privateRoot, PhysicalTenant: "development-tenant", Origin: "http://127.0.0.1:" + strconv.Itoa(httpPort)})
+	masterKeyPath := filepath.Join(privateRoot, "master.key")
+	if err := os.Rename(fixture.MasterKeyPath, masterKeyPath); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{
+		"OPEN_SPLUNK_SERVER_POSTGRES_DSN":         fixture.PostgresDSN,
+		"OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_ID":     "integration-google-client",
+		"OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_SECRET": "integration-google-secret",
+		"OPEN_SPLUNK_SERVER_PUBLIC_BASE_URL":      "http://127.0.0.1:" + strconv.Itoa(httpPort),
+		"OPEN_SPLUNK_SERVER_MINIO_ENDPOINT":       fixture.MinioEndpoint,
+		"OPEN_SPLUNK_SERVER_MINIO_ACCESS_KEY":     fixture.MinioAccessKey,
+		"OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY":     fixture.MinioSecretKey,
+		"OPEN_SPLUNK_SERVER_MINIO_BUCKET":         fixture.MinioBucket,
+		"OPEN_SPLUNK_SERVER_MINIO_USE_TLS":        "false",
+	} {
+		replaceDevelopmentValue(t, environmentFile, name, value)
+	}
+	if err := fixture.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	serverEnvironment := []string{
 		"OPEN_SPLUNK_DEVELOPMENT_STATE_ROOT=" + stateRoot,
 		"OPEN_SPLUNK_DEVELOPMENT_EXPORT_ROOT=" + exportRoot,
@@ -88,11 +118,18 @@ func TestDevelopmentWorkflow(t *testing.T) {
 	waitForDevelopmentReadiness(t, httpPort, logPath)
 	stopDevelopmentServer(t, process, logPath)
 
-	masterKeyPath := filepath.Join(stateRoot, "private", "master.key")
-	controlDatabasePath := filepath.Join(stateRoot, "private", "open-splunk.db")
 	masterKey := readNonemptyFile(t, masterKeyPath)
-	if info, err := os.Stat(controlDatabasePath); err != nil || info.Size() == 0 {
-		t.Fatalf("development control database was not retained: info=%v error=%v", info, err)
+	native, err := control.OpenReadOnly(t.Context(), fixture.PostgresDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, registered, err := auth.ReadServerMasterKeyIdentity(t.Context(), native)
+	expected, hashErr := auth.FingerprintServerMasterKey(masterKey)
+	if err != nil || hashErr != nil || !registered || !bytes.Equal(fingerprint, expected[:]) {
+		t.Fatalf("development native authority not retained: %v %v", err, hashErr)
+	}
+	if err := native.Close(); err != nil {
+		t.Fatal(err)
 	}
 
 	process = startDevelopmentServer(t, repositoryRoot, environmentFile, serverEnvironment, logPath)

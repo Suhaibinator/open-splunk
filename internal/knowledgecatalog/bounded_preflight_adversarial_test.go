@@ -2,7 +2,9 @@ package knowledgecatalog
 
 import (
 	"context"
-	"database/sql/driver"
+
+	"github.com/jackc/pgx/v5"
+
 	"errors"
 	"fmt"
 	"strings"
@@ -11,59 +13,24 @@ import (
 	"testing"
 
 	"gorm.io/gorm"
-	"modernc.org/sqlite"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 const boundedPreflightVisitFunction = "ko_test_bounded_preflight_visit_v1"
 
 type boundedPreflightProbe struct {
-	visits   atomic.Int64
+	visits   pgVisitCounter
 	cancelAt int64
 	cancel   context.CancelFunc
 }
 
 var (
-	boundedPreflightRegisterOnce sync.Once
-	boundedPreflightRegisterErr  error
-	boundedPreflightProbes       sync.Map
+	boundedPreflightProbes sync.Map
 )
 
-func registerBoundedPreflightVisitFunction(t *testing.T) {
-	t.Helper()
-	boundedPreflightRegisterOnce.Do(func() {
-		boundedPreflightRegisterErr = sqlite.RegisterScalarFunction(
-			boundedPreflightVisitFunction,
-			2,
-			func(_ *sqlite.FunctionContext, arguments []driver.Value) (driver.Value, error) {
-				if len(arguments) != 2 {
-					return nil, fmt.Errorf("bounded preflight visit arguments = %d", len(arguments))
-				}
-				token, ok := arguments[0].(string)
-				if !ok {
-					return nil, fmt.Errorf("bounded preflight visit token has type %T", arguments[0])
-				}
-				value, found := boundedPreflightProbes.Load(token)
-				if !found {
-					return nil, fmt.Errorf("bounded preflight visit token is unknown")
-				}
-				probe := value.(*boundedPreflightProbe)
-				visits := probe.visits.Add(1)
-				if probe.cancel != nil && visits == probe.cancelAt {
-					probe.cancel()
-				}
-				return int64(1), nil
-			},
-		)
-	})
-	if boundedPreflightRegisterErr != nil {
-		t.Fatalf("register bounded preflight visit function: %v", boundedPreflightRegisterErr)
-	}
-}
-
 func TestIntegrationSelectorPreflightsBoundHostilePhysicalRowsBeforeCanonicalSort(t *testing.T) {
-	registerBoundedPreflightVisitFunction(t)
 	database, store := newCatalogTestStore(t)
 	for _, fixture := range []struct {
 		id    string
@@ -114,7 +81,6 @@ func TestIntegrationSelectorPreflightsBoundHostilePhysicalRowsBeforeCanonicalSor
 }
 
 func TestIntegrationSelectorPreflightCancellationIsPromptAndReleasesConnection(t *testing.T) {
-	registerBoundedPreflightVisitFunction(t)
 	database, _ := newCatalogTestStore(t)
 	description := "selector cancellation"
 	insertFixtureObject(t, database, fixtureObject{
@@ -131,6 +97,7 @@ func TestIntegrationSelectorPreflightCancellationIsPromptAndReleasesConnection(t
 	preCanceledProbe := &boundedPreflightProbe{}
 	const preCanceledToken = "selector-pre-canceled"
 	boundedPreflightProbes.Store(preCanceledToken, preCanceledProbe)
+	prepareBoundedPostgresProbe(t, database, preCanceledToken, preCanceledProbe)
 	defer boundedPreflightProbes.Delete(preCanceledToken)
 	var preCanceledRows []int64
 	preCanceledErr := selectorRecordPreflightQuery(
@@ -149,6 +116,7 @@ func TestIntegrationSelectorPreflightCancellationIsPromptAndReleasesConnection(t
 	probe := &boundedPreflightProbe{cancelAt: 8, cancel: cancel}
 	token := "selector-cancel"
 	boundedPreflightProbes.Store(token, probe)
+	prepareBoundedPostgresProbe(t, database, token, probe)
 	defer boundedPreflightProbes.Delete(token)
 	var rows []int64
 	err := selectorRecordPreflightQuery(
@@ -170,7 +138,6 @@ func TestIntegrationSelectorPreflightCancellationIsPromptAndReleasesConnection(t
 }
 
 func TestIntegrationDependencyPhysicalPreflightBoundsRowsBeforeGroupedValidation(t *testing.T) {
-	registerBoundedPreflightVisitFunction(t)
 	database, _ := newCatalogTestStore(t)
 	insertFixtureObject(t, database, fixtureObject{
 		id: "ko-bounded-dependency-target", owner: testOwner,
@@ -212,6 +179,7 @@ func TestIntegrationDependencyPhysicalPreflightBoundsRowsBeforeGroupedValidation
 	token := "dependency-progress"
 	probe := &boundedPreflightProbe{}
 	boundedPreflightProbes.Store(token, probe)
+	prepareBoundedPostgresProbe(t, database, token, probe)
 	defer boundedPreflightProbes.Delete(token)
 	query := currentDependencyPhysicalPreflightQuery(
 		database.GORMDB(), testTenant, objectIDs,
@@ -264,27 +232,40 @@ func TestIntegrationDependencyPhysicalPreflightBoundsRowsBeforeGroupedValidation
 		t.Fatalf("acquire wide-dependency connection: %v", connectionErr)
 	}
 	t.Cleanup(func() {
-		_, _ = connection.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = OFF`)
-		_, _ = connection.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`)
+		_, _ = pgtest.Checks(context.Background(), connection, true)
+		_, _ = pgtest.RestoreForeignKeys(context.Background(), connection)
 		_ = connection.Close()
 	})
-	if _, connectionErr = connection.ExecContext(
-		context.Background(),
-		`PRAGMA ignore_check_constraints = ON`,
+	if _, connectionErr = pgtest.Checks(
+		context.Background(), connection, false,
 	); connectionErr != nil {
 		t.Fatalf("disable dependency width checks: %v", connectionErr)
 	}
-	if _, connectionErr = connection.ExecContext(
-		context.Background(),
-		`PRAGMA foreign_keys = OFF`,
+	if _, connectionErr = pgtest.DropForeignKeys(
+		context.Background(), connection,
 	); connectionErr != nil {
 		t.Fatalf("disable dependency foreign keys: %v", connectionErr)
+	}
+	// The oversized TEXT corruption cannot fit native secondary btrees. The
+	// normal indexed preflight was verified above; suspend only these physical
+	// fixture barriers while retaining the tenant/source/version/ordinal PK.
+	var uniqueness string
+	if err := connection.QueryRowContext(t.Context(), `SELECT conname FROM pg_constraint WHERE conrelid='knowledge_object_dependencies'::regclass AND contype='u' AND strpos(pg_get_constraintdef(oid),'dependency_role')>0`).Scan(&uniqueness); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.ExecContext(t.Context(), "ALTER TABLE knowledge_object_dependencies DROP CONSTRAINT "+pgx.Identifier{uniqueness}.Sanitize()); err != nil {
+		t.Fatal(err)
+	}
+	for _, index := range []string{"knowledge_object_dependencies_source_target_idx", "knowledge_object_dependencies_target_idx"} {
+		if _, err := connection.ExecContext(t.Context(), "DROP INDEX "+pgx.Identifier{index}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	assertWideLiteralRejected := func(column, restore string) {
 		t.Helper()
 		oversizedStatement, restoreStatement := dependencyLiteralUpdateStatements(t, column)
 		if _, err := connection.ExecContext(
-			context.Background(), oversizedStatement,
+			context.Background(), pgtest.Parameters(oversizedStatement),
 			"SECRET-DEPENDENCY-LITERAL", 1<<20, testTenant, "ko-bounded-dependency-source",
 		); err != nil {
 			t.Fatalf("inject oversized dependency %s: %v", column, err)
@@ -311,7 +292,7 @@ func TestIntegrationDependencyPhysicalPreflightBoundsRowsBeforeGroupedValidation
 			t.Fatalf("grouped queries after oversized dependency %s = %d, want 0", column, got)
 		}
 		if _, err := connection.ExecContext(
-			context.Background(), restoreStatement,
+			context.Background(), pgtest.Parameters(restoreStatement),
 			restore, testTenant, "ko-bounded-dependency-source",
 		); err != nil {
 			t.Fatalf("restore dependency %s: %v", column, err)
@@ -320,10 +301,10 @@ func TestIntegrationDependencyPhysicalPreflightBoundsRowsBeforeGroupedValidation
 	assertWideLiteralRejected("target_kind", "object")
 	assertWideLiteralRejected("target_object_id", "ko-bounded-dependency-target")
 	assertWideLiteralRejected("dependency_role", "field_input")
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = OFF`); err != nil {
+	if _, err := pgtest.Checks(context.Background(), connection, true); err != nil {
 		t.Fatalf("restore dependency width checks: %v", err)
 	}
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`); err != nil {
+	if _, err := pgtest.RestoreForeignKeys(context.Background(), connection); err != nil {
 		t.Fatalf("restore dependency foreign keys: %v", err)
 	}
 	if err := connection.Close(); err != nil {
@@ -337,7 +318,7 @@ func dependencyLiteralUpdateStatements(t *testing.T, column string) (string, str
 	switch column {
 	case "target_kind":
 		return `UPDATE knowledge_object_dependencies
-				SET target_kind = ? || CAST(zeroblob(?) AS TEXT)
+				SET target_kind = ? || repeat('x', (?)::integer)
 				WHERE tenant_id = ? AND source_object_id = ?
 				  AND source_object_version = 1 AND ordinal = 0`,
 			`UPDATE knowledge_object_dependencies SET target_kind = ?
@@ -345,7 +326,7 @@ func dependencyLiteralUpdateStatements(t *testing.T, column string) (string, str
 				  AND source_object_version = 1 AND ordinal = 0`
 	case "target_object_id":
 		return `UPDATE knowledge_object_dependencies
-				SET target_object_id = ? || CAST(zeroblob(?) AS TEXT)
+				SET target_object_id = ? || repeat('x', (?)::integer)
 				WHERE tenant_id = ? AND source_object_id = ?
 				  AND source_object_version = 1 AND ordinal = 0`,
 			`UPDATE knowledge_object_dependencies SET target_object_id = ?
@@ -353,7 +334,7 @@ func dependencyLiteralUpdateStatements(t *testing.T, column string) (string, str
 				  AND source_object_version = 1 AND ordinal = 0`
 	case "dependency_role":
 		return `UPDATE knowledge_object_dependencies
-				SET dependency_role = ? || CAST(zeroblob(?) AS TEXT)
+				SET dependency_role = ? || repeat('x', (?)::integer)
 				WHERE tenant_id = ? AND source_object_id = ?
 				  AND source_object_version = 1 AND ordinal = 0`,
 			`UPDATE knowledge_object_dependencies SET dependency_role = ?
@@ -375,6 +356,7 @@ func assertBoundedSelectorPreflightProgress(
 	token := fmt.Sprintf("selector-progress-%t", batch)
 	probe := &boundedPreflightProbe{}
 	boundedPreflightProbes.Store(token, probe)
+	prepareBoundedPostgresProbe(t, database, token, probe)
 	defer boundedPreflightProbes.Delete(token)
 	var query *gorm.DB
 	if batch {
@@ -407,32 +389,37 @@ func assertPreflightHasNoTemporaryOrderSort(t *testing.T, database *control.DB, 
 	if compiled.Error != nil {
 		t.Fatalf("compile bounded preflight query: %v", compiled.Error)
 	}
-	rows, err := database.SQLDB().QueryContext(t.Context(),
-		"EXPLAIN QUERY PLAN "+compiled.Statement.SQL.String(),
-		compiled.Statement.Vars...,
-	)
-	if err != nil {
-		t.Fatalf("explain bounded preflight query: %v\n%s", err, compiled.Statement.SQL.String())
-	}
-	defer rows.Close()
-	var details []string
-	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
-			t.Fatalf("scan bounded preflight plan: %v", err)
-		}
-		details = append(details, detail)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("read bounded preflight plan: %v", err)
-	}
+	details := explainPostgreSQLQueryPlan(t, database.SQLDB(), compiled.Statement.SQL.String(), compiled.Statement.Vars)
 	joined := strings.Join(details, "\n")
-	if strings.Contains(joined, "USE TEMP B-TREE FOR ORDER BY") {
-		t.Fatalf("bounded preflight plan sorts before LIMIT:\n%s", joined)
+	if strings.Contains(joined, "Sort") {
+		t.Fatalf("native bounded preflight sorts before limit: %s", joined)
 	}
-	if !strings.Contains(joined, "USING PRIMARY KEY") {
-		t.Fatalf("bounded preflight plan does not use a primary key:\n%s", joined)
+	if !strings.Contains(joined, "Index") || strings.Contains(joined, "Seq Scan") || !strings.Contains(joined, "Limit") {
+		t.Fatalf("native bounded preflight lacks an indexed bounded driver: %s", joined)
+	}
+	// PostgreSQL may choose an equivalent native UNIQUE or covering index instead
+	// of the primary key. Every physical payload probe must constrain the entire
+	// tenant/object/version prefix, regardless of the selected index name.
+	var physicalProbe bool
+	for _, detail := range details {
+		var required []string
+		switch {
+		case strings.Contains(detail, "Index") && strings.Contains(detail, " table knowledge_object_list_selector_patterns"):
+			required = []string{"tenant_id =", "knowledge_object_id =", "object_version ="}
+		case strings.Contains(detail, "Index") && strings.Contains(detail, " table knowledge_object_dependencies"):
+			required = []string{"tenant_id =", "source_object_id =", "source_object_version ="}
+		default:
+			continue
+		}
+		physicalProbe = true
+		for _, condition := range required {
+			if !strings.Contains(detail, condition) {
+				t.Fatalf("native physical probe lacks exact prefix %q: %s", condition, detail)
+			}
+		}
+	}
+	if !physicalProbe {
+		t.Fatalf("native bounded preflight lacks a physical payload index: %s", joined)
 	}
 }
 
@@ -450,11 +437,11 @@ func insertHostileSelectorRows(t *testing.T, database *control.DB, objectID stri
 		t.Fatalf("acquire hostile selector connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+	if _, err := pgtest.Checks(context.Background(), connection, false); err != nil {
 		t.Fatalf("ignore hostile selector checks: %v", err)
 	}
 	defer func() {
-		if _, err := connection.ExecContext(context.Background(), `PRAGMA ignore_check_constraints = OFF`); err != nil {
+		if _, err := pgtest.Checks(context.Background(), connection, true); err != nil {
 			t.Errorf("restore hostile selector checks: %v", err)
 		}
 	}()
@@ -462,13 +449,13 @@ func insertHostileSelectorRows(t *testing.T, database *control.DB, objectID stri
 		WITH RECURSIVE hostile(n) AS (
 			SELECT 0
 			UNION ALL
-			SELECT n + 1 FROM hostile WHERE n + 1 < ?
+			SELECT n + 1 FROM hostile WHERE n + 1 < $1
 		)
 		INSERT INTO knowledge_object_list_selector_patterns (
 			tenant_id, knowledge_object_id, object_version, dimension,
 			ordinal, match_kind, value
 		)
-		SELECT ?, ?, 1, 'host', 1000 + n, 'exact', printf('hostile-selector-%05d', n)
+		SELECT $2, $3, 1, 'host', 1000 + n, 'exact', 'hostile-selector-' || lpad((n)::text,5,'0') || ''
 		FROM hostile
 	`, count, testTenant, objectID); err != nil {
 		t.Fatalf("insert %d hostile selector rows: %v", count, err)
@@ -489,36 +476,32 @@ func insertHostileDependencyRows(t *testing.T, database *control.DB, sourceID st
 		t.Fatalf("acquire hostile dependency connection: %v", err)
 	}
 	defer connection.Close()
-	for _, pragma := range []string{
-		"PRAGMA foreign_keys = OFF",
-		"PRAGMA ignore_check_constraints = ON",
-	} {
-		if _, err := connection.ExecContext(context.Background(), pragma); err != nil {
-			t.Fatalf("configure hostile dependency connection: %v", err)
-		}
+	if _, err := pgtest.DropForeignKeys(t.Context(), connection); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pgtest.Checks(t.Context(), connection, false); err != nil {
+		t.Fatal(err)
 	}
 	defer func() {
-		for _, pragma := range []string{
-			"PRAGMA ignore_check_constraints = OFF",
-			"PRAGMA foreign_keys = ON",
-		} {
-			if _, err := connection.ExecContext(context.Background(), pragma); err != nil {
-				t.Errorf("restore hostile dependency connection: %v", err)
-			}
+		if _, err := pgtest.Checks(t.Context(), connection, true); err != nil {
+			t.Error(err)
+		}
+		if _, err := pgtest.RestoreForeignKeys(t.Context(), connection); err != nil {
+			t.Error(err)
 		}
 	}()
 	if _, err := connection.ExecContext(context.Background(), `
 		WITH RECURSIVE hostile(n) AS (
 			SELECT 0
 			UNION ALL
-			SELECT n + 1 FROM hostile WHERE n + 1 < ?
+			SELECT n + 1 FROM hostile WHERE n + 1 < $1
 		)
 		INSERT INTO knowledge_object_dependencies (
 			tenant_id, source_object_id, source_object_version, ordinal,
 			target_kind, target_object_id, target_object_version, dependency_role
 		)
-		SELECT ?, ?, 1, 10000 + n, 'object',
-			printf('ko-hostile-target-%05d', n), 1, 'field_input'
+		SELECT $2, $3, 1, 10000 + n, 'object',
+			'ko-hostile-target-' || lpad((n)::text,5,'0') || '', 1, 'field_input'
 		FROM hostile
 	`, count, testTenant, sourceID); err != nil {
 		t.Fatalf("insert %d hostile dependency rows: %v", count, err)

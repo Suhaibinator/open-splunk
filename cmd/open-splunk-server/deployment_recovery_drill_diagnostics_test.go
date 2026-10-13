@@ -205,7 +205,7 @@ func truncateRecoveryDrillDiagnostic(text string) string {
 
 func TestRecoveryDrillDiagnosticTextRedactsSecretsAndPrivateKeys(t *testing.T) {
 	t.Parallel()
-	const secret = "administrator-token-that-must-not-be-logged"
+	const secret = "google-session-that-must-not-be-logged"
 	output := []byte(fmt.Sprintf(
 		"password=%s\n-----BEGIN PRIVATE KEY-----\nprivate material\n-----END PRIVATE KEY-----\nafter\n-----BEGIN OPENSSH PRIVATE KEY-----\nunterminated material",
 		secret,
@@ -223,7 +223,7 @@ func TestRecoveryDrillDiagnosticTextRedactsSecretsAndPrivateKeys(t *testing.T) {
 
 func TestRecoveryDrillAPIErrorDiagnosticPreservesReasonWithoutCredentials(t *testing.T) {
 	t.Parallel()
-	const token = "request-administrator-credential"
+	const token = "request-google-session-credential"
 	const password = "fixture-clickhouse-password"
 	fixture := &recoveryDrill{diagnosticSecrets: []string{password}}
 	body := strings.NewReader(`{"error":"search authority is unavailable","token":"` + token + `","password":"` + password + `"}`)

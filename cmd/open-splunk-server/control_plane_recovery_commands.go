@@ -12,28 +12,71 @@ import (
 	"syscall"
 
 	opensplunk "github.com/Suhaibinator/open-splunk"
+	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/controlbackup"
 )
+
+type controlPlaneBackupCommandOptions struct {
+	controlbackup.CreateOptions
+	recoveryObjectOptions
+}
+type controlPlaneRestoreCommandOptions struct {
+	controlbackup.RestoreOptions
+	recoveryObjectOptions
+}
+type maintenanceLeaseAcquirer func(context.Context, string) (*control.MaintenanceLease, error)
+type hostLockAcquirer func() (*serverLock, error)
 
 func runBackupControlPlaneSubcommand(arguments []string) error {
 	options, err := parseBackupControlPlaneOptions(arguments)
 	if err != nil {
 		return err
 	}
+	hostGuard, err := acquireHostServerLock()
+	if err != nil {
+		return err
+	}
+	defer hostGuard.Close()
+
 	release, err := loadControlPlaneRecoveryRelease()
 	if err != nil {
 		return err
 	}
 	ctx, stop := recoveryCommandContext()
 	defer stop()
-	return runBackupControlPlane(
-		ctx,
-		options,
-		release,
-		acquireServerLock,
-	)
+	blobs, err := options.open(ctx)
+	if err != nil {
+		return err
+	}
+	defer blobs.Close()
+	options.Blobs = blobs
+	return runBackupControlPlane(ctx, options.CreateOptions, release, control.AcquireMaintenanceLease)
 }
+func runRestoreControlPlaneSubcommand(arguments []string) error {
+	options, err := parseRestoreControlPlaneOptions(arguments)
+	if err != nil {
+		return err
+	}
+	hostGuard, err := acquireHostServerLock()
+	if err != nil {
+		return err
+	}
+	defer hostGuard.Close()
 
+	release, err := loadControlPlaneRecoveryRelease()
+	if err != nil {
+		return err
+	}
+	ctx, stop := recoveryCommandContext()
+	defer stop()
+	blobs, err := options.open(ctx)
+	if err != nil {
+		return err
+	}
+	defer blobs.Close()
+	options.Blobs = blobs
+	return runRestoreControlPlane(ctx, options.RestoreOptions, release, control.AcquireMaintenanceLease)
+}
 func runVerifyControlPlaneBackupSubcommand(arguments []string) error {
 	source, err := parseVerifyControlPlaneBackupOptions(arguments)
 	if err != nil {
@@ -45,31 +88,9 @@ func runVerifyControlPlaneBackupSubcommand(arguments []string) error {
 	}
 	ctx, stop := recoveryCommandContext()
 	defer stop()
-	if _, err := controlbackup.Verify(ctx, source, release); err != nil {
-		return fmt.Errorf("verify control-plane backup: %w", err)
-	}
-	return nil
+	_, err = controlbackup.Verify(ctx, source, release)
+	return err
 }
-
-func runRestoreControlPlaneSubcommand(arguments []string) error {
-	options, err := parseRestoreControlPlaneOptions(arguments)
-	if err != nil {
-		return err
-	}
-	release, err := loadControlPlaneRecoveryRelease()
-	if err != nil {
-		return err
-	}
-	ctx, stop := recoveryCommandContext()
-	defer stop()
-	return runRestoreControlPlane(
-		ctx,
-		options,
-		release,
-		acquireHostServerLock,
-	)
-}
-
 func recoveryCommandContext() (context.Context, context.CancelFunc) {
 	ctx, rawStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	var stopOnce sync.Once
@@ -83,107 +104,72 @@ func recoveryCommandContext() (context.Context, context.CancelFunc) {
 	return ctx, stop
 }
 
-func parseBackupControlPlaneOptions(arguments []string) (controlbackup.CreateOptions, error) {
+func parseBackupControlPlaneOptions(arguments []string) (controlPlaneBackupCommandOptions, error) {
+	var options controlPlaneBackupCommandOptions
 	flags := flag.NewFlagSet("backup-control-plane", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	var options controlbackup.CreateOptions
-	flags.StringVar(&options.DatabasePath, "control-db", "", "absolute stopped-server SQLite database path")
-	flags.StringVar(&options.MasterKeyPath, "master-key", "", "absolute matching server master-key path")
-	flags.StringVar(
-		&options.AdministratorTokenPath,
-		"administrator-token-file",
-		"",
-		"absolute matching administrator-token path",
-	)
-	flags.StringVar(&options.SearchArtifactDirectory, "search-artifact-directory", "", "absolute retained-search directory (default: <control-db>.search-artifacts when present)")
+	flags.StringVar(&options.PostgresDSN, "postgres-dsn", consumeRecoverySecret("OPEN_SPLUNK_SERVER_POSTGRES_DSN"), "PostgreSQL control schema; stopped server required")
+	flags.StringVar(&options.MasterKeyPath, "master-key", "", "absolute matching server master key")
 	flags.StringVar(&options.Destination, "destination", "", "absolute new private bundle directory")
+	registerRecoveryObjectFlags(flags, &options.recoveryObjectOptions)
 	if err := flags.Parse(arguments); err != nil {
-		return controlbackup.CreateOptions{}, fmt.Errorf("backup control plane: parse flags: %w", err)
+		return options, err
 	}
 	if flags.NArg() != 0 {
-		return controlbackup.CreateOptions{}, errors.New("backup control plane: positional arguments are not allowed")
+		return options, errors.New("positional arguments are not allowed")
 	}
-	for _, item := range []struct {
-		name string
-		path string
-	}{
-		{name: "-control-db", path: options.DatabasePath},
-		{name: "-master-key", path: options.MasterKeyPath},
-		{name: "-administrator-token-file", path: options.AdministratorTokenPath},
-		{name: "-search-artifact-directory", path: options.SearchArtifactDirectory},
-		{name: "-destination", path: options.Destination},
-	} {
-		if item.path == "" && item.name == "-search-artifact-directory" {
-			continue
-		}
-		if err := validateRecoveryCommandPath(item.name, item.path); err != nil {
-			return controlbackup.CreateOptions{}, fmt.Errorf("backup control plane: %w", err)
-		}
+	if err := validateRecoveryDSN(options.PostgresDSN); err != nil {
+		return options, err
 	}
-	return options, nil
+	if err := validateRecoveryCommandPath("-master-key", options.MasterKeyPath); err != nil {
+		return options, err
+	}
+	if err := validateRecoveryCommandPath("-destination", options.Destination); err != nil {
+		return options, err
+	}
+	return options, options.validate()
 }
-
+func parseRestoreControlPlaneOptions(arguments []string) (controlPlaneRestoreCommandOptions, error) {
+	var options controlPlaneRestoreCommandOptions
+	flags := flag.NewFlagSet("restore-control-plane", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.StringVar(&options.PostgresDSN, "postgres-dsn", consumeRecoverySecret("OPEN_SPLUNK_SERVER_POSTGRES_DSN"), "empty PostgreSQL control schema")
+	flags.StringVar(&options.MasterKeyPath, "master-key", "", "absolute absent server master key")
+	flags.StringVar(&options.Source, "source", "", "absolute verified bundle directory")
+	registerRecoveryObjectFlags(flags, &options.recoveryObjectOptions)
+	if err := flags.Parse(arguments); err != nil {
+		return options, err
+	}
+	if flags.NArg() != 0 {
+		return options, errors.New("positional arguments are not allowed")
+	}
+	if err := validateRecoveryDSN(options.PostgresDSN); err != nil {
+		return options, err
+	}
+	if err := validateRecoveryCommandPath("-master-key", options.MasterKeyPath); err != nil {
+		return options, err
+	}
+	if err := validateRecoveryCommandPath("-source", options.Source); err != nil {
+		return options, err
+	}
+	return options, options.validate()
+}
 func parseVerifyControlPlaneBackupOptions(arguments []string) (string, error) {
 	flags := flag.NewFlagSet("verify-control-plane-backup", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var source string
 	flags.StringVar(&source, "source", "", "absolute private bundle directory")
 	if err := flags.Parse(arguments); err != nil {
-		return "", fmt.Errorf("verify control-plane backup: parse flags: %w", err)
+		return "", err
 	}
 	if flags.NArg() != 0 {
-		return "", errors.New("verify control-plane backup: positional arguments are not allowed")
+		return "", errors.New("positional arguments are not allowed")
 	}
-	if err := validateRecoveryCommandPath("-source", source); err != nil {
-		return "", fmt.Errorf("verify control-plane backup: %w", err)
-	}
-	return source, nil
+	return source, validateRecoveryCommandPath("-source", source)
 }
-
-func parseRestoreControlPlaneOptions(arguments []string) (controlbackup.RestoreOptions, error) {
-	flags := flag.NewFlagSet("restore-control-plane", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	var options controlbackup.RestoreOptions
-	flags.StringVar(&options.Source, "source", "", "absolute verified bundle directory")
-	flags.StringVar(&options.DatabasePath, "control-db", "", "absolute absent SQLite database path")
-	flags.StringVar(&options.MasterKeyPath, "master-key", "", "absolute absent server master-key path")
-	flags.StringVar(
-		&options.AdministratorTokenPath,
-		"administrator-token-file",
-		"",
-		"absolute absent administrator-token path",
-	)
-	flags.StringVar(&options.SearchArtifactDirectory, "search-artifact-directory", "", "absolute absent retained-search directory (default: <control-db>.search-artifacts)")
-	if err := flags.Parse(arguments); err != nil {
-		return controlbackup.RestoreOptions{}, fmt.Errorf("restore control plane: parse flags: %w", err)
-	}
-	if flags.NArg() != 0 {
-		return controlbackup.RestoreOptions{}, errors.New("restore control plane: positional arguments are not allowed")
-	}
-	for _, item := range []struct {
-		name string
-		path string
-	}{
-		{name: "-source", path: options.Source},
-		{name: "-control-db", path: options.DatabasePath},
-		{name: "-master-key", path: options.MasterKeyPath},
-		{name: "-administrator-token-file", path: options.AdministratorTokenPath},
-		{name: "-search-artifact-directory", path: options.SearchArtifactDirectory},
-	} {
-		if item.path == "" && item.name == "-search-artifact-directory" {
-			continue
-		}
-		if err := validateRecoveryCommandPath(item.name, item.path); err != nil {
-			return controlbackup.RestoreOptions{}, fmt.Errorf("restore control plane: %w", err)
-		}
-	}
-	return options, nil
-}
-
 func validateRecoveryCommandPath(name, path string) error {
 	return controlbackup.ValidateExactAbsolutePath(name, path)
 }
-
 func loadControlPlaneRecoveryRelease() (controlbackup.ReleaseIdentity, error) {
 	release, err := opensplunk.EmbeddedRelease()
 	if err != nil {
@@ -194,9 +180,9 @@ func loadControlPlaneRecoveryRelease() (controlbackup.ReleaseIdentity, error) {
 	}
 	return controlbackup.ReleaseIdentity{
 		SourceRevision: release.Metadata.SourceRevision,
-		SQLiteMigrations: controlbackup.MigrationIdentity{
-			SHA256:        release.Metadata.SQLiteMigrations.SHA256,
-			LatestVersion: release.Metadata.SQLiteMigrations.LatestVersion,
+		PostgresMigrations: controlbackup.MigrationIdentity{
+			SHA256:        release.Metadata.PostgresMigrations.SHA256,
+			LatestVersion: release.Metadata.PostgresMigrations.LatestVersion,
 		},
 		ClickHouseMigrations: controlbackup.MigrationIdentity{
 			SHA256:        release.Metadata.ClickHouseMigrations.SHA256,
@@ -205,60 +191,54 @@ func loadControlPlaneRecoveryRelease() (controlbackup.ReleaseIdentity, error) {
 	}, nil
 }
 
-type databaseLockAcquirer func(string) (*serverLock, error)
-
-func runBackupControlPlane(
-	ctx context.Context,
-	options controlbackup.CreateOptions,
-	release controlbackup.ReleaseIdentity,
-	acquire databaseLockAcquirer,
-) (returnedErr error) {
-	if ctx == nil {
-		return errors.New("backup control plane: context is required")
+func runBackupControlPlane(ctx context.Context, options controlbackup.CreateOptions, release controlbackup.ReleaseIdentity, acquire maintenanceLeaseAcquirer) (returnedErr error) {
+	if ctx == nil || acquire == nil {
+		return errors.New("backup control plane: context and PostgreSQL lease dependency required")
 	}
-	if acquire == nil {
-		return errors.New("backup control plane: server lock dependency is required")
-	}
-	lock, err := acquire(options.DatabasePath)
+	lease, err := acquire(ctx, options.PostgresDSN)
 	if err != nil {
-		return fmt.Errorf("backup control plane: require the server to be stopped: %w", err)
+		return err
 	}
-	if lock == nil {
-		return errors.New("backup control plane: server lock dependency returned no lock")
+	if lease == nil {
+		return errors.New("PostgreSQL maintenance lease missing")
 	}
-	defer func() { returnedErr = errors.Join(returnedErr, lock.Close()) }()
+	defer func() { returnedErr = errors.Join(returnedErr, lease.Close()) }()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-lease.OwnershipLost():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	options.Lease = lease
 	options.Release = release
-	if _, err := controlbackup.Create(ctx, options); err != nil {
-		return fmt.Errorf("backup control plane: %w", err)
-	}
-	return nil
+	_, err = controlbackup.Create(ctx, options)
+	return err
 }
-
-type hostLockAcquirer func() (*serverLock, error)
-
-func runRestoreControlPlane(
-	ctx context.Context,
-	options controlbackup.RestoreOptions,
-	release controlbackup.ReleaseIdentity,
-	acquire hostLockAcquirer,
-) (returnedErr error) {
-	if ctx == nil {
-		return errors.New("restore control plane: context is required")
+func runRestoreControlPlane(ctx context.Context, options controlbackup.RestoreOptions, release controlbackup.ReleaseIdentity, acquire maintenanceLeaseAcquirer) (returnedErr error) {
+	if ctx == nil || acquire == nil {
+		return errors.New("restore control plane: context and PostgreSQL lease dependency required")
 	}
-	if acquire == nil {
-		return errors.New("restore control plane: server lock dependency is required")
-	}
-	lock, err := acquire()
+	lease, err := acquire(ctx, options.PostgresDSN)
 	if err != nil {
-		return fmt.Errorf("restore control plane: require the server to be stopped: %w", err)
+		return err
 	}
-	if lock == nil {
-		return errors.New("restore control plane: server lock dependency returned no lock")
+	if lease == nil {
+		return errors.New("PostgreSQL maintenance lease missing")
 	}
-	defer func() { returnedErr = errors.Join(returnedErr, lock.Close()) }()
+	defer func() { returnedErr = errors.Join(returnedErr, lease.Close()) }()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-lease.OwnershipLost():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	options.Lease = lease
 	options.Release = release
-	if err := controlbackup.Restore(ctx, options); err != nil {
-		return fmt.Errorf("restore control plane: %w", err)
-	}
-	return nil
+	return controlbackup.Restore(ctx, options)
 }

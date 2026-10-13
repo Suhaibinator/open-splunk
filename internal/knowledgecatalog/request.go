@@ -42,9 +42,11 @@ const (
 )
 
 type normalizedScope struct {
-	tenantID       string
-	ownerID        string
-	readableAppIDs []string
+	organizationID    int64
+	siteAdministrator bool
+	tenantID          string
+	ownerID           string
+	readableAppIDs    []string
 }
 
 type normalizedListRequest struct {
@@ -82,7 +84,7 @@ type normalizedDependencyListRequest struct {
 }
 
 func normalizeScope(scope ReadScope) (normalizedScope, error) {
-	if !validIdentity(scope.TenantID, maximumTenantIDBytes) ||
+	if scope.OrganizationID <= 0 || !validIdentity(scope.TenantID, maximumTenantIDBytes) ||
 		!validIdentity(scope.OwnerID, maximumOwnerIDBytes) ||
 		len(scope.ReadableAppIDs) == 0 || len(scope.ReadableAppIDs) > maximumReadableApps {
 		return normalizedScope{}, fmt.Errorf("%w: knowledge catalog read scope is invalid", control.ErrInvalidArgument)
@@ -96,9 +98,11 @@ func normalizeScope(scope ReadScope) (normalizedScope, error) {
 	slices.Sort(apps)
 	apps = slices.Compact(apps)
 	return normalizedScope{
-		tenantID:       strings.Clone(scope.TenantID),
-		ownerID:        strings.Clone(scope.OwnerID),
-		readableAppIDs: apps,
+		tenantID:          strings.Clone(scope.TenantID),
+		organizationID:    scope.OrganizationID,
+		siteAdministrator: scope.SiteAdministrator,
+		ownerID:           strings.Clone(scope.OwnerID),
+		readableAppIDs:    apps,
 	}, nil
 }
 

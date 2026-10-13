@@ -52,7 +52,7 @@ func TestAuthenticateHECReturnsVersionedPolicySnapshotAndRecordsUse(t *testing.T
 		AllowedIndexNames:    []string{"main"},
 		AllowedHostRegexes:   []string{"^producer-[0-9]+$"},
 		AllowedSourceRegexes: []string{"^/var/log/.+$"},
-		IngestionRateLimits:  tokenLimits,
+		IngestionRateLimits:  tokenLimits, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(HEC): %v", err)
@@ -60,7 +60,7 @@ func TestAuthenticateHECReturnsVersionedPolicySnapshotAndRecordsUse(t *testing.T
 	native, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "native isolation",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(native): %v", err)
@@ -131,7 +131,7 @@ func TestAuthenticateHECClassifiesSQLiteWriterContentionAsTemporary(t *testing.T
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "HEC contended authentication",
 		Purpose:           IngestionTokenPurposeHEC,
-		AllowedIndexNames: []string{"main"},
+		AllowedIndexNames: []string{"main"}, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(HEC): %v", err)
@@ -151,14 +151,14 @@ func TestAuthenticateHECClassifiesSQLiteWriterContentionAsTemporary(t *testing.T
 		_, _ = blocker.ExecContext(context.Background(), `ROLLBACK`)
 		_ = blocker.Close()
 	})
-	if _, err := blocker.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+	if _, err := blocker.ExecContext(ctx, `BEGIN; SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema() || ':15:ingestion-credentials',0))`); err != nil {
 		t.Fatalf("reserve HEC authentication writer: %v", err)
 	}
 	contender, err := database.Conn(ctx)
 	if err != nil {
 		t.Fatalf("acquire HEC authentication contender: %v", err)
 	}
-	if _, err := contender.ExecContext(ctx, `PRAGMA busy_timeout = 1`); err != nil {
+	if _, err := contender.ExecContext(ctx, `SET lock_timeout = '1ms'`); err != nil {
 		_ = contender.Close()
 		t.Fatalf("shorten HEC authentication busy timeout: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestAuthenticateHECRefreshesLastUseAtBoundedInterval(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "HEC bounded last use",
 		Purpose:           IngestionTokenPurposeHEC,
-		AllowedIndexNames: []string{"main"},
+		AllowedIndexNames: []string{"main"}, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(HEC): %v", err)
@@ -272,7 +272,7 @@ func TestAuthenticateHECWithCurrentUseDoesNotWaitForWriter(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "HEC uncontended authentication",
 		Purpose:           IngestionTokenPurposeHEC,
-		AllowedIndexNames: []string{"main"},
+		AllowedIndexNames: []string{"main"}, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(HEC): %v", err)
@@ -291,14 +291,14 @@ func TestAuthenticateHECWithCurrentUseDoesNotWaitForWriter(t *testing.T) {
 		_, _ = blocker.ExecContext(context.Background(), `ROLLBACK`)
 		_ = blocker.Close()
 	})
-	if _, err := blocker.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+	if _, err := blocker.ExecContext(ctx, `BEGIN; SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema() || ':15:ingestion-credentials',0))`); err != nil {
 		t.Fatalf("reserve HEC authentication writer: %v", err)
 	}
 	contender, err := database.Conn(ctx)
 	if err != nil {
 		t.Fatalf("acquire HEC authentication contender: %v", err)
 	}
-	if _, err := contender.ExecContext(ctx, `PRAGMA busy_timeout = 1`); err != nil {
+	if _, err := contender.ExecContext(ctx, `SET lock_timeout = '1ms'`); err != nil {
 		_ = contender.Close()
 		t.Fatalf("shorten HEC authentication busy timeout: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestAuthenticateHECWithCurrentUseRejectsDisabledToken(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "HEC disabled after use",
 		Purpose:           IngestionTokenPurposeHEC,
-		AllowedIndexNames: []string{"main"},
+		AllowedIndexNames: []string{"main"}, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(HEC): %v", err)
@@ -391,14 +391,14 @@ func TestAuthenticateHECFailsClosedWithoutProfileAndDoesNotRecordUse(t *testing.
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "HEC corrupt profile",
 		Purpose:           IngestionTokenPurposeHEC,
-		AllowedIndexNames: []string{"main"},
+		AllowedIndexNames: []string{"main"}, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(HEC): %v", err)
 	}
 	if _, err := db.SQLDB().ExecContext(
 		ctx,
-		`DELETE FROM ingestion_token_hec_profiles WHERE ingestion_token_id = ?`,
+		`DELETE FROM ingestion_token_hec_profiles WHERE ingestion_token_id = $1`,
 		issued.Token.ID,
 	); err != nil {
 		t.Fatalf("remove HEC profile for corruption test: %v", err)
@@ -412,7 +412,7 @@ func TestAuthenticateHECFailsClosedWithoutProfileAndDoesNotRecordUse(t *testing.
 	if err := db.SQLDB().QueryRowContext(ctx, `
 		SELECT last_used_at_unix_micro
 		FROM ingestion_tokens
-		WHERE ingestion_token_id = ?`, issued.Token.ID).Scan(&lastUsedAt); err != nil {
+		WHERE ingestion_token_id = $1`, issued.Token.ID).Scan(&lastUsedAt); err != nil {
 		t.Fatalf("read HEC last-use after corrupt authentication: %v", err)
 	}
 	if lastUsedAt != nil {
@@ -443,7 +443,7 @@ func TestAuthenticateHECRejectsInactiveExpiredRevokedAndUnknownCredentials(t *te
 			Name:              name,
 			Purpose:           IngestionTokenPurposeHEC,
 			AllowedIndexNames: []string{"main"},
-			ExpiresAt:         expiresAt,
+			ExpiresAt:         expiresAt, OrganizationID: 1, IssuerUserID: 42,
 		})
 		if createErr != nil {
 			t.Fatalf("CreateCollectorToken(%s): %v", name, createErr)
@@ -454,7 +454,7 @@ func TestAuthenticateHECRejectsInactiveExpiredRevokedAndUnknownCredentials(t *te
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		UPDATE ingestion_tokens
 		SET state = 'disabled'
-		WHERE ingestion_token_id = ?`, disabled.Token.ID); err != nil {
+		WHERE ingestion_token_id = $1`, disabled.Token.ID); err != nil {
 		t.Fatalf("disable HEC token: %v", err)
 	}
 	expired := create("HEC expired", now.Add(time.Minute))
@@ -489,7 +489,7 @@ func TestAuthenticateHECRejectsInactiveExpiredRevokedAndUnknownCredentials(t *te
 		if err := db.SQLDB().QueryRowContext(ctx, `
 			SELECT last_used_at_unix_micro
 			FROM ingestion_tokens
-			WHERE ingestion_token_id = ?`, issued.Token.ID).Scan(&lastUsedAt); err != nil {
+			WHERE ingestion_token_id = $1`, issued.Token.ID).Scan(&lastUsedAt); err != nil {
 			t.Fatalf("read HEC last-use after rejected authentication: %v", err)
 		}
 		if lastUsedAt != nil {
@@ -533,7 +533,7 @@ func TestHECTokenLifecycleAndNativeAuthorizationIsolation(t *testing.T) {
 			DefaultSource:         "/var/log/app.json",
 			DefaultSourcetype:     "_json",
 			IndexerAcknowledgment: true,
-		},
+		}, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(HEC): %v", err)
@@ -546,14 +546,14 @@ func TestHECTokenLifecycleAndNativeAuthorizationIsolation(t *testing.T) {
 	}
 
 	var storedPurpose, defaultIndexID, defaultHost string
-	var indexerAcknowledgment int
+	var indexerAcknowledgment bool
 	if err := db.SQLDB().QueryRowContext(ctx, `
 		SELECT token.purpose, profile.default_index_id,
 		       profile.default_host, profile.indexer_acknowledgment
 		FROM ingestion_tokens AS token
 		JOIN ingestion_token_hec_profiles AS profile
 		  ON profile.ingestion_token_id = token.ingestion_token_id
-		WHERE token.ingestion_token_id = ?`, issued.Token.ID).
+		WHERE token.ingestion_token_id = $1`, issued.Token.ID).
 		Scan(
 			&storedPurpose,
 			&defaultIndexID,
@@ -565,9 +565,9 @@ func TestHECTokenLifecycleAndNativeAuthorizationIsolation(t *testing.T) {
 	if storedPurpose != string(IngestionTokenPurposeHEC) ||
 		defaultIndexID != mainIndex.ID ||
 		defaultHost != "hec-producer" ||
-		indexerAcknowledgment != 1 {
+		!indexerAcknowledgment {
 		t.Fatalf(
-			"stored HEC profile = purpose:%q index:%q host:%q ack:%d",
+			"stored HEC profile = purpose:%q index:%q host:%q ack:%v",
 			storedPurpose,
 			defaultIndexID,
 			defaultHost,
@@ -706,7 +706,7 @@ func TestHECTokenLifecycleAndNativeAuthorizationIsolation(t *testing.T) {
 	}
 	if _, err := db.SQLDB().ExecContext(
 		ctx,
-		`DELETE FROM ingestion_tokens WHERE ingestion_token_id = ?`,
+		`DELETE FROM ingestion_tokens WHERE ingestion_token_id = $1`,
 		revoked.ID,
 	); err != nil {
 		t.Fatalf("delete revoked HEC tombstone with cascaded profile: %v", err)
@@ -732,7 +732,7 @@ func TestIngestionTokenPurposeCreationValidation(t *testing.T) {
 	native, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "legacy native default",
 		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		BoundCollectorID:  testCollectorID, OrganizationID: 1, IssuerUserID: 42,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(legacy native default): %v", err)

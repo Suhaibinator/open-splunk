@@ -81,6 +81,8 @@ const (
 // Config owns no database lifetime. Directory must be dedicated to retained
 // search artifacts and may not be shared by two running stores.
 type Config struct {
+	Blobs              BlobStore
+	CaptureOptions     CaptureOptions
 	DB                 *sql.DB
 	Directory          string
 	Clock              func() time.Time
@@ -102,6 +104,7 @@ const (
 	AccessInspect
 	AccessRefresh
 	AccessLaunch
+	AccessAuthorization
 )
 
 // Record is detached durable metadata. It never exposes artifact paths.
@@ -151,7 +154,7 @@ type Settings struct {
 	Lifetime       time.Duration
 }
 
-// Stats is an exact process-local capacity snapshot backed by SQLite.
+// Stats is an exact process-local capacity snapshot backed by PostgreSQL.
 type Stats struct {
 	Jobs          uint64
 	ArtifactBytes uint64
@@ -177,7 +180,7 @@ func resolvedConfig(config Config) (Config, error) {
 		return Config{}, ErrInvalid
 	}
 	if config.MaximumJobs < 0 || config.MaximumJobs > maximumJobs ||
-		config.MaximumBytes > maximumArtifactBytes ||
+		(config.Blobs == nil && config.MaximumBytes > maximumArtifactBytes) ||
 		config.TombstoneRetention < 0 || config.ReapBatchSize < 0 ||
 		config.ReapBatchSize > maximumReapBatchSize {
 		return Config{}, ErrInvalid
@@ -187,6 +190,14 @@ func resolvedConfig(config Config) (Config, error) {
 	}
 	if config.MaximumBytes == 0 {
 		config.MaximumBytes = DefaultMaximumBytes
+	}
+	if config.Blobs != nil {
+		options, err := config.CaptureOptions.resolved()
+		if err != nil {
+			return Config{}, err
+		}
+		config.CaptureOptions = options
+		config.MaximumBytes = options.GlobalBytes
 	}
 	if config.CleanupInterval == 0 {
 		config.CleanupInterval = DefaultCleanupInterval

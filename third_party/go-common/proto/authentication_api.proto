@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package go_common.v1;
+
+option go_package = "./proto_models";
+
+import "authentication.proto";
+import "pagination.proto";
+
+// --------------------
+// Active Session API Messages
+// --------------------
+
+message ListActiveSessionsRequest {
+  PaginationRequest pagination = 1;
+}
+
+message ListActiveSessionsResponse {
+  repeated ActiveSession sessions = 1;
+  PaginationResponse pagination = 2;
+}
+
+message RevokeSessionRequest {
+  string session_id = 1;
+}
+
+message RevokeSessionResponse {
+  uint32 sessions_revoked = 1;
+}
+
+message RevokeOtherSessionsRequest {
+}
+
+message RevokeOtherSessionsResponse {
+  uint32 sessions_revoked = 1;
+}

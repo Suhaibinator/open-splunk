@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -15,26 +16,28 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/protostrict"
+	"github.com/Suhaibinator/open-splunk/internal/resourcepolicy"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type indexedEntry struct {
-	jobID         string
-	appID         string
-	savedSearchID string
-	state         int64
-	searchText    string
-	createdAt     int64
-	finishedAt    int64
-	duration      int64
-	matchedEvents int64
-	encoded       []byte
-	checksum      [sha256.Size]byte
+	sourceIndexNames []byte
+	jobID            string
+	appID            string
+	savedSearchID    string
+	state            int64
+	searchText       string
+	createdAt        int64
+	finishedAt       int64
+	duration         int64
+	matchedEvents    int64
+	encoded          []byte
+	checksum         [sha256.Size]byte
 }
 
-func normalizeScope(scope AccessScope) (AccessScope, error) {
+func normalizeOwnerScope(scope AccessScope) (AccessScope, error) {
 	scope.TenantID = strings.TrimSpace(scope.TenantID)
 	scope.OwnerID = strings.TrimSpace(scope.OwnerID)
 	if err := validateText("tenant ID", scope.TenantID, maximumTenantIDBytes, false); err != nil {
@@ -44,6 +47,39 @@ func normalizeScope(scope AccessScope) (AccessScope, error) {
 		return AccessScope{}, err
 	}
 	return scope, nil
+}
+
+func normalizeScope(scope AccessScope) (AccessScope, error) {
+	scope, err := normalizeOwnerScope(scope)
+	if err != nil {
+		return AccessScope{}, err
+	}
+	if scope.OrganizationID == "" && scope.SiteAdministrator {
+		return scope, nil
+	}
+	org, err := strconv.ParseInt(scope.OrganizationID, 10, 64)
+	if err != nil || org <= 0 || strconv.FormatInt(org, 10) != scope.OrganizationID {
+		return AccessScope{}, invalid("organization scope is required")
+	}
+	return scope, nil
+}
+func normalizeWriteScope(scope AccessScope) (AccessScope, error) {
+	scope, err := normalizeScope(scope)
+	if err != nil {
+		return AccessScope{}, err
+	}
+	if scope.OrganizationID == "" {
+		return AccessScope{}, invalid("organization scope is required")
+	}
+	scope.SiteAdministrator = false
+	return scope, nil
+}
+func scopeOrganization(scope AccessScope) int64 {
+	org, _ := strconv.ParseInt(scope.OrganizationID, 10, 64)
+	return org
+}
+func persistedScope(tenant, owner string, org int64) (AccessScope, error) {
+	return normalizeWriteScope(AccessScope{TenantID: tenant, OwnerID: owner, OrganizationID: strconv.FormatInt(org, 10)})
 }
 
 func normalizeEntry(input *opensplunk.SearchHistoryEntry) (*opensplunk.SearchHistoryEntry, indexedEntry, error) {
@@ -130,10 +166,15 @@ func normalizeEntry(input *opensplunk.SearchHistoryEntry) (*opensplunk.SearchHis
 	if len(encoded) == 0 || len(encoded) > maximumEntryBytes {
 		return nil, indexedEntry{}, invalid(fmt.Sprintf("search-history entry cannot exceed %d bytes", maximumEntryBytes))
 	}
+	sourceIndexNames, err := resourcepolicy.SourceNames(entry.Definition, entry.EffectiveIndexScope...)
+	if err != nil {
+		return nil, indexedEntry{}, invalid(err.Error())
+	}
 	appID := entry.Definition.GetAppId()
 	savedSearchID := entry.Source.GetSavedSearchId()
 	indexed := indexedEntry{
-		jobID: entry.SearchJobId, appID: appID, savedSearchID: savedSearchID,
+		sourceIndexNames: sourceIndexNames,
+		jobID:            entry.SearchJobId, appID: appID, savedSearchID: savedSearchID,
 		state: int64(entry.FinalState), searchText: entry.Definition.Spl,
 		createdAt: created.UnixMicro(), finishedAt: finished.UnixMicro(),
 		duration: int64(duration), matchedEvents: int64(entry.MatchedEvents),

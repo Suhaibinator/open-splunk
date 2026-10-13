@@ -21,10 +21,10 @@ func TestIntegrationHiddenCorruptionIsNotAReadOracle(t *testing.T) {
 			corrupt: func(t *testing.T, database *control.DB) {
 				dropTrigger(t, database, "knowledge_definition_blob_update_is_forbidden")
 				mustExec(t, database, `UPDATE knowledge_definition_blobs
-					SET definition_proto = X'00', definition_bytes = 1
-					WHERE tenant_id = ? AND definition_digest = (
+					SET definition_proto = decode('00','hex'), definition_bytes = 1
+					WHERE tenant_id = $1 AND definition_digest = (
 						SELECT definition_digest FROM knowledge_objects
-						WHERE tenant_id = ? AND knowledge_object_id = 'ko-hidden-source'
+						WHERE tenant_id = $2 AND knowledge_object_id = 'ko-hidden-source'
 					)`, testTenant, testTenant)
 			},
 		},
@@ -34,7 +34,7 @@ func TestIntegrationHiddenCorruptionIsNotAReadOracle(t *testing.T) {
 				dropTrigger(t, database, "knowledge_list_projection_update_is_forbidden")
 				mustExec(t, database, `UPDATE knowledge_object_list_projections
 					SET description = 'xxxxxx'
-					WHERE tenant_id = ? AND knowledge_object_id = 'ko-hidden-source'`, testTenant)
+					WHERE tenant_id = $1 AND knowledge_object_id = 'ko-hidden-source'`, testTenant)
 			},
 		},
 		{
@@ -43,7 +43,7 @@ func TestIntegrationHiddenCorruptionIsNotAReadOracle(t *testing.T) {
 				dropTrigger(t, database, "knowledge_list_selector_update_is_forbidden")
 				mustExec(t, database, `UPDATE knowledge_object_list_selector_patterns
 					SET value = 'xxxxxx-*'
-					WHERE tenant_id = ? AND knowledge_object_id = 'ko-hidden-source'
+					WHERE tenant_id = $1 AND knowledge_object_id = 'ko-hidden-source'
 					  AND dimension = 'host'`, testTenant)
 			},
 		},
@@ -52,7 +52,7 @@ func TestIntegrationHiddenCorruptionIsNotAReadOracle(t *testing.T) {
 			corrupt: func(t *testing.T, database *control.DB) {
 				dropTrigger(t, database, "knowledge_dependency_update_is_forbidden")
 				mustExec(t, database, `UPDATE knowledge_object_dependencies SET ordinal = 1
-					WHERE tenant_id = ? AND source_object_id = 'ko-hidden-source'
+					WHERE tenant_id = $1 AND source_object_id = 'ko-hidden-source'
 					  AND source_object_version = 1`, testTenant)
 			},
 		},

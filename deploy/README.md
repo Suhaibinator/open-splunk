@@ -1,70 +1,62 @@
-# Docker Compose with an existing ClickHouse
+# Deployment and recovery
 
-For coordinated backup and restore, use the [recovery topology and procedure](#coordinated-deployment-recovery) below.
-
-The default deployment starts one Open Splunk server and connects it to an
-existing ClickHouse instance over the native protocol. The server applies its
-embedded ClickHouse migrations before it becomes ready; there is no separate
-migration container.
-
-Open Splunk always owns a dedicated database named `open_splunk`. Existing
-databases such as `logs` are not read, migrated, or modified.
-
-The supplied service publishes its plaintext HTTP listener only on host
-loopback (`127.0.0.1`). This is also the HEC transport when HEC is enabled.
-Workspace APIs and the search WebSocket trust the caller; the administrator
-sign-in token protects administrative routes only. Host and Origin checks do
-not authenticate clients, and TLS alone does not provide workspace access
-control. Remote workspace access requires an authenticated TLS reverse proxy
-that protects the complete browser/API listener, including WebSocket upgrades,
-and prevents clients from bypassing it. Keep the host and the shared Docker
-network trusted: containers on that network can reach the server directly.
+Open Splunk uses Google account sessions for browser authentication, GoCommon
+organizations for membership, PostgreSQL for identity and operational metadata,
+private MinIO for complete result captures and streamed exports, and ClickHouse
+for ingested events. The supplied production Compose joins an existing
+ClickHouse service and preserves its data and volumes.
 
 ## Requirements
 
-- Docker with Compose v2;
-- an existing ClickHouse native listener reachable from the Open Splunk
-  container (for example, `per-clickhouse:9000`); and
-- a ClickHouse account with enough privileges to create and migrate
-  `open_splunk`, read and write its tables, execute deletion mutations, and
-  inspect the required `system.tables`, `system.parts`, and `system.mutations`
-  rows.
-
-The tested ClickHouse release is `26.7.5.10`. Pin that release instead of using
-the mutable `clickhouse/clickhouse-server:latest` tag.
+- An existing ClickHouse native endpoint and account with schema migration and
+  event read/write permissions for the `open_splunk` database.
+- PostgreSQL and a private MinIO bucket with versioning. The supplied Compose
+  adds independent `postgres-data` and `minio-data` volumes.
+- A Google OAuth Web application client. Register
+  `<OPEN_SPLUNK_SERVER_PUBLIC_BASE_URL>/auth/oauth/callback/` as an authorized
+  redirect URI, including the trailing slash.
+- An exact Open Splunk server image. Choose an exact approved MinIO server image
+  from your distribution or registry for `OPEN_SPLUNK_DEPLOY_MINIO_IMAGE`.
+- HTTPS ingress for remote browser access. The Compose HTTP listener is
+  published on loopback; PostgreSQL and MinIO are not host-published.
 
 ## Server configuration
 
-Every normal server setting has both a CLI flag and an explicitly registered
-environment variable. Built-in defaults are applied first, environment values
-override them, and explicitly supplied CLI flags win over environment values.
-Environment values use the same string, Boolean, integer, and duration parsers
-as their CLI counterparts. Lowercase `true` and `false`, decimal integers, and
-Go duration strings such as `30m`, `24h`, or `720h` are the recommended
-spellings. An empty environment value is passed to the option parser rather
-than treated as unset: it is usually invalid for typed values, while string
-options may subsequently apply a documented derived-default rule.
+Flags override their environment counterparts. Sensitive values belong in a
+private environment file or your deployment secret manager. Runtime startup
+requires PostgreSQL, Google configuration and MinIO; there is no browser
+administrator token or password sign-in route.
 
 | Environment variable | CLI flag | Built-in default | Purpose | Accepted values and constraints |
 | --- | --- | --- | --- | --- |
+| `OPEN_SPLUNK_SERVER_TENANT_ID` | `-tenant-id` | `default` | Identify this deployment's physical metadata scope. | Non-empty UTF-8 identifier, at most 255 bytes, without surrounding whitespace or control characters. Preserve it across restarts and recovery; organization membership and index permissions are managed separately. |
+| `OPEN_SPLUNK_SERVER_POSTGRES_DSN` | `-postgres-dsn` | required | PostgreSQL metadata and GoCommon identity database. | PostgreSQL connection string; use TLS for remote databases. |
+| `OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_ID` | `-google-client-id` | required | Google OAuth Web application client. | Register the exact callback URI below. |
+| `OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_SECRET` | `-google-client-secret` | required | Google OAuth client secret. | Keep outside source control. |
+| `OPEN_SPLUNK_SERVER_PUBLIC_BASE_URL` | `-public-base-url` | required | Browser origin and OAuth callback base. | Absolute HTTPS URL, or HTTP localhost for development. |
+| `OPEN_SPLUNK_SERVER_MINIO_ENDPOINT` | `-minio-endpoint` | required | Private MinIO service endpoint. | `host:port`; TLS is controlled separately. |
+| `OPEN_SPLUNK_SERVER_MINIO_ACCESS_KEY` | `-minio-access-key` | required | Private object storage access key. | Account must access the artifact bucket. |
+| `OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY` | `-minio-secret-key` | required | Private object storage secret. | Keep outside source control. |
+| `OPEN_SPLUNK_SERVER_MINIO_BUCKET` | `-minio-bucket` | required | Bulk captures and export artifacts. | Private bucket with versioning enabled. |
+| `OPEN_SPLUNK_SERVER_MINIO_USE_TLS` | `-minio-use-tls` | true | TLS for the MinIO connection. | False only for the isolated local Compose network. |
+| `OPEN_SPLUNK_SERVER_SEARCH_CAPTURE_MAXIMUM_ROWS` | `-search-capture-maximum-rows` | 100000 | Maximum rows in a complete immutable capture. | At most 10000000; exceeding a limit fails capture. |
+| `OPEN_SPLUNK_SERVER_SEARCH_CAPTURE_MAXIMUM_BYTES` | `-search-capture-maximum-bytes` | 268435456 | Maximum bytes in a complete immutable capture. | At most 4294967296, and no larger than the organization budget. |
+| `OPEN_SPLUNK_SERVER_SEARCH_RETENTION_ORGANIZATION_BYTES` | `-search-retention-organization-bytes` | 4294967296 | Aggregate retained-object budget per organization. | At least the capture byte limit, and no larger than the global budget. |
+| `OPEN_SPLUNK_SERVER_SEARCH_RETENTION_GLOBAL_BYTES` | `-search-retention-global-bytes` | 17179869184 | Aggregate retained-object budget across organizations. | At least the organization budget. |
 | `OPEN_SPLUNK_SERVER_VERIFY_EMBEDDED_RELEASE` | `-verify-embedded-release` | `false` | Verify the embedded release payload and exit without opening runtime storage or listeners. | Boolean. |
 | `OPEN_SPLUNK_SERVER_LOG_LEVEL` | `-log-level` | `info` | Set the minimum server and router log level. | Case-insensitive `debug`, `info`, `warn`, or `error`. |
 | `OPEN_SPLUNK_SERVER_LOG_FORMAT` | `-log-format` | `json` | Select the server and router log encoding written to standard error. | Case-insensitive `json` or `console`; `json` is recommended for deployed services. |
-| `OPEN_SPLUNK_SERVER_TENANT_ID` | `-tenant-id` | `default` | Set the single-node tenant identity persisted with tenant-scoped data. | Non-empty UTF-8 after trimming, no control characters, at most 255 bytes. Changing an established identity creates a different tenant scope. |
 | `OPEN_SPLUNK_SERVER_HTTP_LISTEN_ADDRESS` | `-http-listen-address` | `127.0.0.1:8080` | Select the browser API, UI, and HEC listen address. | `host:port`. A wildcard host such as `0.0.0.0` or `[::]` requires an explicit allowed-host list. |
 | `OPEN_SPLUNK_SERVER_HTTP_ALLOWED_HOSTS` | `-http-allowed-hosts` | Derived from the listen host | Admit browser/API `Host` values before origin and authentication checks. | Comma-separated DNS names or IP literals, without schemes, paths, or ports; at most 32 entries. Every browser-facing name must be listed. |
 | `OPEN_SPLUNK_SERVER_HTTP_TLS_CERTIFICATE_FILE` | `-http-tls-certificate-file` | Empty; HTTP | Provide the PEM certificate chain for direct HTTPS. | File path. Must be supplied together with the HTTP private-key file and form a valid matching TLS identity. |
 | `OPEN_SPLUNK_SERVER_HTTP_TLS_PRIVATE_KEY_FILE` | `-http-tls-private-key-file` | Empty; HTTP | Provide the PEM private key for direct HTTPS. | File path. Must be supplied together with the HTTP certificate file and match its certificate. |
 | `OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO` | `-http-trust-x-forwarded-proto` | `false` | Allow a controlled plaintext reverse proxy to assert the browser-facing scheme. | Boolean. When enabled, plaintext requests may contain exactly one `X-Forwarded-Proto` value, exactly `http` or `https`; direct TLS remains authoritative. Enable only when clients cannot bypass the proxy. |
-| `OPEN_SPLUNK_SERVER_CONTROL_DATABASE_FILE` | `-control-database-file` | `open-splunk.db` | Select the persistent SQLite control-plane database. | Persistent file path; empty paths and `:memory:` are rejected during lock acquisition. |
-| `OPEN_SPLUNK_SERVER_MASTER_KEY_FILE` | `-master-key-file` | `<control-database-file>.key` | Select the server master key bound to the control database. | File path. A missing key is generated as 32 bytes with mode `0600`; an existing key must contain exactly 32 bytes. Preserve it with the control database. |
-| `OPEN_SPLUNK_SERVER_LOCK_FILE` | `-server-lock-file` | `/tmp/open-splunk-server-open_splunk.server.lock` | Select the host-wide singleton lock that fences the canonical ClickHouse schema. | Exact absolute path. A custom path must be inside an existing private directory. |
-| `OPEN_SPLUNK_SERVER_EXPORT_ARTIFACT_DIRECTORY` | `-export-artifact-directory` | `<control-database-file>.exports` | Select the private directory for generated export artifacts. | Valid UTF-8 path without NUL bytes; must resolve to a dedicated non-root directory and must not escape through a leading `..`. |
-| `OPEN_SPLUNK_SERVER_SEARCH_ARTIFACT_DIRECTORY` | `-search-artifact-directory` | `<control-database-file>.search-artifacts` | Select the private directory for durable retained-search results. | Dedicated non-root directory owned by the server user. It is exclusively locked while the server runs and stores owner-only files with checksums. |
+| `OPEN_SPLUNK_SERVER_LOCK_FILE` | `-server-lock-file` | `/tmp/open-splunk-server-open_splunk.server.lock` | Host guard for the fixed ClickHouse schema, alongside the PostgreSQL lease. | Private host-shared path; preserve its identity. |
+| `OPEN_SPLUNK_SERVER_MASTER_KEY_FILE` | `-master-key-file` | `data/master.key` | Select the server master key bound to the PostgreSQL metadata. | File path. A missing key is generated as 32 bytes with mode `0600`; an existing key must contain exactly 32 bytes. Preserve it with the PostgreSQL metadata. |
+| `OPEN_SPLUNK_SERVER_EXPORT_ARTIFACT_DIRECTORY` | `-export-artifact-directory` | `data/export-cache` | Select the private directory for bounded temporary export staging. | Valid UTF-8 path without NUL bytes; must resolve to a dedicated non-root directory and must not escape through a leading `..`. |
+| `OPEN_SPLUNK_SERVER_SEARCH_ARTIFACT_DIRECTORY` | `-search-artifact-directory` | `data/search-cache` | Select the private directory for bounded temporary search staging and cache. | Dedicated non-root directory owned by the server user; retained bulk objects reside in private MinIO. |
 | `OPEN_SPLUNK_SERVER_ALERT_PUBLIC_BASE_URL` | `-alert-public-base-url` | disabled | Supply absolute links in webhook payloads and permit alert enabling. | Absolute `http://` or `https://` URL reachable by webhook receivers; HTTPS is recommended outside trusted local development. Alerts may be configured while absent but cannot be enabled. |
 | `OPEN_SPLUNK_SERVER_ALERT_PRIVATE_WEBHOOK_HOSTS` | `-alert-private-webhook-hosts` | empty | Permit named webhook receivers whose validated address is private, loopback, or link-local. | Comma-separated exact DNS hostnames; public HTTPS destinations need no entry. |
-| `OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN` | `-administrator-token` | None; required unless a token file is used | Configure the browser administrator bearer token. | Token68 ASCII, 32–512 bytes, without a `Bearer ` prefix or whitespace; trailing `=` padding is allowed. Mutually exclusive with the token-file setting at the same tier. The environment value is removed after parsing. |
-| `OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN_FILE` | `-administrator-token-file` | None; required unless a raw token is used | Read the browser administrator token from a file. | Regular file owned by the server user, exactly mode `0400` or `0600`, with one hard link. One trailing LF or CRLF is removed. Mutually exclusive with the raw token at the same tier. |
 | `OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS` | `-clickhouse-address` | `127.0.0.1:9000` | Select the ClickHouse native-protocol endpoint. | Non-empty native endpoint, normally `host:port`. In Compose, use the service name and container port rather than a host-published port. |
 | `OPEN_SPLUNK_SERVER_CLICKHOUSE_DATABASE` | `-clickhouse-database` | `open_splunk` | Select the application database used after migrations. | Must be exactly `open_splunk`; the embedded schema does not support another database name. |
 | `OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME` | `-clickhouse-username` | `default` | Configure the ClickHouse account used for migrations and runtime operations. | Non-empty string. The account must have the privileges described under Requirements. |
@@ -89,7 +81,7 @@ ISO-8601 timestamp, level, `open-splunk-server` logger name, caller, message,
 and typed context fields. The console encoder exposes the same information in a
 human-readable form. The selected logger is also used by the embedded router.
 
-For administrator and ClickHouse credentials, select either the raw value or
+For ClickHouse credentials, select either the raw value or
 the file at one configuration tier. Supplying both forms at the same tier is
 an error. An explicit CLI credential form overrides both environment forms.
 File flags are safer than raw CLI flags because command-line arguments may be
@@ -102,47 +94,30 @@ remains the collector daemon's configuration source.
 
 ### Compose deployment variables
 
-These variables are consumed by Compose or the development scripts. They are
-not passed to `open-splunk-server` and therefore have no CLI equivalents.
+| Environment variable | Default | Purpose and constraints |
+| --- | --- | --- |
+| `OPEN_SPLUNK_DEPLOY_SERVER_IMAGE` | Required | Exact approved Open Splunk server image tag or digest used by production and recovery Compose. |
+| `OPEN_SPLUNK_DEPLOY_HTTP_PORT` | `8080` | Host TCP port published on `127.0.0.1` for the server's container port `8080`; use an available port from `1` through `65535`. |
+| `OPEN_SPLUNK_DEPLOY_CLICKHOUSE_NATIVE_PORT` | `9000` | Development Compose's loopback host TCP port for ClickHouse container port `9000`; use an available port from `1` through `65535`. Production joins an existing ClickHouse endpoint configured with `OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS`. |
 
-| Environment variable | Default | Purpose | Accepted values and constraints |
-| --- | --- | --- | --- |
-| `OPEN_SPLUNK_DEPLOY_SERVER_IMAGE` | None; required by the supplied server Compose service | Select the server image for Docker to pull and run. | Exact tagged or digest-pinned OCI image reference. Published deployments should not use `latest`. |
-| `OPEN_SPLUNK_DEPLOY_HTTP_PORT` | `8080` | Select the loopback Docker host port published to container port `8080`; the development runner also uses it for its loopback listener. | Valid available TCP port on the host, without an address. It does not change the loopback binding. |
-| `OPEN_SPLUNK_DEPLOY_CLICKHOUSE_NATIVE_PORT` | `9000` | Select the loopback host port published by the development-only ClickHouse Compose service. | Valid available TCP port on the host. Server containers still connect to ClickHouse's container port `9000`. |
+`OPEN_SPLUNK_DEPLOY_SERVER_IMAGE` selects the server image. `OPEN_SPLUNK_DEPLOY_HTTP_PORT`
+changes the loopback publication port. `OPEN_SPLUNK_POSTGRES_PASSWORD` initializes
+the independent PostgreSQL account; Compose derives its internal server DSN.
+`OPEN_SPLUNK_DEPLOY_POSTGRES_IMAGE` can select another exact compatible image.
+`OPEN_SPLUNK_DEPLOY_MINIO_IMAGE` is required and must identify your approved
+MinIO server image. Keep the access and secret keys aligned between the server
+and MinIO service. `.env.example` lists these settings without credentials.
 
 ## Add Open Splunk to an existing Compose project
 
-Copy the `server` service, volumes, and `per-obs-network` reference from
-[`docker-compose.yaml`](docker-compose.yaml) into the Compose project that
-already contains ClickHouse. Both services must share the same network, so the
-ClickHouse service name resolves inside the Open Splunk container.
-
-The `image` value selects the Open Splunk artifact before Docker can pull or
-start it. It is deployment configuration, not the server's runtime version.
-Official images also contain their product version and source revision in the
-binary and OCI metadata. When adding the service to an existing Compose file,
-either replace the variable with an exact version directly:
+For an existing Compose project, paste this service block and its independent
+volumes into the project. It joins the existing `per-obs-network`; retain the
+existing ClickHouse service and volume declarations.
 
 ```yaml
 services:
   server:
-    image: ghcr.io/suhaibinator/open-splunk-server:0.MINOR.PATCH
-```
-
-or retain the `OPEN_SPLUNK_DEPLOY_SERVER_IMAGE` variable used by the supplied
-Compose file. Replace `0.MINOR.PATCH` with an exact published version in either
-case; do not use `latest` as a deployment pin.
-
-For an existing Compose project, paste the following `server` entry beneath
-its existing `services:` key, merge the three volume entries beneath its
-existing top-level `volumes:` key, and use the network already shared with
-ClickHouse. Do not add a second `services:` or `volumes:` key.
-
-```yaml
-services:
-  server:
-    image: ghcr.io/suhaibinator/open-splunk-server:0.MINOR.PATCH
+    image: "${OPEN_SPLUNK_DEPLOY_SERVER_IMAGE:?set OPEN_SPLUNK_DEPLOY_SERVER_IMAGE to an exact Open Splunk server image}"
     restart: unless-stopped
     init: true
     user: "65532:65532"
@@ -153,27 +128,44 @@ services:
       - no-new-privileges:true
     environment:
       TMPDIR: /tmp
+      OPEN_SPLUNK_SERVER_LOG_LEVEL: "${OPEN_SPLUNK_SERVER_LOG_LEVEL:-info}"
+      OPEN_SPLUNK_SERVER_LOG_FORMAT: "${OPEN_SPLUNK_SERVER_LOG_FORMAT:-json}"
       OPEN_SPLUNK_SERVER_HTTP_LISTEN_ADDRESS: 0.0.0.0:8080
-      OPEN_SPLUNK_SERVER_HTTP_ALLOWED_HOSTS: "${OPEN_SPLUNK_SERVER_HTTP_ALLOWED_HOSTS:?set OPEN_SPLUNK_SERVER_HTTP_ALLOWED_HOSTS}"
+      OPEN_SPLUNK_SERVER_HTTP_ALLOWED_HOSTS: "${OPEN_SPLUNK_SERVER_HTTP_ALLOWED_HOSTS:-localhost,127.0.0.1}"
       OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO: "${OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO:-false}"
-      OPEN_SPLUNK_SERVER_CONTROL_DATABASE_FILE: /var/lib/open-splunk/state/private/open-splunk.db
       OPEN_SPLUNK_SERVER_MASTER_KEY_FILE: /var/lib/open-splunk/state/private/master.key
       OPEN_SPLUNK_SERVER_LOCK_FILE: /var/lib/open-splunk/lock/private/open-splunk-server-open_splunk.server.lock
       OPEN_SPLUNK_SERVER_EXPORT_ARTIFACT_DIRECTORY: /var/lib/open-splunk/exports/private
-      OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN: "${OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN:?set OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN}"
-      # Set this to the existing per-clickhouse account's exact password.
-      OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS: per-clickhouse:9000
-      OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME: clickhouse
+      OPEN_SPLUNK_SERVER_ALERT_PUBLIC_BASE_URL: "${OPEN_SPLUNK_SERVER_ALERT_PUBLIC_BASE_URL:-}"
+      OPEN_SPLUNK_SERVER_ALERT_PRIVATE_WEBHOOK_HOSTS: "${OPEN_SPLUNK_SERVER_ALERT_PRIVATE_WEBHOOK_HOSTS:-}"
+      OPEN_SPLUNK_SERVER_POSTGRES_DSN: "postgres://open_splunk:${OPEN_SPLUNK_POSTGRES_PASSWORD:?set OPEN_SPLUNK_POSTGRES_PASSWORD}@postgres:5432/open_splunk?sslmode=disable"
+      OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_ID: "${OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_ID:?set OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_ID}"
+      OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_SECRET: "${OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_SECRET:?set OPEN_SPLUNK_SERVER_GOOGLE_CLIENT_SECRET}"
+      OPEN_SPLUNK_SERVER_PUBLIC_BASE_URL: "${OPEN_SPLUNK_SERVER_PUBLIC_BASE_URL:?set the browser origin}"
+      OPEN_SPLUNK_SERVER_MINIO_ENDPOINT: minio:9000
+      OPEN_SPLUNK_SERVER_MINIO_ACCESS_KEY: "${OPEN_SPLUNK_SERVER_MINIO_ACCESS_KEY:-open-splunk}"
+      OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY: "${OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY:?set OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY}"
+      OPEN_SPLUNK_SERVER_MINIO_BUCKET: "${OPEN_SPLUNK_SERVER_MINIO_BUCKET:-open-splunk-artifacts}"
+      OPEN_SPLUNK_SERVER_MINIO_USE_TLS: "false"
+      OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS: "${OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS:-per-clickhouse:9000}"
+      OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME: "${OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME:-clickhouse}"
       OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD: "${OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD:?set OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD}"
+      OPEN_SPLUNK_SERVER_HEC_ENABLED: "${OPEN_SPLUNK_SERVER_HEC_ENABLED:-false}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
     ports:
+      # Google sessions authenticate browser APIs. Terminate HTTPS at ingress.
       - target: 8080
         published: "${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}"
         host_ip: 127.0.0.1
         protocol: tcp
     volumes:
-      - open-splunk-state:/var/lib/open-splunk/state
-      - open-splunk-lock:/var/lib/open-splunk/lock
-      - open-splunk-exports:/var/lib/open-splunk/exports
+      - server-state:/var/lib/open-splunk/state
+      - server-lock:/var/lib/open-splunk/lock
+      - server-exports:/var/lib/open-splunk/exports
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,mode=0700,uid=65532,gid=65532
     networks:
@@ -192,449 +184,214 @@ services:
     stop_grace_period: 60s
     pids_limit: 512
 
-volumes:
-  open-splunk-state:
-  open-splunk-lock:
-  open-splunk-exports:
-```
+  postgres:
+    image: "${OPEN_SPLUNK_DEPLOY_POSTGRES_IMAGE:-postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873}"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: open_splunk
+      POSTGRES_USER: open_splunk
+      POSTGRES_PASSWORD: "${OPEN_SPLUNK_POSTGRES_PASSWORD:?set OPEN_SPLUNK_POSTGRES_PASSWORD}"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    networks:
+      - per-obs-network
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U open_splunk -d open_splunk"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
-If the existing project uses different service, account, network, or published
-port names, change `per-clickhouse`, `clickhouse`, `per-obs-network`, or the
-`published` port respectively. Keep the `host_ip: 127.0.0.1` binding and
-ClickHouse's container-side native port at `9000` unless its listener itself
-was reconfigured.
+  minio:
+    image: "${OPEN_SPLUNK_DEPLOY_MINIO_IMAGE:?set an exact approved MinIO server image}"
+    restart: unless-stopped
+    command: [server, /data]
+    environment:
+      MINIO_ROOT_USER: "${OPEN_SPLUNK_SERVER_MINIO_ACCESS_KEY:-open-splunk}"
+      MINIO_ROOT_PASSWORD: "${OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY:?set OPEN_SPLUNK_SERVER_MINIO_SECRET_KEY}"
+    volumes:
+      - minio-data:/data
+    networks:
+      - per-obs-network
+
+volumes:
+  postgres-data:
+  minio-data:
+  server-state:
+  server-lock:
+  server-exports:
+
+```
 
 ### Connect to the existing ClickHouse service
 
-Use the ClickHouse **Compose service name and container port**, not the host's
-published port. For example, given this existing service:
-
-```yaml
-services:
-  per-clickhouse:
-    image: clickhouse/clickhouse-server:26.7.5.10
-    environment:
-      CLICKHOUSE_USER: clickhouse
-      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}"
-      CLICKHOUSE_DB: logs
-    ports:
-      - "8123:8123"
-      - "9030:9000"
-    networks:
-      - per-obs-network
-```
-
-the corresponding Open Splunk settings are:
-
-```yaml
-services:
-  server:
-    environment:
-      # This must be the password for CLICKHOUSE_USER above.
-      OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS: per-clickhouse:9000
-      OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME: clickhouse
-      OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}"
-    networks:
-      - per-obs-network
-```
-
-Here, `9030` is only for clients connecting through the Docker host. Containers
-on `per-obs-network` connect directly to `per-clickhouse:9000`. The existing
-`CLICKHOUSE_DB: logs` setting does not need to change: Open Splunk connects with
-the configured account, then creates and owns a separate `open_splunk` database.
-It does not read or modify `logs`.
-
-If the existing ClickHouse password is written directly in its service instead
-of read from `${CLICKHOUSE_PASSWORD}`, give
-`OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD` that same exact value. Prefer placing the
-shared value in the Compose `.env` file instead of duplicating it in YAML:
-
-```dotenv
-CLICKHOUSE_PASSWORD=replace-with-the-existing-clickhouse-password
-```
+Use the service name and its container-side native port, for example
+`per-clickhouse:9000`. Do not use `localhost` from the server container or replace
+an existing ClickHouse data volume. Open Splunk owns the separate `open_splunk`
+database; another application database such as `logs` can remain in place.
 
 ### Configure browser access
 
-The supplied service listens on `0.0.0.0:8080` inside the container so Docker
-can publish its HTTP port on host loopback. A wildcard container listener
-requires an explicit allowlist of Host header names:
+Set the public base URL to the browser origin, register its exact Google callback
+URI, and add the ingress hostname to `OPEN_SPLUNK_SERVER_HTTP_ALLOWED_HOSTS`.
+Enable forwarded-protocol trust only behind a controlled HTTPS ingress that
+replaces `X-Forwarded-Proto`. The scratch images include the builder's CA bundle
+so Google HTTPS and trusted object-store endpoints can be verified. The server
+image also includes PostgreSQL 18 `pg_dump` and `pg_restore` with their target
+architecture library dependencies for native metadata backup and restore. It
+does not require a runtime shell.
 
-```yaml
-environment:
-  OPEN_SPLUNK_SERVER_HTTP_LISTEN_ADDRESS: 0.0.0.0:8080
-  OPEN_SPLUNK_SERVER_HTTP_ALLOWED_HOSTS: "localhost,127.0.0.1,192.168.1.50,logs.example.internal"
+### Account and organization access
+
+Any Google account can sign in. First sign-in creates a user with no
+organization memberships and no index access. There is no first-user promotion
+or administrator bootstrap account.
+
+An operator with database access can deliberately assign user type 44 to an
+already-registered account, for example:
+
+```sql
+UPDATE gocommon_users SET user_type = 44 WHERE email = 'operator@example.com';
 ```
 
-List every hostname or IP address that a browser will use to open Open Splunk.
-Use exact comma-separated names without URL schemes, paths, or ports. The
-ClickHouse service name does not belong in this list unless browsers also use
-that name to reach Open Splunk.
+Site administrators have access to all organizations and indexes. The
+Organizations screen creates a root organization with an explicitly selected
+existing owner. Parent Admins and Owners can create children. Every child member
+must already belong to its parent or be admitted through GoCommon's configured
+parent auto-add policy. Each organization retains an owner.
 
-Keep `host_ip: 127.0.0.1` when a proxy runs on the Docker host. A remote proxy
-requires an explicit Compose change to a private host binding and firewall
-rules admitting only that proxy. Do not publish the workspace directly to
-untrusted clients. The proxy must authenticate every workspace HTTP request
-and WebSocket upgrade before forwarding it; Open Splunk continues to use one
-shared workspace identity behind that boundary. A proxy on the shared Docker
-network can use `server:8080` without broadening host publication.
+Organization roles are Viewer (1), Admin (23) and Owner (44). Index permissions
+can grant or deny search, ingestion, management and grant editing to roles or
+individual users. Deny wins over allow; user rules never create organization
+membership. Select an organization before ordinary workspace operations.
 
-When a controlled reverse proxy terminates browser HTTPS and uses plaintext
-HTTP for its connection to Open Splunk, opt in to its scheme assertion:
-
-```dotenv
-OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO=true
-```
-
-The proxy must replace, rather than append to, `X-Forwarded-Proto`. For nginx,
-the forwarding fragment below assumes authentication is already enforced for
-this location; it is not a complete access-control configuration:
-
-```nginx
-location / {
-    proxy_pass http://127.0.0.1:8080;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-```
-
-Only enable this setting when clients cannot bypass the controlled proxy and
-reach the plaintext Open Splunk listener directly. It accepts the forwarded
-scheme globally on plaintext connections; direct TLS remains authoritative.
-The setting uses the same Boolean syntax as the corresponding CLI flag and
-defaults to `false` when unset.
-
-### Generate the administrator sign-in token
-
-`OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN` is the Open Splunk browser sign-in credential.
-It is unrelated to the ClickHouse password. Generate it once and retain it:
+### Local development
 
 ```sh
-openssl rand -base64 48
+./deploy/generate-env.sh --development
+# Edit deploy/.env.development: Google ID/secret and approved MinIO image.
+make dev-clickhouse
+make run
 ```
 
-Paste the single-line output into `.env` without a `Bearer ` prefix:
-
-```dotenv
-OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN=replace-with-the-generated-value
-```
-
-The token must contain 32 through 512 ASCII characters from letters, digits,
-`-._~+/`, with `=` permitted only as trailing base64 padding. Do not add spaces,
-quotes, or line breaks to the value.
-
-Create the environment file:
-
-```sh
-cd deploy
-cp .env.example .env
-```
-
-Set these values in `.env`:
-
-```dotenv
-OPEN_SPLUNK_DEPLOY_SERVER_IMAGE=ghcr.io/suhaibinator/open-splunk-server:0.MINOR.PATCH
-OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS=per-clickhouse:9000
-OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME=clickhouse
-OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD=replace-with-the-existing-password
-OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN=replace-with-a-long-random-token
-OPEN_SPLUNK_SERVER_HTTP_ALLOWED_HOSTS=localhost,127.0.0.1,logs.example.internal
-OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO=false
-```
-
-Replace `0.MINOR.PATCH` with an exact published version. Generate the
-administrator token once with `openssl rand -base64 48` and retain it; it is
-the browser sign-in credential.
-
-Pull and start the server:
-
-```sh
-docker pull "$OPEN_SPLUNK_DEPLOY_SERVER_IMAGE"
-docker compose up --detach --wait server
-```
-
-Open `http://127.0.0.1:8080/signin/` and enter the configured administrator
-token. On the first start, the server connects to ClickHouse's `default`
-database, creates and migrates `open_splunk`, then opens its runtime
-connections to `open_splunk`. Later starts apply only pending migrations.
-
-If ClickHouse is not ready yet, the server exits without reporting readiness;
-the `restart: unless-stopped` policy retries startup.
+The environment generator creates independent ClickHouse, PostgreSQL and MinIO
+credentials and refuses to overwrite an existing file. The development runner
+reads assignments as data and never evaluates them as shell commands. Open
+`http://localhost:8080/signin/`; configure that exact Google callback origin.
+`make dev-down` stops the isolated development services without deleting volumes.
 
 ## Health and readiness
 
-`GET /healthz` checks only that the HTTP process can answer and returns
-`200 ok`. `GET /readyz` also checks runtime readiness and ClickHouse, returning
-`503 not ready` until dependencies are usable. Both are uncached plaintext
-responses. The supplied container healthcheck invokes the server's restricted
-loopback-only `healthcheck` subcommand against `/readyz`; use readiness, not
-liveness, for rollout and traffic admission.
-
-## Startup errors
-
-`restart: unless-stopped` causes a configuration error to appear repeatedly as
-Docker restarts the failed process. Correct the setting, then recreate and
-follow the service:
-
-```sh
-docker compose up --detach --force-recreate server
-docker compose logs --follow server
-```
-
-| Error | Meaning and correction |
-| --- | --- |
-| `wildcard HTTP listeners require an explicit -http-allowed-hosts value` | `-http-listen-address` uses `0.0.0.0` or `[::]`, but `-http-allowed-hosts` is absent or empty. Add the exact browser-facing hostnames and IP addresses as described above. |
-| `administrator token contains an invalid bearer token` | `OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN` is empty, too short, contains whitespace or unsupported characters, or includes a `Bearer ` prefix. Generate and paste a new token as described above. Do not use the ClickHouse password as this token. |
-| `configure -http-trust-x-forwarded-proto from OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO` | The reverse-proxy opt-in is not a valid Boolean value. Use the same syntax accepted by the CLI Boolean flag. |
-| ClickHouse connection failure at `localhost`, `9030`, or another host-published port | From the Open Splunk container, use the ClickHouse Compose service name and its container port, normally `per-clickhouse:9000`. Ensure both services share a network. |
-| ClickHouse authentication failure | `OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME` and `OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD` must match the existing ClickHouse account's `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD`. |
+`/healthz` checks liveness and `/readyz` reports backend readiness. The server
+fails startup when required identity/database/storage configuration is missing.
+Use `open-splunk-server help configuration` for the executable flag reference.
 
 ## Transport and credential model
 
-Plaintext HTTP and plaintext native ClickHouse are supported by default,
-including across a Docker bridge network. Do not expose either transport over
-an untrusted network. Browser traffic leaving the trusted host requires an
-authenticated TLS reverse proxy with no direct route around its access control.
+GoCommon owns Google authorization state, callback exchange and HttpOnly session
+cookies. OpenSplunk sends organization context in `X-OpenSplunk-Organization-ID`
+and `organization_id` on WebSockets/downloads. Backend handlers authorize the
+current user and organization before reading or mutating resources. Machine
+HEC/collector ingestion credentials remain separate from browser sessions.
 
-The same ClickHouse username and password are used for schema migration,
-runtime reads and writes, inspection, and index deletion. The password and
-administrator token are read from the environment and removed from the server
-process environment immediately after configuration. Docker still exposes
-configured environment values through its container metadata, so protect
-access to the Docker daemon and the `.env` file.
-
-Verified TLS remains available for non-Compose or customized deployments via
-`-http-tls-certificate-file`, `-http-tls-private-key-file`,
-`-clickhouse-tls-enabled`, `-clickhouse-tls-ca-certificate-file`, and
-`-clickhouse-tls-server-name`.
+Complete captures and export objects stay private. Capture row/byte limits and
+organization/global retained-object budgets are enforced by the API and
+advertised in bootstrap. Byte settings are unsigned integer counts; zero
+resolves the native default. Capture progress remains distinct from the
+bounded browser preview and becomes exportable only after completion. Native browser downloads
+stream through the authenticated server rather than materializing an entire
+artifact in JavaScript memory or handing out persistent public links. Session
+and organization changes clear private browser state and restart subscriptions.
 
 ## Persistent state
 
-The Compose service persists the SQLite control plane, generated master key,
-singleton lock, retained-search artifacts, and export artifacts in named
-volumes. ClickHouse data remains owned by the existing ClickHouse service. The
-default Compose deployment does not configure backup or restore jobs; back up
-both systems together using the coordinated procedure below.
-
+Back up PostgreSQL identity and operational metadata, the private versioned
+MinIO bucket, the server master key, and ClickHouse event data. Preserve the
+PostgreSQL ownership lease and host guard identity across restarts. `server-state` holds keys and legacy local
+staging; bulk runtime captures and exports are stored in MinIO. Never delete or
+reinitialize the existing ClickHouse volume during this migration.
 
 ## Coordinated deployment recovery
 
-A deployment recovery set binds the stopped server's SQLite database, master
-key, file-backed administrator token, retained search artifacts, and one native
-ClickHouse archive to the same generation. Keep both the private recovery-set
-directory and its exact archive. Independent `backup-control-plane`,
-`verify-control-plane-backup`, and `restore-control-plane` commands cover only
-SQLite and local artifacts; they cannot recover ingested ClickHouse data.
+Stop the server before taking a coordinated recovery set. Native commands back
+up PostgreSQL identity and operational metadata, the referenced private MinIO
+object versions, the master key and a native ClickHouse archive. Restore into
+an empty PostgreSQL schema with the same schema identity and fresh ClickHouse
+target volumes. Do not clear or replace the live ClickHouse data volume.
 
-Use the **same release image** for backup, verification, restore, and the first
-restart. These commands validate the embedded release and migration identities.
-Discover the full input contract without touching deployment state with:
+Provide `OPEN_SPLUNK_SERVER_POSTGRES_DSN` and the five
+`OPEN_SPLUNK_SERVER_MINIO_*` settings through the operator's protected process
+environment. Backup commands do not require Google credentials. DSN and object
+secrets are consumed before starting PostgreSQL tools; avoid passing secrets
+on the command line. Standalone binaries need PostgreSQL 18 `pg_dump` and
+`pg_restore` on `PATH`; the server image includes them.
 
-```sh
-docker run --rm "$OPEN_SPLUNK_DEPLOY_SERVER_IMAGE" help
-docker run --rm "$OPEN_SPLUNK_DEPLOY_SERVER_IMAGE" help backup-deployment-recovery-set
-docker run --rm "$OPEN_SPLUNK_DEPLOY_SERVER_IMAGE" restore-deployment-recovery-set --help
-```
-
-### Prepare the recovery topology
-
-[`docker-compose.recovery.yaml`](docker-compose.recovery.yaml) is a complete,
-TLS-enabled alternative to the default existing-ClickHouse configuration. Do
-not combine it with `docker-compose.yaml` or the development override: those
-use plaintext ClickHouse and an environment administrator token. The recovery
-configuration runs the pinned ClickHouse release, dedicated backup and restore
-principals with the exact validated grants in
-[`recovery/users.xml.template`](recovery/users.xml.template), and a separate
-operator principal for ordinary migrations/runtime. The operator principal has
-broad database administration privileges; backup and restore commands always
-select their fixed restricted principals and never use it.
-
-On the Docker host, provision a CA certificate, a ClickHouse certificate with
-DNS SAN `clickhouse`, and its matching private key. The preparation program
-requires Python 3 and OpenSSL, validates the chain/name and key match, and
-creates fresh password files without printing them. It requires root to assign
-UID 65532 to server credentials and UID 101 to the ClickHouse private key. The
-destination must not already exist. No credentials are supplied via Compose
-environment variables or command-line password arguments.
+For metadata and referenced captured/export objects only:
 
 ```sh
-sudo python3 deploy/recovery/prepare-config.py \
-  --directory /srv/open-splunk-recovery-config \
-  --ca-cert /srv/pki/clickhouse-ca.crt \
-  --server-cert /srv/pki/clickhouse.crt \
-  --server-key /srv/pki/clickhouse.key
-export OPEN_SPLUNK_RECOVERY_CONFIG_DIRECTORY=/srv/open-splunk-recovery-config
-export OPEN_SPLUNK_DEPLOY_SERVER_IMAGE=ghcr.io/suhaibinator/open-splunk-server:0.MINOR.PATCH
-# Replace 0.MINOR.PATCH with the exact release to recover.
-dc() { docker compose -p open-splunk-recovery -f deploy/docker-compose.recovery.yaml "$@"; }
-dc config --quiet
-dc run --rm prepare-recovery-volume
-dc run --rm recovery provision-administrator-token \
-  -source /run/recovery/administrator/seed \
-  -destination /var/lib/open-splunk/state/private/administrator.token
-dc up -d clickhouse server
-```
-
-The administrator seed is read-only inside a directory restricted to UID
-65532. Use it only to provision the private server token; other UIDs, including
-ClickHouse, cannot traverse that directory.
-
-The helper prepares a fresh archive volume as UID 101, GID 65532, mode 02750,
-and prepares the ClickHouse log volume. It refuses unsafe/nonempty initial
-roots. Native archives use mode 0640. Server-state, recovery-set, and lock
-volumes inherit private UID 65532 directories from the release image. Every
-server and operational recovery helper uses the same `server-lock` volume and
-`OPEN_SPLUNK_SERVER_LOCK_FILE` path. Keep that volume and inode across stops,
-restarts, and restores; a different SQLite target path is not an alternative
-lock. Never unlink a lock file to bypass a running process.
-
-The server publishes HTTP only on loopback. The remote workspace proxy
-requirements at the top of this guide still apply. ClickHouse exposes only its
-verified native TLS endpoint inside the project network. Backup helpers mount
-the archive volume read-only locally; ClickHouse writes native backups to the
-same named volume.
-
-### Back up and verify
-
-First stop ingestion and stop the server. Leave ClickHouse running. Confirm no
-other server points at this canonical database. Backup holds the shared host
-lock before opening credentials or connecting to ClickHouse. The destination
-must be a **new** directory; choose an operator label, not an existing set.
-All command paths are absolute container paths.
-
-```sh
-dc stop server
-dc run --rm recovery backup-deployment-recovery-set \
-  -control-db /var/lib/open-splunk/state/private/open-splunk.db \
+open-splunk-server backup-control-plane \
   -master-key /var/lib/open-splunk/state/private/master.key \
-  -administrator-token-file /var/lib/open-splunk/state/private/administrator.token \
-  -search-artifact-directory /var/lib/open-splunk/state/private/search-artifacts \
-  -destination /var/lib/open-splunk/recovery/private/rehearsal-001 \
-  -archive-root /var/lib/open-splunk-clickhouse-backups \
-  -address clickhouse:9440 -password-file /run/recovery/backup.password \
-  -ca-cert /run/recovery/ca.crt -server-name clickhouse
-dc run --rm recovery verify-deployment-recovery-set \
-  -source /var/lib/open-splunk/recovery/private/rehearsal-001 \
-  -archive-root /var/lib/open-splunk-clickhouse-backups
-dc up -d server
+  -destination /var/lib/open-splunk/recovery/private/control-plane
+
+open-splunk-server verify-control-plane-backup \
+  -source /var/lib/open-splunk/recovery/private/control-plane
+
+# Change the protected DSN/object environment to the empty restore target first.
+open-splunk-server restore-control-plane \
+  -source /var/lib/open-splunk/recovery/private/control-plane \
+  -master-key /var/lib/open-splunk/state/private/master.key
 ```
 
-Verification is offline and validates both members and their binding, including
-archive bytes and ownership. Copy both volumes using infrastructure procedures
-that preserve ownership, modes, and file contents; keep them access-controlled.
-A successful verification does not replace a restore rehearsal. Scheduling,
-retention selection, and off-host transfer remain operator responsibilities.
-
-### Restore into fresh state and rehearse the restart
-
-Stop the server and ClickHouse. Keep the recovery sets, archives, and lock
-volume. Name **new empty** SQLite and ClickHouse target volumes; preserve the
-original data volumes for investigation. The restore overlay changes those two
-volume names and mounts the archive read-only in ClickHouse as well as the
-helper. Do not start the server before restore: startup creates/migrates the
-canonical database and makes that target unsuitable for a fresh restore.
+This control-plane bundle does not contain ClickHouse events. To create and
+restore a complete coordinated deployment recovery set, use the TLS
+ClickHouse backup/restore accounts and the archive volume:
 
 ```sh
-dc stop server clickhouse
-export OPEN_SPLUNK_RECOVERY_TARGET_STATE_VOLUME=open-splunk-restored-state-001
-export OPEN_SPLUNK_RECOVERY_TARGET_CLICKHOUSE_VOLUME=open-splunk-restored-clickhouse-001
-dr() { docker compose -p open-splunk-recovery \
-  -f deploy/docker-compose.recovery.yaml \
-  -f deploy/docker-compose.recovery-restore.yaml "$@"; }
-dr config --quiet
-dr up -d clickhouse
-dr run --rm recovery verify-deployment-recovery-set \
-  -source /var/lib/open-splunk/recovery/private/rehearsal-001 \
-  -archive-root /var/lib/open-splunk-clickhouse-backups
-dr run --rm recovery restore-deployment-recovery-set \
-  -source /var/lib/open-splunk/recovery/private/rehearsal-001 \
-  -archive-root /var/lib/open-splunk-clickhouse-backups \
-  -control-db /var/lib/open-splunk/state/private/open-splunk.db \
+open-splunk-server backup-deployment-recovery-set \
   -master-key /var/lib/open-splunk/state/private/master.key \
-  -administrator-token-file /var/lib/open-splunk/state/private/administrator.token \
-  -search-artifact-directory /var/lib/open-splunk/state/private/search-artifacts \
-  -address clickhouse:9440 -password-file /run/recovery/restore.password \
-  -ca-cert /run/recovery/ca.crt -server-name clickhouse
-dr up -d server
-dr exec server /usr/local/bin/open-splunk-server healthcheck -url http://127.0.0.1:8080/readyz
-```
-
-Read back apps, indexes, saved searches, token metadata, event queries and a
-previously retained terminal search using the recovered administrator token and
-original ingestion credentials. Confirm pending search attempts are marked
-Interrupted after startup; recovery must not silently rerun them. Keep using the
-restore overlay for this recovered deployment. Before later backups, stop the
-server and recreate ClickHouse with a reviewed override that mounts the same
-archive volume writable, retaining these restored state/data volume names.
-
-### Partial failures and exact cleanup
-
-Keep the server stopped after any failed restore. A canonical ClickHouse
-database with the **matching recovery receipt**, manifest digest, restored
-physical UUIDs, and archive identity can resume by rerunning the identical
-restore command with the same set and target paths. This covers interruption
-after receipt publication but before SQLite/key/token/artifact publication;
-retry must not issue a second native RESTORE. A restored canonical database
-without the matching receipt, a partial schema, changed archive, or mismatched
-control-plane member fails closed. Use new empty target volumes and investigate
-the failed target. Do not write a receipt manually, truncate recovery tables,
-or drop an arbitrary production database to manufacture a resumable state.
-
-An interrupted backup can retain an exact source marker. Record its
-`recovery_set_id` and `backup_operation_uuid` from the diagnostic and inspect
-the failed attempt before reconciliation. Keep the server stopped and stop then
-restart ClickHouse to end any still-running native backup; wait for its TLS
-listener to become ready. Reconciliation holds the shared lock and validates
-the canonical schema and exact marker. It does not query native operation
-status or determine archive usability. Repeat both exact identities only after
-you have established that the native operation is no longer running:
-
-```sh
-dc stop server clickhouse
-dc up -d clickhouse
-# Wait for ClickHouse readiness before this command.
-dc run --rm recovery reconcile-deployment-recovery-marker \
-  -recovery-set-id "$RECOVERY_SET_ID" -confirm-recovery-set-id "$RECOVERY_SET_ID" \
-  -backup-operation-uuid "$BACKUP_OPERATION_UUID" \
-  -confirm-backup-operation-uuid "$BACKUP_OPERATION_UUID" \
-  -address clickhouse:9440 -password-file /run/recovery/backup.password \
-  -ca-cert /run/recovery/ca.crt -server-name clickhouse
-```
-
-Reconciliation only clears that validated marker; it does not validate or
-publish a recovery set. For attested retention cleanup, take the exact archive
-name from the verified set manifest and confirm that no retained set still
-needs it. The deletion helper runs as exactly UID 101, GID 65532, validates the
-single archive's name/ownership, and requires its name twice. Stop ClickHouse
-before deleting an archive so no native operation can still reference it. It does not scan
-or recursively remove a directory:
-
-```sh
-dc stop server clickhouse
-dc run --rm delete-recovery-archive delete-deployment-recovery-archive \
+  -destination /var/lib/open-splunk/recovery/private/deployment \
   -archive-root /var/lib/open-splunk-clickhouse-backups \
-  -archive-name "$ARCHIVE_NAME" -confirm-archive-name "$ARCHIVE_NAME"
+  -address clickhouse:9440 -server-name clickhouse \
+  -ca-cert /run/recovery/ca.crt \
+  -password-file /run/recovery/backup.password
+
+open-splunk-server verify-deployment-recovery-set \
+  -source /var/lib/open-splunk/recovery/private/deployment \
+  -archive-root /var/lib/open-splunk-clickhouse-backups
+
+# Use protected restore-target environment, empty PostgreSQL and fresh CH volumes.
+open-splunk-server restore-deployment-recovery-set \
+  -source /var/lib/open-splunk/recovery/private/deployment \
+  -archive-root /var/lib/open-splunk-clickhouse-backups \
+  -master-key /var/lib/open-splunk/state/private/master.key \
+  -address clickhouse:9440 -server-name clickhouse \
+  -ca-cert /run/recovery/ca.crt \
+  -password-file /run/recovery/restore.password
 ```
 
-Never use `docker volume prune` for recovery cleanup. The disposable drill
-below records every container/network/volume it creates and removes only those
-owned resources. For production, remove individual retired set directories
-through your approved retention process after archive/reference review.
+These paths match the recovery Compose mounts. Run its command with
+`docker compose -f deploy/docker-compose.recovery.yaml run --rm recovery`
+in place of `open-splunk-server` when using that topology. Destination
+directories must be new and private; restore master-key paths must be absent
+on the fresh target or match the resumable restore receipt. Native restore verifies object content, rebinds stored version
+references and records a generation-bound receipt so an interrupted restore
+can resume. It preserves the ClickHouse source UUID and visibility high-water
+binding. Verify startup and authorized search/export access before switching
+traffic.
+
+The recovery Compose topology retains TLS ClickHouse account/certificate mounts
+and its existing recovery/lock volumes. `prepare-config.py` prepares ClickHouse
+credentials and certificates only; it does not create a browser administrator
+credential. The restore overlay selects fresh state and ClickHouse targets.
 
 ### Run the disposable drill
 
-Run the [executable recovery drill](../integration/README.md#disposable-deployment-recovery-drill)
-against an image and prepared source tree with the same release identity:
+Use the [integration guide](../integration/README.md) for executable recovery and
+storage tests. Legacy file-based recovery receipts are not a substitute for
+PostgreSQL and MinIO backups.
 
-```sh
-OPEN_SPLUNK_DEPLOYMENT_RECOVERY_DRILL=1 \
-OPEN_SPLUNK_RECOVERY_DRILL_SERVER_IMAGE=open-splunk-server:recovery-test \
-  scripts/test-deployment-recovery.sh
-```
-
-This is an isolated rehearsal with a unique project and generated test
-credentials. It backs up seeded API state and ingested events, kills a restore
-process after the canonical receipt but before control publication, proves an
-exact retry does not issue another native restore, then verifies recovered
-authentication, catalog/data/retained results and Interrupted pending attempts.
+The artifact bucket must be dedicated to OpenSplunk results/exports and have
+versioning enabled before server startup (for example, `mc version enable
+ALIAS/BUCKET`). Startup verifies this setting and does not enable versioning on a
+shared GoCommon attachment bucket. Do not point it at an existing attachment
+bucket: attachment cleanup uses ordinary key deletion rather than historical
+version reclamation.

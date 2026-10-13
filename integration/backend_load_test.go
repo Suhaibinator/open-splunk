@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	clickhousequery "github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
@@ -292,11 +294,12 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 	buildBinary(t, ctx, repository, loggenBinary, "./cmd/open-splunk-loggen")
 
 	httpAddress, collectorAddress := unusedLoopbackAddressPair(t)
-	controlDBPath := filepath.Join(work, "control.sqlite")
-	administratorTokenPath, administratorToken := provisionAdministratorToken(
+	controlDSN := pgtest.DSN(t)
+	googleIdentity, googleSession := provisionGoogleSession(
 		t,
-		work,
+		work, controlDSN,
 	)
+	controlDSN = googleIdentity.PostgresDSN
 	assertEmptyDirectory(t, serverRuntimeDir)
 	serverEnvironment := clickHouseServerEnvironment(
 		os.Environ(),
@@ -310,9 +313,9 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 	serverArguments := []string{
 		serverBinary,
 		"-http-listen-address=" + httpAddress,
-		"-control-database-file=" + controlDBPath,
+		"-postgres-dsn=" + controlDSN,
 		"-master-key-file=" + filepath.Join(work, "server.key"),
-		"-administrator-token-file=" + administratorTokenPath,
+
 		"-collector-grpc-listen-address=" + collectorAddress,
 		"-collector-grpc-plaintext-enabled",
 		"-tenant-id=" + plan.TenantID,
@@ -337,7 +340,7 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		plan.IndexName,
 		"Sustained backend load",
 	)
@@ -369,7 +372,7 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		ctx,
 		httpClient,
 		baseURL,
-		administratorToken,
+		googleSession,
 		plan.IndexName,
 		collectorID,
 	)
@@ -750,7 +753,7 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 			err,
 			redactForFailure(
 				serverProcess.Logs(),
-				administratorToken,
+				googleSession,
 				plaintextToken,
 				clickhouse.Password,
 			),
@@ -761,14 +764,14 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 			t,
 			fmt.Sprintf("server process %d", index+1),
 			process,
-			administratorToken,
+			googleSession,
 			plaintextToken,
 			clickhouse.Password,
 		)
 		assertProcessLogsDoNotLeak(
 			t,
 			process.Logs(),
-			administratorToken,
+			googleSession,
 			plaintextToken,
 			clickhouse.Password,
 		)
@@ -836,7 +839,7 @@ func createBackendLoadToken(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	administratorToken string,
+	googleSession string,
 	indexName string,
 	collectorID string,
 ) string {
@@ -846,7 +849,7 @@ func createBackendLoadToken(
 		ctx,
 		client,
 		baseURL,
-		administratorToken,
+		googleSession,
 		"backend-sustained-load-collector",
 		indexName,
 		collectorID,

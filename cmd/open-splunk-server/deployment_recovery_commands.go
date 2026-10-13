@@ -13,8 +13,10 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/controlbackup"
 	"github.com/Suhaibinator/open-splunk/internal/recoveryset"
+	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/migrations"
 	"github.com/google/uuid"
@@ -31,16 +33,16 @@ const (
 )
 
 type deploymentRecoveryBackupOptions struct {
-	DatabasePath            string
-	MasterKeyPath           string
-	AdministratorTokenPath  string
-	SearchArtifactDirectory string
-	Destination             string
-	ArchiveRoot             string
-	Address                 string
-	PasswordFile            string
-	CACertFile              string
-	ServerName              string
+	PostgresDSN string
+	recoveryObjectOptions
+	Blobs         searchartifacts.BlobStore
+	MasterKeyPath string
+	Destination   string
+	ArchiveRoot   string
+	Address       string
+	PasswordFile  string
+	CACertFile    string
+	ServerName    string
 }
 
 type deploymentRecoveryVerifyOptions struct {
@@ -49,16 +51,16 @@ type deploymentRecoveryVerifyOptions struct {
 }
 
 type deploymentRecoveryRestoreOptions struct {
-	Source                  string
-	ArchiveRoot             string
-	DatabasePath            string
-	MasterKeyPath           string
-	AdministratorTokenPath  string
-	SearchArtifactDirectory string
-	Address                 string
-	PasswordFile            string
-	CACertFile              string
-	ServerName              string
+	Source      string
+	ArchiveRoot string
+	PostgresDSN string
+	recoveryObjectOptions
+	Blobs         searchartifacts.BlobStore
+	MasterKeyPath string
+	Address       string
+	PasswordFile  string
+	CACertFile    string
+	ServerName    string
 }
 
 type deploymentRecoverySession interface {
@@ -72,7 +74,7 @@ type deploymentRecoverySession interface {
 type deploymentRecoveryDependencies struct {
 	migrationFiles            fs.FS
 	open                      func(*clickhousedriver.Options) (deploymentRecoverySession, error)
-	acquireDatabaseLock       databaseLockAcquirer
+	acquireDatabaseLock       maintenanceLeaseAcquirer
 	createRecoverySet         func(context.Context, recoveryset.CreateOptions) (recoveryset.Verification, error)
 	verifyRecoverySet         func(context.Context, recoveryset.VerifyOptions) (recoveryset.Verification, error)
 	preflightControlPlane     func(context.Context, controlbackup.RestoreOptions) error
@@ -115,7 +117,7 @@ func defaultDeploymentRecoveryDependencies() deploymentRecoveryDependencies {
 		open: func(options *clickhousedriver.Options) (deploymentRecoverySession, error) {
 			return openClickHouse(options)
 		},
-		acquireDatabaseLock:       acquireServerLock,
+		acquireDatabaseLock:       control.AcquireMaintenanceLease,
 		createRecoverySet:         recoveryset.Create,
 		verifyRecoverySet:         recoveryset.Verify,
 		preflightControlPlane:     controlbackup.PreflightRestore,
@@ -138,6 +140,12 @@ func runBackupDeploymentRecoverySetSubcommand(arguments []string) error {
 	if err != nil {
 		return err
 	}
+	hostGuard, err := acquireHostServerLock()
+	if err != nil {
+		return err
+	}
+	defer hostGuard.Close()
+
 	release, err := loadControlPlaneRecoveryRelease()
 	if err != nil {
 		return fmt.Errorf("backup deployment recovery set: %w", err)
@@ -146,6 +154,12 @@ func runBackupDeploymentRecoverySetSubcommand(arguments []string) error {
 	defer stop()
 	ctx, cancel := context.WithTimeout(ctx, deploymentRecoveryTimeout)
 	defer cancel()
+	blobs, err := options.open(ctx)
+	if err != nil {
+		return err
+	}
+	defer blobs.Close()
+	options.Blobs = blobs
 	return runBackupDeploymentRecoverySetWithDependencies(
 		ctx,
 		options,
@@ -178,6 +192,12 @@ func runRestoreDeploymentRecoverySetSubcommand(arguments []string) error {
 	if err != nil {
 		return err
 	}
+	hostGuard, err := acquireHostServerLock()
+	if err != nil {
+		return err
+	}
+	defer hostGuard.Close()
+
 	release, err := loadControlPlaneRecoveryRelease()
 	if err != nil {
 		return fmt.Errorf("restore deployment recovery set: %w", err)
@@ -186,6 +206,12 @@ func runRestoreDeploymentRecoverySetSubcommand(arguments []string) error {
 	defer stop()
 	ctx, cancel := context.WithTimeout(ctx, deploymentRecoveryTimeout)
 	defer cancel()
+	blobs, err := options.open(ctx)
+	if err != nil {
+		return err
+	}
+	defer blobs.Close()
+	options.Blobs = blobs
 	return runRestoreDeploymentRecoverySetWithDependencies(
 		ctx,
 		options,
@@ -200,10 +226,9 @@ func parseBackupDeploymentRecoverySetOptions(
 	flags := flag.NewFlagSet("backup-deployment-recovery-set", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var options deploymentRecoveryBackupOptions
-	flags.StringVar(&options.DatabasePath, "control-db", "", "absolute stopped-server SQLite database path")
+	flags.StringVar(&options.PostgresDSN, "postgres-dsn", consumeRecoverySecret("OPEN_SPLUNK_SERVER_POSTGRES_DSN"), "PostgreSQL control schema; stopped server required")
+	registerRecoveryObjectFlags(flags, &options.recoveryObjectOptions)
 	flags.StringVar(&options.MasterKeyPath, "master-key", "", "absolute matching server master-key path")
-	flags.StringVar(&options.AdministratorTokenPath, "administrator-token-file", "", "absolute matching administrator-token path")
-	flags.StringVar(&options.SearchArtifactDirectory, "search-artifact-directory", "", "absolute retained-search directory (default: <control-db>.search-artifacts when present)")
 	flags.StringVar(&options.Destination, "destination", "", "absolute new private recovery-set directory")
 	flags.StringVar(&options.ArchiveRoot, "archive-root", "", "absolute ClickHouse recovery archive root")
 	registerDeploymentRecoveryClickHouseFlags(flags, &options.Address, &options.PasswordFile, &options.CACertFile, &options.ServerName, "backup")
@@ -214,9 +239,7 @@ func parseBackupDeploymentRecoverySetOptions(
 		return deploymentRecoveryBackupOptions{}, errors.New("backup deployment recovery set: positional arguments are not allowed")
 	}
 	if err := validateDeploymentRecoveryPaths("backup deployment recovery set", []deploymentRecoveryPath{
-		{name: "-control-db", value: options.DatabasePath},
 		{name: "-master-key", value: options.MasterKeyPath},
-		{name: "-administrator-token-file", value: options.AdministratorTokenPath},
 		{name: "-destination", value: options.Destination},
 		{name: "-archive-root", value: options.ArchiveRoot},
 		{name: "-password-file", value: options.PasswordFile},
@@ -224,10 +247,11 @@ func parseBackupDeploymentRecoverySetOptions(
 	}); err != nil {
 		return deploymentRecoveryBackupOptions{}, err
 	}
-	if options.SearchArtifactDirectory != "" {
-		if err := validateDeploymentRecoveryPaths("backup deployment recovery set", []deploymentRecoveryPath{{name: "-search-artifact-directory", value: options.SearchArtifactDirectory}}); err != nil {
-			return deploymentRecoveryBackupOptions{}, err
-		}
+	if err := validateRecoveryDSN(options.PostgresDSN); err != nil {
+		return deploymentRecoveryBackupOptions{}, err
+	}
+	if err := options.validate(); err != nil {
+		return deploymentRecoveryBackupOptions{}, err
 	}
 	if err := validateDeploymentRecoveryConnectionFields("backup deployment recovery set", options.Address, options.ServerName); err != nil {
 		return deploymentRecoveryBackupOptions{}, err
@@ -266,10 +290,9 @@ func parseRestoreDeploymentRecoverySetOptions(
 	var options deploymentRecoveryRestoreOptions
 	flags.StringVar(&options.Source, "source", "", "absolute verified recovery-set directory")
 	flags.StringVar(&options.ArchiveRoot, "archive-root", "", "absolute ClickHouse recovery archive root")
-	flags.StringVar(&options.DatabasePath, "control-db", "", "absolute absent or exactly resumed SQLite database path")
+	flags.StringVar(&options.PostgresDSN, "postgres-dsn", consumeRecoverySecret("OPEN_SPLUNK_SERVER_POSTGRES_DSN"), "empty PostgreSQL control schema")
+	registerRecoveryObjectFlags(flags, &options.recoveryObjectOptions)
 	flags.StringVar(&options.MasterKeyPath, "master-key", "", "absolute absent or exactly resumed server master-key path")
-	flags.StringVar(&options.AdministratorTokenPath, "administrator-token-file", "", "absolute absent or exactly resumed administrator-token path")
-	flags.StringVar(&options.SearchArtifactDirectory, "search-artifact-directory", "", "absolute absent or exactly resumed retained-search directory (default: <control-db>.search-artifacts)")
 	registerDeploymentRecoveryClickHouseFlags(flags, &options.Address, &options.PasswordFile, &options.CACertFile, &options.ServerName, "restore")
 	if err := flags.Parse(arguments); err != nil {
 		return deploymentRecoveryRestoreOptions{}, fmt.Errorf("restore deployment recovery set: parse flags: %w", err)
@@ -280,18 +303,17 @@ func parseRestoreDeploymentRecoverySetOptions(
 	if err := validateDeploymentRecoveryPaths("restore deployment recovery set", []deploymentRecoveryPath{
 		{name: "-source", value: options.Source},
 		{name: "-archive-root", value: options.ArchiveRoot},
-		{name: "-control-db", value: options.DatabasePath},
 		{name: "-master-key", value: options.MasterKeyPath},
-		{name: "-administrator-token-file", value: options.AdministratorTokenPath},
 		{name: "-password-file", value: options.PasswordFile},
 		{name: "-ca-cert", value: options.CACertFile},
 	}); err != nil {
 		return deploymentRecoveryRestoreOptions{}, err
 	}
-	if options.SearchArtifactDirectory != "" {
-		if err := validateDeploymentRecoveryPaths("restore deployment recovery set", []deploymentRecoveryPath{{name: "-search-artifact-directory", value: options.SearchArtifactDirectory}}); err != nil {
-			return deploymentRecoveryRestoreOptions{}, err
-		}
+	if err := validateRecoveryDSN(options.PostgresDSN); err != nil {
+		return deploymentRecoveryRestoreOptions{}, err
+	}
+	if err := options.validate(); err != nil {
+		return deploymentRecoveryRestoreOptions{}, err
 	}
 	if err := validateDeploymentRecoveryConnectionFields("restore deployment recovery set", options.Address, options.ServerName); err != nil {
 		return deploymentRecoveryRestoreOptions{}, err
@@ -389,7 +411,7 @@ func runBackupDeploymentRecoverySetWithDependencies(
 	if err := validateDeploymentRecoveryBackupDependencies(dependencies); err != nil {
 		return err
 	}
-	lock, err := dependencies.acquireDatabaseLock(options.DatabasePath)
+	lock, err := dependencies.acquireDatabaseLock(ctx, options.PostgresDSN)
 	if err != nil {
 		return fmt.Errorf("backup deployment recovery set: require the server to be stopped: %w", err)
 	}
@@ -397,19 +419,28 @@ func runBackupDeploymentRecoverySetWithDependencies(
 		return errors.New("backup deployment recovery set: server lock dependency returned no lock")
 	}
 	defer func() { returnedErr = errors.Join(returnedErr, lock.Close()) }()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-lock.OwnershipLost():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	if err := discardDeploymentRecoveryCredentialEnvironment(); err != nil {
 		return err
 	}
 
 	createOptions := recoveryset.CreateOptions{
-		DatabasePath:            options.DatabasePath,
-		MasterKeyPath:           options.MasterKeyPath,
-		AdministratorTokenPath:  options.AdministratorTokenPath,
-		SearchArtifactDirectory: options.SearchArtifactDirectory,
-		Destination:             options.Destination,
-		ArchiveRoot:             options.ArchiveRoot,
-		ArchiveOwnership:        deploymentRecoveryArchiveOwnership(),
-		Release:                 release,
+		PostgresDSN:      options.PostgresDSN,
+		Lease:            lock,
+		Blobs:            options.Blobs,
+		MasterKeyPath:    options.MasterKeyPath,
+		Destination:      options.Destination,
+		ArchiveRoot:      options.ArchiveRoot,
+		ArchiveOwnership: deploymentRecoveryArchiveOwnership(),
+		Release:          release,
 		NativeBackup: func(
 			callbackContext context.Context,
 			request recoveryset.NativeBackupRequest,
@@ -464,7 +495,7 @@ func runRestoreDeploymentRecoverySetWithDependencies(
 	if err := validateDeploymentRecoveryRestoreDependencies(dependencies); err != nil {
 		return err
 	}
-	lock, err := dependencies.acquireDatabaseLock(options.DatabasePath)
+	lock, err := dependencies.acquireDatabaseLock(ctx, options.PostgresDSN)
 	if err != nil {
 		return fmt.Errorf("restore deployment recovery set: require the server to be stopped: %w", err)
 	}
@@ -472,10 +503,15 @@ func runRestoreDeploymentRecoverySetWithDependencies(
 		return errors.New("restore deployment recovery set: server lock dependency returned no lock")
 	}
 	defer func() { returnedErr = errors.Join(returnedErr, lock.Close()) }()
-	databaseLock, err := lock.fileForExactPath(options.DatabasePath + ".server.lock")
-	if err != nil {
-		return fmt.Errorf("restore deployment recovery set: bind control database lock: %w", err)
-	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-lock.OwnershipLost():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	if err := discardDeploymentRecoveryCredentialEnvironment(); err != nil {
 		return err
 	}
@@ -491,15 +527,14 @@ func runRestoreDeploymentRecoverySetWithDependencies(
 		return fmt.Errorf("restore deployment recovery set: verify before mutation: %w", err)
 	}
 	controlRestoreOptions := controlbackup.RestoreOptions{
-		Source:                  filepath.Join(options.Source, verification.Manifest.ControlPlane.Directory),
-		DatabasePath:            options.DatabasePath,
-		DatabaseLock:            databaseLock,
-		MasterKeyPath:           options.MasterKeyPath,
-		AdministratorTokenPath:  options.AdministratorTokenPath,
-		SearchArtifactDirectory: options.SearchArtifactDirectory,
-		Release:                 release,
-		ExpectedRecoverySetID:   verification.Manifest.RecoverySetID,
-		ExpectedManifestSHA256:  verification.Manifest.ControlPlane.Manifest.SHA256,
+		Source:                 filepath.Join(options.Source, verification.Manifest.ControlPlane.Directory),
+		PostgresDSN:            options.PostgresDSN,
+		Lease:                  lock,
+		Blobs:                  options.Blobs,
+		MasterKeyPath:          options.MasterKeyPath,
+		Release:                release,
+		ExpectedRecoverySetID:  verification.Manifest.RecoverySetID,
+		ExpectedManifestSHA256: verification.Manifest.ControlPlane.Manifest.SHA256,
 	}
 	if err := dependencies.preflightControlPlane(ctx, controlRestoreOptions); err != nil {
 		return fmt.Errorf("restore deployment recovery set: preflight control plane before ClickHouse mutation: %w", err)

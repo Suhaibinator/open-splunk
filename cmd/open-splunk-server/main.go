@@ -34,8 +34,10 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/logging"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
+	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"github.com/Suhaibinator/open-splunk/migrations"
@@ -46,13 +48,12 @@ const (
 	startupTimeout                     = 2 * time.Minute
 	shutdownTimeout                    = 35 * time.Second
 	defaultIndexRetention              = ingest.DefaultIndexRetention
-	defaultOwnerID                     = "single-user"
 	auditCursorKeyPurpose              = "audit-event-cursors"
 	searchAttemptAuditCursorKeyPurpose = "search-attempt-audit-cursors"
 	collectorHeartbeatFlushInterval    = time.Second
 	collectorHeartbeatWriteTimeout     = 5 * time.Second
 	collectorHeartbeatReleaseTimeout   = 2 * collectorHeartbeatWriteTimeout
-	// SQLite may spend five seconds waiting on a competing writer. Reserve a
+	// PostgreSQL mutations serialize through a transaction advisory lock. Reserve a
 	// second write window for transaction overhead and a useful retry after
 	// heartbeat Release has consumed its own bound.
 	collectorDurableDisconnectReserve = 2 * collectorHeartbeatWriteTimeout
@@ -73,11 +74,21 @@ type options struct {
 	httpTLSCert                               string
 	httpTLSKey                                string
 	trustForwardedProto                       bool
-	controlDBPath                             string
+	postgresDSN                               string
 	masterKeyPath                             string
 	serverLockFile                            string
-	administratorToken                        string
-	administratorTokenFile                    string
+	googleClientID                            string
+	googleClientSecret                        string
+	publicBaseURL                             string
+	minioEndpoint                             string
+	minioAccessKey                            string
+	minioSecretKey                            string
+	minioBucket                               string
+	minioUseTLS                               bool
+	captureMaximumRows                        uint64
+	captureMaximumBytes                       uint64
+	retentionOrganizationBytes                uint64
+	retentionGlobalBytes                      uint64
 	exportArtifactDir                         string
 	searchArtifactDir                         string
 	alertPublicBaseURL                        string
@@ -216,13 +227,7 @@ func runWithOptions(config options) error {
 		return err
 	}
 	defer discardClickHouseMigrationCredentials(&clickHouseOptions)
-	browserAuthenticator, err := newAdministratorBrowserAuthenticator(
-		config.administratorToken,
-		config.administratorTokenFile,
-		config.tenantID,
-		defaultOwnerID,
-	)
-	if err != nil {
+	if _, err := validateRuntimeIdentityOptions(config); err != nil {
 		return err
 	}
 	release, err := opensplunkroot.EmbeddedRelease()
@@ -234,7 +239,7 @@ func runWithOptions(config options) error {
 		UiBuildId:                  release.Metadata.UIBuildID,
 		UiSha256:                   release.Metadata.UI.SHA256,
 		ProtobufSchemaSha256:       release.Metadata.ProtobufSchema.SHA256,
-		SqliteMigrationsSha256:     release.Metadata.SQLiteMigrations.SHA256,
+		PostgresMigrationsSha256:   release.Metadata.PostgresMigrations.SHA256,
 		ClickhouseMigrationsSha256: release.Metadata.ClickHouseMigrations.SHA256,
 	}
 	if release.Metadata.ProductVersion != "" {
@@ -244,20 +249,30 @@ func runWithOptions(config options) error {
 	if err := exportSettings.validate(); err != nil {
 		return fmt.Errorf("validate export runtime: %w", err)
 	}
-	serverLock, err := acquireConfiguredServerLock(config.controlDBPath, config.serverLockFile)
+	hostLease, err := acquireHostServerLockAt(config.serverLockFile)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := serverLock.Close(); err != nil {
-			logger.Warn("release server lock", zap.Error(err))
-		}
-	}()
-
-	startupContext, cancelStartup := context.WithTimeout(context.Background(), startupTimeout)
+	defer hostLease.Close()
+	shutdownContext, rawStopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer rawStopSignals()
+	lifetimeContext, cancelLifetime := context.WithCancel(shutdownContext)
+	defer cancelLifetime()
+	startupContext, cancelStartup := context.WithTimeout(lifetimeContext, startupTimeout)
 	defer cancelStartup()
 
-	controlDB, err := control.Open(startupContext, config.controlDBPath)
+	startupComplete := make(chan struct{})
+	go func() {
+		select {
+		case <-startupContext.Done():
+			if errors.Is(startupContext.Err(), context.DeadlineExceeded) {
+				cancelLifetime()
+			}
+		case <-startupComplete:
+		case <-lifetimeContext.Done():
+		}
+	}()
+	controlDB, err := control.Open(startupContext, config.postgresDSN)
 	if err != nil {
 		return fmt.Errorf("open control plane: %w", err)
 	}
@@ -266,6 +281,22 @@ func runWithOptions(config options) error {
 			logger.Warn("close control plane", zap.Error(err))
 		}
 	}()
+	go func() {
+		select {
+		case <-controlDB.OwnershipLost():
+			logger.Error("PostgreSQL server lease lost")
+			cancelLifetime()
+		case <-lifetimeContext.Done():
+		}
+	}()
+	identityRuntime, err := newRuntimeIdentity(lifetimeContext, controlDB, config, logger)
+	if err != nil {
+		return err
+	}
+	defer identityRuntime.users.Close()
+	defer identityRuntime.blobs.Close()
+	config.googleClientSecret = ""
+	config.minioSecretKey = ""
 	featureAudit, err := featureaudit.New(
 		startupContext,
 		controlDB,
@@ -299,7 +330,7 @@ func runWithOptions(config options) error {
 		return fmt.Errorf("invalidate prior collector leases: %w", err)
 	}
 
-	sequencer, err := visibility.NewSQLite(startupContext, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(startupContext, controlDB)
 	if err != nil {
 		return fmt.Errorf("open visibility sequencer: %w", err)
 	}
@@ -307,9 +338,9 @@ func runWithOptions(config options) error {
 	// process-local attempt leases. This defer is registered after the
 	// control-database defer and before every sequencer consumer, so LIFO
 	// shutdown first drains those consumers, then releases durable attempt
-	// leases, and only then closes SQLite. If this component exhausts the
+	// leases, and only then closes PostgreSQL. If this component exhausts the
 	// process shutdown budget, its finalizer remains responsible for
-	// unregistering ownership after admitted work exits; closing SQLite then
+	// unregistering ownership after admitted work exits; closing PostgreSQL then
 	// forces any driver work that ignored cancellation to return.
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -324,7 +355,7 @@ func runWithOptions(config options) error {
 		config.masterKeyPath,
 		config.tenantID,
 
-		safecast.MustConv[uint32](config.searchAttemptAuditMaximumRetainedAttempts),
+		safecast.MustConv[uint32](config.searchAttemptAuditMaximumRetainedAttempts), true,
 	)
 	if err != nil {
 		return err
@@ -333,6 +364,7 @@ func runWithOptions(config options) error {
 		controlDB,
 		config.tenantID,
 		securityStores.auditEvents,
+		identityRuntime.bindCreatedIndex,
 	)
 	if err != nil {
 		return err
@@ -365,14 +397,7 @@ func runWithOptions(config options) error {
 	if err != nil {
 		return err
 	}
-	searchHistoryScope := searchhistory.AccessScope{
-		TenantID: config.tenantID,
-		OwnerID:  defaultOwnerID,
-	}
-	recoveredSearches, err := searchHistory.RecoverInterrupted(
-		startupContext,
-		searchHistoryScope,
-	)
+	recoveredSearches, err := searchHistory.RecoverInterruptedTenant(startupContext, config.tenantID)
 	if err != nil {
 		return fmt.Errorf("recover interrupted search history: %w", err)
 	}
@@ -487,6 +512,9 @@ func runWithOptions(config options) error {
 	)
 	if err != nil {
 		return fmt.Errorf("create ClickHouse ingestion store: %w", err)
+	}
+	if err := validateRuntimePreservation(startupContext, controlDB, eventStore, connection, config.tenantID); err != nil {
+		return err
 	}
 	indexReads, err := newIndexReadLifecycle(
 		controlDB,
@@ -625,7 +653,7 @@ func runWithOptions(config options) error {
 		featureOperations: featureOperations, exportSettings: exportSettings, exportJournal: exportJournal,
 		masterKeyPath: config.masterKeyPath, searchArtifactDirectory: config.searchArtifactDir,
 		exportArtifactDirectory: config.exportArtifactDir, tenantID: config.tenantID,
-		ownerID: defaultOwnerID, logger: logger, closeTimeout: shutdownTimeout,
+		identity: identityRuntime, captureOptions: searchartifacts.CaptureOptions{MaximumRows: config.captureMaximumRows, MaximumBytes: config.captureMaximumBytes, OrganizationBytes: config.retentionOrganizationBytes, GlobalBytes: config.retentionGlobalBytes}, logger: logger, closeTimeout: shutdownTimeout,
 	})
 	if err != nil {
 		return err
@@ -644,7 +672,7 @@ func runWithOptions(config options) error {
 	alertLifecycle, err := newRuntimeAlertLifecycle(runtimeAlertLifecycleConfig{
 		ctx: startupContext, controlDB: controlDB, jobs: jobs, artifacts: searchArtifactStore,
 		auditAppender: securityStores.auditEvents, featureOperations: featureOperations,
-		masterKeyPath: config.masterKeyPath, tenantID: config.tenantID, ownerID: defaultOwnerID,
+		masterKeyPath: config.masterKeyPath, tenantID: config.tenantID, identity: identityRuntime,
 		publicBaseURL: config.alertPublicBaseURL, privateWebhookHostsCSV: config.alertPrivateWebhookHostsCSV,
 		logger: logger, closeTimeout: shutdownTimeout,
 	})
@@ -678,6 +706,15 @@ func runWithOptions(config options) error {
 	if err != nil {
 		alertLifecycle.EraseCursorKey()
 		return err
+	}
+	captureRows, captureBytes := searchArtifactStore.CaptureLimits()
+	organizationRetentionBytes := config.retentionOrganizationBytes
+	if organizationRetentionBytes == 0 {
+		organizationRetentionBytes = searchartifacts.DefaultOrganizationCaptureBytes
+	}
+	globalRetentionBytes := config.retentionGlobalBytes
+	if globalRetentionBytes == 0 {
+		globalRetentionBytes = searchartifacts.DefaultGlobalCaptureBytes
 	}
 	httpConfig := server.Config{
 		Logger:                     logger,
@@ -713,15 +750,24 @@ func runWithOptions(config options) error {
 		Dashboards:                 dashboardStore,
 		SearchHistory:              searchHistory,
 		WebUI:                      release.WebUI,
-		OwnerID:                    defaultOwnerID,
 		TenantID:                   config.tenantID,
 		AdministrativeAllowedHosts: config.httpAllowedHosts,
 		TrustForwardedProto:        config.trustForwardedProto,
-		BrowserAuthenticator:       browserAuthenticator,
+		IdentityAuthenticator:      identityRuntime.users,
+		IdentityHandler:            identityRuntime.users.Handler(),
+		Authorization:              identityRuntime.authorization,
+		RetentionUsage: func(ctx context.Context, access searchjobs.AccessScope) (searchartifacts.RetentionUsage, error) {
+			fresh, _, err := identityRuntime.freshAccessAndSubject(ctx, access.OwnerID, access.OrganizationID)
+			if err != nil {
+				return searchartifacts.RetentionUsage{}, err
+			}
+			return searchArtifactStore.RetentionUsage(ctx, fresh.OrganizationID)
+		},
 		Bootstrap: server.BootstrapConfig{
 			Build:              buildMetadata,
 			MaximumExportRows:  exportSettings.maximumRowLimit,
 			MaximumExportBytes: exportSettings.maximumByteLimit,
+			MaximumCaptureRows: captureRows, MaximumCaptureBytes: captureBytes, OrganizationRetentionBytes: organizationRetentionBytes, GlobalRetentionBytes: globalRetentionBytes,
 		},
 	}
 	var hecMetrics *hechttp.Metrics
@@ -758,11 +804,12 @@ func runWithOptions(config options) error {
 	if err != nil {
 		return fmt.Errorf("create HTTP handler: %w", err)
 	}
-	var routedHandler http.Handler = browserHandler
+	refreshedBrowserHandler := identityRuntime.users.SessionRefreshMiddleware(browserHandler)
+	routedHandler := refreshedBrowserHandler
 	var admissionLifecycles []httpAdmissionShutdown
 	if config.hecEnabled {
 		hecHandler, hecErr := newRuntimeHECHandler(runtimeHECConfig{
-			Next:                  browserHandler,
+			Next:                  refreshedBrowserHandler,
 			Authenticator:         tokenStore,
 			Store:                 eventStore,
 			Sequencer:             sequencer,
@@ -781,8 +828,7 @@ func runWithOptions(config options) error {
 	requests := newTrackedHandler(routedHandler)
 	var rootHandler http.Handler = requests
 
-	shutdownContext, rawStopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	schedulerContext, cancelSchedulers := context.WithCancel(shutdownContext)
+	schedulerContext, cancelSchedulers := context.WithCancel(lifetimeContext)
 	var schedulerWorkers sync.WaitGroup
 	schedulerWorkers.Add(2)
 	go func() {
@@ -808,7 +854,7 @@ func runWithOptions(config options) error {
 	// behavior. A second SIGINT/SIGTERM can then terminate a handler or driver
 	// that ignores cancellation instead of being captured indefinitely.
 	go func() {
-		<-shutdownContext.Done()
+		<-lifetimeContext.Done()
 		stopSignals()
 	}()
 	httpServer := &httpRuntimeServer{
@@ -848,8 +894,9 @@ func runWithOptions(config options) error {
 			zap.String("transport", transport),
 		)
 	}
+	close(startupComplete)
 	serveErr := serveRuntime(
-		shutdownContext,
+		lifetimeContext,
 		httpServer,
 		requests,
 		browserHandler,
@@ -869,6 +916,11 @@ func runWithOptions(config options) error {
 			"close collector heartbeat runtime: %w",
 			heartbeatCloseErr,
 		)
+	}
+	select {
+	case <-controlDB.OwnershipLost():
+		serveErr = errors.Join(serveErr, errors.New("PostgreSQL server ownership was lost"))
+	default:
 	}
 	return errors.Join(serveErr, heartbeatCloseErr)
 }
@@ -966,6 +1018,7 @@ func openRuntimeSecurityStoresWithSearchAttemptMaximum(
 	masterKeyPath string,
 	tenantID string,
 	maximumRetainedAttempts uint32,
+	requireOrganizationOwnership ...bool,
 ) (securityStoreSet, error) {
 	return openSecurityStoreSet(
 		ctx,
@@ -973,7 +1026,7 @@ func openRuntimeSecurityStoresWithSearchAttemptMaximum(
 		masterKeyPath,
 		tenantID,
 		true,
-		maximumRetainedAttempts,
+		maximumRetainedAttempts, requireOrganizationOwnership...,
 	)
 }
 
@@ -984,6 +1037,7 @@ func openSecurityStoreSet(
 	tenantID string,
 	requireExplicitAuditActor bool,
 	searchAttemptMaximumRetained uint32,
+	requireOrganizationOwnership ...bool,
 ) (securityStoreSet, error) {
 	masterKey, err := loadVerifiedMasterKey(ctx, db, masterKeyPath)
 	if err != nil {
@@ -1054,10 +1108,12 @@ func openSecurityStoreSet(
 			err,
 		)
 	}
+	organizationOwnership := len(requireOrganizationOwnership) > 0 && requireOrganizationOwnership[0]
 	tokens, err := auth.NewStoreWithOptions(db, digestKey, auth.StoreOptions{
-		AuditAppender:             auditEvents,
-		AuditTenantID:             tenantID,
-		RequireExplicitAuditActor: requireExplicitAuditActor,
+		AuditAppender:                auditEvents,
+		AuditTenantID:                tenantID,
+		RequireExplicitAuditActor:    requireExplicitAuditActor,
+		RequireOrganizationOwnership: organizationOwnership,
 	})
 	if err != nil {
 		return securityStoreSet{}, fmt.Errorf("create collector-token store: %w", err)

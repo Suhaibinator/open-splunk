@@ -62,7 +62,7 @@ test("system bootstrap preserves structured source identity", () => {
       uiBuildId: `r${"g".repeat(40)}`,
       uiSha256: "1".repeat(64),
       protobufSchemaSha256: "2".repeat(64),
-      sqliteMigrationsSha256: "3".repeat(64),
+      postgresMigrationsSha256: "3".repeat(64),
       clickhouseMigrationsSha256: "4".repeat(64),
     },
   });
@@ -217,4 +217,26 @@ test("unsubscribing during an announcement neither skips a listener nor tells a 
     unsubscribeLate?.();
     unsubscribeLast();
   }
+});
+
+test("capture and retained-object budgets preserve full uint64 precision", () => {
+  const quota = (1n << 63n) + 7n;
+  const model = adaptSystemBootstrap(GetSystemBootstrapResponse.fromPartial({
+    serverTime: new Date("2026-07-26T12:00:00Z"),
+    limits: { maximumCaptureRows: quota, maximumCaptureBytes: quota + 1n, organizationRetentionBytes: quota + 2n, globalRetentionBytes: quota + 3n },
+  }));
+  assert.equal(model.limits.maximumCaptureRows, quota);
+  assert.equal(model.limits.maximumCaptureBytes, quota + 1n);
+  assert.equal(model.limits.organizationRetentionBytes, quota + 2n);
+  assert.equal(model.limits.globalRetentionBytes, quota + 3n);
+});
+
+test("retained storage usage keeps exact counters and detaches the response", () => {
+  const quota = (1n << 63n) + 7n;
+  const response = GetSystemBootstrapResponse.fromPartial({ serverTime: new Date("2026-07-26T12:00:00Z"), retainedStorageUsage: { organizationId: "9", organizationUsedBytes: quota, globalUsedBytes: quota + 1n, organizationLimitBytes: quota + 2n, globalLimitBytes: quota + 3n } });
+  const adapted = adaptSystemBootstrap(response);
+  assert.equal(adapted.retainedStorageUsage?.organizationUsedBytes, quota);
+  assert.equal(adapted.retainedStorageUsage?.globalUsedBytes, quota + 1n);
+  response.retainedStorageUsage!.globalUsedBytes = 0n;
+  assert.equal(adapted.retainedStorageUsage?.globalUsedBytes, quota + 1n);
 });

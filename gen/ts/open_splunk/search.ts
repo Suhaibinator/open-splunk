@@ -574,6 +574,10 @@ export interface SearchProgress {
    * zero means unavailable from a legacy sender.
    */
   stateVersion: bigint;
+  captureRows: bigint;
+  captureBytes: bigint;
+  captureComplete: boolean;
+  previewTruncated: boolean;
 }
 
 export interface SearchFailure {
@@ -654,6 +658,13 @@ export interface SearchJob {
   retentionLifetime: Duration | undefined;
   lastAccessedAt: Date | undefined;
   retainedResultStatus: RetainedResultStatus;
+  /** Complete immutable captured output exists independently of live preview. */
+  captureComplete: boolean;
+  /** Preview is a bounded prefix; this does not imply captured output is lost. */
+  previewTruncated: boolean;
+  organizationId?: string | undefined;
+  captureRows: bigint;
+  captureBytes: bigint;
 }
 
 function createBaseSearchDefinition(): SearchDefinition {
@@ -1085,6 +1096,10 @@ function createBaseSearchProgress(): SearchProgress {
     updatedAt: undefined,
     countersAreEstimates: false,
     stateVersion: 0n,
+    captureRows: 0n,
+    captureBytes: 0n,
+    captureComplete: false,
+    previewTruncated: false,
   };
 }
 
@@ -1143,6 +1158,24 @@ export const SearchProgress: MessageFns<SearchProgress> = {
         throw new globalThis.Error("value provided for field message.stateVersion of type uint64 too large");
       }
       writer.uint32(96).uint64(message.stateVersion);
+    }
+    if (message.captureRows !== 0n) {
+      if (BigInt.asUintN(64, message.captureRows) !== message.captureRows) {
+        throw new globalThis.Error("value provided for field message.captureRows of type uint64 too large");
+      }
+      writer.uint32(104).uint64(message.captureRows);
+    }
+    if (message.captureBytes !== 0n) {
+      if (BigInt.asUintN(64, message.captureBytes) !== message.captureBytes) {
+        throw new globalThis.Error("value provided for field message.captureBytes of type uint64 too large");
+      }
+      writer.uint32(112).uint64(message.captureBytes);
+    }
+    if (message.captureComplete !== false) {
+      writer.uint32(120).bool(message.captureComplete);
+    }
+    if (message.previewTruncated !== false) {
+      writer.uint32(128).bool(message.previewTruncated);
     }
     return writer;
   },
@@ -1256,6 +1289,38 @@ export const SearchProgress: MessageFns<SearchProgress> = {
             message.stateVersion = reader.uint64() as bigint;
             continue;
           }
+          case 13: {
+            if (tag !== 104) {
+              break;
+            }
+
+            message.captureRows = reader.uint64() as bigint;
+            continue;
+          }
+          case 14: {
+            if (tag !== 112) {
+              break;
+            }
+
+            message.captureBytes = reader.uint64() as bigint;
+            continue;
+          }
+          case 15: {
+            if (tag !== 120) {
+              break;
+            }
+
+            message.captureComplete = reader.bool();
+            continue;
+          }
+          case 16: {
+            if (tag !== 128) {
+              break;
+            }
+
+            message.previewTruncated = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1322,6 +1387,26 @@ export const SearchProgress: MessageFns<SearchProgress> = {
         : isSet(object.state_version)
         ? BigInt(object.state_version)
         : 0n,
+      captureRows: isSet(object.captureRows)
+        ? BigInt(object.captureRows)
+        : isSet(object.capture_rows)
+        ? BigInt(object.capture_rows)
+        : 0n,
+      captureBytes: isSet(object.captureBytes)
+        ? BigInt(object.captureBytes)
+        : isSet(object.capture_bytes)
+        ? BigInt(object.capture_bytes)
+        : 0n,
+      captureComplete: isSet(object.captureComplete)
+        ? globalThis.Boolean(object.captureComplete)
+        : isSet(object.capture_complete)
+        ? globalThis.Boolean(object.capture_complete)
+        : false,
+      previewTruncated: isSet(object.previewTruncated)
+        ? globalThis.Boolean(object.previewTruncated)
+        : isSet(object.preview_truncated)
+        ? globalThis.Boolean(object.preview_truncated)
+        : false,
     };
   },
 
@@ -1363,6 +1448,18 @@ export const SearchProgress: MessageFns<SearchProgress> = {
     if (message.stateVersion !== 0n) {
       obj.stateVersion = message.stateVersion.toString();
     }
+    if (message.captureRows !== 0n) {
+      obj.captureRows = message.captureRows.toString();
+    }
+    if (message.captureBytes !== 0n) {
+      obj.captureBytes = message.captureBytes.toString();
+    }
+    if (message.captureComplete !== false) {
+      obj.captureComplete = message.captureComplete;
+    }
+    if (message.previewTruncated !== false) {
+      obj.previewTruncated = message.previewTruncated;
+    }
     return obj;
   },
 
@@ -1399,6 +1496,14 @@ export const SearchProgress: MessageFns<SearchProgress> = {
     message.stateVersion = (object.stateVersion !== undefined && object.stateVersion !== null)
       ? BigInt(object.stateVersion)
       : 0n;
+    message.captureRows = (object.captureRows !== undefined && object.captureRows !== null)
+      ? BigInt(object.captureRows)
+      : 0n;
+    message.captureBytes = (object.captureBytes !== undefined && object.captureBytes !== null)
+      ? BigInt(object.captureBytes)
+      : 0n;
+    message.captureComplete = object.captureComplete ?? false;
+    message.previewTruncated = object.previewTruncated ?? false;
     return message;
   },
 };
@@ -1926,6 +2031,11 @@ function createBaseSearchJob(): SearchJob {
     retentionLifetime: undefined,
     lastAccessedAt: undefined,
     retainedResultStatus: 0,
+    captureComplete: false,
+    previewTruncated: false,
+    organizationId: undefined,
+    captureRows: 0n,
+    captureBytes: 0n,
   };
 }
 
@@ -2014,6 +2124,27 @@ export const SearchJob: MessageFns<SearchJob> = {
     }
     if (message.retainedResultStatus !== 0) {
       writer.uint32(224).int32(message.retainedResultStatus);
+    }
+    if (message.captureComplete !== false) {
+      writer.uint32(232).bool(message.captureComplete);
+    }
+    if (message.previewTruncated !== false) {
+      writer.uint32(240).bool(message.previewTruncated);
+    }
+    if (message.organizationId !== undefined) {
+      writer.uint32(250).string(message.organizationId);
+    }
+    if (message.captureRows !== 0n) {
+      if (BigInt.asUintN(64, message.captureRows) !== message.captureRows) {
+        throw new globalThis.Error("value provided for field message.captureRows of type uint64 too large");
+      }
+      writer.uint32(256).uint64(message.captureRows);
+    }
+    if (message.captureBytes !== 0n) {
+      if (BigInt.asUintN(64, message.captureBytes) !== message.captureBytes) {
+        throw new globalThis.Error("value provided for field message.captureBytes of type uint64 too large");
+      }
+      writer.uint32(264).uint64(message.captureBytes);
     }
     return writer;
   },
@@ -2247,6 +2378,46 @@ export const SearchJob: MessageFns<SearchJob> = {
             message.retainedResultStatus = reader.int32() as any;
             continue;
           }
+          case 29: {
+            if (tag !== 232) {
+              break;
+            }
+
+            message.captureComplete = reader.bool();
+            continue;
+          }
+          case 30: {
+            if (tag !== 240) {
+              break;
+            }
+
+            message.previewTruncated = reader.bool();
+            continue;
+          }
+          case 31: {
+            if (tag !== 250) {
+              break;
+            }
+
+            message.organizationId = reader.string();
+            continue;
+          }
+          case 32: {
+            if (tag !== 256) {
+              break;
+            }
+
+            message.captureRows = reader.uint64() as bigint;
+            continue;
+          }
+          case 33: {
+            if (tag !== 264) {
+              break;
+            }
+
+            message.captureBytes = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -2364,6 +2535,31 @@ export const SearchJob: MessageFns<SearchJob> = {
         : isSet(object.retained_result_status)
         ? retainedResultStatusFromJSON(object.retained_result_status)
         : 0,
+      captureComplete: isSet(object.captureComplete)
+        ? globalThis.Boolean(object.captureComplete)
+        : isSet(object.capture_complete)
+        ? globalThis.Boolean(object.capture_complete)
+        : false,
+      previewTruncated: isSet(object.previewTruncated)
+        ? globalThis.Boolean(object.previewTruncated)
+        : isSet(object.preview_truncated)
+        ? globalThis.Boolean(object.preview_truncated)
+        : false,
+      organizationId: isSet(object.organizationId)
+        ? globalThis.String(object.organizationId)
+        : isSet(object.organization_id)
+        ? globalThis.String(object.organization_id)
+        : undefined,
+      captureRows: isSet(object.captureRows)
+        ? BigInt(object.captureRows)
+        : isSet(object.capture_rows)
+        ? BigInt(object.capture_rows)
+        : 0n,
+      captureBytes: isSet(object.captureBytes)
+        ? BigInt(object.captureBytes)
+        : isSet(object.capture_bytes)
+        ? BigInt(object.capture_bytes)
+        : 0n,
     };
   },
 
@@ -2450,6 +2646,21 @@ export const SearchJob: MessageFns<SearchJob> = {
     if (message.retainedResultStatus !== 0) {
       obj.retainedResultStatus = retainedResultStatusToJSON(message.retainedResultStatus);
     }
+    if (message.captureComplete !== false) {
+      obj.captureComplete = message.captureComplete;
+    }
+    if (message.previewTruncated !== false) {
+      obj.previewTruncated = message.previewTruncated;
+    }
+    if (message.organizationId !== undefined) {
+      obj.organizationId = message.organizationId;
+    }
+    if (message.captureRows !== 0n) {
+      obj.captureRows = message.captureRows.toString();
+    }
+    if (message.captureBytes !== 0n) {
+      obj.captureBytes = message.captureBytes.toString();
+    }
     return obj;
   },
 
@@ -2505,6 +2716,15 @@ export const SearchJob: MessageFns<SearchJob> = {
       : undefined;
     message.lastAccessedAt = object.lastAccessedAt ?? undefined;
     message.retainedResultStatus = object.retainedResultStatus ?? 0;
+    message.captureComplete = object.captureComplete ?? false;
+    message.previewTruncated = object.previewTruncated ?? false;
+    message.organizationId = object.organizationId ?? undefined;
+    message.captureRows = (object.captureRows !== undefined && object.captureRows !== null)
+      ? BigInt(object.captureRows)
+      : 0n;
+    message.captureBytes = (object.captureBytes !== undefined && object.captureBytes !== null)
+      ? BigInt(object.captureBytes)
+      : 0n;
     return message;
   },
 };

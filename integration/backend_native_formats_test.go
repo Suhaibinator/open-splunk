@@ -58,14 +58,14 @@ func TestBackendNativeFormats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adminPath, adminToken := provisionAdministratorToken(t, work)
+	googleIdentity, googleSession := provisionGoogleSession(t, work)
 	args := []string{serverBinary,
 		"-http-listen-address=" + httpAddress,
 		"-http-tls-certificate-file=" + identity.CertificateFile,
 		"-http-tls-private-key-file=" + identity.PrivateKeyFile,
-		"-control-database-file=" + filepath.Join(work, "control.sqlite"),
+		"-postgres-dsn=" + googleIdentity.PostgresDSN,
 		"-master-key-file=" + filepath.Join(work, "master.key"),
-		"-administrator-token-file=" + adminPath,
+
 		"-collector-grpc-listen-address=" + collectorAddress,
 		"-collector-grpc-plaintext-enabled",
 		"-tenant-id=" + verticalTenantID,
@@ -77,9 +77,9 @@ func TestBackendNativeFormats(t *testing.T) {
 	t.Cleanup(transport.CloseIdleConnections)
 	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
 	baseURL := "https://" + httpAddress
-	waitForHealth(t, ctx, client, baseURL, server, adminToken)
+	waitForHealth(t, ctx, client, baseURL, server, googleSession)
 	var created opensplunk.CreateIndexResponse
-	postAdministratorProto(t, ctx, client, baseURL+"/api/indexes/create", adminToken,
+	postGoogleUserProto(t, ctx, client, baseURL+"/api/indexes/create", googleSession,
 		&opensplunk.CreateIndexRequest{Definition: &opensplunk.IndexDefinition{
 			Name: verticalIndexName, DisplayName: "Native format integration",
 			RetentionPeriod: durationpb.New(24 * time.Hour),
@@ -114,7 +114,7 @@ func TestBackendNativeFormats(t *testing.T) {
 	writePrivateFile(t, configPath, []byte(yaml.String()))
 	collectorID := initializeCollectorIdentity(t, ctx, repository, collectorBinary, configPath, os.Environ(), stateDir)
 	validateCollectorConfigurationWithInput(t, ctx, repository, collectorBinary, configPath, os.Environ(), "", "native formats", "docker-json-file")
-	token := createIndexScopedIngestionToken(t, ctx, client, baseURL, adminToken, "native-formats", verticalIndexName, collectorID, []string{"^native-host$"}, []string{"^native-log$"})
+	token := createIndexScopedIngestionToken(t, ctx, client, baseURL, googleSession, "native-formats", verticalIndexName, collectorID, []string{"^native-host$"}, []string{"^native-log$"})
 	writePrivateFile(t, tokenPath, []byte(token+"\n"))
 	collector := startProcess(t, repository, []string{collectorBinary, "run", "-config", configPath}, os.Environ())
 	storage, err := clickhousedriver.Open(&clickhousedriver.Options{

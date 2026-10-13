@@ -2,7 +2,9 @@ package featureaudit
 
 import (
 	"errors"
-	"path/filepath"
+
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
+
 	"sync"
 	"testing"
 	"time"
@@ -18,7 +20,7 @@ func (clock fixedClock) Now() time.Time { return clock.now }
 func TestStorePersistsImmutableEventsAcrossRestart(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "control.db")
+	path := pgtest.DSN(t)
 	firstDatabase, err := control.Open(ctx, path)
 	if err != nil {
 		t.Fatalf("open first database: %v", err)
@@ -106,30 +108,38 @@ func TestStorePersistsImmutableEventsAcrossRestart(t *testing.T) {
 
 func TestFeatureAuditRollsOldestEventAtRetentionLimit(t *testing.T) {
 	ctx := t.Context()
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.db"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	if _, err := database.SQLDB().ExecContext(ctx, `
-		INSERT INTO feature_operation_audit_tenant_state (
-			tenant_id, first_sequence, next_sequence, retained_count,
-			last_occurred_at_unix_micro
-		) VALUES ('tenant-roll', 1, 1, 0, NULL);
-		WITH RECURSIVE sequence(value) AS (
-			VALUES (1)
-			UNION ALL
-			SELECT value + 1 FROM sequence WHERE value < 100001
-		)
-		INSERT INTO feature_operation_audit_events (
-			tenant_id, sequence, occurred_at_unix_micro,
-			feature, operation, outcome, items, bytes
-		)
-		SELECT 'tenant-roll', value, value, 3, 14, 1, 0, 0
-		FROM sequence;
-	`); err != nil {
+	if _, err := database.SQLDB().ExecContext(ctx, `INSERT INTO feature_operation_audit_tenant_state (
+ tenant_id,first_sequence,next_sequence,retained_count,last_occurred_at_unix_micro
+ ) VALUES ('tenant-roll',1,1,0,NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	connection, err := database.SQLDB().Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Native AFTER ROW accounting completes after each INSERT statement. Seed
+	// every sequence through all real guards, with committed chunks to avoid a
+	// fixture-only 100,001-version tenant-state HOT chain. The final statements
+	// cross the unchanged retention boundary and exercise real rolling pruning.
+	if _, err = connection.ExecContext(ctx, `DO $$ DECLARE value BIGINT; BEGIN
+ FOR value IN 1..100001 LOOP
+ INSERT INTO feature_operation_audit_events (tenant_id,sequence,occurred_at_unix_micro,
+ feature,operation,outcome,items,bytes)
+ VALUES ('tenant-roll',value,value,3,14,1,0,0);
+ IF value % 512 = 0 THEN COMMIT; END IF;
+ END LOOP; END $$`); err != nil {
+		_ = connection.Close()
 		t.Fatalf("seed rolling retention boundary: %v", err)
 	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	var first, next, retained, minimum, maximum int64
 	if err := database.SQLDB().QueryRowContext(ctx, `
 		SELECT state.first_sequence, state.next_sequence, state.retained_count,
@@ -138,6 +148,7 @@ func TestFeatureAuditRollsOldestEventAtRetentionLimit(t *testing.T) {
 		JOIN feature_operation_audit_events AS event
 		  ON event.tenant_id = state.tenant_id
 		WHERE state.tenant_id = 'tenant-roll'
+ GROUP BY state.first_sequence,state.next_sequence,state.retained_count
 	`).Scan(&first, &next, &retained, &minimum, &maximum); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +180,7 @@ func TestFeatureAuditRollsOldestEventAtRetentionLimit(t *testing.T) {
 func TestStoreInitializesTenantStateOnceOnFirstCommittedEvent(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.db"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
@@ -199,9 +210,7 @@ func TestStoreInitializesTenantStateOnceOnFirstCommittedEvent(t *testing.T) {
 		t.Fatalf("append first event: %v", err)
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
-		CREATE TRIGGER test_reject_redundant_feature_audit_state_insert
-		BEFORE INSERT ON feature_operation_audit_tenant_state
-		BEGIN SELECT RAISE(ABORT, 'redundant tenant-state initialization'); END
+		CREATE FUNCTION test_reject_redundant_feature_audit_state_insert_function() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING MESSAGE = 'redundant tenant-state initialization'; RETURN NEW; END $$; CREATE TRIGGER test_reject_redundant_feature_audit_state_insert BEFORE INSERT ON feature_operation_audit_tenant_state FOR EACH ROW EXECUTE FUNCTION test_reject_redundant_feature_audit_state_insert_function()
 	`); err != nil {
 		t.Fatalf("install redundant-insert guard: %v", err)
 	}
@@ -217,7 +226,7 @@ func TestStoreInitializesTenantStateOnceOnFirstCommittedEvent(t *testing.T) {
 func TestStoreRejectsTamperedOrIncompleteJournalAtStartup(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.db"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
@@ -236,7 +245,7 @@ func TestStoreRejectsTamperedOrIncompleteJournalAtStartup(t *testing.T) {
 		t.Fatalf("append event: %v", err)
 	}
 	if _, err := database.SQLDB().ExecContext(ctx, `
-		DROP TRIGGER feature_operation_audit_event_update_is_forbidden
+		DROP TRIGGER feature_operation_audit_event_update_is_forbidden ON feature_operation_audit_events
 	`); err != nil {
 		t.Fatalf("remove immutability trigger: %v", err)
 	}
@@ -255,7 +264,7 @@ func TestStoreRejectsTamperedOrIncompleteJournalAtStartup(t *testing.T) {
 func TestStoreSerializesConcurrentSequenceAssignment(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.db"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
@@ -301,7 +310,7 @@ func TestStoreSerializesConcurrentSequenceAssignment(t *testing.T) {
 func TestObserverReportsOnlyBoundedFailureCategory(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.db"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}

@@ -33,7 +33,7 @@ func (handler *apiHandler) getSearchFieldSummary(request *http.Request, input *o
 		analysisRequest.MaxValues = new(input.GetMaxValues())
 	}
 
-	result, err := handler.searchFields.GetFieldSummary(request.Context(), handler.accessScope(), analysisRequest)
+	result, err := handler.searchFields.GetFieldSummary(request.Context(), handler.accessScope(request.Context()), analysisRequest)
 	if mapped := mapSearchFieldsCallError(request.Context(), err); mapped != nil {
 		return nil, mapped
 	}

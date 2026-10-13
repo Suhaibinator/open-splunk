@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -122,7 +123,7 @@ func (db *DB) ensureIndexDeletionMutationAttempt(
 	correlationID string,
 	target IndexDeletionMutationTarget,
 ) (result IndexDeletionMutationAttempt, err error) {
-	tx := db.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginLocked(db.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return IndexDeletionMutationAttempt{}, fmt.Errorf(
 			"begin index deletion mutation attempt transaction: %w",
@@ -202,8 +203,21 @@ func (db *DB) ensureIndexDeletionMutationAttempt(
 		ProtocolVersion:     int64(IndexDeletionMutationProtocolVersion),
 		CreatedAtUnixMicro:  createdAt.UnixMicro(),
 	}
+	inUse, err := indexDeletionMutationCorrelationIDInUse(tx, correlationID)
+	if err != nil {
+		return IndexDeletionMutationAttempt{}, err
+	}
+	if inUse {
+		return IndexDeletionMutationAttempt{}, errIndexDeletionMutationCorrelationCollision
+	}
+	if err := tx.SavePoint("os_index_create").Error; err != nil {
+		return IndexDeletionMutationAttempt{}, err
+	}
 	create := tx.Create(&record)
 	if create.Error != nil {
+		if err := tx.RollbackTo("os_index_create").Error; err != nil {
+			return IndexDeletionMutationAttempt{}, errors.Join(create.Error, err)
+		}
 		collision, collisionErr := indexDeletionMutationCorrelationIDInUse(
 			tx,
 			correlationID,

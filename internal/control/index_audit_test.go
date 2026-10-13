@@ -484,7 +484,7 @@ func TestAuditedIndexAdministrationDoesNotAuditRejectedMutations(t *testing.T) {
 	appCatalog := newTestAppCatalog(t, db)
 	if _, err := appCatalog.CreateApp(
 		ctx,
-		AppAccessScope{TenantID: "tenant-a"},
+		AppAccessScope{OrganizationID: 1, TenantID: "tenant-a"},
 		AppDefinition{
 			Slug:           "dependent-app",
 			DisplayName:    "Dependent app",

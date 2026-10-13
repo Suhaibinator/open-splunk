@@ -18,18 +18,18 @@ import (
 
 // Store is the durable scheduling boundary used by Service.
 type Store interface {
-	Configure(context.Context, string, string, string, uint64, Configuration, *time.Time) (Schedule, error)
-	Get(context.Context, string, string) (Schedule, error)
+	Configure(context.Context, AccessScope, string, string, uint64, Configuration, *time.Time) (Schedule, error)
+	Get(context.Context, AccessScope, string) (Schedule, error)
 	ListDue(context.Context, time.Time, int) ([]Schedule, error)
 	ClaimDue(context.Context, Schedule, time.Time, time.Time, time.Time, uint64, time.Duration, time.Duration) (Run, bool, error)
 	ClaimRunNow(context.Context, Schedule, time.Time, time.Duration, time.Duration) (Run, bool, error)
-	ClaimOneOff(context.Context, string, string, string, time.Time, time.Duration, time.Duration) (Run, bool, error)
+	ClaimOneOff(context.Context, AccessScope, string, string, time.Time, time.Duration, time.Duration) (Run, bool, error)
 	MarkSubmitted(context.Context, string, string) error
 	Finish(context.Context, string, RunOutcome, string, time.Time) error
 	InterruptActive(context.Context, time.Time) (int64, error)
-	ListRuns(context.Context, string, string, int) ([]Run, error)
-	ListRunPage(context.Context, string, string, RunPageRequest) (RunPage, error)
-	ListCurrentProjections(context.Context, string, []string) (map[string]CurrentProjection, error)
+	ListRuns(context.Context, AccessScope, string, int) ([]Run, error)
+	ListRunPage(context.Context, AccessScope, string, RunPageRequest) (RunPage, error)
+	ListCurrentProjections(context.Context, AccessScope, []string) (map[string]CurrentProjection, error)
 }
 
 // ServiceOptions contains orchestration dependencies and bounds.
@@ -76,7 +76,7 @@ func NewService(options ServiceOptions) (*Service, error) {
 // Configure validates cron, timezone, and dispatch.ttl before persistence.
 func (service *Service) Configure(
 	ctx context.Context,
-	ownerID, tenantID, savedSearchID string,
+	scope AccessScope, tenantID, savedSearchID string,
 	expectedVersion uint64,
 	configuration Configuration,
 ) (Schedule, error) {
@@ -106,25 +106,25 @@ func (service *Service) Configure(
 	if normalized.Enabled {
 		next = &validation.Next
 	}
-	return service.store.Configure(ctx, ownerID, tenantID, savedSearchID, expectedVersion, normalized, next)
+	return service.store.Configure(ctx, scope, tenantID, savedSearchID, expectedVersion, normalized, next)
 }
 
 // SetEnabled changes only enabled state while preserving validated schedule
 // configuration under the caller's expected config version.
 func (service *Service) SetEnabled(
 	ctx context.Context,
-	ownerID, tenantID, savedSearchID string,
+	scope AccessScope, tenantID, savedSearchID string,
 	expectedVersion uint64,
 	enabled bool,
 ) (Schedule, error) {
-	current, err := service.store.Get(ctx, ownerID, savedSearchID)
+	current, err := service.store.Get(ctx, scope, savedSearchID)
 	if err != nil {
 		return Schedule{}, err
 	}
 	if current.ConfigVersion != expectedVersion {
 		return Schedule{}, ErrConflict
 	}
-	return service.Configure(ctx, ownerID, tenantID, savedSearchID, expectedVersion, Configuration{
+	return service.Configure(ctx, scope, tenantID, savedSearchID, expectedVersion, Configuration{
 		Cron: current.Cron, Timezone: current.Timezone, DispatchTTL: current.DispatchTTL, Enabled: enabled,
 	})
 }
@@ -197,11 +197,11 @@ func (service *Service) claimAndAdmit(ctx context.Context, candidate Schedule, n
 }
 
 // RunNow submits one immediate occurrence without changing the cron cursor.
-func (service *Service) RunNow(ctx context.Context, ownerID, savedSearchID string) (Run, error) {
+func (service *Service) RunNow(ctx context.Context, scope AccessScope, savedSearchID string) (Run, error) {
 	if ctx == nil {
 		return Run{}, ErrInvalidArgument
 	}
-	candidate, err := service.store.Get(ctx, ownerID, savedSearchID)
+	candidate, err := service.store.Get(ctx, scope, savedSearchID)
 	if err != nil {
 		return Run{}, err
 	}
@@ -254,13 +254,13 @@ func (service *Service) runConfiguredNow(ctx context.Context, candidate Schedule
 // caller-supplied period and Splunk's default 2p dispatch retention.
 func (service *Service) RunNowOrOneOff(
 	ctx context.Context,
-	ownerID, tenantID, savedSearchID string,
+	scope AccessScope, tenantID, savedSearchID string,
 	oneOffPeriod time.Duration,
 ) (Run, error) {
 	if ctx == nil || oneOffPeriod <= 0 {
 		return Run{}, ErrInvalidArgument
 	}
-	if candidate, err := service.store.Get(ctx, ownerID, savedSearchID); err == nil {
+	if candidate, err := service.store.Get(ctx, scope, savedSearchID); err == nil {
 		return service.runConfiguredNow(ctx, candidate)
 	} else if !errors.Is(err, ErrNotFound) {
 		return Run{}, err
@@ -274,7 +274,7 @@ func (service *Service) RunNowOrOneOff(
 		return Run{}, fmt.Errorf("resolve one-off report retention: %w", err)
 	}
 	run, claimed, err := service.store.ClaimOneOff(
-		ctx, ownerID, tenantID, savedSearchID, now, oneOffPeriod, retention.Lifetime,
+		ctx, scope, tenantID, savedSearchID, now, oneOffPeriod, retention.Lifetime,
 	)
 	if err != nil {
 		service.observe(featureops.OperationScheduleClaim, featureops.OutcomeFailed, 1)
@@ -302,7 +302,7 @@ func (service *Service) admit(ctx context.Context, run Run) (string, error) {
 	request := AdmissionRequest{
 		RunID: run.RunID, SavedSearchID: run.SavedSearchID, DefinitionVersion: run.DefinitionVersion,
 		Definition: proto.Clone(run.Definition).(*opensplunk.SavedSearchDefinition),
-		OwnerID:    run.OwnerID, TenantID: run.TenantID, ScheduledAt: run.ScheduledAt,
+		OwnerID:    run.OwnerID, TenantID: run.TenantID, OrganizationID: run.OrganizationID, ScheduledAt: run.ScheduledAt,
 		SchedulePeriod: run.SchedulePeriod, RetentionLifetime: run.RetentionLifetime,
 	}
 	jobID, err := service.admitter.AdmitScheduledReport(ctx, request)
@@ -380,40 +380,40 @@ func (service *Service) Recover(ctx context.Context) (int64, error) {
 }
 
 // ListRuns returns a bounded owner-scoped run history.
-func (service *Service) ListRuns(ctx context.Context, ownerID, savedSearchID string, limit int) ([]Run, error) {
-	return service.store.ListRuns(ctx, ownerID, savedSearchID, limit)
+func (service *Service) ListRuns(ctx context.Context, scope AccessScope, savedSearchID string, limit int) ([]Run, error) {
+	return service.store.ListRuns(ctx, scope, savedSearchID, limit)
 }
 
 // ListRunPage returns a bounded keyset page for the HTTP history route.
 func (service *Service) ListRunPage(
 	ctx context.Context,
-	ownerID, savedSearchID string,
+	scope AccessScope, savedSearchID string,
 	request RunPageRequest,
 ) (RunPage, error) {
 	if ctx == nil {
 		return RunPage{}, ErrInvalidArgument
 	}
-	return service.store.ListRunPage(ctx, ownerID, savedSearchID, request)
+	return service.store.ListRunPage(ctx, scope, savedSearchID, request)
 }
 
 // GetSchedule returns the current detached configuration without advancing
 // the scheduler cursor.
-func (service *Service) GetSchedule(ctx context.Context, ownerID, savedSearchID string) (Schedule, error) {
+func (service *Service) GetSchedule(ctx context.Context, scope AccessScope, savedSearchID string) (Schedule, error) {
 	if ctx == nil {
 		return Schedule{}, ErrInvalidArgument
 	}
-	return service.store.Get(ctx, ownerID, savedSearchID)
+	return service.store.Get(ctx, scope, savedSearchID)
 }
 
 // CurrentProjections returns list-view schedule state without issuing queries
 // per saved search when the production repository supports the batch boundary.
 func (service *Service) CurrentProjections(
 	ctx context.Context,
-	ownerID string,
+	scope AccessScope,
 	savedSearchIDs []string,
 ) (map[string]CurrentProjection, error) {
 	if ctx == nil || len(savedSearchIDs) > MaximumProjectionBatch {
 		return nil, ErrInvalidArgument
 	}
-	return service.store.ListCurrentProjections(ctx, ownerID, savedSearchIDs)
+	return service.store.ListCurrentProjections(ctx, scope, savedSearchIDs)
 }

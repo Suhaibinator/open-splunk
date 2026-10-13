@@ -23,6 +23,19 @@ import (
 
 const adapterTestChannel = "123e4567-e89b-42d3-a456-426614174000"
 
+func TestTrustedOrganizationAuthoritySurvivesHECNormalization(t *testing.T) {
+	ctx := adapterTestContext(time.Now().UTC(), false)
+	ctx.Authentication.OrganizationID = 19
+	ctx.Authentication.OrganizationOwnershipRequired = true
+	request, err := JSON(ctx, decodeAdapterEnvelopes(t, `{"event":"line"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.HECAdmission == nil || request.HECAdmission.OrganizationID != 19 || !request.HECAdmission.RequireOrganizationOwnership {
+		t.Fatalf("normalization discarded trusted organization authority: %+v", request.HECAdmission)
+	}
+}
+
 func TestJSONConvertsConcatenatedEnvelopeEventKindsExactly(t *testing.T) {
 	t.Parallel()
 	receivedAt := time.Date(2026, time.August, 10, 18, 19, 20, 987654321, time.FixedZone("test", -7*60*60))

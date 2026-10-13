@@ -18,6 +18,7 @@ import (
 
 	"fortio.org/safecast"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
 )
@@ -932,6 +933,11 @@ type storedValue struct {
 }
 
 func encodeJob(job searchjobs.Job) ([]byte, error) {
+	ids, err := knowledgesnapshot.NormalizeObjectIDs(job.KnowledgeSnapshot, job.KnowledgeObjectIDs)
+	if err != nil {
+		return nil, err
+	}
+	job.KnowledgeObjectIDs = ids
 	detached := job
 	detached.Schema = nil
 	var knowledge []byte
@@ -957,6 +963,11 @@ func decodeJob(payload []byte) (searchjobs.Job, error) {
 			return searchjobs.Job{}, err
 		}
 	}
+	ids, err := knowledgesnapshot.NormalizeObjectIDs(stored.Job.KnowledgeSnapshot, stored.Job.KnowledgeObjectIDs)
+	if err != nil {
+		return searchjobs.Job{}, err
+	}
+	stored.Job.KnowledgeObjectIDs = ids
 	return stored.Job, nil
 }
 

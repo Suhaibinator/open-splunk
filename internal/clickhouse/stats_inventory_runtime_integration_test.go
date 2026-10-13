@@ -13,13 +13,12 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	"google.golang.org/protobuf/types/known/timestamppb"
-
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // TestStatsInventoryPinnedRuntimeAgainstClickHouse executes the stats

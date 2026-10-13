@@ -146,7 +146,7 @@ export interface BuildMetadata {
   uiBuildId: string;
   uiSha256: string;
   protobufSchemaSha256: string;
-  sqliteMigrationsSha256: string;
+  postgresMigrationsSha256: string;
   clickhouseMigrationsSha256: string;
   productVersion?: string | undefined;
 }
@@ -237,7 +237,7 @@ function createBaseBuildMetadata(): BuildMetadata {
     uiBuildId: "",
     uiSha256: "",
     protobufSchemaSha256: "",
-    sqliteMigrationsSha256: "",
+    postgresMigrationsSha256: "",
     clickhouseMigrationsSha256: "",
     productVersion: undefined,
   };
@@ -257,8 +257,8 @@ export const BuildMetadata: MessageFns<BuildMetadata> = {
     if (message.protobufSchemaSha256 !== "") {
       writer.uint32(42).string(message.protobufSchemaSha256);
     }
-    if (message.sqliteMigrationsSha256 !== "") {
-      writer.uint32(50).string(message.sqliteMigrationsSha256);
+    if (message.postgresMigrationsSha256 !== "") {
+      writer.uint32(50).string(message.postgresMigrationsSha256);
     }
     if (message.clickhouseMigrationsSha256 !== "") {
       writer.uint32(66).string(message.clickhouseMigrationsSha256);
@@ -319,7 +319,7 @@ export const BuildMetadata: MessageFns<BuildMetadata> = {
               break;
             }
 
-            message.sqliteMigrationsSha256 = reader.string();
+            message.postgresMigrationsSha256 = reader.string();
             continue;
           }
           case 8: {
@@ -372,10 +372,10 @@ export const BuildMetadata: MessageFns<BuildMetadata> = {
         : isSet(object.protobuf_schema_sha256)
         ? globalThis.String(object.protobuf_schema_sha256)
         : "",
-      sqliteMigrationsSha256: isSet(object.sqliteMigrationsSha256)
-        ? globalThis.String(object.sqliteMigrationsSha256)
-        : isSet(object.sqlite_migrations_sha256)
-        ? globalThis.String(object.sqlite_migrations_sha256)
+      postgresMigrationsSha256: isSet(object.postgresMigrationsSha256)
+        ? globalThis.String(object.postgresMigrationsSha256)
+        : isSet(object.postgres_migrations_sha256)
+        ? globalThis.String(object.postgres_migrations_sha256)
         : "",
       clickhouseMigrationsSha256: isSet(object.clickhouseMigrationsSha256)
         ? globalThis.String(object.clickhouseMigrationsSha256)
@@ -404,8 +404,8 @@ export const BuildMetadata: MessageFns<BuildMetadata> = {
     if (message.protobufSchemaSha256 !== "") {
       obj.protobufSchemaSha256 = message.protobufSchemaSha256;
     }
-    if (message.sqliteMigrationsSha256 !== "") {
-      obj.sqliteMigrationsSha256 = message.sqliteMigrationsSha256;
+    if (message.postgresMigrationsSha256 !== "") {
+      obj.postgresMigrationsSha256 = message.postgresMigrationsSha256;
     }
     if (message.clickhouseMigrationsSha256 !== "") {
       obj.clickhouseMigrationsSha256 = message.clickhouseMigrationsSha256;
@@ -425,7 +425,7 @@ export const BuildMetadata: MessageFns<BuildMetadata> = {
     message.uiBuildId = object.uiBuildId ?? "";
     message.uiSha256 = object.uiSha256 ?? "";
     message.protobufSchemaSha256 = object.protobufSchemaSha256 ?? "";
-    message.sqliteMigrationsSha256 = object.sqliteMigrationsSha256 ?? "";
+    message.postgresMigrationsSha256 = object.postgresMigrationsSha256 ?? "";
     message.clickhouseMigrationsSha256 = object.clickhouseMigrationsSha256 ?? "";
     message.productVersion = object.productVersion ?? undefined;
     return message;

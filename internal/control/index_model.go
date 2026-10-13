@@ -2,7 +2,7 @@ package control
 
 // indexRecord is the explicit GORM representation of the indexes table.
 //
-// Versioned SQL migrations remain the schema authority because SQLite STRICT
+// Versioned SQL migrations remain the schema authority because PostgreSQL STRICT
 // tables, immutable-name triggers, and retention-alignment triggers cannot be
 // represented completely by GORM tags. Keep this model's ordered columns,
 // keys, and physical scalar types in sync with 0001_control_plane.sql and

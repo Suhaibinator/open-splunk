@@ -115,7 +115,7 @@ func (manager *Manager) CreateDownloadGrant(ctx context.Context, access searchjo
 			return DownloadGrant{}, err
 		}
 		manager.purgeExpiredGrantsLocked(now)
-		if entry.access != access {
+		if !sameAccess(entry.access, access) {
 			entry.mu.Unlock()
 			manager.mu.Unlock()
 			return DownloadGrant{}, ErrNotFound
@@ -183,7 +183,7 @@ func downloadableStateErrorLocked(entry *jobEntry, now time.Time) error {
 	case StateExpired:
 		return ErrSourceExpired
 	case StateCompleted:
-		if entry.job.Artifact == nil || entry.artifactPath == "" || entry.artifactIdentity == nil {
+		if entry.job.Artifact == nil || entry.artifactPath == "" || (entry.artifactIdentity == nil && entry.remoteIdentity == nil) {
 			return ErrArtifactUnavailable
 		}
 		if !entry.job.Artifact.ExpiresAt.After(now) {
@@ -438,8 +438,15 @@ func (lease *DownloadLease) Close() error {
 	if lease == nil {
 		return nil
 	}
+	if lease.cancel != nil {
+		lease.cancel()
+	}
 	lease.closeOnce.Do(func() {
 		lease.mu.Lock()
+		lease.closed = true
+		if lease.stop != nil {
+			lease.stop()
+		}
 		file := lease.file
 		lease.file = nil
 		var fileErr error

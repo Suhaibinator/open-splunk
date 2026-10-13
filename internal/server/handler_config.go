@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 )
@@ -186,7 +185,6 @@ type handlerAdministrativeServices struct {
 	serverSettings           Settings
 	collectorAdmin           CollectorAdministration
 	appAdmin                 AppAdministration
-	browserAuthenticator     auth.BrowserAuthenticator
 	appCursorKey             []byte
 }
 
@@ -202,7 +200,7 @@ func normalizeHandlerAdministrativeServices(
 		ingestionTokens: config.IngestionTokens, hecOperations: config.HECOperations,
 		auditEvents: config.AuditEvents, searchAttemptAuditEvents: config.SearchAttemptAuditEvents,
 		serverSettings: config.ServerSettings, collectorAdmin: config.CollectorAdmin,
-		appAdmin: config.AppAdmin, browserAuthenticator: config.BrowserAuthenticator,
+		appAdmin: config.AppAdmin,
 	}
 	if isNilDependency(result.ingestionTokens) {
 		result.ingestionTokens = nil
@@ -225,14 +223,11 @@ func normalizeHandlerAdministrativeServices(
 	if isNilDependency(result.appAdmin) {
 		result.appAdmin = nil
 	}
-	if isNilDependency(result.browserAuthenticator) {
-		result.browserAuthenticator = nil
-	}
 	if (indexes.administration != nil || indexes.statistics != nil || indexes.fields != nil ||
 		result.ingestionTokens != nil || result.hecOperations != nil || result.auditEvents != nil ||
 		result.searchAttemptAuditEvents != nil || result.serverSettings != nil || result.collectorAdmin != nil ||
 		result.appAdmin != nil || knowledge.catalog != nil || lookups.management != nil || inspection != nil || alerts.complete) &&
-		result.browserAuthenticator == nil {
+		isNilDependency(config.IdentityAuthenticator) {
 		return handlerAdministrativeServices{}, errors.New("create server handler: administrative services require browser authentication")
 	}
 	if result.appAdmin != nil {

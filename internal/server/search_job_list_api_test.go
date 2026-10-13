@@ -73,7 +73,7 @@ func TestSearchJobListRouteRoundTripScopeFiltersAndSafeProjection(t *testing.T) 
 	if calls != 1 {
 		t.Fatalf("list calls = %d, want 1", calls)
 	}
-	if capturedScope != (searchjobs.AccessScope{OwnerID: "owner-1", TenantID: "tenant-1"}) {
+	if capturedScope != (searchjobs.AccessScope{OrganizationID: "1", OwnerID: "1009", TenantID: "tenant-1"}) {
 		t.Fatalf("scope = %+v", capturedScope)
 	}
 	if captured.PageSize != 2 || captured.PageToken != "page-1" || !captured.IncludeTotal {
@@ -218,7 +218,7 @@ func TestSearchJobListOverlaysDurableSettingsWithoutRefreshingRetention(t *testi
 func TestSearchJobListRestoresDurableTerminalJobsAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	now := testNow
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := openTestControl(t, ctx, filepath.Join(t.TempDir(), "control.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,20 +236,20 @@ func TestSearchJobListRestoresDurableTerminalJobsAfterRestart(t *testing.T) {
 	}
 	store := openStore()
 
-	interrupted := durableListQueuedJob("durable-interrupted", testNow, "owner-1")
+	interrupted := durableListQueuedJob("durable-interrupted", testNow, "1009")
 	if err := store.Admit(ctx, interrupted); err != nil {
 		t.Fatal(err)
 	}
-	completed := durableListQueuedJob("durable-completed", testNow.Add(-time.Minute), "owner-1")
+	completed := durableListQueuedJob("durable-completed", testNow.Add(-time.Minute), "1009")
 	persistDurableListCompletion(t, store, completed, testNow, time.Hour)
-	expired := durableListQueuedJob("durable-expired", testNow.Add(-2*time.Minute), "owner-1")
+	expired := durableListQueuedJob("durable-expired", testNow.Add(-2*time.Minute), "1009")
 	persistDurableListCompletion(t, store, expired, testNow, time.Minute)
-	shared := durableListQueuedJob("durable-shared", testNow.Add(-3*time.Minute), "owner-2")
+	shared := durableListQueuedJob("durable-shared", testNow.Add(-3*time.Minute), "1010")
 	persistDurableListCompletion(t, store, shared, testNow, time.Hour)
-	if _, err := store.Share(ctx, searchjobs.AccessScope{TenantID: "tenant-1", OwnerID: "owner-2"}, shared.ID); err != nil {
+	if _, err := store.Share(ctx, searchjobs.AccessScope{OrganizationID: "1", TenantID: "tenant-1", OwnerID: "1010"}, shared.ID); err != nil {
 		t.Fatal(err)
 	}
-	private := durableListQueuedJob("durable-private", testNow.Add(-4*time.Minute), "owner-2")
+	private := durableListQueuedJob("durable-private", testNow.Add(-4*time.Minute), "1010")
 	persistDurableListCompletion(t, store, private, testNow, time.Hour)
 
 	if err := store.Close(); err != nil {
@@ -319,7 +319,7 @@ func TestSearchJobListRestoresDurableTerminalJobsAfterRestart(t *testing.T) {
 func TestSearchJobListAppliesStateFilterAfterLiveOverlay(t *testing.T) {
 	ctx := context.Background()
 	now := testNow
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := openTestControl(t, ctx, filepath.Join(t.TempDir(), "control.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func TestSearchJobListAppliesStateFilterAfterLiveOverlay(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	queued := durableListQueuedJob("live-running", now, "owner-1")
+	queued := durableListQueuedJob("live-running", now, "1009")
 	if err := store.Admit(ctx, queued); err != nil {
 		t.Fatal(err)
 	}
@@ -827,18 +827,24 @@ func TestSearchJobListRouteIsExactAndPostOnly(t *testing.T) {
 func newSearchJobListTestHandler(t *testing.T, jobs SearchJobs, overrides Config) *Handler {
 	t.Helper()
 	overrides.SearchJobs = jobs
-	overrides.Indexes = fakeIndexCatalog{}
+	overrides.Indexes = fakeIndexCatalog{indexes: []control.Index{validationTestIndex("main")}}
 	overrides.WebUI = testUI()
-	overrides.OwnerID = "owner-1"
+	overrides.OwnerID = "1009"
 	overrides.TenantID = "tenant-1"
 	overrides.Now = func() time.Time { return testNow }
+	if overrides.IdentityAuthenticator == nil {
+		overrides.IdentityAuthenticator = serverFixtureUserIdentity(t, 1009)
+	}
+	if overrides.AppCatalog == nil {
+		overrides.AppCatalog = &fakeBootstrapAppCatalog{result: AppCatalogResult{Complete: true, Apps: []AppCatalogSummary{validBootstrapCatalogApp("app-main", "main", "Main", "main")}}}
+	}
 	return newTestHandler(t, overrides)
 }
 
 func listSearchJob(id string, createdAt time.Time) searchjobs.Job {
 	job := completeJob(id)
 	job.CreatedAt = createdAt
-	job.OwnerID = "owner-1"
+	job.OwnerID = "1009"
 	job.TenantID = "tenant-1"
 	job.Schema = nil
 	if job.Failure != nil {
@@ -849,6 +855,7 @@ func listSearchJob(id string, createdAt time.Time) searchjobs.Job {
 
 func listItem(job searchjobs.Job) searchjobs.JobListItem {
 	item := searchjobs.JobListItem{
+		OrganizationID:    job.OrganizationID,
 		ID:                job.ID,
 		Version:           job.Version,
 		OwnerID:           job.OwnerID,
@@ -991,7 +998,7 @@ func persistDurableListCompletion(
 	if err := store.Finalize(ctx, completed); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.PersistResults(ctx, searchjobs.AccessScope{
+	if _, err := store.PersistResults(ctx, searchjobs.AccessScope{OrganizationID: "1",
 		TenantID: completed.TenantID, OwnerID: completed.OwnerID,
 	}, completed.ID, &durableListResultLease{}); err != nil {
 		t.Fatal(err)

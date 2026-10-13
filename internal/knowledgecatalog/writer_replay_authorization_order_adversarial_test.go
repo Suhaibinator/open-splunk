@@ -9,6 +9,7 @@ import (
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 )
 
 const writerReplayRevokedApp = "app_000000000300000000002A"
@@ -25,7 +26,7 @@ func TestWriterHiddenExactReplaysAuthorizeBeforeReceiptOrBodyHydration(t *testin
 			slug: "corrupt-outcome-missing-blob",
 			tamper: func(t *testing.T, harness *writerFaultHarness) {
 				t.Helper()
-				tamperAllWriterReplayReceipts(t, harness, `outcome_proto = x'00'`, false)
+				tamperAllWriterReplayReceipts(t, harness, `outcome_proto = decode('00','hex')`, false)
 				removeWriterReplayDefinitionBlobs(t, harness)
 			},
 		},
@@ -35,7 +36,7 @@ func TestWriterHiddenExactReplaysAuthorizeBeforeReceiptOrBodyHydration(t *testin
 			tamper: func(t *testing.T, harness *writerFaultHarness) {
 				t.Helper()
 				tamperAllWriterReplayReceipts(
-					t, harness, `outcome_proto = zeroblob(1025)`, true,
+					t, harness, `outcome_proto = decode(repeat('00', (1025)::int), 'hex')`, true,
 				)
 			},
 		},
@@ -46,11 +47,11 @@ func TestWriterHiddenExactReplaysAuthorizeBeforeReceiptOrBodyHydration(t *testin
 				t.Helper()
 				if _, err := harness.database.SQLDB().ExecContext(t.Context(), `
 					UPDATE knowledge_mutation_idempotency
-					SET request_digest = zeroblob(32)
-					WHERE tenant_id = ?`, writerFaultTenant); err == nil {
+					SET request_digest = decode(repeat('00', (32)::int), 'hex')
+					WHERE tenant_id = $1`, writerFaultTenant); err == nil {
 					t.Fatal("row-only request-digest tamper succeeded with foreign keys enabled")
 				}
-				tamperAllWriterReplayReceipts(t, harness, `request_digest = zeroblob(32)`, false)
+				tamperAllWriterReplayReceipts(t, harness, `request_digest = decode(repeat('00', (32)::int), 'hex')`, false)
 			},
 		},
 	}
@@ -72,7 +73,7 @@ func TestWriterHiddenExactReplaysAuthorizeBeforeReceiptOrBodyHydration(t *testin
 					scope: WriteScope{
 						TenantID:       writerFaultTenant,
 						OwnerID:        "owner-without-replay-authority",
-						WritableAppIDs: []string{writerFaultApp},
+						WritableAppIDs: []string{writerFaultApp}, OrganizationID: 1,
 					},
 				},
 				{
@@ -80,7 +81,7 @@ func TestWriterHiddenExactReplaysAuthorizeBeforeReceiptOrBodyHydration(t *testin
 					scope: WriteScope{
 						TenantID:       writerFaultTenant,
 						OwnerID:        writerFaultOwner,
-						WritableAppIDs: []string{writerReplayRevokedApp},
+						WritableAppIDs: []string{writerReplayRevokedApp}, OrganizationID: 1,
 					},
 				},
 			}
@@ -104,7 +105,7 @@ func TestWriterHiddenExactReplaysAuthorizeBeforeReceiptOrBodyHydration(t *testin
 func TestWriterQuarantinedExactReplaysRedactBeforeCorruptReceiptOrBodyHydration(t *testing.T) {
 	harness := newWriterFaultHarness(t)
 	routes := commitWriterReplayRouteSequence(t, harness, "quarantine-order")
-	tamperAllWriterReplayReceipts(t, harness, `outcome_proto = zeroblob(1025)`, true)
+	tamperAllWriterReplayReceipts(t, harness, `outcome_proto = decode(repeat('00', (1025)::int), 'hex')`, true)
 	removeWriterReplayDefinitionBlobs(t, harness)
 	quarantineWriterReplayRegistry(t, harness)
 
@@ -230,40 +231,40 @@ func tamperAllWriterReplayReceipts(
 		t.Fatalf("open replay receipt tamper connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(t.Context(), connection); err != nil {
 		t.Fatalf("disable replay receipt foreign keys: %v", err)
 	}
 	defer func() {
-		if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
+		if _, err := pgtest.RestoreForeignKeys(t.Context(), connection); err != nil {
 			t.Errorf("restore replay receipt foreign keys: %v", err)
 		}
 	}()
 	if _, err := connection.ExecContext(t.Context(),
-		`DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden`); err != nil {
+		`DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden ON knowledge_mutation_idempotency`); err != nil {
 		t.Fatalf("drop replay receipt immutability guard: %v", err)
 	}
 	if ignoreChecks {
-		if _, err := connection.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+		if _, err := pgtest.Checks(t.Context(), connection, false); err != nil {
 			t.Fatalf("enable replay receipt check corruption: %v", err)
 		}
 		defer func() {
-			if _, err := connection.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = OFF`); err != nil {
+			if _, err := pgtest.Checks(t.Context(), connection, true); err != nil {
 				t.Errorf("restore replay receipt checks: %v", err)
 			}
 		}()
 	}
 	var statement string
 	switch assignment {
-	case `outcome_proto = x'00'`:
-		statement = `UPDATE knowledge_mutation_idempotency SET outcome_proto = x'00' WHERE tenant_id = ?`
-	case `outcome_proto = zeroblob(1025)`:
-		statement = `UPDATE knowledge_mutation_idempotency SET outcome_proto = zeroblob(1025) WHERE tenant_id = ?`
-	case `request_digest = zeroblob(32)`:
-		statement = `UPDATE knowledge_mutation_idempotency SET request_digest = zeroblob(32) WHERE tenant_id = ?`
+	case `outcome_proto = decode('00','hex')`:
+		statement = `UPDATE knowledge_mutation_idempotency SET outcome_proto = decode('00','hex') WHERE tenant_id = ?`
+	case `outcome_proto = decode(repeat('00', (1025)::int), 'hex')`:
+		statement = `UPDATE knowledge_mutation_idempotency SET outcome_proto = decode(repeat('00', (1025)::int), 'hex') WHERE tenant_id = ?`
+	case `request_digest = decode(repeat('00', (32)::int), 'hex')`:
+		statement = `UPDATE knowledge_mutation_idempotency SET request_digest = decode(repeat('00', (32)::int), 'hex') WHERE tenant_id = ?`
 	default:
 		t.Fatalf("unknown replay receipt assignment %q", assignment)
 	}
-	result, err := connection.ExecContext(t.Context(), statement, writerFaultTenant)
+	result, err := connection.ExecContext(t.Context(), pgtest.Parameters(statement), writerFaultTenant)
 	if err != nil {
 		t.Fatalf("tamper replay receipts: %v", err)
 	}
@@ -279,18 +280,18 @@ func removeWriterReplayDefinitionBlobs(t *testing.T, harness *writerFaultHarness
 		t.Fatalf("open replay blob tamper connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(t.Context(), `DROP TRIGGER knowledge_definition_blob_delete_is_forbidden`); err != nil {
+	if _, err := connection.ExecContext(t.Context(), `DROP TRIGGER knowledge_definition_blob_delete_is_forbidden ON knowledge_definition_blobs`); err != nil {
 		t.Fatalf("drop replay blob deletion guard: %v", err)
 	}
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(t.Context(), connection); err != nil {
 		t.Fatalf("disable replay blob foreign keys: %v", err)
 	}
 	defer func() {
-		if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
+		if _, err := pgtest.RestoreForeignKeys(t.Context(), connection); err != nil {
 			t.Errorf("restore replay blob foreign keys: %v", err)
 		}
 	}()
-	result, err := connection.ExecContext(t.Context(), `DELETE FROM knowledge_definition_blobs WHERE tenant_id = ?`, writerFaultTenant)
+	result, err := connection.ExecContext(t.Context(), `DELETE FROM knowledge_definition_blobs WHERE tenant_id = $1`, writerFaultTenant)
 	if err != nil {
 		t.Fatalf("remove replay definition blob: %v", err)
 	}
@@ -306,17 +307,20 @@ func quarantineWriterReplayRegistry(t *testing.T, harness *writerFaultHarness) {
 		t.Fatalf("open replay quarantine connection: %v", err)
 	}
 	defer connection.Close()
-	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := pgtest.DropForeignKeys(t.Context(), connection); err != nil {
 		t.Fatalf("disable replay quarantine foreign keys: %v", err)
 	}
 	defer func() {
-		if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
+		if _, err := pgtest.RestoreForeignKeys(t.Context(), connection); err != nil {
 			t.Errorf("restore replay quarantine foreign keys: %v", err)
 		}
 	}()
+	for _, trigger := range []string{"knowledge_object_registry_transition_is_valid", "knowledge_object_update_requires_sealed_list_projection"} {
+		if _, err := connection.ExecContext(t.Context(), "DROP TRIGGER "+trigger+" ON knowledge_objects"); err != nil {
+			t.Fatalf("remove quarantine replay registry guard: %v", err)
+		}
+	}
 	if _, err := connection.ExecContext(t.Context(), `
-		DROP TRIGGER knowledge_object_registry_transition_is_valid;
-		DROP TRIGGER knowledge_object_update_requires_sealed_list_projection;
 		UPDATE knowledge_objects
 		SET state = 'quarantined',
 		    definition_digest = NULL,
@@ -325,7 +329,7 @@ func quarantineWriterReplayRegistry(t *testing.T, harness *writerFaultHarness) {
 		    quarantined_at_unix_micro = updated_at_unix_micro + 1,
 		    deleted_at_unix_micro = NULL,
 		    quarantine_reason = 'root_corruption'
-		WHERE tenant_id = ?`, writerFaultTenant); err != nil {
+		WHERE tenant_id = $1`, writerFaultTenant); err != nil {
 		t.Fatalf("quarantine replay registry: %v", err)
 	}
 }

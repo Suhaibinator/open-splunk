@@ -12,17 +12,17 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	"google.golang.org/protobuf/types/known/timestamppb"
-
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport/jsonnumbercorpus"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -1286,12 +1286,12 @@ func spathStartClickHouse(t *testing.T, ctx context.Context) (clickhousedriver.C
 	config.Addresses = []string{container.Address}
 	config.Username = container.Username
 	config.Password = container.Password
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	controlDB, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatalf("open spath visibility control database: %v", err)
 	}
 	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	sequencer, err := visibility.NewPostgreSQL(ctx, controlDB)
 	if err != nil {
 		t.Fatalf("create spath visibility sequencer: %v", err)
 	}

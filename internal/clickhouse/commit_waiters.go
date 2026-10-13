@@ -8,7 +8,7 @@ import (
 var errCommitWaiterCapacity = errors.New("ClickHouse native commit waiter capacity reached")
 
 // commitWaiters is a bounded process-local notification index. Durable
-// visibility state remains authoritative: callers always re-read SQLite after
+// visibility state remains authoritative: callers always re-read PostgreSQL after
 // registering and again after a notification. A sequence may have multiple
 // waiters because exact retries can overlap the original request.
 type commitWaiters struct {

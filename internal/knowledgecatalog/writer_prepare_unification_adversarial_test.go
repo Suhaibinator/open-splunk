@@ -16,7 +16,7 @@ import (
 const prepareUnificationRequestID = "prepare-unification-0001"
 
 func prepareUnificationScope(ownerID string) normalizedWriteScope {
-	return normalizedWriteScope{tenantID: testTenant, ownerID: ownerID, writableAppIDs: []string{testApp}}
+	return normalizedWriteScope{tenantID: testTenant, ownerID: ownerID, writableAppIDs: []string{testApp}, organizationID: 1}
 }
 
 func prepareUnificationActor() audit.Actor {
@@ -162,7 +162,7 @@ func TestPrepareMutationDetachesEveryRouteFromHostileCallers(t *testing.T) {
 			if !proto.Equal(retained, cleared) {
 				t.Fatalf("prepare %s retained clone = %v, want %v", route, retained, cleared)
 			}
-			if digest != digestMutationRequest(route, testOwner, requestBytes) {
+			if digest != digestScopedMutationRequest(route, prepareUnificationScope(testOwner), requestBytes) {
 				t.Fatalf("prepare %s digest is not the canonical route digest", route)
 			}
 		})

@@ -14,6 +14,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+
 	"fortio.org/safecast"
 	"gorm.io/gorm"
 
@@ -44,14 +46,16 @@ var (
 	)
 )
 
-// AppAccessScope is the authenticated tenant boundary for app administration.
+// AppAccessScope is the authenticated organization boundary within a physical tenant.
 // It must be derived from trusted server identity, never from a request body.
 type AppAccessScope struct {
-	TenantID string
+	OrganizationID    int64
+	SiteAdministrator bool
+	TenantID          string
 }
 
 // AppSelector selects exactly one app by stable global ID or immutable,
-// tenant-local slug.
+// organization-local slug within the physical tenant.
 type AppSelector struct {
 	AppID string
 	Slug  string
@@ -88,13 +92,14 @@ type AppDefinition struct {
 
 // AppWorkspace is one detached optimistic-versioned app record.
 type AppWorkspace struct {
-	ID         string
-	Version    uint64
-	Definition AppDefinition
-	State      AppState
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-	ArchivedAt *time.Time
+	OrganizationID int64
+	ID             string
+	Version        uint64
+	Definition     AppDefinition
+	State          AppState
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	ArchivedAt     *time.Time
 }
 
 // AppCatalogOptions contains process dependencies. CursorKey must be a stable
@@ -152,7 +157,7 @@ func NewAppCatalog(db *DB, options AppCatalogOptions) (*AppCatalog, error) {
 }
 
 // CreateApp creates an active app at version one. The app row and every
-// default-index membership are committed atomically under SQLite's IMMEDIATE
+// default-index membership are committed atomically under PostgreSQL's IMMEDIATE
 // writer transaction.
 func (catalog *AppCatalog) CreateApp(
 	ctx context.Context,
@@ -196,6 +201,7 @@ func (catalog *AppCatalog) createApp(
 			ctx,
 			tenantID,
 			appID,
+			scope.OrganizationID,
 			normalized,
 			now,
 			auditPublisher,
@@ -212,11 +218,12 @@ func (catalog *AppCatalog) createAppOnce(
 	ctx context.Context,
 	tenantID string,
 	appID string,
+	organizationID int64,
 	definition AppDefinition,
 	now time.Time,
 	auditPublisher appMutationAuditPublisher,
 ) (result AppWorkspace, returnedErr error) {
-	tx := catalog.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginLocked(catalog.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return AppWorkspace{}, appContextError(ctx, "begin app creation", tx.Error)
 	}
@@ -224,7 +231,7 @@ func (catalog *AppCatalog) createAppOnce(
 
 	var existing appRecord
 	slugErr := tx.Select("app_id").
-		Where("tenant_id = ? AND slug = ?", tenantID, definition.Slug).
+		Where("tenant_id = ? AND organization_id = ? AND slug = ?", tenantID, organizationID, definition.Slug).
 		Take(&existing).Error
 	switch {
 	case slugErr == nil:
@@ -264,6 +271,7 @@ func (catalog *AppCatalog) createAppOnce(
 		return AppWorkspace{}, err
 	}
 	record := newAppRecord(appID, tenantID, definition, now)
+	record.OrganizationID = organizationID
 	if err := tx.Create(&record).Error; err != nil {
 		return AppWorkspace{}, appContextError(ctx, "create app", err)
 	}
@@ -315,12 +323,12 @@ func (catalog *AppCatalog) GetApp(
 		return AppWorkspace{}, err
 	}
 
-	tx := catalog.orm.WithContext(ctx).Begin()
+	tx := pgmeta.Begin(catalog.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return AppWorkspace{}, appContextError(ctx, "begin app read", tx.Error)
 	}
 	defer finishGORMTx(tx, &returnedErr)
-	record, err := takeAppRecord(tx, tenantID, normalizedSelector)
+	record, err := takeAppRecord(tx, tenantID, normalizedSelector, scope.OrganizationID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return AppWorkspace{}, ErrNotFound
 	}
@@ -392,12 +400,12 @@ func (catalog *AppCatalog) updateApp(
 		return AppWorkspace{}, err
 	}
 
-	tx := catalog.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginLocked(catalog.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return AppWorkspace{}, appContextError(ctx, "begin app update", tx.Error)
 	}
 	defer finishGORMTx(tx, &returnedErr)
-	current, err := takeAppRecord(tx, tenantID, normalizedSelector)
+	current, err := takeAppRecord(tx, tenantID, normalizedSelector, scope.OrganizationID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return AppWorkspace{}, ErrNotFound
 	}
@@ -446,7 +454,7 @@ func (catalog *AppCatalog) updateApp(
 			return AppWorkspace{}, appContextError(ctx, "replace app default indexes", err)
 		}
 	}
-	updated, err := takeAppRecord(tx, tenantID, AppSelector{AppID: current.AppID})
+	updated, err := takeAppRecord(tx, tenantID, AppSelector{AppID: current.AppID}, scope.OrganizationID)
 	if err != nil {
 		return AppWorkspace{}, appContextError(ctx, "read updated app", err)
 	}
@@ -512,12 +520,12 @@ func (catalog *AppCatalog) setAppState(
 		return AppWorkspace{}, fmt.Errorf("%w: unknown app state", ErrInvalidArgument)
 	}
 
-	tx := catalog.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginLocked(catalog.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return AppWorkspace{}, appContextError(ctx, "begin app state update", tx.Error)
 	}
 	defer finishGORMTx(tx, &returnedErr)
-	current, err := takeAppRecord(tx, tenantID, normalizedSelector)
+	current, err := takeAppRecord(tx, tenantID, normalizedSelector, scope.OrganizationID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return AppWorkspace{}, ErrNotFound
 	}
@@ -572,7 +580,7 @@ func (catalog *AppCatalog) setAppState(
 	if update.RowsAffected != 1 {
 		return AppWorkspace{}, ErrVersionConflict
 	}
-	updated, err := takeAppRecord(tx, tenantID, AppSelector{AppID: current.AppID})
+	updated, err := takeAppRecord(tx, tenantID, AppSelector{AppID: current.AppID}, scope.OrganizationID)
 	if err != nil {
 		return AppWorkspace{}, appContextError(ctx, "read app after state update", err)
 	}
@@ -651,12 +659,12 @@ func (catalog *AppCatalog) deleteApp(
 		return "", fmt.Errorf("%w: app deletion confirmation is invalid", ErrInvalidArgument)
 	}
 
-	tx := catalog.orm.WithContext(ctx).Begin()
+	tx := pgmeta.BeginLocked(catalog.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return "", appContextError(ctx, "begin app deletion", tx.Error)
 	}
 	defer finishGORMTx(tx, &returnedErr)
-	current, err := takeAppRecord(tx, tenantID, normalizedSelector)
+	current, err := takeAppRecord(tx, tenantID, normalizedSelector, scope.OrganizationID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", ErrNotFound
 	}
@@ -727,9 +735,9 @@ func (catalog *AppCatalog) deleteApp(
 	return current.AppID, nil
 }
 
-func takeAppRecord(database *gorm.DB, tenantID string, selector AppSelector) (appRecord, error) {
+func takeAppRecord(database *gorm.DB, tenantID string, selector AppSelector, organizationID int64) (appRecord, error) {
 	var record appRecord
-	query := database.Where("tenant_id = ?", tenantID)
+	query := database.Where("tenant_id = ? AND organization_id = ?", tenantID, organizationID)
 	if selector.AppID != "" {
 		query = query.Where("app_id = ?", selector.AppID)
 	} else {
@@ -778,7 +786,7 @@ func appDefinitionUpdates(definition AppDefinition, now time.Time) map[string]an
 }
 
 func appFromRecord(record appRecord, defaultIndexes []string) (AppWorkspace, error) {
-	if !ValidCanonicalAppID(record.AppID) ||
+	if record.OrganizationID <= 0 || !ValidCanonicalAppID(record.AppID) ||
 		validateTenantID(record.TenantID) != nil ||
 		record.Version < 1 ||
 		record.DefaultTimeRangePresent < 0 ||
@@ -830,7 +838,7 @@ func appFromRecord(record appRecord, defaultIndexes []string) (AppWorkspace, err
 		archivedAt = &value
 	}
 	return AppWorkspace{
-		ID:      record.AppID,
+		OrganizationID: record.OrganizationID, ID: record.AppID,
 		Version: uint64(record.Version),
 		Definition: AppDefinition{
 			Slug:             record.Slug,
@@ -1168,6 +1176,9 @@ func loadAppDefaultIndexNames(
 }
 
 func normalizeAppScope(scope AppAccessScope) (string, error) {
+	if scope.OrganizationID <= 0 {
+		return "", fmt.Errorf("%w: organization scope is required", ErrInvalidArgument)
+	}
 	if err := validateTenantID(scope.TenantID); err != nil {
 		return "", fmt.Errorf("%w: tenant identity is invalid", ErrInvalidArgument)
 	}

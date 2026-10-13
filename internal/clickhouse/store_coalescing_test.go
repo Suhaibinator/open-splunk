@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 )
 
@@ -673,15 +673,15 @@ func TestStoreCloseContextBoundsConnectionClose(t *testing.T) {
 	}
 }
 
-func openStoreGroupSequencer(t *testing.T) *visibility.SQLiteSequencer {
+func openStoreGroupSequencer(t *testing.T) *visibility.PostgreSQLSequencer {
 	t.Helper()
 	ctx := context.Background()
-	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	database, err := control.Open(ctx, pgtest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, database)
+	sequencer, err := visibility.NewPostgreSQL(ctx, database)
 	if err != nil {
 		t.Fatal(err)
 	}

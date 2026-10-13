@@ -141,17 +141,17 @@ func TestIncomingGraphQueryIsAuthorizationDrivenAndClipsPayloadScalars(t *testin
 	}
 	query := compiled.Statement.SQL.String()
 	for _, clipped := range []string{
-		"CASE WHEN length(CAST(dependency.tenant_id AS BLOB))",
-		"CASE WHEN length(CAST(dependency.source_object_id AS BLOB))",
-		"CASE WHEN length(CAST(dependency.target_kind AS BLOB))",
-		"CASE WHEN length(CAST(dependency.target_object_id AS BLOB))",
-		"CASE WHEN length(CAST(dependency.dependency_role AS BLOB))",
+		"CASE WHEN octet_length(dependency.tenant_id)",
+		"CASE WHEN octet_length(dependency.source_object_id)",
+		"CASE WHEN octet_length(dependency.target_kind)",
+		"CASE WHEN octet_length(dependency.target_object_id)",
+		"CASE WHEN octet_length(dependency.dependency_role)",
 	} {
 		if !strings.Contains(query, clipped) {
 			t.Fatalf("incoming graph SQL lacks clipped payload %q:\n%s", clipped, query)
 		}
 	}
-	details := explainSQLiteQueryPlan(
+	details := explainPostgreSQLQueryPlan(
 		t,
 		database.SQLDB(),
 		query,
@@ -169,7 +169,7 @@ func TestIncomingGraphQueryIsAuthorizationDrivenAndClipsPayloadScalars(t *testin
 		}
 	}
 	for _, forbidden := range []string{
-		"SCAN dependency",
+		"Seq Scan on dependency",
 		"knowledge_object_dependencies_target_idx",
 	} {
 		if strings.Contains(joined, forbidden) {
@@ -177,7 +177,7 @@ func TestIncomingGraphQueryIsAuthorizationDrivenAndClipsPayloadScalars(t *testin
 		}
 	}
 	sourceIndex := indexContaining(details, "authorized_source")
-	dependencyIndex := indexContaining(details, "dependency USING")
+	dependencyIndex := indexContaining(details, "on dependency")
 	if sourceIndex < 0 || dependencyIndex <= sourceIndex {
 		t.Fatalf("incoming graph plan is not authorization/current-source first:\n%s", joined)
 	}

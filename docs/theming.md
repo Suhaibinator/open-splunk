@@ -549,9 +549,9 @@ its token file; everything else is the guardrails' job.
    `internal/server/server_settings_api.go` (both `uiPaletteToProto` and
    `uiPaletteFromProto` read it; the build passes without the entry, and only
    `go test ./internal/server` holds it to `uipalette.All()`), and a new
-   SQLite migration that rebuilds the `palette` CHECK on
-   `server_appearance_settings` (`0011` is shipped and digest-pinned, so it is
-   not edited). Keep all of them in the same order.
+   PostgreSQL migration that updates the `palette` CHECK on
+   `server_appearance_settings`. Shipped migrations are digest-pinned and are
+   not edited. Keep all of them in the same order.
 7. **Run the guardrails and extend the contracts.** `npm run lint:css` and
    `npm run test:frontend` prove the file shape, the four preludes, the
    `color-scheme` rule, "primitives only in base light", "restate only what

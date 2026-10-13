@@ -8,7 +8,7 @@
 // boundary. A server must invalidate prior-boot leases before accepting
 // traffic. Runtime integration must also combine credential revalidation,
 // accepted-token use, enabled-state validation, and lease claim in one
-// immediate SQLite transaction. Each later operation must read fresh
+// immediate PostgreSQL transaction. Each later operation must read fresh
 // credential state and its exact enabled lease from one shared snapshot;
 // composing either boundary from independent snapshots is not safe.
 package collectorfleet

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"github.com/Suhaibinator/open-splunk/internal/uipalette"
 	"gorm.io/gorm"
 )
@@ -102,7 +103,7 @@ func (store *ServerAppearanceSettingsStore) Update(
 		Palette:            string(palette),
 		UpdatedAtUnixMicro: now.UnixMicro(),
 	}
-	err = store.db.orm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = pgmeta.TransactionLocked(store.db.orm.WithContext(ctx), "settings:server_appearance_settings", func(tx *gorm.DB) error {
 		var current serverAppearanceSettingsRecord
 		readErr := tx.First(&current, "singleton_id = ?", 1).Error
 		switch {

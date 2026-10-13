@@ -43,20 +43,19 @@ func TestRecoveryComposeSharesPersistentLockAndVerifiesTLS(t *testing.T) {
 	for _, name := range []string{"server", "recovery"} {
 		service := config.Services[name]
 		if service.User != "65532:65532" || service.Environment["OPEN_SPLUNK_SERVER_LOCK_FILE"] != lock {
-			t.Fatalf("%s must share the persistent lock and server UID", name)
+			t.Fatalf("%s must retain the host guard and server UID", name)
 		}
 		for key, want := range map[string]string{
 			"OPEN_SPLUNK_SERVER_CLICKHOUSE_TLS_ENABLED":             "true",
 			"OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS":                 "clickhouse:9440",
 			"OPEN_SPLUNK_SERVER_CLICKHOUSE_TLS_CA_CERTIFICATE_FILE": "/run/recovery/ca.crt",
 			"OPEN_SPLUNK_SERVER_CLICKHOUSE_TLS_SERVER_NAME":         "clickhouse",
-			"OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN_FILE":           "/var/lib/open-splunk/state/private/administrator.token",
 		} {
 			if service.Environment[key] != want {
 				t.Errorf("%s %s = %q, want %q", name, key, service.Environment[key], want)
 			}
 		}
-		for _, key := range []string{"OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN", "OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD", "OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH"} {
+		for _, key := range []string{"OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN", "OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN_FILE", "OPEN_SPLUNK_SERVER_CONTROL_DATABASE_FILE", "OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD", "OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH"} {
 			if _, exists := service.Environment[key]; exists {
 				t.Errorf("%s contains incompatible credential/lock setting %s", name, key)
 			}
