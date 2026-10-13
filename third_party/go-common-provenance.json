@@ -1,7 +1,7 @@
 {
   "module": "github.com/Suhaibinator/go-common",
   "source": "https://github.com/Suhaibinator/go-common",
-  "sourceRevision": "5efce550f22357991c6d794a4cf82aa03f93cb55",
+  "sourceRevision": "a1f81ec0b0a2b1e76aeb4813e16a4c44b3ebe743",
   "license": "Upstream Go module has no repository license file; upstream README documents the current scope.",
   "includesLocalIntegrationChanges": true,
   "files": {
