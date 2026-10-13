@@ -26,8 +26,8 @@ func TestGoogleOnlyConfigurationDoesNotGrantOrganizationOrCredentials(t *testing
 	if view.EnableOrganizationEmailAutoAssociation() || view.OrgAncestorMembershipAutoAdd() {
 		t.Fatal("signup/membership must not auto grant scope")
 	}
-	if view.DefaultUserType() != pb.UserType_USER_TYPE_REGULAR_TIER_0 || view.AuthCacheTtl() <= 0 || view.AuthTokenCacheCapacity() == 0 || view.AuthUserCacheCapacity() != 0 {
-		t.Fatal("unprivileged signup and fresh persisted user authority required")
+	if view.DefaultUserType() != pb.UserType_USER_TYPE_REGULAR_TIER_0 || view.AuthCacheTtl() <= 0 || view.AuthTokenCacheCapacity() == 0 || view.AuthUserCacheCapacity() == 0 {
+		t.Fatal("unprivileged signup and native token/user caching required")
 	}
 	if cfg.MinioBucket != "private-results" || cfg.SessionTokenSecret.StringValue() != "session-resource-preserved" {
 		t.Fatal("policy replaced deployment resource identity")

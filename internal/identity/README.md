@@ -19,11 +19,12 @@ UPDATE gocommon_users SET user_type = 44 WHERE id = <existing_google_user_id>;
 ```
 
 `44` is `USER_TYPE_ADMIN_TIER_10`; only this recognized type is an OpenSplunk site
-administrator. The native token cache retains its positive lifetime while
-`AuthUserCacheCapacity=0` disables user projection caching. Committed changes
-therefore affect the next native API or application request using the existing
-session. Reloading the page refreshes `/user/me` and updates the UI. `CurrentSubject`/`LookupSubject` also reload account type and
-ban/deletion status for schedulers and long-lived work.
+administrator. Restart the server after this manual database change, then reload
+the browser. GoCommon's native token and user caches remain enabled with their
+configured capacities and lifetime (defaults: 5,000 users and 15 minutes). The
+existing session remains valid across the restart and reads the new user type.
+`CurrentSubject`/`LookupSubject` still reload account type and ban/deletion status
+for resource authorization, schedulers and long-lived work.
 
 Viewer, Admin and Owner map to GoCommon roles 1, 23 and 44. Native role
 transitions apply: Admins manage Viewers; Owners manage Admins and ownership
@@ -86,8 +87,8 @@ adapter additionally validates the native signed session and current persisted
 session row, accepting only `AUTH_PROVIDER_OAUTH` with the `google` slug. Both
 native API and application authentication reject restored non-Google or revoked
 sessions. This application boundary uses native validation/persistence methods;
-it installs no GoCommon session-policy callback. Native user projections remain
-fresh even when the token cache is warm.
+it installs no GoCommon session-policy callback. Native user projections use
+GoCommon's cache and its normal invalidation for application-managed mutations.
 
 Native collector and HEC credentials remain machine ingestion credentials.
 Each records one immutable organization and its issuing user for audit. Issuing,

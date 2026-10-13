@@ -187,8 +187,8 @@ func subjectForUser(user sm.User) (authorization.Subject, error) {
 // authenticateSession keeps the application boundary Google-only even for
 // restored rows. Login availability is restart-bound in GoCommon and does not
 // invalidate existing sessions, so use its native signature and persisted-row
-// validation here. The native user cache is disabled; its normal lookup reloads
-// current account type and status for both API and application authentication.
+// validation here. Native user caching remains enabled; operators restart the
+// server after manually changing account types directly in PostgreSQL.
 func (r *Runtime) authenticateSession(ctx context.Context, raw string) (*sm.User, error) {
 	freshContext := gcpersistence.WithoutRequestTransaction[sm.User](ctx)
 	claims, err := r.service.ValidateSessionToken(freshContext, raw)

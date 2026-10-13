@@ -41,10 +41,8 @@ func Configure(c *gcconfig.Config) {
 	c.EnableOrganizationEmailAutoAssociation = new(false)
 	c.AllowOrganizationManagedEmailDomains = new(false)
 	c.OrgAncestorMembershipAutoAdd = new(false)
-	// Keep the native token cache lifetime positive. Mutable user projections
-	// must be reloaded for manual database promotions and native /user/me.
-	c.AuthCacheTtl = gcconfig.GetDefaults().AuthCacheTtl
-	c.AuthUserCacheCapacity = new(uint64(0))
+	// Retain the configured native token and user caches. Operators restart
+	// the server after changing user types directly in PostgreSQL.
 	c.OrganizationRoleCacheTTL = new(time.Duration(0))
 	c.OAuthSignupMode = new(gcconfig.OAuthSignupModeEmailLocalPart)
 	c.DefaultUserType = new(pb.UserType_USER_TYPE_REGULAR_TIER_0)

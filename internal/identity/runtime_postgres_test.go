@@ -80,7 +80,7 @@ func newPostgresIdentityRuntime(t *testing.T) (*Runtime, *gorm.DB, *gcconfig.Con
 	return runtime, pool, cfg
 }
 
-func runtimeSameGoogleSessionSeesManualPromotionDemotion(t *testing.T, runtime *Runtime, pool *gorm.DB, cfg *gcconfig.Config) {
+func runtimeSameGoogleSessionSeesManualPromotionAfterRestart(t *testing.T, runtime *Runtime, pool *gorm.DB, cfg *gcconfig.Config) {
 	user := pm.User{Username: "googleuser", Email: "googleuser@example.com", UserType: pb.UserType_USER_TYPE_REGULAR_TIER_0}
 	if err := pool.Create(&user).Error; err != nil {
 		t.Fatal(err)
@@ -104,16 +104,43 @@ func runtimeSameGoogleSessionSeesManualPromotionDemotion(t *testing.T, runtime *
 	}
 	request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/search", nil)
 	request.AddCookie(&http.Cookie{Name: runtime.cookieName, Value: session, Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	restart := func() {
+		t.Helper()
+		if err := runtime.Close(); err != nil {
+			t.Fatal(err)
+		}
+		restarted, err := New(t.Context(), pool, Options{Common: cfg, GoogleClientID: "google-test-client", GoogleClientSecret: gcconfig.NewSecret("google-test-secret"), GoogleRedirectURLs: []string{"http://localhost:8080/auth/callback"}, Logger: zap.NewNop()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := restarted.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		runtime = restarted
+	}
+	cachedType := pb.UserType_USER_TYPE_REGULAR_TIER_0
 	for _, tier := range []pb.UserType{pb.UserType_USER_TYPE_REGULAR_TIER_0, pb.UserType_USER_TYPE_ADMIN_TIER_10, pb.UserType_USER_TYPE_REGULAR_TIER_0} {
+		// Warm the native user cache before the out-of-band database update.
+		if _, _, err := runtime.AuthenticateRequest(request.Clone(t.Context())); err != nil {
+			t.Fatal(err)
+		}
 		if err := pool.Exec("UPDATE gocommon_users SET user_type=? WHERE id=?", tier, user.ID).Error; err != nil {
 			t.Fatal(err)
 		}
+		_, cached, err := runtime.AuthenticateRequest(request.Clone(t.Context()))
+		if err != nil || cached.UserType != int32(cachedType) {
+			t.Fatalf("native cache changed before restart: %#v %v", cached, err)
+		}
+		restart()
+		cachedType = tier
 		_, subject, err := runtime.AuthenticateRequest(request.Clone(t.Context()))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if subject.UserType != int32(tier) || subject.IsSiteAdmin() != (tier == pb.UserType_USER_TYPE_ADMIN_TIER_10) {
-			t.Fatalf("same-cookie fresh type got%#v want%d", subject, tier)
+			t.Fatalf("same-cookie restarted type got%#v want%d", subject, tier)
 		}
 		adminReq := httptest.NewRequestWithContext(t.Context(), http.MethodPost, Prefix+"/admin/users", strings.NewReader(""))
 		adminReq.Header.Set("Content-Type", "application/x-protobuf")
@@ -128,9 +155,8 @@ func runtimeSameGoogleSessionSeesManualPromotionDemotion(t *testing.T, runtime *
 		if record.Code != expected {
 			t.Fatalf("same-session user administration got%d want%d: %s", record.Code, expected, record.Body.String())
 		}
-		// /user/me goes through GoCommon's GetUserByID facade as well as its
-		// router auth context. Both must see the new persisted type even after
-		// the token cache was warmed by previous API calls.
+		// Restarting clears both native caches while preserving the signed
+		// session and persisted account. The profile must show the new type.
 		me := httptest.NewRequestWithContext(t.Context(), http.MethodGet, Prefix+"/user/me", nil)
 		me.Header.Set("Accept", "application/x-protobuf")
 		me.AddCookie(&http.Cookie{Name: runtime.cookieName, Value: session, Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
@@ -161,11 +187,12 @@ func runtimeSameGoogleSessionSeesManualPromotionDemotion(t *testing.T, runtime *
 			t.Fatalf("worker fresh user %#v %v", fresh, err)
 		}
 	}
-	// A native token-cache hit must not freeze account-state decisions either.
+	// Out-of-band account-state updates follow the same restart workflow.
 	for _, banned := range []bool{true, false} {
 		if err := pool.Exec("UPDATE gocommon_users SET banned=? WHERE id=?", banned, user.ID).Error; err != nil {
 			t.Fatal(err)
 		}
+		restart()
 		_, _, err := runtime.AuthenticateRequest(request.Clone(t.Context()))
 		if banned == (err == nil) {
 			t.Fatalf("same-cookie persisted ban=%v authentication error=%v", banned, err)
@@ -357,9 +384,13 @@ func runtimeAuthorizationTransactionReadsUncommittedPersistedType(t *testing.T, 
 	}
 }
 
+func TestRuntimeGoogleSessionReflectsManualPromotionAfterRestart(t *testing.T) {
+	runtime, pool, cfg := newPostgresIdentityRuntime(t)
+	runtimeSameGoogleSessionSeesManualPromotionAfterRestart(t, runtime, pool, cfg)
+}
+
 func TestRuntimePostgresAcceptance(t *testing.T) {
 	runtime, pool, cfg := newPostgresIdentityRuntime(t)
-	t.Run("same Google cookie promotion demotion revocation", func(t *testing.T) { runtimeSameGoogleSessionSeesManualPromotionDemotion(t, runtime, pool, cfg) })
 	t.Run("reject foreign session methods", func(t *testing.T) { runtimeRejectsForeignSessionMethods(t, runtime, pool, cfg) })
 	t.Run("native Google only route registration", func(t *testing.T) { runtimeNativeGoogleOnlyRouteRegistration(t, runtime) })
 	t.Run("native Owner-managed Admin and ancestry policy", func(t *testing.T) { runtimeNativeOrganizationPolicyPreservesAncestorMembership(t, runtime, pool) })
