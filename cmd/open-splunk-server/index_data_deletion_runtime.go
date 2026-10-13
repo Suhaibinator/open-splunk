@@ -118,10 +118,16 @@ func (runtime *indexDataDeletionRuntime) Close(ctx context.Context) error {
 
 func (runtime *indexDataDeletionRuntime) close(ctx context.Context) {
 	defer close(runtime.closeDone)
+	// Preserve an already-canceled shutdown budget even when the worker's
+	// completion becomes ready before this asynchronous close is scheduled.
+	shutdownErr := ctx.Err()
 	if err := runtime.coordinator.Close(ctx); err != nil {
+		shutdownErr = err
+	}
+	if shutdownErr != nil {
 		runtime.closeErr = fmt.Errorf(
 			"close index data deletion coordinator: %w",
-			err,
+			shutdownErr,
 		)
 		return
 	}
