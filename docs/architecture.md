@@ -141,3 +141,12 @@ on user or organization changes. MinIO object keys never confer user access;
 large downloads stream through an authenticated gateway. PostgreSQL stores
 metadata and manifests, while MinIO stores full captures and exports; bounded
 browser previews are explicitly distinguished from complete captured results.
+
+
+The PostgreSQL/GoCommon integration remains blocked on the
+[granular locking refactor](roadmap.md#postgresql-integration-release-blocker).
+GoCommon borrows the application pool without a transaction-start interceptor.
+OpenSplunk still owns the global metadata writer lock and statement triggers;
+these must be replaced with invariant-scoped locking/constraints and a consistent
+order for identity lifecycle callbacks before release. Existing serial execution
+checks do not establish those concurrency guarantees.

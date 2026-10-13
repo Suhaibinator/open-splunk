@@ -30,7 +30,6 @@ type Option func(*bootstrapOptions) error
 
 type bootstrapOptions struct {
 	applicationSchemaSetups []applicationSchemaSetup
-	transactionStartHook    func(context.Context, *gorm.DB) error
 }
 
 type applicationSchemaSetup struct {
@@ -50,22 +49,6 @@ func WithApplicationSchemaSetup(name string, setup SchemaSetupFunc) Option {
 			name: name,
 			run:  setup,
 		})
-	}
-}
-
-// WithTransactionStartHook installs an application lock protocol immediately
-// after every handler-owned transaction begins, including background workers,
-// before resource row locks. Initialization/migration transactions are independent.
-func WithTransactionStartHook(hook func(context.Context, *gorm.DB) error) Option {
-	return func(options *bootstrapOptions) error {
-		if hook == nil {
-			return errors.New("transaction start hook must not be nil")
-		}
-		if options.transactionStartHook != nil {
-			return errors.New("transaction start hook is duplicated")
-		}
-		options.transactionStartHook = hook
-		return nil
 	}
 }
 
@@ -237,7 +220,6 @@ func initializeHandler[U common_service_models.UserLike](
 	ctx, cancel := context.WithCancel(parent)
 	handler := &CommonPersistenceHandler[U]{
 		runtime:                     provider,
-		transactionStartHook:        options.transactionStartHook,
 		transactionTimeout:          startup.DBTransactionTimeout(),
 		objectHashSalt:              startup.ObjectHashSalt(),
 		db:                          db,
@@ -253,9 +235,6 @@ func initializeHandler[U common_service_models.UserLike](
 		return nil, handler.failInitialization(err)
 	}
 	if err := handler.runSQLMigrations(ctx); err != nil {
-		return nil, handler.failInitialization(err)
-	}
-	if err := handler.installTransactionStartHook(); err != nil {
 		return nil, handler.failInitialization(err)
 	}
 	if err := handler.initMinioClient(startup); err != nil {

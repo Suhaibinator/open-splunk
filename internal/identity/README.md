@@ -83,3 +83,10 @@ credentials. Credentials do not depend on the issuing user's later membership;
 an organization administrator can inspect, disable or revoke an owned credential
 even after its old source index moves. HEC operational telemetry aggregates the
 whole deployment and remains restricted to site administrators.
+
+
+The borrowed pool has no transaction-start hook. OpenSplunk's remaining global
+writer locks and triggers need an application-owned granular-locking refactor
+before release; see [the release blocker](../../docs/roadmap.md#postgresql-integration-release-blocker).
+Removing the shared-library hook alone does not prove cross-repository lock
+ordering or concurrent lifecycle safety.

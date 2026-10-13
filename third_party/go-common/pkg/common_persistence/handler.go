@@ -121,15 +121,14 @@ const (
 //   - Attachment lifecycle management
 type CommonPersistenceHandler[U common_service_models.UserLike] struct {
 	// runtime supplies immutable hot policy; remaining fields are startup resource identity.
-	runtime              config.PersistenceProvider
-	transactionTimeout   time.Duration
-	transactionStartHook func(context.Context, *gorm.DB) error
-	objectHashSalt       config.Secret
-	minioAccessKey       string
-	minioSecretKey       config.Secret
-	poolPolicyMu         sync.Mutex
-	poolPolicy           databasePoolPolicy
-	poolPolicySet        bool
+	runtime            config.PersistenceProvider
+	transactionTimeout time.Duration
+	objectHashSalt     config.Secret
+	minioAccessKey     string
+	minioSecretKey     config.Secret
+	poolPolicyMu       sync.Mutex
+	poolPolicy         databasePoolPolicy
+	poolPolicySet      bool
 
 	// db is the main GORM database connection
 	db *gorm.DB
@@ -229,7 +228,6 @@ func (h *CommonPersistenceHandler[U]) BeginTransaction(ctx context.Context) (*go
 			zap.String(logkeys.Operation, "begin_transaction"),
 			appLogger.DurationSeconds(appLogger.KeyTimeoutSeconds, txTimeout))
 	}
-
 	return tx, nil
 }
 

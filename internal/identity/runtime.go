@@ -27,7 +27,6 @@ import (
 	"github.com/Suhaibinator/go-common/pkg/oauth"
 	pb "github.com/Suhaibinator/go-common/pkg/proto_models"
 	"github.com/Suhaibinator/open-splunk/internal/authorization"
-	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -79,9 +78,7 @@ func New(ctx context.Context, pool *gorm.DB, options Options) (_ *Runtime, err e
 			_ = r.Close()
 		}
 	}()
-	r.persistence, err = gcpersistence.Borrow[sm.User](ctx, pool, source.Persistence(), logger, nil, gcpersistence.WithTransactionStartHook(func(ctx context.Context, tx *gorm.DB) error {
-		return tx.WithContext(ctx).Exec("SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(), ?))", pgmeta.WriteLock).Error
-	}))
+	r.persistence, err = gcpersistence.Borrow[sm.User](ctx, pool, source.Persistence(), logger, nil)
 	if err != nil {
 		return nil, err
 	}
