@@ -30,7 +30,7 @@ func (store *Store) ReserveExport(ctx context.Context, organizationID, exportID 
 	if err != nil {
 		return err
 	}
-	tx, err := pgmeta.BeginSQL(ctx, store.db, nil)
+	tx, err := pgmeta.BeginSQLLocked(ctx, store.db, pgmeta.RetainedStorage)
 	if err != nil {
 		return err
 	}
@@ -66,7 +66,7 @@ func (store *Store) ReserveExport(ctx context.Context, organizationID, exportID 
 	return tx.Commit()
 }
 func (store *Store) ReleaseExport(ctx context.Context, exportID string) error {
-	tx, err := pgmeta.BeginSQL(ctx, store.db, nil)
+	tx, err := pgmeta.BeginSQLLocked(ctx, store.db, pgmeta.RetainedStorage)
 	if err != nil {
 		return err
 	}

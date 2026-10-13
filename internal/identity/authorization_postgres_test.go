@@ -31,7 +31,7 @@ func runtimeAuthorizationUsesNativeMembershipAndFreshType(t *testing.T, runtime 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(t.Context(), authorization.Schema); err != nil {
+	if _, err := db.ExecContext(t.Context(), authorization.Schema+authorization.GranularSchema); err != nil {
 		t.Fatal(err)
 	}
 	service, err := authorization.New(db, runtime, "physical-tenant")

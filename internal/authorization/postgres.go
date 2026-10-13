@@ -10,6 +10,9 @@ import (
 //go:embed schema.sql
 var Schema string
 
+//go:embed granular_schema.sql
+var GranularSchema string
+
 type PostgresStore struct {
 	db                 *sql.DB
 	transactionContext func(context.Context, *sql.Tx) (context.Context, error)

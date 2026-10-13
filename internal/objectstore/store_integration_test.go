@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Suhaibinator/go-common/pkg/common_persistence"
 	"github.com/Suhaibinator/go-common/pkg/config"
 	"github.com/Suhaibinator/open-splunk/internal/objectstore"
 	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
@@ -19,7 +18,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func realStore(t *testing.T) (*objectstore.Store, *common_persistence.PrivateObjectStorage, *minio.Client, string) {
+func realStore(t *testing.T) (*objectstore.Store, *objectstore.PrivateObjectStorage, *minio.Client, string) {
 	t.Helper()
 	endpoint := os.Getenv("OPEN_SPLUNK_TEST_MINIO_ENDPOINT")
 	if endpoint == "" {
@@ -34,7 +33,7 @@ func realStore(t *testing.T) (*objectstore.Store, *common_persistence.PrivateObj
 	partSize := int64(5 << 20)
 	bucket := fmt.Sprintf("os-private-test-%d", time.Now().UnixNano())
 	source := config.Static(&config.Config{MinioEndpoint: endpoint, MinioAccessKey: key, MinioSecretKey: config.NewSecret(secret), MinioUseSSL: &tls, MinioBucket: bucket, ObjectStorageStreamPartSize: &partSize})
-	raw, err := common_persistence.NewPrivateObjectStorage(context.Background(), source.Persistence(), zap.NewNop())
+	raw, err := objectstore.NewPrivateObjectStorage(context.Background(), source.Persistence(), zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +76,7 @@ func TestRealMinIOImmutableVersionPinsAndPendingCleanup(t *testing.T) {
 	if _, err := store.Put(ctx, key, bytes.NewBufferString("collision"), 9); !errors.Is(err, searchartifacts.ErrConflict) {
 		t.Fatalf("create-only collision=%v", err)
 	}
-	replacement, err := raw.PutObjectStreamVersion(ctx, key, bytes.NewBufferString("replacement"), 11, common_persistence.PutObjectOptions{})
+	replacement, err := raw.PutObjectStreamVersion(ctx, key, bytes.NewBufferString("replacement"), 11, objectstore.PutObjectOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +104,7 @@ func TestRealMinIOImmutableVersionPinsAndPendingCleanup(t *testing.T) {
 	}
 	// A lost PUT receipt must not cause pending-key cleanup to delete a foreign object.
 	foreignKey := "open-splunk/captures/foreign/00000000"
-	foreign, err := raw.PutObjectStreamVersion(ctx, foreignKey, bytes.NewBufferString("foreign"), 7, common_persistence.PutObjectOptions{})
+	foreign, err := raw.PutObjectStreamVersion(ctx, foreignKey, bytes.NewBufferString("foreign"), 7, objectstore.PutObjectOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

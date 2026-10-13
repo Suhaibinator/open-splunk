@@ -63,7 +63,7 @@ func (db *DB) CompleteIndexDataDeletion(
 		)
 	}
 
-	tx := pgmeta.Begin(database)
+	tx := pgmeta.BeginLocked(database, pgmeta.Catalog)
 	if tx.Error != nil {
 		return IndexDataDeletionCompletion{}, fmt.Errorf(
 			"begin index data deletion completion: %w",

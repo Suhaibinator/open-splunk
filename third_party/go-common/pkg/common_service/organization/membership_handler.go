@@ -176,10 +176,6 @@ func (h *OrganizationHandler[U]) addMemberPrivilegedWithResolvedOrg(
 	resolvedOrg *resolvedOrganization,
 	role proto_models.OrganizationRole,
 ) (*common_service_models.UserOrganizationResponse, error) {
-	if err := h.validateApplicationRole(role); err != nil {
-		return nil, err
-	}
-
 	if targetUserId == 0 {
 		return nil, errors.ErrInvalidUserID
 	}
@@ -271,6 +267,18 @@ func (h *OrganizationHandler[U]) addMemberDirectWithResolvedOrg(
 	// Add user to organization
 	err = h.persistenceHandler.AddUserToOrganization(ctx, targetUserId, orgID, role)
 	if err != nil {
+		if stdErrors.Is(err, persistence.ErrOrganizationAncestorMembershipRequired) {
+			return nil, errors.ErrOrganizationAncestorMembershipRequired
+		}
+		if stdErrors.Is(err, persistence.ErrUserAlreadyInOrganization) {
+			return nil, errors.ErrUserAlreadyMember
+		}
+		if stdErrors.Is(err, persistence.ErrOrganizationNotFound) {
+			return nil, errors.ErrOrganizationNotFound
+		}
+		if stdErrors.Is(err, persistence.ErrUserNotFound) {
+			return nil, errors.ErrUserNotFound
+		}
 		return nil, appLogger.WithErrorCause(errors.ErrInternalError, err,
 			zap.String(logkeys.Operation, "add_organization_member"),
 			zap.String(logkeys.Stage, "persist_membership"),
@@ -507,7 +515,7 @@ func (h *OrganizationHandler[U]) removeMemberDirect(
 		}
 
 		// Check if actor can manage the target user's role
-		if !h.canManageRole(actorRole, targetRole) {
+		if !common_service_models.CanManageRole(actorRole, targetRole) {
 			return appLogger.WithErrorFields(errors.ErrCannotManageHigherRole,
 				zap.String(logkeys.Operation, "remove_organization_member"),
 				zap.Uint64(appLogger.KeyActorUserID, uint64(actorID)),
@@ -759,9 +767,6 @@ func (h *OrganizationHandler[U]) modifyOtherMemberRolePermissionCheckAtDepth(
 	newRole proto_models.OrganizationRole,
 	currentTargetRole *proto_models.OrganizationRole,
 ) (bool, error) {
-	if err := h.validateApplicationRole(newRole); err != nil {
-		return false, err
-	}
 	fields := []zap.Field{
 		zap.Int64(appLogger.KeyOrganizationID, orgID),
 		zap.Uint64(appLogger.KeyTargetUserID, uint64(targetUserId)),
@@ -809,9 +814,9 @@ func (h *OrganizationHandler[U]) modifyOtherMemberRolePermissionCheckAtDepth(
 			)...,
 		)
 	}
-	canUpdate = canUpdate && h.canGrantRole(actorMemberRole, newRole)
+	canUpdate = canUpdate && common_service_models.CanPromoteToRole(actorMemberRole, newRole)
 	if currentTargetRole != nil {
-		canUpdate = canUpdate && h.canManageRole(actorMemberRole, *currentTargetRole)
+		canUpdate = canUpdate && common_service_models.CanPromoteToRole(actorMemberRole, *currentTargetRole)
 	}
 	return canUpdate, nil
 }
@@ -825,10 +830,6 @@ func (h *OrganizationHandler[U]) updateMemberRoleDirect(
 	newRole proto_models.OrganizationRole,
 	guardLastOwner bool,
 ) (*common_service_models.UserOrganizationResponse, error) {
-	if err := h.validateApplicationRole(newRole); err != nil {
-		return nil, err
-	}
-
 	log := appLogger.For(ctx, h.logger, organizationLoggerName).With(
 		zap.Uint64(appLogger.KeyActorUserID, uint64(actorID)),
 		zap.Int64(appLogger.KeyOrganizationID, orgID),

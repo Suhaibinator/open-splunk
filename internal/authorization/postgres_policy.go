@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"slices"
 
 	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
+	"github.com/lib/pq"
 )
 
 const MaximumPolicyRules = 256
@@ -75,17 +77,51 @@ func readPolicy(ctx context.Context, tx *sql.Tx, indexID string, lock bool) (_ P
 
 func lockIdentity(ctx context.Context, tx *sql.Tx, actor Subject, targetUser uint64, organizations ...int64) error {
 	var id uint64
-	if err := tx.QueryRowContext(ctx, "SELECT id FROM gocommon_users WHERE id=$1 AND deleted_at IS NULL FOR SHARE", actor.UserID).Scan(&id); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrUnauthorized
-		}
-		return err
-	}
-	for _, userID := range []uint64{actor.UserID, targetUser} {
+	sortedUsers := []uint64{actor.UserID, targetUser}
+	slices.Sort(sortedUsers)
+	for _, userID := range slices.Compact(sortedUsers) {
 		if userID == 0 {
 			continue
 		}
-		rows, err := tx.QueryContext(ctx, "SELECT user_id FROM gocommon_user_organizations WHERE user_id=$1 FOR SHARE", userID)
+		if err := tx.QueryRowContext(ctx, "SELECT id FROM gocommon_users WHERE id=$1 AND deleted_at IS NULL FOR SHARE", userID).Scan(&id); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				if userID == actor.UserID {
+					return ErrUnauthorized
+				}
+				return ErrForbidden
+			}
+			return err
+		}
+	}
+	slices.Sort(organizations)
+	organizations = slices.DeleteFunc(slices.Compact(organizations), func(id int64) bool { return id <= 0 })
+	if len(organizations) > 0 {
+		// Deletion and native membership writes lock ancestors before descendants,
+		// independent of externally assigned IDs. Root lineage may be NULL.
+		rows, err := tx.QueryContext(ctx, "SELECT id FROM gocommon_organizations WHERE id=ANY($1) AND deleted_at IS NULL AND personal_owner_user_id IS NULL ORDER BY COALESCE(cardinality(lineage),0),id FOR SHARE", pq.Array(organizations))
+		if err != nil {
+			return err
+		}
+		locked := 0
+		for rows.Next() {
+			var live int64
+			if err = rows.Scan(&live); err != nil {
+				return errors.Join(err, rows.Close())
+			}
+			locked++
+		}
+		if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+			return err
+		}
+		if locked != len(organizations) {
+			return ErrForbidden
+		}
+	}
+	for _, userID := range slices.Compact(sortedUsers) {
+		if userID == 0 {
+			continue
+		}
+		rows, err := tx.QueryContext(ctx, "SELECT user_id FROM gocommon_user_organizations WHERE user_id=$1 ORDER BY organization_id FOR SHARE", userID)
 		if err != nil {
 			return err
 		}
@@ -99,18 +135,7 @@ func lockIdentity(ctx context.Context, tx *sql.Tx, actor Subject, targetUser uin
 			return err
 		}
 	}
-	for _, org := range organizations {
-		if org <= 0 {
-			continue
-		}
-		var live int64
-		if err := tx.QueryRowContext(ctx, "SELECT id FROM gocommon_organizations WHERE id=$1 AND deleted_at IS NULL AND personal_owner_user_id IS NULL FOR SHARE", org).Scan(&live); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrForbidden
-			}
-			return err
-		}
-	}
+
 	return nil
 }
 
@@ -120,7 +145,7 @@ func (s *PostgresStore) ChangeRuleExpected(ctx context.Context, rule Rule, _ int
 		return 0, err
 	}
 	defer rollbackTransaction(tx, &resultErr)
-	old, err := readPolicy(ctx, tx, rule.IndexID, true)
+	old, err := readPolicy(ctx, tx, rule.IndexID, false)
 	if err != nil {
 		return 0, err
 	}
@@ -128,12 +153,23 @@ func (s *PostgresStore) ChangeRuleExpected(ctx context.Context, rule Rule, _ int
 		return 0, ErrConflict
 	}
 	target := uint64(0)
-	if rule.SubjectKind == "user" {
+	if rule.SubjectKind == "user" && !remove {
 		target = rule.SubjectID
 	}
 	if err = lockIdentity(ctx, tx, actor, target, old.OrganizationID); err != nil {
 		return 0, err
 	}
+	if err = pgmeta.LockSQL(ctx, tx, "index-policy:"+rule.IndexID); err != nil {
+		return 0, err
+	}
+	locked, lockErr := readPolicy(ctx, tx, rule.IndexID, true)
+	if lockErr != nil {
+		return 0, lockErr
+	}
+	if locked.Revision != old.Revision || locked.OrganizationID != old.OrganizationID {
+		return 0, ErrConflict
+	}
+	old = locked
 	if s.transactionContext == nil {
 		return 0, ErrInvalidPolicy
 	}
@@ -183,12 +219,12 @@ func (s *PostgresStore) ChangeRuleExpected(ctx context.Context, rule Rule, _ int
 }
 
 func (s *PostgresStore) AssignExpected(ctx context.Context, indexID string, organizationID int64, expected uint64, actor Subject, check policyMutationCheck) (_ uint64, resultErr error) {
-	tx, err := pgmeta.BeginSQL(ctx, s.db, nil)
+	tx, err := pgmeta.BeginSQLCatalogReader(ctx, s.db, "15:ingestion-credentials")
 	if err != nil {
 		return 0, err
 	}
 	defer rollbackTransaction(tx, &resultErr)
-	old, err := readPolicy(ctx, tx, indexID, true)
+	old, err := readPolicy(ctx, tx, indexID, false)
 	if errors.Is(err, ErrUnassigned) {
 		old = Policy{Rules: []Rule{}}
 		err = nil
@@ -205,6 +241,21 @@ func (s *PostgresStore) AssignExpected(ctx context.Context, indexID string, orga
 	if err = lockIdentity(ctx, tx, actor, 0, old.OrganizationID, organizationID); err != nil {
 		return 0, err
 	}
+	if err = pgmeta.LockSQL(ctx, tx, "index-policy:"+indexID); err != nil {
+		return 0, err
+	}
+	locked, lockErr := readPolicy(ctx, tx, indexID, true)
+	if errors.Is(lockErr, ErrUnassigned) {
+		locked = Policy{Rules: []Rule{}}
+		lockErr = nil
+	}
+	if lockErr != nil {
+		return 0, lockErr
+	}
+	if locked.Revision != old.Revision || locked.OrganizationID != old.OrganizationID {
+		return 0, ErrConflict
+	}
+	old = locked
 	if s.transactionContext == nil {
 		return 0, ErrInvalidPolicy
 	}
@@ -245,6 +296,11 @@ func (s *PostgresStore) AssignExpected(ctx context.Context, indexID string, orga
 }
 
 func appendPolicyAudit(ctx context.Context, tx *sql.Tx, indexID string, actor Subject, action string, old, updated Policy) error {
+	// The append-only journal has an instance-wide capacity independent of the
+	// per-index policy revision. Acquire this final boundary before its count.
+	if err := pgmeta.LockSQL(ctx, tx, "policy-audit-capacity"); err != nil {
+		return err
+	}
 	var count uint64
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM os_index_policy_audit").Scan(&count); err != nil {
 		return err

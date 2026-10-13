@@ -131,6 +131,9 @@ func claimInTransaction(
 	normalized normalizedClaim,
 ) (result Collector, lease Lease, returnedErr error) {
 	ctx := tx.Statement.Context
+	if err := pgmeta.Lock(tx, "collector-fleet:"+normalized.scope.TenantID); err != nil {
+		return Collector{}, Lease{}, err
+	}
 	var fleet fleetRecord
 	queryErr := tx.
 		Where(
@@ -313,7 +316,22 @@ func (store *Store) InvalidatePriorBootLeases(
 	finished := false
 	defer finishGORMTransaction(tx, &finished, &returnedErr)
 
+	// Lock every existing tenant before the bulk update takes tuple locks.
+	// New current-boot claims are outside this startup repair boundary.
+	var tenants []string
+	if err := tx.Model(&fleetRecord{}).Distinct("tenant_id").Order("tenant_id").Pluck("tenant_id", &tenants).Error; err != nil {
+		return 0, mapContextError(ctx, "enumerate prior-boot collector tenants", err)
+	}
+	resources := make([]string, len(tenants))
+	for i, tenant := range tenants {
+		resources[i] = "collector-fleet:" + tenant
+	}
+	if err := pgmeta.Lock(tx, resources...); err != nil {
+		return 0, mapContextError(ctx, "lock prior-boot collector tenants", err)
+	}
+
 	update := tx.Model(&runtimeRecord{}).
+		Where("tenant_id IN ?", tenants).
 		Where(
 			`boot_epoch IS NOT NULL
 			 AND boot_epoch <> ?
@@ -383,6 +401,11 @@ func (store *Store) RecordHeartbeat(
 	if tx.Error != nil {
 		return false, mapContextError(ctx, "begin collector heartbeat", tx.Error)
 	}
+	if err := pgmeta.Lock(tx, "collector-fleet:"+lease.TenantID); err != nil {
+		_ = tx.Rollback()
+		return false, err
+	}
+
 	finished := false
 	defer finishGORMTransaction(tx, &finished, &returnedErr)
 
@@ -465,6 +488,11 @@ func (store *Store) Disconnect(
 	if tx.Error != nil {
 		return false, mapContextError(ctx, "begin collector disconnect", tx.Error)
 	}
+	if err := pgmeta.Lock(tx, "collector-fleet:"+lease.TenantID); err != nil {
+		_ = tx.Rollback()
+		return false, err
+	}
+
 	finished := false
 	defer finishGORMTransaction(tx, &finished, &returnedErr)
 	current, currentLease, err := takeCurrentLease(tx, lease)
@@ -699,6 +727,11 @@ func (store *Store) updateAdministration(
 			tx.Error,
 		)
 	}
+	if err := pgmeta.Lock(tx, "collector-fleet:"+scope.TenantID); err != nil {
+		_ = tx.Rollback()
+		return AdministrationSnapshot{}, err
+	}
+
 	finished := false
 	defer finishGORMTransaction(tx, &finished, &returnedErr)
 

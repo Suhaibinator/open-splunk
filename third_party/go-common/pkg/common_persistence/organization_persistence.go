@@ -36,6 +36,10 @@ var (
 	// they are already a member of.
 	ErrUserAlreadyInOrganization = errors.New("user already in organization")
 
+	// ErrOrganizationAncestorMembershipRequired rejects a child membership when
+	// an explicit ancestor membership disappeared before the insertion committed.
+	ErrOrganizationAncestorMembershipRequired = errors.New("organization ancestor membership required")
+
 	// ErrOrganizationLastOwner is returned by the guarded membership mutations when removing or
 	// demoting the target would leave the organization without an explicit owner.
 	ErrOrganizationLastOwner = errors.New("operation would leave the organization without an owner")
@@ -854,6 +858,16 @@ func (h *CommonPersistenceHandler[U]) DeleteOrganization(ctx context.Context, id
 
 	// Start a nested transaction if not already in one
 	return db.Transaction(func(tx *gorm.DB) error {
+		// Membership creation locks the user, organization rows, then owner
+		// guards. Lock the subtree in the same row order before deleting its
+		// memberships, including callers without application lifecycle hooks.
+		var organizations []int64
+		if err := tx.Model(&common_persistence_models.Organization{}).Select("id").Where("id = ?", id).Clauses(clause.Locking{Strength: "UPDATE"}).Find(&organizations).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&common_persistence_models.Organization{}).Select("id").Where("id = ? OR lineage @> ARRAY[?]::bigint[]", id, id).Order("COALESCE(cardinality(lineage),0), id").Clauses(clause.Locking{Strength: "UPDATE"}).Find(&organizations).Error; err != nil {
+			return err
+		}
 		if err := h.deleteOrganizationMembershipsByLineage(ctx, tx, id); err != nil {
 			return err
 		}
@@ -1212,33 +1226,108 @@ func (h *CommonPersistenceHandler[U]) ListOrganizationEmailDomainsPage(
 // AddUserToOrganization executes its operation in the persistence flow between service handlers and the database layer.
 func (h *CommonPersistenceHandler[U]) AddUserToOrganization(ctx context.Context, userID uint64, organizationID int64, role proto_models.OrganizationRole) error {
 	db := h.getDBFromContext(ctx)
-
-	userOrg := &common_persistence_models.UserOrganization{
-		UserID:         userID,
-		OrganizationID: organizationID,
-		Role:           role,
-	}
-
-	result := db.Create(userOrg)
-	if result.Error != nil {
-		// A unique violation means the user is already in the organization.
-		if isUniqueViolation(result.Error) {
-			if appLogger.DebugEnabled(h.logger) {
-				appLogger.For(ctx, h.logger, loggerName).Debug("User already in organization",
-					zap.String(logkeys.Operation, "add_user_to_organization"),
-					zap.Uint64(appLogger.KeyUserID, userID),
-					zap.Int64(appLogger.KeyOrganizationID, organizationID),
-					zap.Error(result.Error))
+	return db.Transaction(func(tx *gorm.DB) error {
+		var user common_persistence_models.User
+		if err := tx.Select("id").Where("id = ?", userID).Clauses(clause.Locking{Strength: "SHARE"}).First(&user).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrUserNotFound
 			}
-			return ErrUserAlreadyInOrganization
+			return err
 		}
-		return databaseErrorWithFields(result.Error,
-			zap.String(logkeys.Operation, "add_user_to_organization"),
-			zap.Uint64(appLogger.KeyUserID, userID),
-			zap.Int64(appLogger.KeyOrganizationID, organizationID),
-			zap.Stringer(appLogger.KeyNewRole, role))
+		organization, err := membershipOrganization(tx, organizationID)
+		if err != nil {
+			return err
+		}
+		// Take live organization rows before owner guards, matching application
+		// creation policies and organization deletion's native row boundary.
+		ids := append([]int64(nil), organization.Lineage...)
+		ids = append(ids, organizationID)
+		slices.Sort(ids)
+		ids = slices.Compact(ids)
+		var live []int64
+		if err := tx.Model(&common_persistence_models.Organization{}).Select("id").Where("id IN ?", ids).Order("COALESCE(cardinality(lineage),0), id").Clauses(clause.Locking{Strength: "SHARE"}).Find(&live).Error; err != nil {
+			return err
+		}
+		if len(live) != len(ids) {
+			return ErrOrganizationNotFound
+		}
+		if err := lockOrganizationOwnerGuard(tx, membershipHierarchyRoot(organization)); err != nil {
+			return err
+		}
+		if membershipHierarchyRoot(organization) != organizationID {
+			if err := lockOrganizationOwnerGuard(tx, organizationID); err != nil {
+				return err
+			}
+		}
+		// Read after acquiring the hierarchy root guard. Every insertion and
+		// subtree removal shares it, so an earlier service-layer check cannot
+		// authorize a child using an ancestor concurrently being removed.
+		if len(organization.Lineage) != 0 {
+			var memberships []int64
+			if err := tx.Model(&common_persistence_models.UserOrganization{}).Select("organization_id").Where("user_id = ? AND organization_id IN ?", userID, []int64(organization.Lineage)).Order("organization_id").Clauses(clause.Locking{Strength: "SHARE"}).Find(&memberships).Error; err != nil {
+				return err
+			}
+			if len(memberships) != len(organization.Lineage) {
+				return ErrOrganizationAncestorMembershipRequired
+			}
+		}
+
+		userOrg := &common_persistence_models.UserOrganization{
+			UserID:         userID,
+			OrganizationID: organizationID,
+			Role:           role,
+		}
+
+		result := tx.Create(userOrg)
+		if result.Error != nil {
+			// A unique violation means the user is already in the organization.
+			if isUniqueViolation(result.Error) {
+				if appLogger.DebugEnabled(h.logger) {
+					appLogger.For(ctx, h.logger, loggerName).Debug("User already in organization",
+						zap.String(logkeys.Operation, "add_user_to_organization"),
+						zap.Uint64(appLogger.KeyUserID, userID),
+						zap.Int64(appLogger.KeyOrganizationID, organizationID),
+						zap.Error(result.Error))
+				}
+				return ErrUserAlreadyInOrganization
+			}
+			return databaseErrorWithFields(result.Error,
+				zap.String(logkeys.Operation, "add_user_to_organization"),
+				zap.Uint64(appLogger.KeyUserID, userID),
+				zap.Int64(appLogger.KeyOrganizationID, organizationID),
+				zap.Stringer(appLogger.KeyNewRole, role))
+		}
+		return nil
+	})
+}
+
+func membershipOrganization(tx *gorm.DB, organizationID int64) (*common_persistence_models.Organization, error) {
+	var organization common_persistence_models.Organization
+	if err := tx.Select("id", "lineage").Where("id = ?", organizationID).First(&organization).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrOrganizationNotFound
+		}
+		return nil, err
 	}
-	return nil
+	return &organization, nil
+}
+
+func membershipHierarchyRoot(organization *common_persistence_models.Organization) int64 {
+	if len(organization.Lineage) != 0 {
+		return organization.Lineage[0]
+	}
+	return organization.ID
+}
+
+// The hierarchy root is acquired before discovering descendant memberships.
+// Reusing its owner guard prevents insertions from appearing after discovery or
+// after a subtree DELETE has taken its statement snapshot. Other trees proceed.
+func lockMembershipHierarchyRoot(tx *gorm.DB, organizationID int64) error {
+	organization, err := membershipOrganization(tx, organizationID)
+	if err != nil {
+		return err
+	}
+	return lockOrganizationOwnerGuard(tx, membershipHierarchyRoot(organization))
 }
 
 // RemoveUserFromOrganizationAndDescendants executes its operation in the persistence flow between service handlers and the database layer.
@@ -1246,6 +1335,9 @@ func (h *CommonPersistenceHandler[U]) RemoveUserFromOrganizationAndDescendants(c
 	db := h.getDBFromContext(ctx)
 
 	return db.Transaction(func(tx *gorm.DB) error {
+		if err := lockMembershipHierarchyRoot(tx, organizationID); err != nil {
+			return err
+		}
 		subquery := tx.Model(&common_persistence_models.Organization{}).
 			Select("id").
 			Where("id = ? OR lineage @> ARRAY[?]::bigint[]", organizationID, organizationID)
@@ -1395,6 +1487,9 @@ func (h *CommonPersistenceHandler[U]) RemoveUserFromOrganizationAndDescendantsGu
 	db := h.getDBFromContext(ctx)
 
 	return db.Transaction(func(tx *gorm.DB) error {
+		if err := lockMembershipHierarchyRoot(tx, organizationID); err != nil {
+			return err
+		}
 		affectedOrganizationIDs, err := userOrganizationHierarchyMembershipIDsTx(tx, userID, organizationID)
 		if err != nil {
 			return databaseErrorWithFields(err,

@@ -49,13 +49,13 @@ func postgresPolicyFixture(t *testing.T) (*Service, *sql.DB) {
 	_, err := db.ExecContext(t.Context(), `CREATE FUNCTION os_control_write_lock() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(),5716000640707417153)); RETURN NULL; END $$;
  CREATE TABLE indexes(index_id text PRIMARY KEY);
  CREATE TABLE gocommon_users(id bigint PRIMARY KEY,user_type integer NOT NULL,deleted_at timestamptz);
- CREATE TABLE gocommon_organizations(personal_owner_user_id bigint,id bigint PRIMARY KEY,deleted_at timestamptz);
+ CREATE TABLE gocommon_organizations(personal_owner_user_id bigint,id bigint PRIMARY KEY,deleted_at timestamptz,lineage bigint[]);
  CREATE TABLE gocommon_user_organizations(user_id bigint,organization_id bigint,role integer,PRIMARY KEY(user_id,organization_id));
  CREATE TABLE saved_searches(organization_id bigint); CREATE TABLE dashboards(organization_id bigint); CREATE TABLE app_workspaces(organization_id bigint); CREATE TABLE knowledge_objects(organization_id bigint); CREATE TABLE knowledge_lookup_definitions(organization_id bigint); CREATE TABLE ingestion_tokens(organization_id bigint);CREATE TABLE saved_search_schedules(organization_id bigint);CREATE TABLE saved_search_schedule_runs(organization_id bigint);CREATE TABLE alerts(organization_id bigint);CREATE TABLE search_history(organization_id bigint);CREATE TABLE search_history_pending(organization_id bigint);CREATE TABLE durable_search_jobs(organization_id bigint);CREATE TABLE durable_export_jobs(organization_id bigint);CREATE TABLE search_capture_sessions(organization_id bigint); CREATE TABLE search_retained_export_reservations(organization_id bigint);`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.ExecContext(t.Context(), Schema); err != nil {
+	if _, err = db.ExecContext(t.Context(), Schema+GranularSchema); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.ExecContext(t.Context(), `INSERT INTO indexes VALUES('index');INSERT INTO gocommon_users(id,user_type)VALUES(9,12),(10,12),(11,44);INSERT INTO gocommon_organizations(id)VALUES(7),(8);INSERT INTO gocommon_user_organizations VALUES(9,7,23),(10,7,1);INSERT INTO os_index_organizations(index_id,organization_id)VALUES('index',7)`); err != nil {

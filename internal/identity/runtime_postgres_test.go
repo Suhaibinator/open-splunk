@@ -22,6 +22,7 @@ import (
 	pb "github.com/Suhaibinator/go-common/pkg/proto_models"
 	"github.com/Suhaibinator/open-splunk/internal/pgtest"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -127,6 +128,24 @@ func runtimeSameGoogleSessionSeesManualPromotionDemotion(t *testing.T, runtime *
 		if record.Code != expected {
 			t.Fatalf("same-session user administration got%d want%d: %s", record.Code, expected, record.Body.String())
 		}
+		// /user/me goes through GoCommon's GetUserByID facade as well as its
+		// router auth context. Both must see the new persisted type even after
+		// the token cache was warmed by previous API calls.
+		me := httptest.NewRequestWithContext(t.Context(), http.MethodGet, Prefix+"/user/me", nil)
+		me.Header.Set("Accept", "application/x-protobuf")
+		me.AddCookie(&http.Cookie{Name: runtime.cookieName, Value: session, Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		profile := httptest.NewRecorder()
+		runtime.Handler().ServeHTTP(profile, me)
+		if profile.Code != http.StatusOK {
+			t.Fatalf("native profile status %d: %s", profile.Code, profile.Body.String())
+		}
+		var projected pb.GetCurrentUserResponse
+		if err := proto.Unmarshal(profile.Body.Bytes(), &projected); err != nil {
+			t.Fatal(err)
+		}
+		if projected.GetUser().GetUserType() != tier {
+			t.Fatalf("native profile retained stale type %v want%v", projected.GetUser().GetUserType(), tier)
+		}
 		for _, route := range []string{"/auth/add-password", "/auth/otp/setup", "/auth/otp/verify-setup", "/auth/otp/disable"} {
 			credentialReq := httptest.NewRequestWithContext(t.Context(), http.MethodPost, Prefix+route, strings.NewReader(""))
 			credentialReq.AddCookie(&http.Cookie{Name: runtime.cookieName, Value: session, Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
@@ -140,6 +159,16 @@ func runtimeSameGoogleSessionSeesManualPromotionDemotion(t *testing.T, runtime *
 		fresh, err := runtime.CurrentSubject(t.Context(), user.ID)
 		if err != nil || fresh.UserType != int32(tier) {
 			t.Fatalf("worker fresh user %#v %v", fresh, err)
+		}
+	}
+	// A native token-cache hit must not freeze account-state decisions either.
+	for _, banned := range []bool{true, false} {
+		if err := pool.Exec("UPDATE gocommon_users SET banned=? WHERE id=?", banned, user.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := runtime.AuthenticateRequest(request.Clone(t.Context()))
+		if banned == (err == nil) {
+			t.Fatalf("same-cookie persisted ban=%v authentication error=%v", banned, err)
 		}
 	}
 	var organizations int64
@@ -207,10 +236,9 @@ func runtimeNativeOrganizationPolicyPreservesAncestorMembership(t *testing.T, ru
 		userContexts[i] = scontext.WithUserID[sm.UserIdType, sm.User](userContexts[i], users[i].ID)
 	}
 	handler := runtime.service.GetOrganizationHandler()
-	creator := handler.(organization.InitialMembershipCreator)
-	create := func(ctx context.Context, org *sm.Organization, members []organization.InitialMembership) (*organization.OrganizationResponse, error) {
+	create := func(ctx context.Context, org *sm.Organization, members []InitialMembership) (*organization.OrganizationResponse, error) {
 		return identityNativeTransaction(runtime, ctx, func(txCtx context.Context) (*organization.OrganizationResponse, error) {
-			return creator.CreateOrganizationWithInitialMemberships(txCtx, org, members)
+			return runtime.CreateOrganizationWithInitialMemberships(txCtx, org, members)
 		})
 	}
 	add := func(ctx context.Context, user uint64, org int64, role pb.OrganizationRole) (*sm.UserOrganizationResponse, error) {
@@ -229,7 +257,7 @@ func runtimeNativeOrganizationPolicyPreservesAncestorMembership(t *testing.T, ru
 		})
 		return err
 	}
-	parent, err := create(userContexts[0], &sm.Organization{Name: "Parent", Slug: "parent"}, []organization.InitialMembership{{UserID: users[1].ID, Role: pb.OrganizationRole_ORGANIZATION_ROLE_OWNER_TIER_10}})
+	parent, err := create(userContexts[0], &sm.Organization{Name: "Parent", Slug: "parent"}, []InitialMembership{{UserID: users[1].ID, Role: pb.OrganizationRole_ORGANIZATION_ROLE_OWNER_TIER_10}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +265,7 @@ func runtimeNativeOrganizationPolicyPreservesAncestorMembership(t *testing.T, ru
 	if _, err := add(userContexts[0], users[2].ID, orgID, pb.OrganizationRole_ORGANIZATION_ROLE_ADMIN_TIER_0); err != nil {
 		t.Fatal(err)
 	}
-	child, err := create(userContexts[2], &sm.Organization{Name: "Child", Slug: "child", ParentOrganizationID: &orgID}, []organization.InitialMembership{{UserID: users[1].ID, Role: pb.OrganizationRole_ORGANIZATION_ROLE_OWNER_TIER_10}})
+	child, err := create(userContexts[2], &sm.Organization{Name: "Child", Slug: "child", ParentOrganizationID: &orgID}, []InitialMembership{{UserID: users[1].ID, Role: pb.OrganizationRole_ORGANIZATION_ROLE_OWNER_TIER_10}})
 	if err != nil {
 		t.Fatalf("parent Admin creating child without global root permission: %v", err)
 	}
@@ -253,14 +281,32 @@ func runtimeNativeOrganizationPolicyPreservesAncestorMembership(t *testing.T, ru
 	if _, err := add(userContexts[2], users[3].ID, child.ID, pb.OrganizationRole_ORGANIZATION_ROLE_MEMBER_TIER_0); !errors.Is(err, gerrors.ErrOrganizationAncestorMembershipRequired) {
 		t.Fatalf("child admitted outsider without ancestor: %v", err)
 	}
-	if _, err := add(userContexts[2], users[3].ID, orgID, pb.OrganizationRole_ORGANIZATION_ROLE_ADMIN_TIER_0); err != nil {
-		t.Fatalf("Admin adding peerAdmin: %v", err)
+	if _, err := add(userContexts[2], users[3].ID, orgID, pb.OrganizationRole_ORGANIZATION_ROLE_ADMIN_TIER_0); !errors.Is(err, gerrors.ErrInsufficientPermissions) {
+		t.Fatalf("Admin peer grant must be rejected: %v", err)
 	}
-	if _, err := add(userContexts[2], users[3].ID, child.ID, pb.OrganizationRole_ORGANIZATION_ROLE_ADMIN_TIER_0); err != nil {
-		t.Fatalf("Admin adding ancestor-backed peer: %v", err)
+	if _, member, err := runtime.EffectiveRole(t.Context(), users[3].ID, orgID); err != nil || member {
+		t.Fatalf("rejected Admin peer grant created parent membership: member%t %v", member, err)
 	}
-	if _, err := update(userContexts[2], users[3].ID, child.ID, pb.OrganizationRole_ORGANIZATION_ROLE_MEMBER_TIER_0); err != nil {
-		t.Fatalf("Admin managing peer: %v", err)
+	if _, err := add(userContexts[1], users[3].ID, orgID, pb.OrganizationRole_ORGANIZATION_ROLE_ADMIN_TIER_0); err != nil {
+		t.Fatalf("Owner adding parent Admin: %v", err)
+	}
+	if _, err := add(userContexts[2], users[3].ID, child.ID, pb.OrganizationRole_ORGANIZATION_ROLE_ADMIN_TIER_0); !errors.Is(err, gerrors.ErrInsufficientPermissions) {
+		t.Fatalf("Admin child peer grant must be rejected: %v", err)
+	}
+	if _, member, err := runtime.EffectiveRole(t.Context(), users[3].ID, child.ID); err != nil || member {
+		t.Fatalf("rejected Admin peer grant created child membership: member%t %v", member, err)
+	}
+	if _, err := add(userContexts[1], users[3].ID, child.ID, pb.OrganizationRole_ORGANIZATION_ROLE_ADMIN_TIER_0); err != nil {
+		t.Fatalf("Owner adding ancestor-backed Admin: %v", err)
+	}
+	if _, err := update(userContexts[2], users[3].ID, child.ID, pb.OrganizationRole_ORGANIZATION_ROLE_MEMBER_TIER_0); !errors.Is(err, gerrors.ErrInsufficientPermissions) {
+		t.Fatalf("Admin peer role mutation must be rejected: %v", err)
+	}
+	if role, member, err := runtime.EffectiveRole(t.Context(), users[3].ID, child.ID); err != nil || !member || role != 23 {
+		t.Fatalf("rejected Admin peer role mutation changed membership: role%d member%t %v", role, member, err)
+	}
+	if _, err := update(userContexts[1], users[3].ID, child.ID, pb.OrganizationRole_ORGANIZATION_ROLE_MEMBER_TIER_0); err != nil {
+		t.Fatalf("Owner managing Admin: %v", err)
 	}
 	if _, err := update(userContexts[2], users[1].ID, child.ID, pb.OrganizationRole_ORGANIZATION_ROLE_ADMIN_TIER_0); err == nil {
 		t.Fatal("Admin demoted Owner")
@@ -316,9 +362,40 @@ func TestRuntimePostgresAcceptance(t *testing.T) {
 	t.Run("same Google cookie promotion demotion revocation", func(t *testing.T) { runtimeSameGoogleSessionSeesManualPromotionDemotion(t, runtime, pool, cfg) })
 	t.Run("reject foreign session methods", func(t *testing.T) { runtimeRejectsForeignSessionMethods(t, runtime, pool, cfg) })
 	t.Run("native Google only route registration", func(t *testing.T) { runtimeNativeGoogleOnlyRouteRegistration(t, runtime) })
-	t.Run("native organization peer Admin and ancestry policy", func(t *testing.T) { runtimeNativeOrganizationPolicyPreservesAncestorMembership(t, runtime, pool) })
+	t.Run("native Owner-managed Admin and ancestry policy", func(t *testing.T) { runtimeNativeOrganizationPolicyPreservesAncestorMembership(t, runtime, pool) })
 	t.Run("native SQL authorization transaction", func(t *testing.T) { runtimeAuthorizationTransactionReadsUncommittedPersistedType(t, runtime, pool) })
 	t.Run("native membership grants CAS audit and demotion", func(t *testing.T) { runtimeAuthorizationUsesNativeMembershipAndFreshType(t, runtime, pool) })
+	t.Run("identity transactions do not wait for catalog writers", func(t *testing.T) {
+		raw, err := pool.DB()
+		if err != nil {
+			t.Fatal(err)
+		}
+		blocker, err := raw.BeginTx(t.Context(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = blocker.Rollback() }()
+		if _, err = blocker.ExecContext(t.Context(), "SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema() || ':10:catalog-publication',0))"); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		native, err := runtime.Persistence().BeginTransaction(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer native.Rollback()
+		if err = native.Exec("UPDATE gocommon_users SET user_type=user_type WHERE id=(SELECT min(id) FROM gocommon_users)").Error; err != nil {
+			t.Fatal(err)
+		}
+		if err = native.Commit().Error; err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		if err = raw.QueryRowContext(ctx, "SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND (t.tgname='a000_control_write_lock' OR (c.relname LIKE 'gocommon_%' AND t.tgname LIKE 'a00%'))").Scan(&count); err != nil || count != 0 {
+			t.Fatalf("unexpected runtime writer interceptors: %d %v", count, err)
+		}
+	})
 	t.Run("native user deletion preserves ownership and ancestry", func(t *testing.T) { runtimeUserDeletionPreservesNativeOwnership(t, runtime, pool, cfg) })
 }
 

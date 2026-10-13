@@ -28,6 +28,7 @@ const scriptTests = [
   "build-oci.test.mjs",
 ];
 const testFiles = [
+  path.join("lib", "api", "organization-role-policy.test.ts"),
   path.join("lib", "api", "identity-client.test.ts"),
   path.join("lib", "search", "native-export-download.test.ts"),
   path.join("app", "_components", "product-shell-help.mount.test.tsx"),

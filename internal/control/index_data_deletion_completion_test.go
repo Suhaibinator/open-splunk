@@ -633,7 +633,7 @@ func TestCompleteIndexDataDeletionRetryDoesNotReservePostgreSQLWriter(
 	if err != nil {
 		t.Fatalf("acquire writer connection: %v", err)
 	}
-	if _, err := writer.ExecContext(ctx, `BEGIN; SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(),5716000640707417153))`); err != nil {
+	if _, err := writer.ExecContext(ctx, `BEGIN; SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema() || ':10:catalog-publication',0))`); err != nil {
 		if closeErr := writer.Close(); closeErr != nil {
 			t.Fatalf(
 				"reserve PostgreSQL writer: %v; close connection: %v",

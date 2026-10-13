@@ -64,7 +64,7 @@ func (h *CommonServiceHandler[U]) validateFrontendOrigin(frontendOrigin *string)
 //   - lastName: *string input consumed by NewUserEmailRegistration.
 //   - frontendOrigin: optional frontend origin for the verification link; must be in the configured allowlist.
 func (h *CommonServiceHandler[U]) NewUserEmailRegistration(ctx context.Context, email, password string, username, firstName, lastName, frontendOrigin *string) (*U, error) {
-	if !h.emailAuthenticationEnabled() {
+	if h.emailAuthHandler == nil {
 		return nil, apperrors.ErrEmailAuthDisabled
 	}
 
@@ -438,7 +438,7 @@ func (h *CommonServiceHandler[U]) createNewUserWithEmailAuthWithConfig(
 // VerifyNewUserEmail consumes the email proof and verifies its bound address.
 // The caller must supply an ambient transaction and roll back on error.
 func (h *CommonServiceHandler[U]) VerifyNewUserEmail(ctx context.Context, verificationToken string) (*U, string, error) {
-	if !h.emailAuthenticationEnabled() {
+	if h.emailAuthHandler == nil {
 		return nil, "", apperrors.ErrEmailAuthDisabled
 	}
 
@@ -557,7 +557,7 @@ func (h *CommonServiceHandler[U]) VerifyNewUserEmail(ctx context.Context, verifi
 //   - email: string input consumed by ResetPasswordRequest.
 //   - frontendOrigin: optional frontend origin for the reset link; must be in the configured allowlist.
 func (h *CommonServiceHandler[U]) ResetPasswordRequest(ctx context.Context, email string, frontendOrigin *string) error {
-	if !h.emailAuthenticationEnabled() {
+	if h.emailAuthHandler == nil {
 		return apperrors.ErrEmailAuthDisabled
 	}
 
@@ -628,7 +628,7 @@ func (h *CommonServiceHandler[U]) ResetPasswordRequest(ctx context.Context, emai
 // ResetPasswordWithToken consumes the reset proof and changes the password.
 // The caller must supply an ambient transaction and roll back on error.
 func (h *CommonServiceHandler[U]) ResetPasswordWithToken(ctx context.Context, resetToken, newPassword string) (*U, string, error) {
-	if !h.emailAuthenticationEnabled() {
+	if h.emailAuthHandler == nil {
 		return nil, "", apperrors.ErrEmailAuthDisabled
 	}
 
@@ -715,7 +715,7 @@ func (h *CommonServiceHandler[U]) ResetPasswordWithToken(ctx context.Context, re
 
 // ChangeUserPassword executes this step in the common_service backend flow.
 func (h *CommonServiceHandler[U]) ChangeUserPassword(ctx context.Context, userID common_service_models.UserIdType, oldPassword, newPassword string) error {
-	if !h.emailAuthenticationEnabled() {
+	if h.emailAuthHandler == nil {
 		return apperrors.ErrEmailAuthDisabled
 	}
 

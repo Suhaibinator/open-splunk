@@ -186,7 +186,7 @@ func (writer *Writer) create(
 		return nil, err
 	}
 
-	tx := pgmeta.Begin(writer.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(writer.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return nil, writerError(ctx, "begin create", tx.Error)
 	}
@@ -414,7 +414,7 @@ func (writer *Writer) update(
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookPrepared, Route: mutationRouteUpdate}); err != nil {
 		return nil, err
 	}
-	tx := pgmeta.Begin(writer.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(writer.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return nil, writerError(ctx, "begin update", tx.Error)
 	}
@@ -693,7 +693,7 @@ func (writer *Writer) setState(
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookPrepared, Route: mutationRouteSetState}); err != nil {
 		return nil, err
 	}
-	tx := pgmeta.Begin(writer.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(writer.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return nil, writerError(ctx, "begin set-state", tx.Error)
 	}
@@ -953,7 +953,7 @@ func (writer *Writer) delete(
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookPrepared, Route: mutationRouteDelete}); err != nil {
 		return nil, err
 	}
-	tx := pgmeta.Begin(writer.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(writer.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return nil, writerError(ctx, "begin delete", tx.Error)
 	}

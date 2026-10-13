@@ -187,7 +187,6 @@ type OrganizationHandler[U common_service_models.UserLike] struct {
 	converter           common_converter.ConverterInterface
 	config              *startupPolicy
 	runtimeConfig       PolicyProvider
-	applicationPolicy   applicationPolicy
 	collections         *config.GenerationMemo[PolicyView, *organizationCollections]
 	// attributeTables samples the attribute-permission provider once per call
 	// and returns the compiled tables, memoized per configuration generation.
@@ -229,7 +228,6 @@ func NewOrganizationHandler[U common_service_models.UserLike](
 	provider PolicyProvider,
 	callbackConfig *ports.OrganizationCallbackConfig[U],
 	logger *zap.Logger,
-	options ...HandlerOption,
 ) (*OrganizationHandler[U], error) {
 	if provider == nil {
 		return nil, stdErrors.New("organization configuration provider is required")
@@ -242,12 +240,6 @@ func NewOrganizationHandler[U common_service_models.UserLike](
 		logger = zap.NewNop()
 	}
 	organizationConfig := newStartupPolicy(view)
-	appPolicy := applicationPolicy{}
-	for _, option := range options {
-		if option != nil {
-			option(&appPolicy)
-		}
-	}
 	attributeTables := config.NewGenerationMemo(
 		func(view PolicyView) (attributePermissionTables, error) {
 			return compileAttributePermissionTables(view), nil
@@ -275,7 +267,6 @@ func NewOrganizationHandler[U common_service_models.UserLike](
 		converter:          converter,
 		config:             organizationConfig,
 		runtimeConfig:      provider,
-		applicationPolicy:  appPolicy,
 		collections:        newOrganizationCollectionsMemo(),
 		attributeTables:    attributeTables.Provider(provider),
 		callbackConfig:     callbackConfig,
@@ -491,7 +482,6 @@ func (h *OrganizationHandler[U]) createOrganizationWithMode(
 	ctx context.Context,
 	organization *common_service_models.Organization,
 	mode organizationCreateMode,
-	requestedMemberships ...[]InitialMembership,
 ) (*OrganizationResponse, error) {
 	if organization == nil {
 		return nil, appLogger.InvariantError(
@@ -544,47 +534,6 @@ func (h *OrganizationHandler[U]) createOrganizationWithMode(
 		return nil, err
 	}
 
-	defaultRole := getRoleAtDepth(h.collectionPolicy(runtimeConfig).creatorRoles, orgDepth)
-	if common_service_models.IsPersonalOrganization(organization) {
-		defaultRole = h.config.PersonalWorkspaceOwnerRole
-	}
-	var initialMembers []InitialMembership
-	if autoAddCreator {
-		initialMembers = []InitialMembership{{UserID: actorID, Role: defaultRole}}
-	}
-	if policy := h.applicationPolicy.initialMemberships; policy != nil && !common_service_models.IsPersonalOrganization(organization) {
-		if _, ok := persistence.DatabasePostCommitHookRegistrarFromContext(ctx); !ok {
-			return nil, errors.ErrTransactionNotFound
-		}
-		var requested []InitialMembership
-		if len(requestedMemberships) != 0 {
-			requested = append([]InitialMembership(nil), requestedMemberships[0]...)
-		}
-		initialMembers, err = policy(ctx, OrganizationCreationInput{ActorID: actorID, ActorType: user.UserType, Organization: organization, CreatorRole: defaultRole, AutoAddCreator: autoAddCreator, RequestedMemberships: requested})
-		if err != nil {
-			return nil, err
-		}
-		seen := make(map[common_service_models.UserIdType]bool, len(initialMembers))
-		for _, member := range initialMembers {
-			if err := h.validateApplicationRole(member.Role); err != nil {
-				return nil, err
-			}
-			if member.UserID == 0 || seen[member.UserID] || member.Role == proto_models.OrganizationRole_ORGANIZATION_ROLE_UNSPECIFIED {
-				return nil, errors.ErrInvalidRequest
-			}
-			if _, known := proto_models.OrganizationRole_name[int32(member.Role)]; !known {
-				return nil, errors.ErrInvalidRequest
-			}
-			seen[member.UserID] = true
-			if _, err := h.persistenceHandler.GetUserByID(ctx, member.UserID); err != nil {
-				return nil, errors.ErrUserNotFound
-			}
-			if err := h.ensureAncestorMembershipForLineage(ctx, member.UserID, organization.GetLineage(), runtimeConfig); err != nil {
-				return nil, err
-			}
-		}
-	}
-
 	orgResponse, err := h.createOrganizationInternal(ctx, organization)
 	if err != nil {
 		return nil, appLogger.WithErrorFields(err,
@@ -597,8 +546,13 @@ func (h *OrganizationHandler[U]) createOrganizationWithMode(
 	}
 
 	memberCount := int64(0)
-	for _, member := range initialMembers {
-		_, err = h.addMemberDirect(ctx, actorID, member.UserID, orgResponse.ID, member.Role)
+	var defaultRole proto_models.OrganizationRole
+	if autoAddCreator {
+		defaultRole = getRoleAtDepth(h.collectionPolicy(runtimeConfig).creatorRoles, orgDepth)
+		if common_service_models.IsPersonalOrganization(organization) {
+			defaultRole = h.config.PersonalWorkspaceOwnerRole
+		}
+		_, err = h.addMemberDirect(ctx, actorID, actorID, orgResponse.ID, defaultRole)
 		if err != nil {
 			return nil, appLogger.WithErrorCause(errors.ErrInternalError, err,
 				zap.String(logkeys.Operation, "create_organization"),
@@ -608,7 +562,7 @@ func (h *OrganizationHandler[U]) createOrganizationWithMode(
 				zap.Stringer(appLogger.KeyRole, defaultRole),
 			)
 		}
-		memberCount++
+		memberCount = 1
 	}
 	orgResponse.MemberCount = memberCount
 
@@ -684,9 +638,6 @@ func (h *OrganizationHandler[U]) prepareOrganizationForCreate(
 			return 0, false, errors.ErrInsufficientPermissions
 		}
 	case organizationCreateModeUser:
-		if organization.ParentOrganizationID != nil {
-			break
-		}
 		canCreate, _ := h.permissionHandler.HasOrgPermission(
 			ctx,
 			user.UserType,

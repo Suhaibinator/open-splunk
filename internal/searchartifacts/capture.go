@@ -276,15 +276,12 @@ func (capture *captureTransaction) flush(ctx context.Context) error {
 }
 
 func (capture *captureTransaction) reserve(ctx context.Context, size uint64, identity BlobIdentity) (returnedErr error) {
-	tx, err := pgmeta.BeginSQL(ctx, capture.store.db, nil)
+	tx, err := pgmeta.BeginSQLLocked(ctx, capture.store.db, pgmeta.RetainedStorage)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	// All capture reservations and deletions use the same database lock.
-	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(5715996261149786433)`); err != nil {
-		return err
-	}
+
 	var global, organization uint64
 	if err = tx.QueryRowContext(ctx, retainedUsageSQL, capture.organization).Scan(&global, &organization); err != nil {
 		return err
@@ -421,7 +418,7 @@ func (capture *captureTransaction) Publish(ctx context.Context, job searchjobs.J
 	}
 	manifest, payload, digest := capture.preparedManifest, capture.preparedPayload, capture.preparedDigest
 	lifetime := job.ExpiresAt.Sub(job.FinishedAt)
-	tx, err := pgmeta.BeginSQL(ctx, capture.store.db, nil)
+	tx, err := pgmeta.BeginSQLLocked(ctx, capture.store.db, pgmeta.RetainedStorage)
 	if err != nil {
 		return err
 	}
@@ -501,7 +498,7 @@ func (store *Store) deleteCapture(ctx context.Context, id string, allowPublished
 			return err
 		}
 	}
-	tx, err := pgmeta.BeginSQL(ctx, store.db, nil)
+	tx, err := pgmeta.BeginSQLLocked(ctx, store.db, pgmeta.RetainedStorage)
 	if err != nil {
 		return err
 	}
@@ -883,7 +880,7 @@ var _ searchjobs.ResultLease = (*captureLease)(nil)
 // an uncertain COMMIT cannot be mistaken for an unpublished upload, and no
 // future writer can publish a session already being reclaimed.
 func (store *Store) claimCaptureReclamation(ctx context.Context, id string, allowPublished bool) (bool, error) {
-	tx, err := pgmeta.BeginSQL(ctx, store.db, nil)
+	tx, err := pgmeta.BeginSQLLocked(ctx, store.db, pgmeta.RetainedStorage)
 	if err != nil {
 		return false, err
 	}

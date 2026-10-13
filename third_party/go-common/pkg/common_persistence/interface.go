@@ -29,10 +29,6 @@ import (
 // MinioObjectInfo defines the data structure used in the persistence flow for transactional database operations and repository access.
 // It carries state across layer boundaries handled by this package.
 type MinioObjectInfo struct {
-	// VersionID pins immutable objects in a versioned private bucket.
-	VersionID string
-	// UserMetadata is detached private object metadata returned by HEAD.
-	UserMetadata map[string]string
 	// Size is the size of the object in bytes
 	Size int64
 
@@ -57,9 +53,6 @@ type MinioObjectInfo struct {
 // application/octet-stream. ContentEncoding only labels the bytes: the upload
 // never compresses or otherwise transforms them.
 type PutObjectOptions struct {
-	// NoOverwrite publishes only if the object key has no current version.
-	NoOverwrite        bool
-	UserMetadata       map[string]string
 	ContentType        string
 	ContentEncoding    string // e.g. "gzip"
 	ContentDisposition string // e.g. "inline", "attachment"
@@ -75,7 +68,6 @@ type PutObjectOptions struct {
 // observation. The zero value imposes no condition.
 type ObjectPrecondition struct {
 	MatchETag string
-	VersionID string
 }
 
 // ClaimedToolCallAttemptReader is an optional optimization for durable tool executors. It returns

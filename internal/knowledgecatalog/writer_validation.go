@@ -443,7 +443,7 @@ func (writer *Writer) validateInTransaction(
 	request normalizedValidationRequest,
 	authorized **AuthorizedContext,
 ) (result knowledgevalidation.Result, revision uint64, returnedErr error) {
-	tx := pgmeta.Begin(writer.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(writer.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return knowledgevalidation.Result{}, 0, writerError(ctx, "begin validation", tx.Error)
 	}

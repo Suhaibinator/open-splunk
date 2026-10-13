@@ -525,7 +525,7 @@ func (store *Store) createCollectorToken(
 	digest := store.digest(plaintext)
 	prefix := plaintext[:len(collectorTokenPrefix)+8]
 
-	tx := pgmeta.Begin(store.orm.WithContext(ctx))
+	tx := pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "15:ingestion-credentials")
 	if tx.Error != nil {
 		return IssuedCollectorToken{}, fmt.Errorf("begin collector token creation: %w", tx.Error)
 	}
@@ -707,7 +707,7 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 		return CollectorToken{}, fmt.Errorf("%w: expected token version is outside the supported range", control.ErrInvalidArgument)
 	}
 	now := databaseTime(store.now())
-	tx := pgmeta.Begin(store.orm.WithContext(ctx))
+	tx := pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "15:ingestion-credentials")
 	if tx.Error != nil {
 		return CollectorToken{}, fmt.Errorf("begin collector token update: %w", tx.Error)
 	}
@@ -1127,7 +1127,7 @@ func (store *Store) authenticateHECAndRecordUse(
 	authentication Authentication,
 	returnedErr error,
 ) {
-	tx := pgmeta.Begin(store.orm.WithContext(ctx))
+	tx := pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "15:ingestion-credentials")
 	if tx.Error != nil {
 		return Authentication{}, classifyHECAuthenticationError(fmt.Errorf(
 			"begin HEC token authentication: %w",
@@ -2275,7 +2275,7 @@ func (store *Store) SetCollectorTokenEnabled(
 	}
 
 	now := databaseTime(store.now())
-	tx := pgmeta.Begin(store.orm.WithContext(ctx))
+	tx := pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "15:ingestion-credentials")
 	if tx.Error != nil {
 		return CollectorToken{}, fmt.Errorf(
 			"begin collector token state update: %w",
@@ -2385,7 +2385,7 @@ func (store *Store) RevokeCollectorToken(ctx context.Context, tokenID string, ex
 	if expectedVersion == 0 || expectedVersion > math.MaxInt64 {
 		return CollectorToken{}, fmt.Errorf("%w: expected token version is outside the supported range", control.ErrInvalidArgument)
 	}
-	tx := pgmeta.Begin(store.orm.WithContext(ctx))
+	tx := pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "15:ingestion-credentials")
 	if tx.Error != nil {
 		return CollectorToken{}, fmt.Errorf("begin collector token revocation: %w", tx.Error)
 	}

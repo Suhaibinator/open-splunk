@@ -174,7 +174,7 @@ func (db *DB) beginIndexDataDeletionTransaction(
 	confirmationName string,
 	auditPublisher indexMutationAuditPublisher,
 ) (result IndexDeletionOperation, err error) {
-	tx := pgmeta.Begin(db.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(db.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return IndexDeletionOperation{}, fmt.Errorf(
 			"begin index data deletion transaction: %w",

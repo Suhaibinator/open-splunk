@@ -294,6 +294,7 @@ func runWithOptions(config options) error {
 		return err
 	}
 	defer identityRuntime.users.Close()
+	defer identityRuntime.blobs.Close()
 	config.googleClientSecret = ""
 	config.minioSecretKey = ""
 	featureAudit, err := featureaudit.New(

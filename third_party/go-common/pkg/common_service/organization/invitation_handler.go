@@ -38,9 +38,6 @@ func (h *OrganizationHandler[U]) InviteUserToOrganization(
 	if err := h.requireInvitationNotificationTransaction(ctx); err != nil {
 		return 0, err
 	}
-	if err := h.validateApplicationRole(role); err != nil {
-		return 0, err
-	}
 	// Get actor from context
 	requestingUser, found := scontext.GetUser[common_service_models.UserIdType, U](ctx)
 	if !found {
@@ -402,9 +399,6 @@ func (h *OrganizationHandler[U]) addUserToOrganizationByIdentifierPrivilegedReso
 	targetEmail string,
 	role proto_models.OrganizationRole,
 ) (*AddUserResult, error) {
-	if err := h.validateApplicationRole(role); err != nil {
-		return nil, err
-	}
 	if resolvedOrg == nil || resolvedOrg.Organization == nil {
 		return nil, errors.ErrOrganizationNotFound
 	}
@@ -667,6 +661,9 @@ func (h *OrganizationHandler[U]) AcceptInvitation(
 	// Add user to organization
 	err = h.persistenceHandler.AddUserToOrganization(ctx, uint64(userID), invitation.OrganizationID, invitation.Role)
 	if err != nil {
+		if stdErrors.Is(err, persistence.ErrOrganizationAncestorMembershipRequired) {
+			return nil, errors.ErrOrganizationAncestorMembershipRequired
+		}
 		if stdErrors.Is(err, persistence.ErrUserAlreadyInOrganization) {
 			return nil, errors.ErrUserAlreadyMember
 		}

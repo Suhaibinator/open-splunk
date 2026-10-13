@@ -68,11 +68,14 @@ func (store *Store) beginAttempt(
 		return nil, err
 	}
 
-	tx := pgmeta.Begin(store.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(store.orm.WithContext(ctx), "search-history:"+scope.TenantID+":"+scope.OwnerID)
 	if tx.Error != nil {
 		return nil, mapContextError(ctx, "begin pending search-history record", tx.Error)
 	}
 	defer finishGORMTx(tx, &returnedErr)
+	if err := pgmeta.Lock(tx, "search-history-job:"+indexed.jobID); err != nil {
+		return nil, mapContextError(ctx, "lock pending search-history job identity", err)
+	}
 	if intent != nil {
 		if target == nil || store.searchAttemptAuditAppender == nil {
 			return nil, requestidempotency.ErrUnavailable
@@ -222,11 +225,14 @@ func (store *Store) CompleteAttempt(ctx context.Context, scope AccessScope, inpu
 		return nil, errors.New("complete search history: clock returned an invalid timestamp")
 	}
 
-	tx := pgmeta.Begin(store.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(store.orm.WithContext(ctx), "search-history:"+scope.TenantID+":"+scope.OwnerID)
 	if tx.Error != nil {
 		return nil, mapContextError(ctx, "begin search-history completion", tx.Error)
 	}
 	defer finishGORMTx(tx, &returnedErr)
+	if err := pgmeta.Lock(tx, "search-history-job:"+indexed.jobID); err != nil {
+		return nil, mapContextError(ctx, "lock terminal search-history job identity", err)
+	}
 
 	var pendingRecord pendingHistoryRecord
 	err = tx.Where("search_job_id = ?", indexed.jobID).Take(&pendingRecord).Error
@@ -301,11 +307,22 @@ func (store *Store) RecoverInterrupted(ctx context.Context, scope AccessScope) (
 		return 0, errors.New("recover search history: clock returned an invalid timestamp")
 	}
 
-	tx := pgmeta.Begin(store.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(store.orm.WithContext(ctx), "search-history:"+scope.TenantID+":"+scope.OwnerID)
 	if tx.Error != nil {
 		return 0, mapContextError(ctx, "begin interrupted search-history recovery", tx.Error)
 	}
 	defer finishGORMTx(tx, &returnedErr)
+	var identities []pendingHistoryRecord
+	if err := tx.Select("search_job_id").Where("tenant_id = ? AND owner_id = ? AND organization_id = ?", scope.TenantID, scope.OwnerID, scopeOrganization(scope)).Order("search_job_id").Find(&identities).Error; err != nil {
+		return 0, mapContextError(ctx, "list interrupted search-history job identities", err)
+	}
+	jobKeys := make([]string, len(identities))
+	for index, identity := range identities {
+		jobKeys[index] = "search-history-job:" + identity.SearchJobID
+	}
+	if err := pgmeta.Lock(tx, jobKeys...); err != nil {
+		return 0, mapContextError(ctx, "lock interrupted search-history job identities", err)
+	}
 
 	for {
 		var pendingRecord pendingHistoryRecord

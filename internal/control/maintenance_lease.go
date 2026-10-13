@@ -57,6 +57,11 @@ func AcquireMaintenanceLease(ctx context.Context, dsn string) (*MaintenanceLease
 	if !owned {
 		return fail(ErrServerAlreadyRunning)
 	}
+	lease.startOwnershipWatcher()
+	return lease, nil
+}
+
+func (lease *MaintenanceLease) startOwnershipWatcher() {
 	watch, cancel := context.WithCancel(context.Background())
 	lease.cancel = cancel
 	lease.wait.Go(func() {
@@ -67,17 +72,20 @@ func AcquireMaintenanceLease(ctx context.Context, dsn string) (*MaintenanceLease
 			case <-watch.Done():
 				return
 			case <-tick.C:
-				check, cancel := context.WithTimeout(watch, 5*time.Second)
+				// Stopping the watcher must not interrupt an in-flight ping:
+				// pgx discards the reserved connection on any ping error,
+				// preventing Close from releasing its advisory lock normally.
+				// Close joins this independently bounded check before unlocking.
+				check, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				err := lease.conn.PingContext(check)
 				cancel()
-				if err != nil && watch.Err() == nil {
+				if err != nil {
 					close(lease.lost)
 					return
 				}
 			}
 		}
 	})
-	return lease, nil
 }
 
 // Validate proves that this lease still protects exactly the requested connection.

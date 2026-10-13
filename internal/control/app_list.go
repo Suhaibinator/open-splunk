@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -220,7 +221,7 @@ func (catalog *AppCatalog) ListApps(
 		}
 	}
 
-	tx := pgmeta.Begin(catalog.orm.WithContext(ctx))
+	tx := pgmeta.Begin(catalog.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return AppListResult{}, appContextError(ctx, "begin app list", tx.Error)
 	}

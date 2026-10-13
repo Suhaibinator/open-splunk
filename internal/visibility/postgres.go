@@ -231,7 +231,7 @@ func releaseDurableAttemptLeases(
 	db *sql.DB,
 	operation string,
 ) error {
-	tx, err := pgmeta.BeginSQL(ctx, db, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := pgmeta.BeginIngestion(ctx, db)
 	if err != nil {
 		return fmt.Errorf("begin %s: %w", operation, err)
 	}
@@ -507,7 +507,7 @@ func (sequencer *PostgreSQLSequencer) Reserve(ctx context.Context, request Reser
 		}
 	}
 
-	tx, err := pgmeta.BeginSQL(ctx, sequencer.db, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := pgmeta.BeginIngestion(ctx, sequencer.db)
 	if err != nil {
 		return Reservation{}, fmt.Errorf("begin visibility reservation: %w", err)
 	}
@@ -748,7 +748,7 @@ func (sequencer *PostgreSQLSequencer) Reject(
 		metadata = []byte{}
 	}
 
-	tx, err := pgmeta.BeginSQL(ctx, sequencer.db, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := pgmeta.BeginIngestion(ctx, sequencer.db)
 	if err != nil {
 		return Reservation{}, fmt.Errorf("begin visibility rejection: %w", err)
 	}
@@ -910,7 +910,7 @@ func (sequencer *PostgreSQLSequencer) AcquirePending(ctx context.Context, attemp
 		}
 	}()
 
-	tx, err := pgmeta.BeginSQL(ctx, sequencer.db, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := pgmeta.BeginIngestion(ctx, sequencer.db)
 	if err != nil {
 		return Reservation{}, false, fmt.Errorf("begin pending visibility acquisition: %w", err)
 	}
@@ -1867,7 +1867,7 @@ func (sequencer *PostgreSQLSequencer) MarkSending(ctx context.Context, sequence 
 	if validationErr != nil {
 		return validationErr
 	}
-	tx, err := pgmeta.BeginSQL(ctx, sequencer.db, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := pgmeta.BeginIngestion(ctx, sequencer.db)
 	if err != nil {
 		return fmt.Errorf("begin visibility sending transition: %w", err)
 	}
@@ -1962,7 +1962,7 @@ func (sequencer *PostgreSQLSequencer) finish(ctx context.Context, sequence uint6
 	if validationErr != nil {
 		return validationErr
 	}
-	tx, err := pgmeta.BeginSQL(ctx, sequencer.db, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := pgmeta.BeginIngestion(ctx, sequencer.db)
 	if err != nil {
 		return fmt.Errorf("begin visibility finalization: %w", err)
 	}
@@ -2125,7 +2125,7 @@ func (sequencer *PostgreSQLSequencer) PruneTerminal(
 	if limit == 0 || limit > MaxPruneLimit {
 		return 0, fmt.Errorf("%w: prune limit must be between 1 and %d", ErrInvalidArgument, MaxPruneLimit)
 	}
-	tx, err := pgmeta.BeginSQL(ctx, sequencer.db, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := pgmeta.BeginIngestion(ctx, sequencer.db)
 	if err != nil {
 		return 0, fmt.Errorf("begin terminal visibility prune: %w", err)
 	}

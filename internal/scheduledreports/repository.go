@@ -143,7 +143,7 @@ func (repository *Repository) Configure(
 	if err != nil {
 		return Schedule{}, err
 	}
-	tx := pgmeta.Begin(repository.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(repository.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return Schedule{}, fmt.Errorf("begin schedule configuration: %w", tx.Error)
 	}
@@ -484,7 +484,7 @@ func (repository *Repository) claim(
 	if err != nil {
 		return Run{}, false, err
 	}
-	tx := pgmeta.Begin(repository.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(repository.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return Run{}, false, fmt.Errorf("begin scheduled-report claim: %w", tx.Error)
 	}
@@ -622,7 +622,7 @@ func (repository *Repository) Finish(ctx context.Context, runID string, outcome 
 	if err != nil {
 		return err
 	}
-	tx := pgmeta.Begin(repository.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(repository.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return fmt.Errorf("begin scheduled-report finish: %w", tx.Error)
 	}

@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	gcpersistence "github.com/Suhaibinator/go-common/pkg/common_persistence"
 	gcconfig "github.com/Suhaibinator/go-common/pkg/config"
 	"github.com/Suhaibinator/open-splunk/internal/objectstore"
 	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
@@ -83,7 +82,7 @@ func (options recoveryObjectOptions) open(ctx context.Context) (*recoveryObjects
 	cfg.MinioBucket = options.Bucket
 	cfg.MinioPublicBucket = ""
 	cfg.MinioUseSSL = &options.UseTLS
-	objects, err := gcpersistence.NewPrivateObjectStorage(ctx, gcconfig.Static(cfg).Persistence(), zap.NewNop())
+	objects, err := objectstore.NewPrivateObjectStorage(ctx, gcconfig.Static(cfg).Persistence(), zap.NewNop())
 	if err != nil {
 		return nil, err
 	}

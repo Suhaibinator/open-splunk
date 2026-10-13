@@ -190,7 +190,7 @@ func (writer *Writer) Quarantine(
 	replayOutcomeUnknown = true
 	request = prepared.quarantineRequest
 
-	tx := pgmeta.Begin(writer.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(writer.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return nil, writerError(ctx, "begin quarantine", tx.Error)
 	}

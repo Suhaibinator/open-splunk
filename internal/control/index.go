@@ -159,7 +159,7 @@ func (db *DB) createIndexOnce(
 	auditPublisher indexMutationAuditPublisher,
 	admissionValidator IndexNameAdmissionValidator,
 ) (result Index, returnedErr error) {
-	tx := pgmeta.Begin(db.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(db.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return Index{}, fmt.Errorf("begin index creation: %w", tx.Error)
 	}
@@ -517,7 +517,7 @@ func (db *DB) updateIndex(
 	if err != nil {
 		return Index{}, err
 	}
-	tx := pgmeta.Begin(db.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(db.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return Index{}, fmt.Errorf("begin index update: %w", tx.Error)
 	}
@@ -611,7 +611,7 @@ func (db *DB) setIndexState(
 	if state == IndexStateDeleting {
 		return Index{}, fmt.Errorf("%w: deleting is reserved for the physical deletion coordinator", ErrInvalidArgument)
 	}
-	tx := pgmeta.Begin(db.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(db.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return Index{}, fmt.Errorf("begin index state update: %w", tx.Error)
 	}
@@ -731,7 +731,7 @@ func (db *DB) deleteIndex(
 	if err != nil || canonicalConfirmation != confirmationName {
 		return "", fmt.Errorf("%w: index deletion confirmation is invalid", ErrInvalidArgument)
 	}
-	tx := pgmeta.Begin(db.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(db.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return "", fmt.Errorf("begin index deletion: %w", tx.Error)
 	}

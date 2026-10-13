@@ -188,6 +188,10 @@ func (store *Store) appendRejectedPrepared(
 	definition Definition,
 	prepared preparedAppend,
 ) error {
+	if err := pgmeta.Lock(database, "audit:knowledgeattemptaudit:"+tenantID); err != nil {
+		return err
+	}
+
 	state, err := ensureTenantState(database, tenantID)
 	if err != nil {
 		return mapStoreError(database.Statement.Context, "prepare tenant state", err)

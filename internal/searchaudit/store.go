@@ -289,34 +289,15 @@ func (store *Store) ensureTenantState(
 	database *gorm.DB,
 	tenantID string,
 ) (searchAttemptTenantStateRecord, error) {
-	inserted := database.Exec(`
-		INSERT INTO search_attempt_audit_tenant_state (
-			tenant_id,
-			first_sequence,
-			next_sequence,
-			retained_count,
-			maximum_retained_attempts
-		)
-		SELECT ?, 1, 1, 0, ?
-		WHERE NOT EXISTS (
-			SELECT 1
-			FROM search_attempt_audit_tenant_state
-			WHERE tenant_id = ?
-		)
-	`, tenantID, store.maximumRetainedAttempts, tenantID)
-	if inserted.Error != nil {
-		return searchAttemptTenantStateRecord{}, inserted.Error
+	var state searchAttemptTenantStateRecord
+	read := database.Raw("SELECT * FROM os_prepare_search_attempt_tenant(?,?)", tenantID, store.maximumRetainedAttempts).Scan(&state)
+	if read.Error != nil {
+		return searchAttemptTenantStateRecord{}, read.Error
 	}
-	if inserted.RowsAffected < 0 || inserted.RowsAffected > 1 {
-		return searchAttemptTenantStateRecord{}, fmt.Errorf(
-			"%w: search-attempt audit tenant initialization affected an invalid row count",
-			ErrCorrupt,
-		)
+	if read.RowsAffected != 1 || !validTenantState(state, tenantID) {
+		return searchAttemptTenantStateRecord{}, fmt.Errorf("%w: search-attempt audit authority is missing", ErrCorrupt)
 	}
-	state, err := readTenantState(database, tenantID)
-	if err != nil {
-		return searchAttemptTenantStateRecord{}, err
-	}
+
 	if store.maximumRetainedWasExplicit &&
 		state.MaximumRetainedAttempts != int64(store.maximumRetainedAttempts) {
 		return searchAttemptTenantStateRecord{}, fmt.Errorf(

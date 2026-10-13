@@ -44,15 +44,16 @@ type Options struct {
 }
 
 type Runtime struct {
-	persistence *gcpersistence.CommonPersistenceHandler[sm.User]
-	service     *common_service.CommonServiceHandler[sm.User]
-	api         *gcapi.CommonAPIHandler[sm.User]
-	router      *router.Router[sm.UserIdType, sm.User]
-	roles       *organization.OrgRoleProvider
-	sanitizer   *common_sanitizer.Handler
-	cookieName  string
-	closeOnce   sync.Once
-	closeErr    error
+	persistence     *gcpersistence.CommonPersistenceHandler[sm.User]
+	service         *common_service.CommonServiceHandler[sm.User]
+	api             *gcapi.CommonAPIHandler[sm.User]
+	router          *router.Router[sm.UserIdType, sm.User]
+	roles           *organization.OrgRoleProvider
+	sanitizer       *common_sanitizer.Handler
+	cookieName      string
+	adminRoleUpdate http.Handler
+	closeOnce       sync.Once
+	closeErr        error
 }
 
 // New borrows the application's PostgreSQL pool. Close stops identity-owned
@@ -94,13 +95,19 @@ func New(ctx context.Context, pool *gorm.DB, options Options) (_ *Runtime, err e
 			if options.BeforeOrganizationDelete == nil {
 				return gerrors.ErrInsufficientPermissions
 			}
+			transaction, ok := scontext.GetTransaction(ctx)
+			if !ok || transaction == nil || transaction.GetDB() == nil || transaction.GetDB().Statement == nil {
+				return gerrors.ErrTransactionNotFound
+			}
+			if _, active := transaction.GetDB().Statement.ConnPool.(gorm.TxCommitter); !active {
+				return gerrors.ErrTransactionNotFound
+			}
 			return options.BeforeOrganizationDelete(ctx, r.persistence.DB(ctx), id)
 		},
 	})
 	r.service, err = common_service.NewCommonServiceHandler(source.Service(), r.persistence, callbacks, logger, nil, nil,
 		common_service.WithOAuthProviders[sm.User](oauth.Static(oauth.Google(options.GoogleClientID, options.GoogleClientSecret, options.GoogleRedirectURLs...))),
 		common_service.WithOrganizationCallbacks(orgCallbacks),
-		common_service.WithOrganizationOptions[sm.User](organization.WithMembershipRolePolicy(rolePolicy{}), organization.WithInitialMembershipPolicy(r.initialMemberships)),
 	)
 	if err != nil {
 		return nil, err
@@ -108,7 +115,7 @@ func New(ctx context.Context, pool *gorm.DB, options Options) (_ *Runtime, err e
 	r.sanitizer = common_sanitizer.NewHandler(source.Sanitization(), logger)
 	r.router = router.NewRouter(router.RouterConfig{Logger: logger, AddUserObjectToCtx: true, GlobalMaxBodySize: 1 << 20}, router.RouterDependencies[sm.UserIdType, sm.User]{
 		Authenticate: func(ctx context.Context, token string) (*sm.User, bool) {
-			user, err := r.service.ValidateAuthTokenAndGetUser(ctx, token)
+			user, err := r.authenticateSession(ctx, token)
 			if err != nil || user == nil {
 				return nil, false
 			}
@@ -129,10 +136,15 @@ func New(ctx context.Context, pool *gorm.DB, options Options) (_ *Runtime, err e
 	if err := r.router.Build(); err != nil {
 		return nil, err
 	}
+	if err := r.registerGuardedAdminRoleRoute(logger); err != nil {
+		return nil, err
+	}
 	return r, nil
 }
 
-func (r *Runtime) Handler() http.Handler { return r.router }
+func (r *Runtime) Handler() http.Handler {
+	return organizationExposureGuard(r.router, r.adminRoleUpdate)
+}
 
 // SessionRefreshMiddleware applies GoCommon's sliding-session policy to the
 // application's routes after their authenticated user context is installed.
@@ -172,12 +184,38 @@ func subjectForUser(user sm.User) (authorization.Subject, error) {
 	return subject, nil
 }
 
+// authenticateSession keeps the application boundary Google-only even for
+// restored rows. Login availability is restart-bound in GoCommon and does not
+// invalidate existing sessions, so use its native signature and persisted-row
+// validation here. The native user cache is disabled; its normal lookup reloads
+// current account type and status for both API and application authentication.
+func (r *Runtime) authenticateSession(ctx context.Context, raw string) (*sm.User, error) {
+	freshContext := gcpersistence.WithoutRequestTransaction[sm.User](ctx)
+	claims, err := r.service.ValidateSessionToken(freshContext, raw)
+	if err != nil || claims == nil {
+		return nil, authorization.ErrUnauthorized
+	}
+	session, err := r.persistence.GetValidSessionToken(freshContext, raw)
+	if err != nil || session == nil || session.TokenType != pb.TokenType_TOKEN_TYPE_AUTHENTICATION ||
+		session.AuthMethod != pb.AuthProvider_AUTH_PROVIDER_OAUTH || session.OAuthProviderSlug != oauth.SlugGoogle || session.UserID != claims.UserID {
+		return nil, authorization.ErrUnauthorized
+	}
+	user, err := r.service.ValidateAuthTokenAndGetUser(freshContext, raw)
+	if err != nil || user == nil || user.ID != session.UserID {
+		return nil, authorization.ErrUnauthorized
+	}
+	if _, err := subjectForUser(*user); err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
 func (r *Runtime) AuthenticateRequest(request *http.Request) (*http.Request, authorization.Subject, error) {
 	cookie, err := request.Cookie(r.cookieName)
 	if err != nil || strings.TrimSpace(cookie.Value) == "" {
 		return nil, authorization.Subject{}, authorization.ErrUnauthorized
 	}
-	user, err := r.service.ValidateAuthTokenAndGetUser(request.Context(), cookie.Value)
+	user, err := r.authenticateSession(request.Context(), cookie.Value)
 	if err != nil || user == nil {
 		return nil, authorization.Subject{}, authorization.ErrUnauthorized
 	}

@@ -2,14 +2,18 @@ package identity
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"math"
 	"net/http"
+	"slices"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	"github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
+	"github.com/Suhaibinator/SRouter/pkg/scontext"
 	gcapi "github.com/Suhaibinator/go-common/pkg/common_api"
+	gcpersistence "github.com/Suhaibinator/go-common/pkg/common_persistence"
 	sm "github.com/Suhaibinator/go-common/pkg/common_service/common_service_models"
 	gerrors "github.com/Suhaibinator/go-common/pkg/common_service/errors"
 	"github.com/Suhaibinator/go-common/pkg/common_service/organization"
@@ -17,25 +21,23 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/authorization"
 )
 
-type rolePolicy struct{}
-
-func (rolePolicy) ValidRole(role pb.OrganizationRole) bool {
-	return authorization.ValidRole(int32(role))
-}
-func (rolePolicy) CanManageRole(actor, target pb.OrganizationRole) bool {
-	return allowedRoleTransition(actor, target)
-}
-func (rolePolicy) CanGrantRole(actor, requested pb.OrganizationRole) bool {
-	return allowedRoleTransition(actor, requested)
-}
-func allowedRoleTransition(actor, target pb.OrganizationRole) bool {
-	if !authorization.ValidRole(int32(actor)) || !authorization.ValidRole(int32(target)) {
-		return false
-	}
-	return int32(actor) == authorization.OwnerRole || int32(actor) == authorization.AdminRole && int32(target) != authorization.OwnerRole
+// InitialMembership is OpenSplunk's explicit initial-ownership request. Native
+// GoCommon creation and privileged membership APIs publish it in one transaction.
+type InitialMembership struct {
+	UserID sm.UserIdType
+	Role   pb.OrganizationRole
 }
 
-func (r *Runtime) initialMemberships(ctx context.Context, input organization.OrganizationCreationInput) ([]organization.InitialMembership, error) {
+type OrganizationCreationInput struct {
+	ActorID              sm.UserIdType
+	ActorType            pb.UserType
+	Organization         *sm.Organization
+	CreatorRole          pb.OrganizationRole
+	AutoAddCreator       bool
+	RequestedMemberships []InitialMembership
+}
+
+func (r *Runtime) initialMemberships(ctx context.Context, input OrganizationCreationInput) ([]InitialMembership, error) {
 	requested := input.RequestedMemberships
 	if len(requested) != 1 || requested[0].UserID == 0 || int32(requested[0].Role) != authorization.OwnerRole {
 		return nil, gerrors.ErrInvalidRequest
@@ -49,9 +51,59 @@ func (r *Runtime) initialMemberships(ctx context.Context, input organization.Org
 		if !actor.IsSiteAdmin() {
 			return nil, gerrors.ErrInsufficientPermissions
 		}
-		return []organization.InitialMembership{owner}, nil
+		return []InitialMembership{owner}, nil
 	}
 	parent := *input.Organization.ParentOrganizationID
+	// The composer loads GoCommon's canonical parent lineage. Lock every
+	// ancestor before inserting the child: physical foreign keys alone do not
+	// exclude a parent whose soft deletion committed while creation was waiting.
+	ambient, ok := scontext.GetTransaction(ctx)
+	if !ok || ambient == nil || ambient.GetDB() == nil || ambient.GetDB().Statement == nil {
+		return nil, gerrors.ErrTransactionNotFound
+	}
+	tx, ok := ambient.GetDB().Statement.ConnPool.(*sql.Tx)
+	if !ok {
+		return nil, gerrors.ErrTransactionNotFound
+	}
+	// A child can initialize both its Owner and the acting parent Admin. Lock
+	// every initial user's lifetime before any insertion acquires the hierarchy
+	// guard; user deletion takes that same user-first order.
+	users := []uint64{input.ActorID, owner.UserID}
+	slices.Sort(users)
+	for _, userID := range slices.Compact(users) {
+		var live uint64
+		var userType int32
+		if err := tx.QueryRowContext(ctx, "SELECT id,user_type FROM gocommon_users WHERE id=$1 AND deleted_at IS NULL FOR SHARE", userID).Scan(&live, &userType); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, gerrors.ErrUserNotFound
+			}
+			return nil, err
+		}
+		if userID == input.ActorID {
+			actor.UserType = userType
+			if !actor.Valid() {
+				return nil, gerrors.ErrInvalidCredentials
+			}
+		}
+	}
+	ancestors := append([]int64(nil), input.Organization.GetLineage()...)
+	ancestors = append(ancestors, parent)
+	// Canonical lineage order is root-to-parent, independent of imported IDs.
+	// Subtree deletion locks shallower organizations before their descendants.
+	seen := make(map[int64]bool, len(ancestors))
+	for _, ancestor := range ancestors {
+		if seen[ancestor] {
+			continue
+		}
+		seen[ancestor] = true
+		var live int64
+		if err := tx.QueryRowContext(ctx, "SELECT id FROM gocommon_organizations WHERE id=$1 AND deleted_at IS NULL FOR SHARE", ancestor).Scan(&live); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, gerrors.ErrOrganizationNotFound
+			}
+			return nil, err
+		}
+	}
 	actorRole, member, err := r.EffectiveRole(ctx, input.ActorID, parent)
 	if err != nil {
 		return nil, err
@@ -71,11 +123,95 @@ func (r *Runtime) initialMemberships(ctx context.Context, input organization.Org
 	if !actor.IsSiteAdmin() && actorRole == authorization.AdminRole && ownerRole != authorization.OwnerRole {
 		return nil, gerrors.ErrInsufficientPermissions
 	}
-	result := []organization.InitialMembership{owner}
+	result := []InitialMembership{owner}
 	if member && actorRole >= authorization.AdminRole && input.ActorID != owner.UserID {
-		result = append(result, organization.InitialMembership{UserID: input.ActorID, Role: pb.OrganizationRole_ORGANIZATION_ROLE_ADMIN_TIER_0})
+		result = append(result, InitialMembership{UserID: input.ActorID, Role: pb.OrganizationRole_ORGANIZATION_ROLE_ADMIN_TIER_0})
 	}
 	return result, nil
+}
+
+// CreateOrganizationWithInitialMemberships is the application creation boundary.
+// It joins the native transaction and uses GoCommon's ordinary organization and
+// privileged member APIs after checking OpenSplunk's explicit-owner policy.
+func (r *Runtime) CreateOrganizationWithInitialMemberships(ctx context.Context, org *sm.Organization, requested []InitialMembership) (*organization.OrganizationResponse, error) {
+	if org == nil || len(requested) != 1 || requested[0].UserID == 0 || requested[0].UserID > math.MaxInt64 || int32(requested[0].Role) != authorization.OwnerRole {
+		return nil, gerrors.ErrInvalidRequest
+	}
+	if org.PersonalOwnerUserID != nil || (org.OrganizationType != pb.OrganizationType_ORGANIZATION_TYPE_UNSPECIFIED && org.OrganizationType != TeamOrganizationType) {
+		return nil, gerrors.ErrInvalidRequest
+	}
+	ambient, ok := scontext.GetTransaction(ctx)
+	if !ok || ambient == nil || ambient.GetDB() == nil || ambient.GetDB().Statement == nil {
+		return nil, gerrors.ErrTransactionNotFound
+	}
+	tx, ok := ambient.GetDB().Statement.ConnPool.(*sql.Tx)
+	if !ok {
+		return nil, gerrors.ErrTransactionNotFound
+	}
+	if _, hooksPresent := gcpersistence.DatabasePostCommitHookRegistrarFromContext(ctx); !hooksPresent {
+		return nil, gerrors.ErrTransactionNotFound
+	}
+	user, ok := scontext.GetUser[sm.UserIdType, sm.User](ctx)
+	if !ok || user == nil || user.ID == 0 {
+		return nil, gerrors.ErrUserNotFound
+	}
+	ids := []uint64{user.ID, requested[0].UserID}
+	slices.Sort(ids)
+	for _, id := range slices.Compact(ids) {
+		var live uint64
+		if err := tx.QueryRowContext(ctx, "SELECT id FROM gocommon_users WHERE id=$1 AND deleted_at IS NULL FOR SHARE", id).Scan(&live); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, gerrors.ErrUserNotFound
+			}
+			return nil, err
+		}
+	}
+	actor, err := r.CurrentSubjectInTransaction(ctx, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	fresh := *user
+	fresh.UserType = pb.UserType(actor.UserType)
+	ctx = scontext.WithUser[sm.UserIdType](ctx, &fresh)
+	org.OrganizationType = TeamOrganizationType
+	if org.ParentOrganizationID != nil {
+		parent, err := r.persistence.GetOrganizationByID(ctx, *org.ParentOrganizationID)
+		if err != nil {
+			if errors.Is(err, gcpersistence.ErrOrganizationNotFound) {
+				return nil, gerrors.ErrOrganizationNotFound
+			}
+			return nil, err
+		}
+		if parent.PersonalOwnerUserID != nil || parent.OrganizationType != TeamOrganizationType {
+			return nil, gerrors.ErrInsufficientPermissions
+		}
+		org.Lineage = append(append([]int64(nil), parent.Lineage...), parent.ID)
+	}
+	members, err := r.initialMemberships(ctx, OrganizationCreationInput{ActorID: user.ID, ActorType: fresh.UserType, Organization: org, RequestedMemberships: requested})
+	if err != nil {
+		return nil, err
+	}
+	handler := r.service.GetOrganizationHandler()
+	privileged, ok := handler.(organization.OrganizationPrivilegedHandlerInterface)
+	if !ok {
+		return nil, gerrors.ErrInternalError
+	}
+	var response *organization.OrganizationResponse
+	if org.ParentOrganizationID == nil {
+		response, err = handler.CreateOrganizationByAdmin(ctx, org)
+	} else {
+		response, err = handler.CreateOrganizationByUser(ctx, org)
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, member := range members {
+		if _, err := privileged.AddMemberPrivileged(ctx, member.UserID, response.ID, member.Role); err != nil {
+			return nil, err
+		}
+	}
+	response.MemberCount = int64(len(members))
+	return response, nil
 }
 
 // CreateOrganizationRequest extends the shared create workflow only with an
@@ -119,12 +255,11 @@ func (r *Runtime) registerCreationRoute() {
 			return req, nil
 		},
 		Handler: func(req *http.Request, input *CreateOrganizationRequest) (*CreateOrganizationResponse, error) {
-			creator := r.service.GetOrganizationHandler().(organization.InitialMembershipCreator)
 			org := &sm.Organization{Name: input.Name, Slug: input.Slug, ParentOrganizationID: input.ParentOrganizationID}
 			if input.Description != nil {
 				org.Description = *input.Description
 			}
-			response, err := creator.CreateOrganizationWithInitialMemberships(req.Context(), org, []organization.InitialMembership{{UserID: input.OwnerUserID, Role: pb.OrganizationRole_ORGANIZATION_ROLE_OWNER_TIER_10}})
+			response, err := r.CreateOrganizationWithInitialMemberships(req.Context(), org, []InitialMembership{{UserID: input.OwnerUserID, Role: pb.OrganizationRole_ORGANIZATION_ROLE_OWNER_TIER_10}})
 			if err != nil {
 				if errors.Is(err, authorization.ErrForbidden) || errors.Is(err, authorization.ErrUnauthorized) {
 					return nil, router.NewHTTPErrorWithCause(http.StatusForbidden, "Organization creation denied", err)

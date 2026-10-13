@@ -9,6 +9,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/logkeys"
 	"github.com/Suhaibinator/SRouter/pkg/scontext"
+	"github.com/Suhaibinator/go-common/internal/httpstatus"
 	"github.com/Suhaibinator/go-common/pkg/common_persistence"
 	"github.com/Suhaibinator/go-common/pkg/common_service/common_service_models"
 	appLogger "github.com/Suhaibinator/go-common/pkg/logger"
@@ -236,12 +237,12 @@ func streamingTransactionMiddleware[U common_service_models.UserLike](
 			// Track the streamed status without buffering the body. A 4xx/5xx response
 			// without the corresponding SRouter handler error violates the transaction
 			// contract and must not be committed.
-			recorder := &streamingStatusRecorder{ResponseWriter: w}
+			recorder := &httpstatus.Recorder{ResponseWriter: w}
 			next.ServeHTTP(recorder, r)
 
 			// Get the handler error from context (set by SRouter)
 			handlerErr, handlerErrorSet := scontext.GetHandlerError(r.Context())
-			statusCode := recorder.status
+			statusCode := recorder.Status
 			if statusCode == 0 {
 				statusCode = http.StatusOK
 			}

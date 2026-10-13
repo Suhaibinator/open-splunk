@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Suhaibinator/go-common/pkg/common_persistence"
 	gcconfig "github.com/Suhaibinator/go-common/pkg/config"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
@@ -52,7 +51,7 @@ func realRecoveryBlobs(t *testing.T) *objectstore.Store {
 	config.MinioBucket = bucket
 	config.MinioPublicBucket = ""
 	config.MinioUseSSL = new(false)
-	objects, err := common_persistence.NewPrivateObjectStorage(t.Context(), gcconfig.Static(config).Persistence(), nil)
+	objects, err := objectstore.NewPrivateObjectStorage(t.Context(), gcconfig.Static(config).Persistence(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

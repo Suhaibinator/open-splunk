@@ -533,7 +533,7 @@ func TestPostgreSQLOpenMigratesAndLeasesSharedPool(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, "SELECT count(*) FROM open_splunk_schema_migrations").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 8 {
+	if count != 9 {
 		t.Fatalf("migration count=%d", count)
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, "INSERT INTO ingestion_token_indexes VALUES('missing','missing')"); err == nil {

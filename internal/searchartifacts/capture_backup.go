@@ -49,7 +49,7 @@ func ReferencedBlobs(ctx context.Context, database *sql.DB) ([]BlobReference, er
 }
 
 func RebindBlobs(ctx context.Context, database *sql.DB, replacements map[string]BlobIdentity) error {
-	tx, err := pgmeta.BeginSQL(ctx, database, nil)
+	tx, err := pgmeta.BeginSQLLocked(ctx, database, pgmeta.RetainedStorage)
 	if err != nil {
 		return err
 	}

@@ -201,7 +201,7 @@ func (store *Store) Admit(
 		return Result{}, err
 	}
 
-	tx := pgmeta.Begin(store.orm.WithContext(ctx))
+	tx := pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "15:ingestion-credentials")
 	if tx.Error != nil {
 		return Result{}, fmt.Errorf(
 			"begin collector admission: %w",

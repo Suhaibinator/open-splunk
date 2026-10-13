@@ -165,7 +165,7 @@ func (store *Store) Admit(ctx context.Context, job searchjobs.Job) (returnedErr 
 	if store.closed {
 		return ErrClosed
 	}
-	tx, err := pgmeta.BeginSQL(ctx, store.db, nil)
+	tx, err := pgmeta.BeginSQLLocked(ctx, store.db, pgmeta.RetainedStorage)
 	if err != nil {
 		return err
 	}

@@ -7,7 +7,6 @@ import (
 
 	sm "github.com/Suhaibinator/go-common/pkg/common_service/common_service_models"
 	gerrors "github.com/Suhaibinator/go-common/pkg/common_service/errors"
-	"github.com/Suhaibinator/go-common/pkg/common_service/organization"
 	gcconfig "github.com/Suhaibinator/go-common/pkg/config"
 	pb "github.com/Suhaibinator/go-common/pkg/proto_models"
 )
@@ -27,13 +26,13 @@ func TestGoogleOnlyConfigurationDoesNotGrantOrganizationOrCredentials(t *testing
 	if view.EnableOrganizationEmailAutoAssociation() || view.OrgAncestorMembershipAutoAdd() {
 		t.Fatal("signup/membership must not auto grant scope")
 	}
-	if view.DefaultUserType() != pb.UserType_USER_TYPE_REGULAR_TIER_0 || view.AuthCacheTtl() != 0 {
+	if view.DefaultUserType() != pb.UserType_USER_TYPE_REGULAR_TIER_0 || view.AuthCacheTtl() <= 0 || view.AuthTokenCacheCapacity() == 0 || view.AuthUserCacheCapacity() != 0 {
 		t.Fatal("unprivileged signup and fresh persisted user authority required")
 	}
 	if cfg.MinioBucket != "private-results" || cfg.SessionTokenSecret.StringValue() != "session-resource-preserved" {
 		t.Fatal("policy replaced deployment resource identity")
 	}
-	if view.SiteMinUserTypeUserTypeChange() != pb.UserType_USER_TYPE_ADMIN_TIER_10 || view.OrgMinUserTypeCreate() != pb.UserType_USER_TYPE_ADMIN_TIER_10 {
+	if view.SiteMinUserTypeUserTypeChange() != pb.UserType_USER_TYPE_ADMIN_TIER_10 || view.OrgMinUserTypeCreate() != pb.UserType_USER_TYPE_REGULAR_TIER_0 {
 		t.Fatal("site administration must use the same highest user type")
 	}
 }
@@ -54,28 +53,30 @@ func TestSubjectUsesRecognizedPersistedTypeAndAccountState(t *testing.T) {
 	}
 }
 
-func TestAdminCanManagePeersButNotOwnersOrOtherTiers(t *testing.T) {
-	p := rolePolicy{}
-	for _, test := range []struct {
-		actor, target int32
+func TestNativeOwnersManageAdminsAndAdminsManageViewers(t *testing.T) {
+	for _, fixture := range []struct {
+		actor, target pb.OrganizationRole
 		allowed       bool
-	}{{23, 1, true}, {23, 23, true}, {23, 44, false}, {23, 24, false}, {1, 1, false}, {44, 44, true}, {44, 23, true}} {
-		if actual := p.CanManageRole(pb.OrganizationRole(test.actor), pb.OrganizationRole(test.target)); actual != test.allowed {
-			t.Fatalf("manage %d->%d=%t", test.actor, test.target, actual)
-		}
-		if actual := p.CanGrantRole(pb.OrganizationRole(test.actor), pb.OrganizationRole(test.target)); actual != test.allowed {
-			t.Fatalf("grant %d->%d=%t", test.actor, test.target, actual)
+	}{
+		{pb.OrganizationRole_ORGANIZATION_ROLE_ADMIN_TIER_0, pb.OrganizationRole_ORGANIZATION_ROLE_MEMBER_TIER_0, true},
+		{pb.OrganizationRole_ORGANIZATION_ROLE_ADMIN_TIER_0, pb.OrganizationRole_ORGANIZATION_ROLE_ADMIN_TIER_0, false},
+		{pb.OrganizationRole_ORGANIZATION_ROLE_ADMIN_TIER_0, pb.OrganizationRole_ORGANIZATION_ROLE_OWNER_TIER_10, false},
+		{pb.OrganizationRole_ORGANIZATION_ROLE_OWNER_TIER_10, pb.OrganizationRole_ORGANIZATION_ROLE_ADMIN_TIER_0, true},
+		{pb.OrganizationRole_ORGANIZATION_ROLE_MEMBER_TIER_0, pb.OrganizationRole_ORGANIZATION_ROLE_MEMBER_TIER_0, false},
+	} {
+		if actual := sm.CanManageRole(fixture.actor, fixture.target); actual != fixture.allowed {
+			t.Fatalf("native role management %v→%v=%t", fixture.actor, fixture.target, actual)
 		}
 	}
 }
 
 func TestRootCreationRequiresExplicitOwnerAndSiteAdmin(t *testing.T) {
 	r := &Runtime{}
-	input := organization.OrganizationCreationInput{ActorID: 1, ActorType: pb.UserType_USER_TYPE_ADMIN_TIER_10, Organization: &sm.Organization{}}
+	input := OrganizationCreationInput{ActorID: 1, ActorType: pb.UserType_USER_TYPE_ADMIN_TIER_10, Organization: &sm.Organization{}}
 	if _, err := r.initialMemberships(context.Background(), input); err == nil {
 		t.Fatal("accepted ownerless creation")
 	}
-	input.RequestedMemberships = []organization.InitialMembership{{UserID: 2, Role: pb.OrganizationRole_ORGANIZATION_ROLE_OWNER_TIER_10}}
+	input.RequestedMemberships = []InitialMembership{{UserID: 2, Role: pb.OrganizationRole_ORGANIZATION_ROLE_OWNER_TIER_10}}
 	members, err := r.initialMemberships(context.Background(), input)
 	if err != nil || len(members) != 1 || members[0].UserID != 2 {
 		t.Fatal("siteadmin must assign the explicitly requested owner")

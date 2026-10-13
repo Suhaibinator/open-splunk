@@ -25,7 +25,7 @@ func TestNativeScheduleOrganizationSharingAndFreshSourceScope(t *testing.T) {
 	if _, err := database.SQLDB().ExecContext(t.Context(), `CREATE TABLE gocommon_organizations(id BIGINT PRIMARY KEY,deleted_at TIMESTAMPTZ);CREATE TABLE gocommon_users(id BIGINT PRIMARY KEY,deleted_at TIMESTAMPTZ);CREATE TABLE gocommon_user_organizations(user_id BIGINT,organization_id BIGINT,role INTEGER,PRIMARY KEY(user_id,organization_id));INSERT INTO gocommon_organizations(id)VALUES(1),(2);INSERT INTO gocommon_users(id)VALUES(1),(2),(99)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.SQLDB().ExecContext(t.Context(), authorization.Schema); err != nil {
+	if _, err := database.SQLDB().ExecContext(t.Context(), authorization.Schema+authorization.GranularSchema); err != nil {
 		t.Fatal(err)
 	}
 

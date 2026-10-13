@@ -259,14 +259,11 @@ func (c *Config) validateLivePersistenceAndAuthPolicy() error {
 		name  string
 		value *time.Duration
 	}{
-		{"SessionValidity", c.SessionValidity}, {"VerificationTokenValidity", c.VerificationTokenValidity},
+		{"AuthCacheTtl", c.AuthCacheTtl}, {"SessionValidity", c.SessionValidity}, {"VerificationTokenValidity", c.VerificationTokenValidity},
 	} {
 		if field.value != nil && *field.value <= 0 {
 			return fmt.Errorf("%s must be positive", field.name)
 		}
-	}
-	if c.AuthCacheTtl != nil && *c.AuthCacheTtl < 0 {
-		return fmt.Errorf("AuthCacheTtl must be nonnegative")
 	}
 	const maxDuration = time.Duration(1<<63 - 1)
 	for _, field := range []struct {

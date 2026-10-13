@@ -123,7 +123,7 @@ func (db *DB) ensureIndexDeletionMutationAttempt(
 	correlationID string,
 	target IndexDeletionMutationTarget,
 ) (result IndexDeletionMutationAttempt, err error) {
-	tx := pgmeta.Begin(db.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(db.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return IndexDeletionMutationAttempt{}, fmt.Errorf(
 			"begin index deletion mutation attempt transaction: %w",

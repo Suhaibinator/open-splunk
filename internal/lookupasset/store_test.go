@@ -327,7 +327,7 @@ func TestStoreStagingStartsTTLAfterWaitingForWriter(t *testing.T) {
 	if _, err := writer.ExecContext(t.Context(), `BEGIN ISOLATION LEVEL READ COMMITTED`); err != nil {
 		t.Fatalf("begin blocking writer: %v", err)
 	}
-	if _, err := writer.ExecContext(t.Context(), "SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(), $1))", pgmeta.WriteLock); err != nil {
+	if _, err := writer.ExecContext(t.Context(), "SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema() || ':' || $1, 0))", pgmeta.Catalog); err != nil {
 		t.Fatalf("acquire metadata writer: %v", err)
 	}
 	writerOpen := true
@@ -422,7 +422,7 @@ func TestStorePublicationRechecksExpiryAfterWaitingForWriter(t *testing.T) {
 	if _, err := writer.ExecContext(t.Context(), `BEGIN ISOLATION LEVEL READ COMMITTED`); err != nil {
 		t.Fatalf("begin blocking writer: %v", err)
 	}
-	if _, err := writer.ExecContext(t.Context(), "SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(), $1))", pgmeta.WriteLock); err != nil {
+	if _, err := writer.ExecContext(t.Context(), "SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema() || ':' || $1, 0))", pgmeta.Catalog); err != nil {
 		t.Fatalf("acquire metadata writer: %v", err)
 	}
 	writerOpen := true

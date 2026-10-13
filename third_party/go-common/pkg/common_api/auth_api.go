@@ -261,25 +261,24 @@ func markClearOAuthStateCookie(r *http.Request) {
 // RegisterAuthRoutes executes this step in the common_api backend flow.
 func (h *CommonAPIHandler[U]) RegisterAuthRoutes(group *router.RouteGroup[common_service_models.UserIdType, U]) {
 	log := h.logger.Named(commonAPILoggerName)
-	group = h.featureGroup(group, func(c config.APIView) bool {
-		return c.EnableEmailAuth() || c.SMSEnabled() || c.EnableOAuth()
-	})
+	// EnableEmailAuth and EnableOAuth are restart-bound: their routes are either
+	// registered at startup or absent. SMS stays hot, so phone routes check it per request.
+	emailAuth, oauthAuth := h.startup.EnableEmailAuth(), h.startup.EnableOAuth()
+	if !emailAuth && !oauthAuth {
+		group = h.featureGroup(group, config.APIView.SMSEnabled)
+	}
 
-	// Email auth routes (if enabled)
-	{
-		h.addEmailAuthRoutes(h.featureGroup(group, config.APIView.EnableEmailAuth))
+	if emailAuth {
+		h.addEmailAuthRoutes(group)
+		h.addPasswordManagementRoutes(group)
 		log.Debug("Email authentication routes registered")
 	}
 
-	// Phone auth routes (if enabled)
-	{
-		h.addPhoneAuthRoutes(h.featureGroup(group, config.APIView.SMSEnabled))
-		log.Debug("Phone authentication routes registered")
-	}
+	h.addPhoneAuthRoutes(h.featureGroup(group, config.APIView.SMSEnabled))
+	log.Debug("Phone authentication routes registered")
 
-	// OAuth routes (if enabled)
-	{
-		h.addOAuthRoutes(h.featureGroup(group, config.APIView.EnableOAuth))
+	if oauthAuth {
+		h.addOAuthRoutes(group)
 		log.Debug("OAuth authentication routes registered")
 	}
 
@@ -336,7 +335,7 @@ func (h *CommonAPIHandler[U]) addSessionRoutes(group *router.RouteGroup[common_s
 
 // addEmailAuthRoutes executes this step in the common_api backend flow.
 func (h *CommonAPIHandler[U]) addEmailAuthRoutes(group *router.RouteGroup[common_service_models.UserIdType, U]) {
-	// Get transaction middleware for logout operation
+	// Get transaction middleware for email auth operations
 	transactionMiddleware := h.GetTransactionMiddleware()
 	group.Route(router.RouteConfig[*proto_models.EmailRegistrationRequest, *proto_models.EmailRegistrationResponse]{
 		Path:        "/auth/email/create",
@@ -408,7 +407,6 @@ func (h *CommonAPIHandler[U]) addEmailAuthRoutes(group *router.RouteGroup[common
 		Sanitizer:   h.sanitizer.SanitizePasswordResetCompleteRequest,
 		Middlewares: []common.Middleware{transactionMiddleware, h.sessionCookieMiddleware},
 	})
-
 }
 
 // addPhoneAuthRoutes executes this step in the common_api backend flow.
@@ -786,21 +784,8 @@ func (h *CommonAPIHandler[U]) RevokeOtherSessions(r *http.Request, _ *proto_mode
 	return resp, nil
 }
 
-// addMultiAuthRoutes executes this step in the common_api backend flow.
+// addMultiAuthRoutes registers account routes available with any login method.
 func (h *CommonAPIHandler[U]) addMultiAuthRoutes(group *router.RouteGroup[common_service_models.UserIdType, U]) {
-	// Get transaction middleware for multi-auth operations
-	transactionMiddleware := h.GetTransactionMiddleware()
-	emailGroup := h.featureGroup(group, config.APIView.EnableEmailAuth)
-	emailGroup.Route(router.RouteConfig[*proto_models.AddPasswordRequest, *proto_models.AddPasswordResponse]{
-		Path:        "/auth/add-password",
-		Methods:     []router.HttpMethod{http.MethodPost, http.MethodOptions},
-		AuthLevel:   new(router.AuthRequired),
-		Codec:       codec.NewProtoCodec[*proto_models.AddPasswordRequest, *proto_models.AddPasswordResponse](),
-		Handler:     h.HandleAddPassword,
-		SourceType:  router.Body,
-		Sanitizer:   h.sanitizer.SanitizeAddPasswordRequest,
-		Middlewares: []common.Middleware{transactionMiddleware},
-	})
 	group.Route(router.RouteConfig[*proto_models.GetAuthMethodsResponse, *proto_models.GetAuthMethodsResponse]{
 		Path:       "/auth/methods",
 		Methods:    []router.HttpMethod{http.MethodGet, http.MethodOptions},
@@ -818,7 +803,23 @@ func (h *CommonAPIHandler[U]) addMultiAuthRoutes(group *router.RouteGroup[common
 		SourceType: router.Body,
 		Sanitizer:  h.sanitizer.SanitizeCheckUsernameAvailabilityRequest,
 	})
-	emailGroup.Route(router.RouteConfig[*proto_models.SetupOTPRequest, *proto_models.SetupOTPResponse]{
+}
+
+// addPasswordManagementRoutes registers password and TOTP management, which
+// require email authentication; it is called only when that is enabled at startup.
+func (h *CommonAPIHandler[U]) addPasswordManagementRoutes(group *router.RouteGroup[common_service_models.UserIdType, U]) {
+	transactionMiddleware := h.GetTransactionMiddleware()
+	group.Route(router.RouteConfig[*proto_models.AddPasswordRequest, *proto_models.AddPasswordResponse]{
+		Path:        "/auth/add-password",
+		Methods:     []router.HttpMethod{http.MethodPost, http.MethodOptions},
+		AuthLevel:   new(router.AuthRequired),
+		Codec:       codec.NewProtoCodec[*proto_models.AddPasswordRequest, *proto_models.AddPasswordResponse](),
+		Handler:     h.HandleAddPassword,
+		SourceType:  router.Body,
+		Sanitizer:   h.sanitizer.SanitizeAddPasswordRequest,
+		Middlewares: []common.Middleware{transactionMiddleware},
+	})
+	group.Route(router.RouteConfig[*proto_models.SetupOTPRequest, *proto_models.SetupOTPResponse]{
 		Path:        "/auth/otp/setup",
 		Methods:     []router.HttpMethod{http.MethodPost, http.MethodOptions},
 		AuthLevel:   new(router.AuthRequired),
@@ -827,7 +828,7 @@ func (h *CommonAPIHandler[U]) addMultiAuthRoutes(group *router.RouteGroup[common
 		SourceType:  router.Body,
 		Middlewares: []common.Middleware{transactionMiddleware},
 	})
-	emailGroup.Route(router.RouteConfig[*proto_models.VerifyOTPSetupRequest, *proto_models.VerifyOTPSetupResponse]{
+	group.Route(router.RouteConfig[*proto_models.VerifyOTPSetupRequest, *proto_models.VerifyOTPSetupResponse]{
 		Path:        "/auth/otp/verify-setup",
 		Methods:     []router.HttpMethod{http.MethodPost, http.MethodOptions},
 		AuthLevel:   new(router.AuthRequired),
@@ -837,7 +838,7 @@ func (h *CommonAPIHandler[U]) addMultiAuthRoutes(group *router.RouteGroup[common
 		Sanitizer:   h.sanitizer.SanitizeVerifyOTPSetupRequest,
 		Middlewares: []common.Middleware{transactionMiddleware},
 	})
-	emailGroup.Route(router.RouteConfig[*proto_models.DisableOTPRequest, *proto_models.DisableOTPResponse]{
+	group.Route(router.RouteConfig[*proto_models.DisableOTPRequest, *proto_models.DisableOTPResponse]{
 		Path:        "/auth/otp/disable",
 		Methods:     []router.HttpMethod{http.MethodPost, http.MethodOptions},
 		AuthLevel:   new(router.AuthRequired),

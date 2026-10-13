@@ -766,7 +766,7 @@ func beginWriteConnection(ctx context.Context, conn *sql.Conn) error {
 	if _, err := conn.ExecContext(ctx, "BEGIN ISOLATION LEVEL READ COMMITTED"); err != nil {
 		return err
 	}
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(), $1))", pgmeta.WriteLock); err != nil {
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema() || ':' || $1, 0))", pgmeta.Catalog); err != nil {
 		_, _ = conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK")
 		return err
 	}

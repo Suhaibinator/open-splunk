@@ -155,7 +155,7 @@ func (store *Store) create(
 				return buildSavedSearch(id, 1, normalized, now, now), nil
 			}
 		} else {
-			tx := pgmeta.Begin(store.orm.WithContext(ctx))
+			tx := pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "saved-content:"+ownerID)
 			if tx.Error != nil {
 				return nil, mapContextError(ctx, "begin saved-search create", tx.Error)
 			}
@@ -296,7 +296,7 @@ func (store *Store) update(
 		return nil, fmt.Errorf("%w: saved-search definition is required", control.ErrInvalidArgument)
 	}
 
-	tx := pgmeta.Begin(store.orm.WithContext(ctx))
+	tx := store.beginOwnedMutation(ctx, scope, id, ownerID, false)
 	if tx.Error != nil {
 		return nil, mapContextError(ctx, "begin saved-search update", tx.Error)
 	}
@@ -430,7 +430,7 @@ func (store *Store) duplicate(
 		return nil, err
 	}
 
-	tx := pgmeta.Begin(store.orm.WithContext(ctx))
+	tx := pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "saved-content:"+ownerID)
 	if tx.Error != nil {
 		return nil, mapContextError(ctx, "begin saved-search duplicate", tx.Error)
 	}
@@ -572,7 +572,7 @@ func (store *Store) delete(
 	if err := validateExpectedVersion(expectedVersion); err != nil {
 		return err
 	}
-	tx := pgmeta.Begin(store.orm.WithContext(ctx))
+	tx := store.beginOwnedMutation(ctx, scope, id, ownerID, true)
 	if tx.Error != nil {
 		return mapContextError(ctx, "begin saved-search delete", tx.Error)
 	}
@@ -870,3 +870,31 @@ func scopeQuery(query *gorm.DB, scope AccessScope, ownerID string, read bool) *g
 }
 
 func parsedOrganization(value string) int64 { id, _ := strconv.ParseInt(value, 10, 64); return id }
+
+// A site administrator may edit another creator's object. The creator is
+// immutable, so resolve that resource's owner before taking its mutation key;
+// locking the acting administrator would invert row/key order with its creator.
+func (store *Store) beginOwnedMutation(ctx context.Context, scope AccessScope, id, ownerID string, deleteCatalogDependents bool) *gorm.DB {
+	mutationOwner := ownerID
+	if scope.SiteAdministrator {
+		var identity savedSearchRecord
+		read := scopeQuery(store.orm.WithContext(ctx), scope, ownerID, false).Select("owner_id").Where("saved_search_id = ?", id).Take(&identity)
+		if read.Error != nil && !errors.Is(read.Error, gorm.ErrRecordNotFound) {
+			return read
+		}
+		if read.Error == nil {
+			mutationOwner = identity.OwnerID
+		}
+	}
+	if deleteCatalogDependents {
+		tx := pgmeta.BeginLocked(store.orm.WithContext(ctx), pgmeta.Catalog)
+		if tx.Error == nil {
+			if err := pgmeta.Lock(tx, "saved-content:"+mutationOwner); err != nil {
+				_ = tx.Rollback()
+				tx.Error = err
+			}
+		}
+		return tx
+	}
+	return pgmeta.BeginCatalogReader(store.orm.WithContext(ctx), "saved-content:"+mutationOwner)
+}

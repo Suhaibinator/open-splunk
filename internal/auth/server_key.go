@@ -124,7 +124,7 @@ func registerServerMasterKeyIdentityAt(
 	}
 	detachedFingerprint := append([]byte(nil), fingerprint...)
 
-	tx := pgmeta.Begin(orm)
+	tx := pgmeta.BeginLocked(orm, "server-key-identity")
 	if tx.Error != nil {
 		return fmt.Errorf("begin server master-key registration: %w", tx.Error)
 	}

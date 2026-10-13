@@ -507,7 +507,7 @@ func (h *OrganizationHandler[U]) ValidateRoleTransition(
 	newRole proto_models.OrganizationRole,
 ) error {
 	// Actor must be able to manage the current role
-	if !h.canManageRole(actorRole, currentRole) {
+	if !common_service_models.CanManageRole(actorRole, currentRole) {
 		return appLogger.WithErrorFields(errors.ErrCannotManageHigherRole,
 			zap.String(logkeys.Operation, "validate_organization_role_transition"),
 			zap.Stringer(appLogger.KeyActorRole, actorRole),
@@ -518,7 +518,7 @@ func (h *OrganizationHandler[U]) ValidateRoleTransition(
 	}
 
 	// Actor must be able to promote to the new role
-	if !h.canGrantRole(actorRole, newRole) {
+	if !common_service_models.CanPromoteToRole(actorRole, newRole) {
 		return appLogger.WithErrorFields(errors.ErrCannotPromoteAboveOwnRole,
 			zap.String(logkeys.Operation, "validate_organization_role_transition"),
 			zap.Stringer(appLogger.KeyActorRole, actorRole),

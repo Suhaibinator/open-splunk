@@ -329,13 +329,7 @@ func (h *CommonPersistenceHandler[U]) runSQLMigrations(ctx context.Context) erro
 
 func withSchemaBootstrapLock(ctx context.Context, baseDB *gorm.DB, run func(*gorm.DB) error) error {
 	return baseDB.WithContext(ctx).Connection(func(db *gorm.DB) (resultErr error) {
-		// Resolve the namespace on the pinned physical session. Retain the exact
-		// name for release even if an application setup changes search_path.
-		lockName, err := scopedSchemaBootstrapLockName(db.Session(&gorm.Session{NewDB: true}))
-		if err != nil {
-			return err
-		}
-		if err := db.Exec(schemaBootstrapLockSQL, lockName).Error; err != nil {
+		if err := db.Exec(schemaBootstrapLockSQL, schemaBootstrapLockName).Error; err != nil {
 			// A cancellation or lost response can make acquisition outcome
 			// unknowable. Never return that session to a borrowed pool.
 			return errors.Join(
@@ -350,7 +344,7 @@ func withSchemaBootstrapLock(ctx context.Context, baseDB *gorm.DB, run func(*gor
 			unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), schemaBootstrapUnlockTimeout)
 			defer cancel()
 
-			unlockErr := releaseSchemaBootstrapLock(db.WithContext(unlockCtx), lockName)
+			unlockErr := releaseSchemaBootstrapLock(db.WithContext(unlockCtx))
 			if unlockErr != nil {
 				// If PostgreSQL did not confirm the unlock, discard the physical
 				// connection. Reusing an uncertain session could serialize every
@@ -366,17 +360,6 @@ func withSchemaBootstrapLock(ctx context.Context, baseDB *gorm.DB, run func(*gor
 		// cannot leak into later tables or the advisory-lock release.
 		return run(db.Session(&gorm.Session{NewDB: true}))
 	})
-}
-
-func scopedSchemaBootstrapLockName(db *gorm.DB) (string, error) {
-	var schema sql.NullString
-	if err := db.Raw("SELECT current_schema()").Scan(&schema).Error; err != nil {
-		return "", fmt.Errorf("resolve schema bootstrap lock namespace: %w", err)
-	}
-	if !schema.Valid || schema.String == "" {
-		return "", errors.New("schema bootstrap requires a current PostgreSQL schema")
-	}
-	return schema.String + ":" + schemaBootstrapLockName, nil
 }
 
 func discardSchemaBootstrapConnection(db *gorm.DB) error {
@@ -399,9 +382,9 @@ func discardSchemaBootstrapConnection(db *gorm.DB) error {
 	return nil
 }
 
-func releaseSchemaBootstrapLock(db *gorm.DB, lockName string) error {
+func releaseSchemaBootstrapLock(db *gorm.DB) error {
 	var unlocked bool
-	if err := db.Raw(schemaBootstrapUnlockSQL, lockName).Scan(&unlocked).Error; err != nil {
+	if err := db.Raw(schemaBootstrapUnlockSQL, schemaBootstrapLockName).Scan(&unlocked).Error; err != nil {
 		return fmt.Errorf("release schema bootstrap advisory lock: %w", err)
 	}
 	if !unlocked {

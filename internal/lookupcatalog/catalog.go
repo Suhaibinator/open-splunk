@@ -457,7 +457,7 @@ func (catalog *Catalog) CreatePublished(
 }
 
 func (catalog *Catalog) createRows(ctx context.Context, organizationID int64, tenantID, ownerID, lookupID string, definition *opensplunk.LookupDefinition, definitionBytes []byte, asset lookupasset.Version, now time.Time) (*opensplunk.Lookup, error) {
-	tx, err := pgmeta.BeginSQL(ctx, catalog.database, nil)
+	tx, err := pgmeta.BeginSQLLocked(ctx, catalog.database, pgmeta.Catalog)
 	if err != nil {
 		return nil, fmt.Errorf("begin lookup creation: %w", err)
 	}
@@ -564,7 +564,7 @@ func (catalog *Catalog) Replace(ctx context.Context, request ReplaceRequest) (*o
 	if err != nil {
 		return nil, err
 	}
-	tx, err := pgmeta.BeginSQL(ctx, catalog.database, nil)
+	tx, err := pgmeta.BeginSQLLocked(ctx, catalog.database, pgmeta.Catalog)
 	if err != nil {
 		return nil, fmt.Errorf("begin lookup replacement: %w", err)
 	}
@@ -890,7 +890,7 @@ func (catalog *Catalog) SetState(ctx context.Context, request StateRequest) (*op
 	if err != nil {
 		return nil, err
 	}
-	tx, err := pgmeta.BeginSQL(ctx, catalog.database, nil)
+	tx, err := pgmeta.BeginSQLLocked(ctx, catalog.database, pgmeta.Catalog)
 	if err != nil {
 		return nil, fmt.Errorf("begin lookup state transition: %w", err)
 	}

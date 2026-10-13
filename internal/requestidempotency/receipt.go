@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"fortio.org/safecast"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
@@ -329,6 +330,9 @@ func AppendInTransaction(
 	if database.Error != nil {
 		return Receipt{}, mapDatabaseError(ctx, database.Error)
 	}
+	if err := pgmeta.Lock(database, "receipts:"+intent.TenantID); err != nil {
+		return Receipt{}, err
+	}
 	if err := database.Exec(
 		`INSERT INTO api_mutation_receipt_tenant_state (
 			tenant_id, receipt_count, encoded_bytes, high_water_unix_micro
@@ -409,6 +413,9 @@ func AppendInSQLTransaction(
 	canonicalNow, err := canonicalTime(now)
 	if err != nil {
 		return Receipt{}, ErrInvalid
+	}
+	if _, err := transaction.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema() || ':' || $1,0))", "receipts:"+intent.TenantID); err != nil {
+		return Receipt{}, err
 	}
 	if _, err := transaction.ExecContext(
 		ctx,
@@ -527,6 +534,9 @@ func MarkTargetTerminalInTransaction(
 		return ErrInvalid
 	}
 	database := tx.WithContext(ctx)
+	if err := pgmeta.Lock(database, "receipts:"+tenantID); err != nil {
+		return mapDatabaseError(ctx, err)
+	}
 	if err := database.Exec(
 		`UPDATE api_mutation_receipt_tenant_state
 		 SET high_water_unix_micro = GREATEST(high_water_unix_micro, ?)
@@ -576,7 +586,11 @@ func ExtendRetentionInTransaction(
 	if err != nil {
 		return ErrInvalid
 	}
-	result := tx.WithContext(ctx).Exec(
+	database := tx.WithContext(ctx)
+	if err := pgmeta.Lock(database, "receipts:"+intent.TenantID); err != nil {
+		return mapDatabaseError(ctx, err)
+	}
+	result := database.Exec(
 		`UPDATE api_mutation_receipts
 		 SET retain_until_unix_micro = GREATEST(retain_until_unix_micro, ?)
 		 WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?

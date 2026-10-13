@@ -46,7 +46,7 @@ func TestSetCollectorTokenEnabledReportsBeginContentionWithoutMutation(t *testin
 		_, _ = blocker.ExecContext(context.Background(), `ROLLBACK`)
 		_ = blocker.Close()
 	})
-	if _, err := blocker.ExecContext(ctx, `BEGIN; SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(), 5716000640707417153))`); err != nil {
+	if _, err := blocker.ExecContext(ctx, `BEGIN; SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema() || ':15:ingestion-credentials',0))`); err != nil {
 		t.Fatalf("reserve state mutation writer: %v", err)
 	}
 	contender, err := raw.Conn(ctx)

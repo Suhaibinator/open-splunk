@@ -223,7 +223,7 @@ func (catalog *AppCatalog) createAppOnce(
 	now time.Time,
 	auditPublisher appMutationAuditPublisher,
 ) (result AppWorkspace, returnedErr error) {
-	tx := pgmeta.Begin(catalog.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(catalog.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return AppWorkspace{}, appContextError(ctx, "begin app creation", tx.Error)
 	}
@@ -323,7 +323,7 @@ func (catalog *AppCatalog) GetApp(
 		return AppWorkspace{}, err
 	}
 
-	tx := pgmeta.Begin(catalog.orm.WithContext(ctx))
+	tx := pgmeta.Begin(catalog.orm.WithContext(ctx), &sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
 		return AppWorkspace{}, appContextError(ctx, "begin app read", tx.Error)
 	}
@@ -400,7 +400,7 @@ func (catalog *AppCatalog) updateApp(
 		return AppWorkspace{}, err
 	}
 
-	tx := pgmeta.Begin(catalog.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(catalog.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return AppWorkspace{}, appContextError(ctx, "begin app update", tx.Error)
 	}
@@ -520,7 +520,7 @@ func (catalog *AppCatalog) setAppState(
 		return AppWorkspace{}, fmt.Errorf("%w: unknown app state", ErrInvalidArgument)
 	}
 
-	tx := pgmeta.Begin(catalog.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(catalog.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return AppWorkspace{}, appContextError(ctx, "begin app state update", tx.Error)
 	}
@@ -659,7 +659,7 @@ func (catalog *AppCatalog) deleteApp(
 		return "", fmt.Errorf("%w: app deletion confirmation is invalid", ErrInvalidArgument)
 	}
 
-	tx := pgmeta.Begin(catalog.orm.WithContext(ctx))
+	tx := pgmeta.BeginLocked(catalog.orm.WithContext(ctx), pgmeta.Catalog)
 	if tx.Error != nil {
 		return "", appContextError(ctx, "begin app deletion", tx.Error)
 	}

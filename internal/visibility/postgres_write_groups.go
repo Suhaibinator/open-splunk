@@ -46,7 +46,7 @@ func (sequencer *PostgreSQLSequencer) AcquireUngroupedReplay(
 		}
 	}()
 
-	tx, err := pgmeta.BeginSQL(ctx, sequencer.db, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := pgmeta.BeginIngestion(ctx, sequencer.db)
 	if err != nil {
 		return Reservation{}, false, fmt.Errorf("begin ungrouped replay acquisition: %w", err)
 	}
@@ -180,7 +180,7 @@ func (sequencer *PostgreSQLSequencer) FormOrAcquireWriteGroup(
 		}
 	}()
 
-	tx, err := pgmeta.BeginSQL(ctx, sequencer.db, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := pgmeta.BeginIngestion(ctx, sequencer.db)
 	if err != nil {
 		return WriteGroup{}, false, time.Time{}, fmt.Errorf("begin write group acquisition: %w", err)
 	}
@@ -718,7 +718,7 @@ func (sequencer *PostgreSQLSequencer) MarkWriteGroupSending(ctx context.Context,
 	if !sequencer.leases.ownsGroup(attemptID, groupID) {
 		return ErrAttemptLease
 	}
-	tx, err := pgmeta.BeginSQL(ctx, sequencer.db, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := pgmeta.BeginIngestion(ctx, sequencer.db)
 	if err != nil {
 		return fmt.Errorf("begin write group sending transition: %w", err)
 	}
@@ -845,7 +845,7 @@ func (sequencer *PostgreSQLSequencer) CommitWriteGroup(
 		return ErrAttemptLease
 	}
 	defer sequencer.leases.deactivate(attemptID)
-	tx, err := pgmeta.BeginSQL(ctx, sequencer.db, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := pgmeta.BeginIngestion(ctx, sequencer.db)
 	if err != nil {
 		return fmt.Errorf("begin write group commit: %w", err)
 	}

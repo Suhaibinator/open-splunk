@@ -578,7 +578,7 @@ func (writer *Writer) reconcileCommittedMutation(
 	}
 	reconcileContext, cancel := context.WithTimeout(base, writerCommitReconcileTimeout)
 	defer cancel()
-	tx := pgmeta.Begin(writer.orm.WithContext(reconcileContext))
+	tx := pgmeta.BeginLocked(writer.orm.WithContext(reconcileContext), pgmeta.Catalog)
 	if tx.Error != nil {
 		return outcome, tx.Error
 	}

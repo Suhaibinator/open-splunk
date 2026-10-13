@@ -41,7 +41,10 @@ func Configure(c *gcconfig.Config) {
 	c.EnableOrganizationEmailAutoAssociation = new(false)
 	c.AllowOrganizationManagedEmailDomains = new(false)
 	c.OrgAncestorMembershipAutoAdd = new(false)
-	c.AuthCacheTtl = new(time.Duration(0))
+	// Keep the native token cache lifetime positive. Mutable user projections
+	// must be reloaded for manual database promotions and native /user/me.
+	c.AuthCacheTtl = gcconfig.GetDefaults().AuthCacheTtl
+	c.AuthUserCacheCapacity = new(uint64(0))
 	c.OrganizationRoleCacheTTL = new(time.Duration(0))
 	c.OAuthSignupMode = new(gcconfig.OAuthSignupModeEmailLocalPart)
 	c.DefaultUserType = new(pb.UserType_USER_TYPE_REGULAR_TIER_0)
@@ -71,7 +74,10 @@ func Configure(c *gcconfig.Config) {
 	c.SiteMinUserTypeInferenceModelOverride = new(site)
 	c.SiteMinUserTypeInferenceAdministration = new(site)
 	c.OrgMinUserTypeManageEmailDomains = new(site)
-	c.OrgMinUserTypeCreate = new(site)
+	// Native creation is exposed only by the application's explicit-owner
+	// route. Allow its actual regular parent Admin actor through native child
+	// creation; that application route independently restricts root creation.
+	c.OrgMinUserTypeCreate = new(pb.UserType_USER_TYPE_REGULAR_TIER_0)
 	c.OrgMinUserTypeCreateChild = new(site)
 	c.OrgMinUserTypeView = new(site)
 	c.OrgMinUserTypeListMembers = new(site)

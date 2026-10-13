@@ -7,13 +7,13 @@ import type { RetainedStorageUsage } from "@/gen/ts/open_splunk/system_api";
 import type { IndexCapabilityDecision, IndexPermission } from "@/gen/ts/open_splunk/index_permissions_api";
 import { createIdentityClient, refreshIdentity } from "@/lib/api/identity-client";
 import { isSiteAdministrator, selectOrganization } from "@/lib/api/identity-session";
+import { ORGANIZATION_ROLES as ROLES, canManageOrganizationRole, grantableOrganizationRoles } from "@/lib/api/organization-role-policy";
 import { isHttpStatus } from "@/lib/api/protobuf-transport";
 import { createOpenSplunkApiClient } from "@/lib/api/open-splunk-client";
 import { useIdentity } from "../_components/identity-provider";
 import { Select, SelectOption } from "../_components/select";
 import { PageHeading } from "../_components/product-shell";
 
-const ROLES = [{ value: 1, label: "Viewer" }, { value: 23, label: "Admin" }, { value: 44, label: "Owner" }] as const;
 function positiveId(value: string): bigint {
   if (!/^[1-9]\d*$/u.test(value)) throw new Error("Enter a positive account ID.");
   const id = BigInt(value);
@@ -26,13 +26,16 @@ export function OrganizationAccess({ apiBaseUrl }: { apiBaseUrl: string }) {
   const client = useMemo(() => createIdentityClient(apiBaseUrl), [apiBaseUrl]);
   const api = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
   const organization = identity.organizations.find((org) => org.id === identity.organizationId);
-  const canManage = isSiteAdministrator() || (organization?.role ?? 0) >= 23;
+  const siteAdministrator = isSiteAdministrator();
+  const canManage = siteAdministrator || organization?.role === 23 || organization?.role === 44;
+  const grantableRoles = grantableOrganizationRoles(organization?.role ?? 0, siteAdministrator);
   const [storageUsage, setStorageUsage] = useState<RetainedStorageUsage | null>(null);
   const [members, setMembers] = useState<OrganizationMemberDetails[]>([]);
   const [page, setPage] = useState(1);
   const [hasNext, setHasNext] = useState(false);
   const [userId, setUserId] = useState("");
   const [role, setRole] = useState(1);
+  const selectedRole = grantableRoles.some((item) => item.value === role) ? role : 1;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -88,7 +91,7 @@ export function OrganizationAccess({ apiBaseUrl }: { apiBaseUrl: string }) {
     event.preventDefault();
     void action(async () => {
       if (identity.organizationId === null) throw new Error("Select an organization first.");
-      await client.organizations.members.add(identity.organizationId, positiveId(userId), role);
+      await client.organizations.members.add(identity.organizationId, positiveId(userId), selectedRole);
       await reloadMembers(); setUserId(""); setNotice("Member added.");
     });
   }
@@ -114,8 +117,8 @@ export function OrganizationAccess({ apiBaseUrl }: { apiBaseUrl: string }) {
       {identity.organizations.map((org) => <button key={org.id.toString()} className="button button--secondary" type="button" disabled={busy} aria-pressed={org.id === identity.organizationId} onClick={() => selectOrganization(org.id)}>{org.name}</button>)}
     </section>
     {storageUsage ? <section className="panel"><h2>Retained storage</h2><p>{organization?.name ?? "Selected organization"}: {summarizeByteQuantity(storageUsage.organizationUsedBytes)} used of {summarizeByteQuantity(storageUsage.organizationLimitBytes)}</p><p>Instance: {summarizeByteQuantity(storageUsage.globalUsedBytes)} used of {summarizeByteQuantity(storageUsage.globalLimitBytes)}</p><p>Usage includes reserved captures and exports. This snapshot refreshes when you switch organizations or select Refresh.</p><button className="button button--secondary" type="button" disabled={busy} onClick={() => { void action(async () => { const response = await api.system.bootstrap({}); const usage = response.retainedStorageUsage; if (usage === undefined || usage.organizationId !== identity.organizationId?.toString()) throw new Error("Storage usage is unavailable for the selected organization."); setStorageUsage(usage); }); }}>Refresh storage usage</button></section> : null}
-    {organization ? <section className="panel"><h2>{organization.name} members</h2><div className="table-wrap"><table className="table"><thead><tr><th>Account</th><th>Role</th>{canManage ? <th>Actions</th> : null}</tr></thead><tbody>{members.map((member) => <tr key={member.userId.toString()}><td>{member.user?.displayPrimary || member.userId.toString()}</td><td>{ROLES.find((item) => item.value === member.effectiveRole)?.label ?? "Member"}</td>{canManage ? <td><label>Role <Select aria-label={`Role for account ${member.userId}`} value={String(member.explicitRole)} disabled={busy} onValueChange={(value) => { const nextRole = Number(value); void action(async () => { await client.organizations.members.updateRole(organization.id, member.userId, nextRole); await reloadMembers(); }); }}>{ROLES.map((item) => <SelectOption key={item.value} value={String(item.value)}>{item.label}</SelectOption>)}</Select></label><button className="button button--secondary" type="button" disabled={busy} onClick={() => { void action(async () => { await client.organizations.members.remove(organization.id, member.userId); await reloadMembers(); }); }}>Remove</button></td> : null}</tr>)}</tbody></table></div><button className="button button--secondary" disabled={busy || page <= 1} onClick={() => setPage((value) => value - 1)}>Previous</button><span>Page {page}</span><button className="button button--secondary" disabled={busy || !hasNext} onClick={() => setPage((value) => value + 1)}>Next</button>
-      {canManage ? <form className="form-stack" onSubmit={addMember}><h3>Add an existing account</h3><label>Account ID <input required inputMode="numeric" value={userId} onChange={(event) => setUserId(event.target.value)} /></label><label>Role <Select value={String(role)} onValueChange={(value) => setRole(Number(value))}>{ROLES.map((item) => <SelectOption key={item.value} value={String(item.value)}>{item.label}</SelectOption>)}</Select></label><button className="button" disabled={busy} type="submit">Add member</button></form> : null}
+    {organization ? <section className="panel"><h2>{organization.name} members</h2><div className="table-wrap"><table className="table"><thead><tr><th>Account</th><th>Role</th>{canManage ? <th>Actions</th> : null}</tr></thead><tbody>{members.map((member) => <tr key={member.userId.toString()}><td>{member.user?.displayPrimary || member.userId.toString()}</td><td>{ROLES.find((item) => item.value === member.effectiveRole)?.label ?? "Member"}</td>{canManage ? <td>{canManageOrganizationRole(organization.role, member.effectiveRole, siteAdministrator) ? <label>Role <Select aria-label={`Role for account ${member.userId}`} value={String(member.explicitRole)} disabled={busy} onValueChange={(value) => { const nextRole = Number(value); void action(async () => { await client.organizations.members.updateRole(organization.id, member.userId, nextRole); await reloadMembers(); }); }}>{grantableRoles.map((item) => <SelectOption key={item.value} value={String(item.value)}>{item.label}</SelectOption>)}</Select></label> : null}{canManageOrganizationRole(organization.role, member.effectiveRole, siteAdministrator) || member.userId === identity.user?.id ? <button className="button button--secondary" type="button" disabled={busy} onClick={() => { void action(async () => { await client.organizations.members.remove(organization.id, member.userId); await reloadMembers(); }); }}>Remove</button> : null}</td> : null}</tr>)}</tbody></table></div><button className="button button--secondary" disabled={busy || page <= 1} onClick={() => setPage((value) => value - 1)}>Previous</button><span>Page {page}</span><button className="button button--secondary" disabled={busy || !hasNext} onClick={() => setPage((value) => value + 1)}>Next</button>
+      {canManage ? <form className="form-stack" onSubmit={addMember}><h3>Add an existing account</h3><label>Account ID <input required inputMode="numeric" value={userId} onChange={(event) => setUserId(event.target.value)} /></label><label>Role <Select value={String(selectedRole)} onValueChange={(value) => setRole(Number(value))}>{grantableRoles.map((item) => <SelectOption key={item.value} value={String(item.value)}>{item.label}</SelectOption>)}</Select></label><button className="button" disabled={busy} type="submit">Add member</button></form> : null}
     </section> : null}
     {canManage ? <section className="panel"><form className="form-stack" onSubmit={createOrganization}><h2>{isSiteAdministrator() ? "Create organization" : "Create child organization"}</h2><label>Name <input required value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} /></label><label>Slug <input required value={organizationSlug} onChange={(event) => setOrganizationSlug(event.target.value)} /></label><label>Initial owner account ID <input required inputMode="numeric" value={ownerId} onChange={(event) => setOwnerId(event.target.value)} /></label>{isSiteAdministrator() ? <label>Parent organization ID (optional) <input inputMode="numeric" value={parentId} onChange={(event) => setParentId(event.target.value)} /></label> : <p>Parent: {organization?.name}</p>}<p>The owner must already have an account. Child owners must belong to their parent organization.</p><button className="button" disabled={busy} type="submit">Create organization</button></form></section> : null}
     {identity.organizationId !== null || isSiteAdministrator() ? <section className="panel"><h2>Index permissions</h2><p>Allow grants an operation; Deny overrides allows. A user rule never creates organization membership.</p><form className="form-stack" onSubmit={(event) => { event.preventDefault(); void action(loadRules); }}><label>Index ID <input required value={indexId} onChange={(event) => { setIndexId(event.target.value); setRules([]); setIndexOrganization(null); setEffective([]); setIndexRevision(0n); }} /></label><button className="button button--secondary" disabled={busy} type="submit">Load permissions</button></form>

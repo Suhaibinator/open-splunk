@@ -164,7 +164,7 @@ func (h *CommonServiceHandler[U]) recordLoginSuccess(ctx context.Context, email 
 
 // LoginUserByEmail executes this step in the common_service backend flow.
 func (h *CommonServiceHandler[U]) LoginUserByEmail(ctx context.Context, email, password string) (*U, string, error) {
-	if !h.emailAuthenticationEnabled() {
+	if h.emailAuthHandler == nil {
 		return nil, "", apperrors.ErrEmailAuthDisabled
 	}
 
@@ -187,7 +187,7 @@ func (h *CommonServiceHandler[U]) LoginUserByEmail(ctx context.Context, email, p
 
 // LoginUserByEmailWithOTP executes this step in the common_service backend flow.
 func (h *CommonServiceHandler[U]) LoginUserByEmailWithOTP(ctx context.Context, email, password, otpCode string) (*U, string, bool, error) {
-	if !h.emailAuthenticationEnabled() {
+	if h.emailAuthHandler == nil {
 		return nil, "", false, apperrors.ErrEmailAuthDisabled
 	}
 
@@ -310,44 +310,39 @@ func (h *CommonServiceHandler[U]) ListOAuthProviders(ctx context.Context) []auth
 
 // AddPasswordAuthentication executes this step in the common_service backend flow.
 func (h *CommonServiceHandler[U]) AddPasswordAuthentication(ctx context.Context, userID uint64, password string) error {
-	if !h.emailAuthenticationEnabled() {
+	if h.emailAuthHandler == nil {
 		return apperrors.ErrEmailAuthDisabled
 	}
 
-	// We need to expose this through the main service handler, not the auth handler
-	// For now, delegate to the email auth handler if available
-	if h.emailAuthHandler != nil {
-		// Get user to determine their OAuth provider for metrics
-		user, err := h.GetUserByID(ctx, common_service_models.UserIdType(userID))
-		provider := "unknown"
-		if err == nil && user != nil {
-			// Try to get auth methods to find the OAuth provider
-			methods, _ := h.GetUserAuthMethods(ctx, userID)
-			if methods != nil && len(methods.OAuthProviders) > 0 {
-				provider = methods.OAuthProviders[0].ProviderSlug
-			}
+	// Get user to determine their OAuth provider for metrics
+	user, err := h.GetUserByID(ctx, common_service_models.UserIdType(userID))
+	provider := "unknown"
+	if err == nil && user != nil {
+		// Try to get auth methods to find the OAuth provider
+		methods, _ := h.GetUserAuthMethods(ctx, userID)
+		if methods != nil && len(methods.OAuthProviders) > 0 {
+			provider = methods.OAuthProviders[0].ProviderSlug
 		}
-
-		err = h.emailAuthHandler.AddPasswordAuthentication(ctx, userID, password)
-
-		// Record metrics
-		if h.metricsHandler != nil {
-			status := "success"
-			if err != nil {
-				status = "failure"
-			}
-			h.metricsHandler.RecordPasswordAddition(provider, status)
-		}
-
-		// Invalidate user cache after successful password addition to ensure
-		// authentication methods list is immediately updated
-		if err == nil && h.authHandler != nil {
-			h.authHandler.InvalidateUserCache(common_service_models.UserIdType(userID))
-		}
-
-		return err
 	}
-	return apperrors.ErrInternalError
+
+	err = h.emailAuthHandler.AddPasswordAuthentication(ctx, userID, password)
+
+	// Record metrics
+	if h.metricsHandler != nil {
+		status := "success"
+		if err != nil {
+			status = "failure"
+		}
+		h.metricsHandler.RecordPasswordAddition(provider, status)
+	}
+
+	// Invalidate user cache after successful password addition to ensure
+	// authentication methods list is immediately updated
+	if err == nil && h.authHandler != nil {
+		h.authHandler.InvalidateUserCache(common_service_models.UserIdType(userID))
+	}
+
+	return err
 }
 
 // GetUserAuthMethods executes this step in the common_service backend flow.
@@ -389,7 +384,7 @@ func (h *CommonServiceHandler[U]) RequireRecentAuthentication(ctx context.Contex
 
 // SetupOTP executes this step in the common_service backend flow.
 func (h *CommonServiceHandler[U]) SetupOTP(ctx context.Context, userID uint64, currentPassword string) (secret, qrCodeURL string, err error) {
-	if !h.emailAuthenticationEnabled() {
+	if h.emailAuthHandler == nil {
 		return "", "", apperrors.ErrEmailAuthDisabled
 	}
 
@@ -455,7 +450,7 @@ func (h *CommonServiceHandler[U]) SetupOTP(ctx context.Context, userID uint64, c
 
 // VerifyOTPSetup executes this step in the common_service backend flow.
 func (h *CommonServiceHandler[U]) VerifyOTPSetup(ctx context.Context, userID uint64, otpCode, currentPassword string) error {
-	if !h.emailAuthenticationEnabled() {
+	if h.emailAuthHandler == nil {
 		return apperrors.ErrEmailAuthDisabled
 	}
 
@@ -530,7 +525,7 @@ func (h *CommonServiceHandler[U]) VerifyOTPSetup(ctx context.Context, userID uin
 
 // DisableOTP executes this step in the common_service backend flow.
 func (h *CommonServiceHandler[U]) DisableOTP(ctx context.Context, userID uint64, currentPassword string) error {
-	if !h.emailAuthenticationEnabled() {
+	if h.emailAuthHandler == nil {
 		return apperrors.ErrEmailAuthDisabled
 	}
 

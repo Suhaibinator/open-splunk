@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Suhaibinator/go-common/pkg/common_persistence"
 	"github.com/Suhaibinator/go-common/pkg/config"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
@@ -204,7 +203,7 @@ func fullCaptureMinIO(t *testing.T, ctx context.Context) *objectstore.Store {
 	useTLS, partBytes := false, int64(5<<20)
 	bucket := fmt.Sprintf("os-real-capture-%d", time.Now().UnixNano())
 	settings := config.Static(&config.Config{MinioEndpoint: endpoint, MinioAccessKey: accessKey, MinioSecretKey: config.NewSecret(secretKey), MinioUseSSL: &useTLS, MinioBucket: bucket, ObjectStorageStreamPartSize: &partBytes})
-	objects, err := common_persistence.NewPrivateObjectStorage(ctx, settings.Persistence(), zap.NewNop())
+	objects, err := objectstore.NewPrivateObjectStorage(ctx, settings.Persistence(), zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -491,7 +491,7 @@ func (h *CommonServiceHandler[U]) AdminCreateUser(ctx context.Context, req *prot
 	if (!passwordMode && req.Password != nil) || (passwordMode && req.GetPassword() == "") || (!inviteMode && req.FrontendOrigin != nil) {
 		return nil, apperrors.ErrInvalidRequest
 	}
-	if (passwordMode || inviteMode) && (!h.emailAuthenticationEnabled() || h.emailAuthHandler == nil) {
+	if (passwordMode || inviteMode) && h.emailAuthHandler == nil {
 		return nil, apperrors.ErrInvalidRequest
 	}
 	if err := requireAccountLifecycleTransaction(ctx); err != nil {
@@ -540,7 +540,7 @@ func (h *CommonServiceHandler[U]) AdminResendUserInvitation(ctx context.Context,
 	if req == nil || req.UserId == 0 {
 		return nil, apperrors.ErrInvalidRequest
 	}
-	if !h.emailAuthenticationEnabled() || h.emailAuthHandler == nil {
+	if h.emailAuthHandler == nil {
 		return nil, apperrors.ErrInvalidRequest
 	}
 	if err := requireAccountLifecycleTransaction(ctx); err != nil {
@@ -566,7 +566,7 @@ func (h *CommonServiceHandler[U]) EmailAcceptInvitation(ctx context.Context, req
 	if req == nil {
 		return nil, apperrors.ErrInvalidRequest
 	}
-	if !h.emailAuthenticationEnabled() || h.emailAuthHandler == nil {
+	if h.emailAuthHandler == nil {
 		return nil, apperrors.ErrInvalidRequest
 	}
 	id, err := h.emailAuthHandler.AcceptAccountInvitation(ctx, req.Token, req.Password)
@@ -607,13 +607,6 @@ func (h *CommonServiceHandler[U]) associateProvisionedUserWithOrganization(ctx c
 			zap.String(logkeys.Fallback, "continue without organization association"))
 	}
 	return nil
-}
-
-func (h *CommonServiceHandler[U]) emailAuthenticationEnabled() bool {
-	if h.runtimeConfig != nil {
-		return h.runtimeConfig().EnableEmailAuth()
-	}
-	return false
 }
 
 // AdminListInferenceProviders lists public provider metadata from the live registry.

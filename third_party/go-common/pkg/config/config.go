@@ -213,9 +213,8 @@ type Config struct {
 	SessionRefreshRevocationGrace *time.Duration `json:"session_refresh_revocation_grace" yaml:"session_refresh_revocation_grace,omitempty" toml:"session_refresh_revocation_grace,omitempty" kms:"group=auth,reload=restart" kms_views:"auth"`
 	// SessionTokenSecret is the secret used for signing session tokens (resolved from KMS)
 	SessionTokenSecret Secret `json:"-" yaml:"-" toml:"-" kms:"secret=session_token_secret,reload=restart" kms_views:"auth"`
-	// AuthCacheTtl is the time-to-live for cached authentication tokens and users.
-	// Zero disables authorization cache reads and admissions; negative values are invalid.
-	// Use pointer to distinguish between "not configured" (nil) and "explicitly disabled" (*0)
+	// AuthCacheTtl is the positive time-to-live for cached authentication tokens.
+	// Use pointer to distinguish an omitted value from an explicit duration.
 	AuthCacheTtl *time.Duration `json:"auth_cache_ttl" yaml:"auth_cache_ttl,omitempty" toml:"auth_cache_ttl,omitempty" kms:"group=auth,reload=hot" kms_views:"auth"`
 	// OTPIssuer is the issuer name displayed in TOTP authenticator apps (e.g., "MyApp" or "MyCompany")
 	// Use pointer to distinguish between "not configured" (nil) and "explicitly empty" (*"")
@@ -223,7 +222,8 @@ type Config struct {
 	// AuthTokenCacheCapacity is the maximum number of tokens to store in the auth cache
 	// Use pointer to distinguish between "not configured" (nil) and "explicitly disabled" (*0)
 	AuthTokenCacheCapacity *uint64 `json:"auth_token_cache_capacity" yaml:"auth_token_cache_capacity,omitempty" toml:"auth_token_cache_capacity,omitempty" kms:"group=auth,reload=hot" kms_views:"auth"`
-	// AuthUserCacheCapacity is the maximum number of users to store in the user cache
+	// AuthUserCacheCapacity is the maximum number of users to store in the user cache.
+	// Zero disables user projection caching without disabling the token cache.
 	// Use pointer to distinguish between "not configured" (nil) and "explicitly disabled" (*0)
 	AuthUserCacheCapacity *uint64 `json:"auth_user_cache_capacity" yaml:"auth_user_cache_capacity,omitempty" toml:"auth_user_cache_capacity,omitempty" kms:"group=auth,reload=hot" kms_views:"auth"`
 	// OrganizationRoleCacheCapacity is the maximum number of user-organization role mappings to store in the cache
@@ -660,12 +660,15 @@ type Config struct {
 	// Module enablement configuration
 	// These flags allow selective enabling/disabling of go-common modules
 
-	// EnableEmailAuth determines whether email-based authentication endpoints are registered
+	// EnableEmailAuth determines whether email/password authentication is available. It is
+	// restart-bound: routes are registered and service operations enabled at startup only.
+	// Existing sessions are unaffected by disabling it; revoke them explicitly if needed.
 	// Use pointer to distinguish between "not configured" (nil) and "explicitly disabled" (*false)
-	EnableEmailAuth *bool `json:"enable_email_auth" yaml:"enable_email_auth,omitempty" toml:"enable_email_auth,omitempty" kms:"group=features,reload=hot" kms_views:"features"`
-	// EnableOAuth determines whether OAuth authentication endpoints are registered
+	EnableEmailAuth *bool `json:"enable_email_auth" yaml:"enable_email_auth,omitempty" toml:"enable_email_auth,omitempty" kms:"group=features,reload=restart" kms_views:"features"`
+	// EnableOAuth determines whether OAuth authentication endpoints are registered. It is
+	// restart-bound: routes are registered at startup only, and existing sessions are unaffected.
 	// Use pointer to distinguish between "not configured" (nil) and "explicitly disabled" (*false)
-	EnableOAuth *bool `json:"enable_oauth" yaml:"enable_oauth,omitempty" toml:"enable_oauth,omitempty" kms:"group=features,reload=hot" kms_views:"features"`
+	EnableOAuth *bool `json:"enable_oauth" yaml:"enable_oauth,omitempty" toml:"enable_oauth,omitempty" kms:"group=features,reload=restart" kms_views:"features"`
 	// EnableContacts determines whether contact form endpoints are registered
 	// Use pointer to distinguish between "not configured" (nil) and "explicitly disabled" (*false)
 	EnableContacts *bool `json:"enable_contacts" yaml:"enable_contacts,omitempty" toml:"enable_contacts,omitempty" kms:"group=features,reload=hot" kms_views:"features"`

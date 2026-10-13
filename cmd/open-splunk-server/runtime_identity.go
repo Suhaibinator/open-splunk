@@ -97,8 +97,13 @@ func newRuntimeIdentity(ctx context.Context, db *control.DB, options options, lo
 	common.MinioPublicBaseURL = ""
 	runtime := &runtimeIdentity{tenantID: options.tenantID, indexes: db}
 	defer func() {
-		if err != nil && runtime.users != nil {
-			_ = runtime.users.Close()
+		if err != nil {
+			if runtime.blobs != nil {
+				_ = runtime.blobs.Close()
+			}
+			if runtime.users != nil {
+				_ = runtime.users.Close()
+			}
 		}
 	}()
 	runtime.users, err = identity.New(ctx, db.GORMDB(), identity.Options{Common: common, GoogleClientID: options.googleClientID, GoogleClientSecret: gcconfig.NewSecret(options.googleClientSecret), GoogleRedirectURLs: []string{origin + "/auth/oauth/callback/"}, Logger: logger, BeforeOrganizationDelete: beforeRuntimeOrganizationDelete})
@@ -108,20 +113,38 @@ func newRuntimeIdentity(ctx context.Context, db *control.DB, options options, lo
 	if err = db.ApplyAdditionalMigration(ctx, "organization-index-authorization-v1", authorization.Schema); err != nil {
 		return nil, fmt.Errorf("apply organization authorization schema: %w", err)
 	}
+	if err = db.ApplyAdditionalMigration(ctx, "organization-index-authorization-v2-granular", authorization.GranularSchema); err != nil {
+		return nil, fmt.Errorf("apply granular authorization schema: %w", err)
+	}
 	runtime.authorization, err = authorization.New(db.SQLDB(), runtime.users, options.tenantID)
 	if err != nil {
 		return nil, err
 	}
 	objectContext, cancelObjects := context.WithTimeout(ctx, startupTimeout)
 	defer cancelObjects()
-	runtime.blobs, err = objectstore.NewContext(objectContext, runtime.users.Persistence())
+	objects, objectErr := objectstore.NewPrivateObjectStorage(objectContext, gcconfig.Static(common).Persistence(), logger)
+	if objectErr != nil {
+		return nil, objectErr
+	}
+	runtime.blobs, err = objectstore.NewContext(objectContext, objects)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, objects.Close())
 	}
 	return runtime, nil
 }
 
 func beforeRuntimeOrganizationDelete(ctx context.Context, tx *gorm.DB, id int64) error {
+	// Child creation shares every ancestor row. Fence the root in a separate
+	// statement before discovering descendants: a child may commit while this
+	// lock waits, and must be included in the following fresh snapshot.
+	var rootID int64
+	if err := tx.WithContext(ctx).Raw("SELECT id FROM gocommon_organizations WHERE id=? FOR UPDATE", id).Scan(&rootID).Error; err != nil {
+		return err
+	}
+	var organizations []int64
+	if err := tx.WithContext(ctx).Raw("SELECT id FROM gocommon_organizations WHERE id=? OR ?=ANY(lineage) ORDER BY COALESCE(cardinality(lineage),0),id FOR UPDATE", id, id).Scan(&organizations).Error; err != nil {
+		return err
+	}
 	var dependent bool
 	// Lineage covers descendants. References are preserved rather than implicitly
 	// deleting indexes, queries or retained results when an organization is removed.
@@ -130,6 +153,8 @@ func beforeRuntimeOrganizationDelete(ctx context.Context, tx *gorm.DB, id int64)
  UNION ALL SELECT 1 FROM app_workspaces WHERE organization_id IN(SELECT id FROM subtree)
  UNION ALL SELECT 1 FROM saved_searches WHERE organization_id IN(SELECT id FROM subtree)
  UNION ALL SELECT 1 FROM dashboards WHERE organization_id IN(SELECT id FROM subtree)
+ UNION ALL SELECT 1 FROM knowledge_objects WHERE organization_id IN(SELECT id FROM subtree)
+ UNION ALL SELECT 1 FROM knowledge_lookup_definitions WHERE organization_id IN(SELECT id FROM subtree)
  UNION ALL SELECT 1 FROM search_capture_sessions WHERE organization_id IN(SELECT id FROM subtree)
  UNION ALL SELECT 1 FROM search_retained_export_reservations WHERE organization_id IN(SELECT id FROM subtree)
  UNION ALL SELECT 1 FROM durable_search_jobs WHERE organization_id IN(SELECT id FROM subtree)

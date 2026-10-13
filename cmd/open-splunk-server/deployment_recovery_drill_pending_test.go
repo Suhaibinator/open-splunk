@@ -179,6 +179,18 @@ func TestDeploymentRecoveryDrillPendingAttemptUsesProductionDurableProjections(t
 func newRecoveryDrillTestObjects(t *testing.T) *recoveryObjects {
 	t.Helper()
 	options := recoveryObjectOptions{Endpoint: os.Getenv("OPEN_SPLUNK_TEST_MINIO_ENDPOINT"), AccessKey: os.Getenv("OPEN_SPLUNK_TEST_MINIO_ACCESS_KEY"), SecretKey: os.Getenv("OPEN_SPLUNK_TEST_MINIO_SECRET_KEY"), Bucket: "os-drill-" + strings.ReplaceAll(uuid.NewString(), "-", ""), UseTLS: false}
+	// Recovery uses the same operator-provisioned versioned-bucket contract as
+	// production. Provision only this test's dedicated bucket before startup.
+	client, err := minio.New(options.Endpoint, &minio.Options{Creds: credentials.NewStaticV4(options.AccessKey, options.SecretKey, ""), Secure: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = client.MakeBucket(t.Context(), options.Bucket, minio.MakeBucketOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err = client.SetBucketVersioning(t.Context(), options.Bucket, minio.BucketVersioningConfiguration{Status: minio.Enabled}); err != nil {
+		t.Fatal(err)
+	}
 	objects, err := options.open(t.Context())
 	if err != nil {
 		t.Fatal(err)

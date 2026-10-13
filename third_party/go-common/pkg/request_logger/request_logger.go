@@ -2,12 +2,10 @@
 package request_logger
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +17,7 @@ import (
 
 	"github.com/Suhaibinator/SRouter/pkg/logkeys"
 	"github.com/Suhaibinator/SRouter/pkg/scontext"
+	"github.com/Suhaibinator/go-common/internal/httpstatus"
 	"github.com/Suhaibinator/go-common/pkg/common_service/common_service_models"
 	appLogger "github.com/Suhaibinator/go-common/pkg/logger"
 	"go.uber.org/zap"
@@ -39,44 +38,6 @@ type RequestLogEntry struct {
 	UserID     string
 	AuthHeader string
 	TraceID    string
-}
-
-// statusRecorder wraps http.ResponseWriter to capture the response status code
-// for request logging. It passes Hijack/Flush through so WebSocket upgrades and
-// streaming responses keep working behind the middleware.
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (sr *statusRecorder) WriteHeader(code int) {
-	sr.status = code
-	sr.ResponseWriter.WriteHeader(code)
-}
-
-func (sr *statusRecorder) Write(b []byte) (int, error) {
-	if sr.status == 0 {
-		sr.status = http.StatusOK
-	}
-	return sr.ResponseWriter.Write(b)
-}
-
-// Unwrap supports http.ResponseController-based access to the underlying writer.
-func (sr *statusRecorder) Unwrap() http.ResponseWriter {
-	return sr.ResponseWriter
-}
-
-func (sr *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	if hj, ok := sr.ResponseWriter.(http.Hijacker); ok {
-		return hj.Hijack()
-	}
-	return nil, nil, http.ErrNotSupported
-}
-
-func (sr *statusRecorder) Flush() {
-	if f, ok := sr.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
 }
 
 // requestLogChannelCapacity bounds the buffer feeding the single log-writer
@@ -312,12 +273,12 @@ func (rl *RequestLogger) LoggingMiddleware(next http.Handler) http.Handler {
 		startTime := time.Now().UTC()
 
 		// Call the next handler, recording the response status code
-		recorder := &statusRecorder{ResponseWriter: w}
+		recorder := &httpstatus.Recorder{ResponseWriter: w}
 		next.ServeHTTP(recorder, r)
 
 		// A handler that never wrote anything (e.g. hijacked the connection)
 		// leaves the status at zero; net/http would have sent 200 OK.
-		statusCode := recorder.status
+		statusCode := recorder.Status
 		if statusCode == 0 {
 			statusCode = http.StatusOK
 		}

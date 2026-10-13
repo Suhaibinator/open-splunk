@@ -1305,9 +1305,8 @@ func (c *Config) ValidateConfig() error {
 	if c.AuthTokenCacheCapacity != nil && *c.AuthTokenCacheCapacity == 0 {
 		return fmt.Errorf("auth token cache capacity cannot be zero")
 	}
-	if c.AuthUserCacheCapacity != nil && *c.AuthUserCacheCapacity == 0 {
-		return fmt.Errorf("auth user cache capacity cannot be zero")
-	}
+	// Zero user-cache capacity is supported by the auth consumer: session
+	// identities remain cached while application user projections stay fresh.
 	if c.OrganizationRoleCacheCapacity != nil && *c.OrganizationRoleCacheCapacity == 0 {
 		return fmt.Errorf("organization role cache capacity cannot be zero")
 	}

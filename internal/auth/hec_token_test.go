@@ -151,7 +151,7 @@ func TestAuthenticateHECClassifiesSQLiteWriterContentionAsTemporary(t *testing.T
 		_, _ = blocker.ExecContext(context.Background(), `ROLLBACK`)
 		_ = blocker.Close()
 	})
-	if _, err := blocker.ExecContext(ctx, `BEGIN; SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(), 5716000640707417153))`); err != nil {
+	if _, err := blocker.ExecContext(ctx, `BEGIN; SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema() || ':15:ingestion-credentials',0))`); err != nil {
 		t.Fatalf("reserve HEC authentication writer: %v", err)
 	}
 	contender, err := database.Conn(ctx)
@@ -291,7 +291,7 @@ func TestAuthenticateHECWithCurrentUseDoesNotWaitForWriter(t *testing.T) {
 		_, _ = blocker.ExecContext(context.Background(), `ROLLBACK`)
 		_ = blocker.Close()
 	})
-	if _, err := blocker.ExecContext(ctx, `BEGIN; SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(), 5716000640707417153))`); err != nil {
+	if _, err := blocker.ExecContext(ctx, `BEGIN; SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema() || ':15:ingestion-credentials',0))`); err != nil {
 		t.Fatalf("reserve HEC authentication writer: %v", err)
 	}
 	contender, err := database.Conn(ctx)

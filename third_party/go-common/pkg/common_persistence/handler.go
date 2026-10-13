@@ -18,6 +18,7 @@ import (
 	appLogger "github.com/Suhaibinator/go-common/pkg/logger"
 	"github.com/Suhaibinator/go-common/pkg/proto_models"
 	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gorm.io/driver/postgres"
@@ -875,12 +876,103 @@ func (h *CommonPersistenceHandler[U]) ensureChatAgenticIndexes(db *gorm.DB) erro
 
 // initMinioClient executes its operation in the persistence flow between service handlers and the database layer.
 func (h *CommonPersistenceHandler[U]) initMinioClient(v config.PersistenceView) error {
-	storage := h.objectStorage()
-	if err := storage.initMinioClient(v); err != nil {
-		return err
+	// Config shape is validated before any bucket or policy call: the public
+	// bucket is given an anonymous read policy below, so pointing it at the
+	// private bucket would silently publish every private object to the world.
+	if v.MinioPublicBucket() != "" && v.MinioPublicBucket() == v.MinioBucket() {
+		return appLogger.WithErrorFields(
+			errors.New("minio_public_bucket must differ from minio_bucket: the private bucket must never carry an anonymous read policy"),
+			zap.String(logkeys.Operation, "initialize_minio_client"),
+			zap.String(logkeys.Bucket, v.MinioBucket()))
 	}
-	h.minioClient, h.minioBucket, h.minioPublicBucket = storage.minioClient, storage.minioBucket, storage.minioPublicBucket
-	h.minioAccessKey, h.minioSecretKey = storage.minioAccessKey, storage.minioSecretKey
+
+	// Initialize MinIO client
+	accessKey, secretKey := v.MinioAccessKey(), v.MinioSecretKey()
+	minioClient, err := minio.New(v.MinioEndpoint(), &minio.Options{
+		Creds:  credentials.NewStaticV4(accessKey, secretKey.StringValue(), ""),
+		Secure: v.MinioUseSSL(),
+	})
+	if err != nil {
+		return appLogger.WithErrorFields(fmt.Errorf("failed to initialize MinIO client: %w", err),
+			zap.String(logkeys.Operation, "initialize_minio_client"),
+			zap.String(logkeys.Stage, "create_client"),
+			zap.String(appLogger.KeyEndpoint, v.MinioEndpoint()))
+	}
+
+	// Use the handler's context for initialization operations with timeout
+	ctx, cancel := context.WithTimeout(h.ctx, 30*time.Second)
+	defer cancel()
+	logger := appLogger.For(ctx, h.logger, loggerName)
+
+	// Check if bucket exists
+	exists, err := minioClient.BucketExists(ctx, v.MinioBucket())
+	if err != nil {
+		return appLogger.WithErrorFields(fmt.Errorf("failed to check if bucket exists: %w", err),
+			zap.String(logkeys.Operation, "initialize_minio_client"),
+			zap.String(logkeys.Stage, "check_private_bucket"),
+			zap.String(logkeys.Bucket, v.MinioBucket()))
+	}
+
+	// Create bucket if it doesn't exist
+	if !exists {
+		err = minioClient.MakeBucket(ctx, v.MinioBucket(), minio.MakeBucketOptions{})
+		if err != nil {
+			return appLogger.WithErrorFields(fmt.Errorf("failed to create bucket: %w", err),
+				zap.String(logkeys.Operation, "initialize_minio_client"),
+				zap.String(logkeys.Stage, "create_private_bucket"),
+				zap.String(logkeys.Bucket, v.MinioBucket()))
+		}
+		logger.Info("Created MinIO bucket",
+			zap.String(logkeys.Operation, "initialize_minio_client"),
+			zap.String(logkeys.Bucket, v.MinioBucket()))
+	}
+
+	// Public storage is optional. When configured, the public bucket is created on
+	// demand and carries an anonymous read-only policy so vetted public objects can
+	// be fetched (and CDN-cached) without a presigned URL.
+	if v.MinioPublicBucket() != "" {
+		publicExists, err := minioClient.BucketExists(ctx, v.MinioPublicBucket())
+		if err != nil {
+			return appLogger.WithErrorFields(fmt.Errorf("failed to check if public bucket exists: %w", err),
+				zap.String(logkeys.Operation, "initialize_minio_client"),
+				zap.String(logkeys.Stage, "check_public_bucket"),
+				zap.String(logkeys.Bucket, v.MinioPublicBucket()))
+		}
+
+		if !publicExists {
+			err = minioClient.MakeBucket(ctx, v.MinioPublicBucket(), minio.MakeBucketOptions{})
+			if err != nil {
+				return appLogger.WithErrorFields(fmt.Errorf("failed to create public bucket: %w", err),
+					zap.String(logkeys.Operation, "initialize_minio_client"),
+					zap.String(logkeys.Stage, "create_public_bucket"),
+					zap.String(logkeys.Bucket, v.MinioPublicBucket()))
+			}
+			logger.Info("Created MinIO public bucket",
+				zap.String(logkeys.Operation, "initialize_minio_client"),
+				zap.String(logkeys.Bucket, v.MinioPublicBucket()))
+		}
+
+		// Anonymous GetObject only. Listing stays denied so the salted-hash object
+		// names remain unguessable. Setting the policy is idempotent.
+		if err := minioClient.SetBucketPolicy(ctx, v.MinioPublicBucket(), anonymousReadOnlyBucketPolicy(v.MinioPublicBucket())); err != nil {
+			return appLogger.WithErrorFields(fmt.Errorf("failed to set public bucket policy: %w", err),
+				zap.String(logkeys.Operation, "initialize_minio_client"),
+				zap.String(logkeys.Stage, "set_public_bucket_policy"),
+				zap.String(logkeys.Bucket, v.MinioPublicBucket()))
+		}
+		if ce := logger.Check(zap.DebugLevel, "Reconciled anonymous read-only policy for MinIO public bucket"); ce != nil {
+			ce.Write(
+				zap.String(logkeys.Operation, "initialize_minio_client"),
+				zap.String(logkeys.Bucket, v.MinioPublicBucket()),
+			)
+		}
+	}
+
+	h.minioClient = minioClient
+	h.minioBucket = v.MinioBucket()
+	h.minioPublicBucket = v.MinioPublicBucket()
+	h.minioAccessKey = accessKey
+	h.minioSecretKey = secretKey
 	return nil
 }
 

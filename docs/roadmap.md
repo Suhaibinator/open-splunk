@@ -3,31 +3,6 @@
 This list contains only unfinished product work; completed phases, estimates,
 checkpoints, and migration history are not retained here.
 
-## PostgreSQL integration release blocker
-
-The control-plane conversion still uses `pgmeta.WriteLock` and
-`os_control_write_lock`/`a000_control_write_lock` statement triggers. Replace
-these with locks and constraints scoped to each invariant before releasing the
-PostgreSQL/GoCommon integration. The shared-library transaction-start hook and
-its OpenSplunk binding have been removed; this does not complete the refactor.
-
-- Inventory quota/capacity admission, idempotency receipts, visibility allocation,
-  collector leases, catalog revisions/publication fences and audit/accounting.
-- Use row locks, atomic conditional updates, unique/transition constraints or
-  resource-keyed advisory locks, with a consistent cross-repository lock order.
-- Keep lifecycle callbacks, audit records and business mutations in one ambient
-  transaction. Remove global writer triggers, including on GoCommon tables.
-- Prove unrelated writes proceed concurrently and read-only identity traffic
-  takes no global lock. Exercise conflicting user/organization deletion,
-  membership and policy changes alongside domain mutations; deadlock aborts
-  must not substitute for a defined locking protocol.
-- Keep bootstrap/recovery exclusion separate and preserve ClickHouse physical
-  identities, visibility authority and the separate cutover preservation task.
-
-Tracking: [OpenSplunk #132](https://github.com/Suhaibinator/open-splunk/issues/132).
-
-Review decision: [GoCommon transaction hook review](https://github.com/Suhaibinator/go-common/pull/13#issuecomment-6135863917).
-
 ## Stable v1 contract
 
 - Define protobuf/HTTP/gRPC, SPL, storage, cursor, backup, collector-state, and

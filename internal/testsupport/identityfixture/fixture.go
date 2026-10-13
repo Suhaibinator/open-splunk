@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -130,6 +131,9 @@ func New(t testing.TB, options Options) *Fixture {
 	if err := fixture.Database.ApplyAdditionalMigration(ctx, "organization-index-authorization-v1", authorization.Schema); err != nil {
 		t.Fatal(err)
 	}
+	if err := fixture.Database.ApplyAdditionalMigration(ctx, "organization-index-authorization-v2-granular", authorization.GranularSchema); err != nil {
+		t.Fatal(err)
+	}
 	fixture.Authorization, err = authorization.New(fixture.Database.SQLDB(), fixture.Runtime, options.PhysicalTenant)
 	if err != nil {
 		t.Fatal(err)
@@ -143,8 +147,13 @@ func New(t testing.TB, options Options) *Fixture {
 	if err := client.SetBucketVersioning(ctx, fixture.MinioBucket, minio.BucketVersioningConfiguration{Status: minio.Enabled}); err != nil {
 		t.Fatal(err)
 	}
-	fixture.Blobs, err = objectstore.NewContext(ctx, fixture.Runtime.Persistence())
+	objects, err := objectstore.NewPrivateObjectStorage(ctx, gcconfig.Static(cfg).Persistence(), zap.NewNop())
 	if err != nil {
+		t.Fatal("initialize dedicated fixture object client:", err)
+	}
+	fixture.Blobs, err = objectstore.NewContext(ctx, objects)
+	if err != nil {
+		_ = objects.Close()
 		t.Fatal("initialize private versioned fixture objects:", err)
 	}
 	t.Cleanup(func() {
@@ -212,8 +221,13 @@ func New(t testing.TB, options Options) *Fixture {
 
 func (fixture *Fixture) Close() error {
 	fixture.closeOnce.Do(func() {
+		if fixture.Blobs != nil {
+			fixture.closeError = fixture.Blobs.Close()
+		}
 		if fixture.Runtime != nil {
-			fixture.closeError = fixture.Runtime.Close()
+			if err := fixture.Runtime.Close(); err != nil {
+				fixture.closeError = errors.Join(fixture.closeError, err)
+			}
 		}
 		if fixture.ownedDatabase {
 			if err := fixture.Database.Close(); fixture.closeError == nil {

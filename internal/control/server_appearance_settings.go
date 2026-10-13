@@ -103,7 +103,7 @@ func (store *ServerAppearanceSettingsStore) Update(
 		Palette:            string(palette),
 		UpdatedAtUnixMicro: now.UnixMicro(),
 	}
-	err = pgmeta.Transaction(store.db.orm.WithContext(ctx), func(tx *gorm.DB) error {
+	err = pgmeta.TransactionLocked(store.db.orm.WithContext(ctx), "settings:server_appearance_settings", func(tx *gorm.DB) error {
 		var current serverAppearanceSettingsRecord
 		readErr := tx.First(&current, "singleton_id = ?", 1).Error
 		switch {

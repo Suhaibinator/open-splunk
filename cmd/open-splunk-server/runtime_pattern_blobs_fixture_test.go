@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Suhaibinator/go-common/pkg/common_persistence"
 	gcconfig "github.com/Suhaibinator/go-common/pkg/config"
 	"github.com/Suhaibinator/open-splunk/internal/objectstore"
 	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
@@ -24,7 +23,7 @@ func runtimePatternPrivateBlobs(t *testing.T) searchartifacts.BlobStore {
 	}
 	bucket := fmt.Sprintf("os-pattern-runtime-%d", time.Now().UnixNano())
 	source := gcconfig.Static(&gcconfig.Config{MinioEndpoint: endpoint, MinioAccessKey: key, MinioSecretKey: gcconfig.NewSecret(secret), MinioUseSSL: new(false), MinioBucket: bucket, ObjectStorageStreamPartSize: new(int64(5 << 20))})
-	raw, err := common_persistence.NewPrivateObjectStorage(t.Context(), source.Persistence(), zap.NewNop())
+	raw, err := objectstore.NewPrivateObjectStorage(t.Context(), source.Persistence(), zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -121,7 +121,7 @@ func (store *Store) admit(ctx context.Context, access searchjobs.AccessScope, jo
 	if intent != nil && (intent.TenantID != access.TenantID || intent.Route != "/api/search/exports/create") {
 		return requestidempotency.ErrUnavailable
 	}
-	err = pgmeta.Transaction(store.db.WithContext(ctx), func(tx *gorm.DB) error {
+	err = pgmeta.TransactionLocked(store.db.WithContext(ctx), "exports:"+row.TenantID, func(tx *gorm.DB) error {
 		// Terminal metadata may leave the durable catalog after an additional
 		// seven-day tombstone interval. Its independent receipt remains authoritative
 		// and returns unavailable, never admitting the request again.
@@ -177,7 +177,7 @@ func (store *Store) Update(ctx context.Context, retained exportjobs.DurableJob) 
 	if err != nil {
 		return err
 	}
-	return pgmeta.Transaction(store.db.WithContext(ctx), func(tx *gorm.DB) error {
+	return pgmeta.TransactionLocked(store.db.WithContext(ctx), "exports:"+row.TenantID, func(tx *gorm.DB) error {
 		var previous record
 		if err := tx.Where("tenant_id = ? AND owner_id = ? AND export_id = ?", row.TenantID, row.OwnerID, row.ExportID).Where("organization_id = ?", row.OrganizationID).Take(&previous).Error; err != nil {
 			return err

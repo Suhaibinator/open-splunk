@@ -198,7 +198,7 @@ func (repository *SQLRepository) Create(ctx context.Context, input alerts.Create
 		CreatedAt: input.CreatedAt.UTC().UnixMicro(), UpdatedAt: input.CreatedAt.UTC().UnixMicro(),
 	}
 	var created alerts.CreateResult
-	err = pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
+	err = pgmeta.TransactionLocked(repository.db.WithContext(ctx), "alerts:"+repository.tenantID, func(tx *gorm.DB) error {
 		if input.ClientRequestID != "" {
 			replayed, found, replayErr := repository.findCreateReplay(tx, input.OwnerID, input.ClientRequestID, input.RequestFingerprint)
 			if replayErr != nil {
@@ -341,7 +341,7 @@ func (repository *SQLRepository) Update(ctx context.Context, input alerts.Update
 		"endpoint_generation": input.EndpointGeneration, "webhook_hostname": input.WebhookHostname, "updated_at_unix_micro": input.UpdatedAt.UTC().UnixMicro(),
 	}
 	var updated alerts.Alert
-	err = pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
+	err = pgmeta.TransactionLocked(repository.db.WithContext(ctx), "alerts:"+repository.tenantID, func(tx *gorm.DB) error {
 		var current alertSQLRecord
 		if err := scopedAlertQuery(tx, "").Where("tenant_id = ? AND TRUE AND alert_id = ?", repository.tenantID, input.ID).Take(&current).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -391,7 +391,7 @@ func (repository *SQLRepository) SetState(ctx context.Context, input alerts.SetS
 		return alerts.Alert{}, fmt.Errorf("%w: expected version exceeds storage bounds", alerts.ErrInvalidArgument)
 	}
 	var updated alerts.Alert
-	err := pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
+	err := pgmeta.TransactionLocked(repository.db.WithContext(ctx), "alerts:"+repository.tenantID, func(tx *gorm.DB) error {
 		var record alertSQLRecord
 		if err := scopedAlertQuery(tx, "").Where("tenant_id = ? AND TRUE AND alert_id = ?", repository.tenantID, input.ID).Take(&record).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -441,18 +441,24 @@ func (repository *SQLRepository) SetState(ctx context.Context, input alerts.SetS
 }
 
 func (repository *SQLRepository) RotateSecret(ctx context.Context, input alerts.RotateSecretRecord) (alerts.Alert, error) {
-	result := scopedAlertQuery(repository.db.WithContext(ctx).Model(&alertSQLRecord{}), "").
-		Where("tenant_id = ? AND TRUE AND alert_id = ? AND version = ? AND secret_generation = ?", repository.tenantID, input.ID, input.ExpectedVersion, input.ExpectedGeneration).
-		Updates(map[string]any{
-			"version": gorm.Expr("version + 1"), "secret_generation": input.SecretGeneration.Generation,
-			"secret_ciphertext": input.SecretGeneration.Encrypted.Ciphertext, "secret_nonce": input.SecretGeneration.Encrypted.Nonce,
-			"secret_rotated_at_unix_micro": input.SecretGeneration.CreatedAt.UTC().UnixMicro(), "updated_at_unix_micro": input.UpdatedAt.UTC().UnixMicro(),
-		})
-	if result.Error != nil {
-		return alerts.Alert{}, mapSQLError(ctx, "rotate alert secret", result.Error)
-	}
-	if result.RowsAffected != 1 {
-		return alerts.Alert{}, repository.lookupConflict(ctx, input.OwnerID, input.ID)
+	err := pgmeta.TransactionLocked(repository.db.WithContext(ctx), "alerts:"+repository.tenantID, func(tx *gorm.DB) error {
+		result := scopedAlertQuery(tx.Model(&alertSQLRecord{}), "").
+			Where("tenant_id = ? AND TRUE AND alert_id = ? AND version = ? AND secret_generation = ?", repository.tenantID, input.ID, input.ExpectedVersion, input.ExpectedGeneration).
+			Updates(map[string]any{
+				"version": gorm.Expr("version + 1"), "secret_generation": input.SecretGeneration.Generation,
+				"secret_ciphertext": input.SecretGeneration.Encrypted.Ciphertext, "secret_nonce": input.SecretGeneration.Encrypted.Nonce,
+				"secret_rotated_at_unix_micro": input.SecretGeneration.CreatedAt.UTC().UnixMicro(), "updated_at_unix_micro": input.UpdatedAt.UTC().UnixMicro(),
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return repository.notFoundOrConflict(tx, input.OwnerID, input.ID)
+		}
+		return nil
+	})
+	if err != nil {
+		return alerts.Alert{}, mapSQLError(ctx, "rotate alert secret", err)
 	}
 	return repository.GetSecretBearing(ctx, input.OwnerID, input.ID)
 }
@@ -466,7 +472,7 @@ func (repository *SQLRepository) AuthorizeDelivery(ctx context.Context, input al
 		return "", fmt.Errorf("%w: secret generation exceeds storage bounds", alerts.ErrInvalidArgument)
 	}
 	var authorization alerts.DeliveryAuthorization
-	err = pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
+	err = pgmeta.TransactionLocked(repository.db.WithContext(ctx), "alerts:"+repository.tenantID, func(tx *gorm.DB) error {
 		var record alertSQLRecord
 		if err := scopedAlertQuery(tx.Select("secret_generation"), "").Where("tenant_id = ? AND TRUE AND alert_id = ?", repository.tenantID, input.AlertID).Take(&record).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -516,7 +522,7 @@ func (repository *SQLRepository) DeleteIfIdle(ctx context.Context, input alerts.
 	if conversionErr != nil {
 		return fmt.Errorf("%w: expected version exceeds storage bounds", alerts.ErrInvalidArgument)
 	}
-	err := pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
+	err := pgmeta.TransactionLocked(repository.db.WithContext(ctx), "alerts:"+repository.tenantID, func(tx *gorm.DB) error {
 		var record alertSQLRecord
 		if err := scopedAlertQuery(tx.Select("version"), "").Where("tenant_id = ? AND TRUE AND alert_id = ?", repository.tenantID, input.ID).Take(&record).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -551,7 +557,9 @@ func (repository *SQLRepository) ClaimDue(ctx context.Context, now time.Time, li
 		limit = alerts.MaximumAlertsPerOwner
 	}
 	claimed := make([]alerts.RunSnapshot, 0, limit)
-	err := pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
+	err := pgmeta.TransactionLocked(repository.db.WithContext(ctx), "alerts:"+repository.tenantID, func(tx *gorm.DB) error {
+		claimed = claimed[:0] // Retry output belongs only to the transaction that commits.
+
 		var records []alertSQLRecord
 		if err := tx.Where("tenant_id = ? AND enabled = 1 AND next_run_at_unix_micro <= ?", repository.tenantID, now.UTC().UnixMicro()).Order("next_run_at_unix_micro, alert_id").Limit(limit).Find(&records).Error; err != nil {
 			return err
@@ -667,7 +675,9 @@ func (repository *SQLRepository) ClaimRunNow(ctx context.Context, ownerID, alert
 	now = now.UTC()
 	var snapshot alerts.RunSnapshot
 	active := false
-	err := pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
+	err := pgmeta.TransactionLocked(repository.db.WithContext(ctx), "alerts:"+repository.tenantID, func(tx *gorm.DB) error {
+		active = false
+
 		var record alertSQLRecord
 		if err := scopedAlertQuery(tx, "").Where("tenant_id = ? AND TRUE AND alert_id = ?", repository.tenantID, alertID).Take(&record).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -759,7 +769,7 @@ func (repository *SQLRepository) RecordOverlap(ctx context.Context, summary aler
 	if summary.AlertID == "" || summary.AlertRunID == "" || summary.ScheduledAt.IsZero() {
 		return fmt.Errorf("%w: overlap run identity and schedule are required", alerts.ErrInvalidArgument)
 	}
-	err := pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
+	err := pgmeta.TransactionLocked(repository.db.WithContext(ctx), "alerts:"+repository.tenantID, func(tx *gorm.DB) error {
 		var alert alertSQLRecord
 		if err := tx.Where("tenant_id = ? AND alert_id = ?", repository.tenantID, summary.AlertID).Take(&alert).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -813,32 +823,34 @@ func (repository *SQLRepository) AttachSearchJob(ctx context.Context, alertID, r
 	if jobID == "" || len(jobID) > 256 || expiresAt.IsZero() {
 		return fmt.Errorf("%w: retained search job identity and expiry are required", alerts.ErrInvalidArgument)
 	}
-	result := repository.db.WithContext(ctx).Model(&alertRunSQLRecord{}).
-		Where("alert_id = ? AND alert_run_id = ? AND outcome = ? AND search_job_id IS NULL", alertID, runID, persistedRunOutcomeActive).
-		Updates(map[string]any{"search_job_id": jobID, "search_job_expires_at_unix_micro": expiresAt.UTC().UnixMicro()})
-	if result.Error != nil {
-		return mapSQLError(ctx, "attach alert search job", result.Error)
-	}
-	if result.RowsAffected == 1 {
-		return nil
-	}
-	// A transport or driver can report an ambiguous commit after the update
-	// reached PostgreSQL. Make an exact retry idempotent without allowing a caller
-	// to replace the immutable job identity or expiry.
-	var current alertRunSQLRecord
-	if err := repository.db.WithContext(ctx).
-		Where("alert_id = ? AND alert_run_id = ?", alertID, runID).
-		Take(&current).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return alerts.ErrNotFound
+	err := pgmeta.TransactionLocked(repository.db.WithContext(ctx), "alerts:"+repository.tenantID, func(tx *gorm.DB) error {
+		result := tx.Model(&alertRunSQLRecord{}).
+			Where("alert_id = ? AND alert_run_id = ? AND outcome = ? AND search_job_id IS NULL", alertID, runID, persistedRunOutcomeActive).
+			Updates(map[string]any{"search_job_id": jobID, "search_job_expires_at_unix_micro": expiresAt.UTC().UnixMicro()})
+		if result.Error != nil {
+			return result.Error
 		}
-		return mapSQLError(ctx, "verify attached alert search job", err)
-	}
-	if stringValue(current.SearchJobID) == jobID &&
-		databaseTimesEqual(optionalTimeValue(current.SearchJobExpiresAt), expiresAt) {
-		return nil
-	}
-	return alerts.ErrVersionConflict
+		if result.RowsAffected == 1 {
+			return nil
+		}
+		// A transport or driver can report an ambiguous commit after the update
+		// reached PostgreSQL. Make an exact retry idempotent without allowing a caller
+		// to replace the immutable job identity or expiry.
+		var current alertRunSQLRecord
+		if err := tx.Where("alert_id = ? AND alert_run_id = ?", alertID, runID).
+			Take(&current).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return alerts.ErrNotFound
+			}
+			return err
+		}
+		if stringValue(current.SearchJobID) == jobID &&
+			databaseTimesEqual(optionalTimeValue(current.SearchJobExpiresAt), expiresAt) {
+			return nil
+		}
+		return alerts.ErrVersionConflict
+	})
+	return mapSQLError(ctx, "attach alert search job", err)
 }
 
 func (repository *SQLRepository) CompleteRun(ctx context.Context, summary alerts.RunSummary) error {
@@ -877,7 +889,7 @@ func (repository *SQLRepository) CompleteRun(ctx context.Context, summary alerts
 	} else if summary.Delivery.Category != "" && summary.Delivery.Category != alerts.DeliverySucceeded {
 		updates["failure_category"] = string(summary.Delivery.Category)
 	}
-	err = pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
+	err = pgmeta.TransactionLocked(repository.db.WithContext(ctx), "alerts:"+repository.tenantID, func(tx *gorm.DB) error {
 		var current alertRunSQLRecord
 		if err := tx.
 			Where("alert_id = ? AND alert_run_id = ?", summary.AlertID, summary.AlertRunID).
@@ -943,7 +955,7 @@ func databaseTimesEqual(actual, expected time.Time) bool {
 
 func (repository *SQLRepository) InterruptUnfinished(ctx context.Context, now time.Time) (int64, error) {
 	var interrupted int64
-	err := pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error {
+	err := pgmeta.TransactionLocked(repository.db.WithContext(ctx), "alerts:"+repository.tenantID, func(tx *gorm.DB) error {
 		var activeRuns []alertRunSQLRecord
 		if err := tx.Model(&alertRunSQLRecord{}).
 			Where("outcome = ? AND alert_id IN (SELECT alert_id FROM alerts WHERE tenant_id = ?)", persistedRunOutcomeActive, repository.tenantID).
@@ -1004,10 +1016,6 @@ func (repository *SQLRepository) notFoundOrConflict(tx *gorm.DB, _ string, id st
 		return alerts.ErrNotFound
 	}
 	return alerts.ErrVersionConflict
-}
-
-func (repository *SQLRepository) lookupConflict(ctx context.Context, ownerID, id string) error {
-	return mapSQLError(ctx, "read alert conflict", pgmeta.Transaction(repository.db.WithContext(ctx), func(tx *gorm.DB) error { return repository.notFoundOrConflict(tx, ownerID, id) }))
 }
 
 func alertFromSQL(record alertSQLRecord) (alerts.Alert, error) {

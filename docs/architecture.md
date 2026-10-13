@@ -142,11 +142,42 @@ large downloads stream through an authenticated gateway. PostgreSQL stores
 metadata and manifests, while MinIO stores full captures and exports; bounded
 browser previews are explicitly distinguished from complete captured results.
 
+Specialized artifact storage belongs to OpenSplunk's `internal/objectstore`
+adapter over MinIO. It verifies the operator-provisioned private bucket's
+versioning and pins reads and deletion to exact object versions and ETags.
+GoCommon's attachment lifecycle and storage contracts remain unchanged.
 
-The PostgreSQL/GoCommon integration remains blocked on the
-[granular locking refactor](roadmap.md#postgresql-integration-release-blocker).
-GoCommon borrows the application pool without a transaction-start interceptor.
-OpenSplunk still owns the global metadata writer lock and statement triggers;
-these must be replaced with invariant-scoped locking/constraints and a consistent
-order for identity lifecycle callbacks before release. Existing serial execution
-checks do not establish those concurrency guarantees.
+
+GoCommon borrows the application PostgreSQL pool without a transaction interceptor
+or application writer triggers on its tables. Ordinary transactions acquire no
+writer lock. Read snapshots use repeatable read; mutation repositories explicitly
+lock the authority they inspect before changing it.
+
+Catalog publication protects the instance-wide index revision, physical-record
+limit and selector dependencies. Ingestion acquires a shared catalog fence,
+credential authority, then the visibility/pending/quota boundary. Capture and
+export reservations share the retained-storage budget. These locks protect real
+instance-wide invariants and never span query execution, object uploads or reads.
+Saved content and history use owner keys; collector revisions, alert/export
+budgets and audit/receipt accounting use tenant keys; index policies use index
+keys. Shared catalog fences allow independent saved-content owners to write
+concurrently while excluding incompatible catalog deletion.
+
+Business mutations append audit and retry receipts in their ambient transaction.
+Database-only transaction closures retry serialization/deadlock aborts at most
+four times. Unique constraints, conditional version updates and existing native
+transition/append-only guards remain authoritative. Fixed-scope statement
+guards take their invariant before tuple locks; owner/tenant row guards back the
+repositories' explicit prelocks. The migration removes the
+legacy universal statement triggers without rewriting historical migrations.
+
+Policy mutations lock users, organizations and membership rows before their index
+policy key, then reread ownership and revision before publication. Native user
+lifecycle callbacks keep GoCommon's guarded ancestor/last-Owner primitives.
+Organization deletion locks its root first, then reads and locks the current
+subtree before checking dependent application resources. Resource creation locks
+and validates its live owning organization.
+Callbacks require an ambient native transaction and never acquire a universal
+application lock. Child provisioning locks live ancestors before native
+hierarchy insertion. Bootstrap, migration,
+maintenance ownership and coordinated recovery exclusion remain separate.

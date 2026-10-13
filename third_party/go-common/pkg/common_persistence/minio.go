@@ -52,7 +52,6 @@ var ErrObjectPreconditionFailed = errors.New("object precondition failed: conten
 // re-requests a seekable object issues, so every read stays conditional.
 func objectPreconditionGetOptions(precondition ObjectPrecondition) (minio.GetObjectOptions, error) {
 	opts := minio.GetObjectOptions{}
-	opts.VersionID = precondition.VersionID
 	if precondition.MatchETag != "" {
 		if err := opts.SetMatchETag(precondition.MatchETag); err != nil {
 			return opts, err
@@ -117,7 +116,7 @@ func (r *preconditionedObjectReader) LastReadError() error {
 }
 
 // GetPresignedURL executes its operation in the persistence flow between service handlers and the database layer.
-func (h *minioObjectStorage) GetPresignedURL(ctx context.Context, objectName string, expiry time.Duration) (string, error) {
+func (h *CommonPersistenceHandler[U]) GetPresignedURL(ctx context.Context, objectName string, expiry time.Duration) (string, error) {
 
 	// Generate the presigned URL
 	presignedURL, err := h.minioClient.PresignedGetObject(ctx, h.minioBucket, objectName, expiry, nil)
@@ -133,7 +132,7 @@ func (h *minioObjectStorage) GetPresignedURL(ctx context.Context, objectName str
 }
 
 // GeneratePresignedPostURL executes its operation in the persistence flow between service handlers and the database layer.
-func (h *minioObjectStorage) GeneratePresignedPostURL(ctx context.Context, objectName string, expiresAt time.Time, minSize, maxSize int64, contentType string) (url string, formData map[string]string, err error) {
+func (h *CommonPersistenceHandler[U]) GeneratePresignedPostURL(ctx context.Context, objectName string, expiresAt time.Time, minSize, maxSize int64, contentType string) (url string, formData map[string]string, err error) {
 	// Create a new post policy
 	policy := minio.NewPostPolicy()
 
@@ -173,7 +172,7 @@ func (h *minioObjectStorage) GeneratePresignedPostURL(ctx context.Context, objec
 // When precondition pins an ETag, the first request is issued eagerly so a
 // mismatch fails here rather than from the caller's first Read, and later
 // range re-requests (after Seek) carry the same If-Match header.
-func (h *minioObjectStorage) GetObjectReader(ctx context.Context, objectName string, precondition ObjectPrecondition) (io.ReadCloser, error) {
+func (h *CommonPersistenceHandler[U]) GetObjectReader(ctx context.Context, objectName string, precondition ObjectPrecondition) (io.ReadCloser, error) {
 	opts, err := objectPreconditionGetOptions(precondition)
 	if err != nil {
 		return nil, appLogger.WithErrorFields(err,
@@ -222,12 +221,12 @@ func (h *minioObjectStorage) GetObjectReader(ctx context.Context, objectName str
 }
 
 // PutObjectBytes executes its operation in the persistence flow between service handlers and the database layer.
-func (h *minioObjectStorage) PutObjectBytes(ctx context.Context, objectName string, data []byte, contentType string) error {
+func (h *CommonPersistenceHandler[U]) PutObjectBytes(ctx context.Context, objectName string, data []byte, contentType string) error {
 	return h.putObject(ctx, "put_object_bytes", objectName, bytes.NewReader(data), int64(len(data)), PutObjectOptions{ContentType: contentType}, 0)
 }
 
 // PutObjectStream streams reader into the private bucket; see the interface for the contract.
-func (h *minioObjectStorage) PutObjectStream(ctx context.Context, objectName string, reader io.Reader, size int64, opts PutObjectOptions) error {
+func (h *CommonPersistenceHandler[U]) PutObjectStream(ctx context.Context, objectName string, reader io.Reader, size int64, opts PutObjectOptions) error {
 	// Leading slashes are trimmed for the check because a path-cleaning server may drop them.
 	if key := strings.TrimLeft(objectName, "/"); strings.HasPrefix(key, TempObjectPrefix) || strings.HasPrefix(key, VerifiedObjectPrefix) {
 		return fmt.Errorf("put object stream %q: %w", objectName, ErrReservedObjectName)
@@ -287,50 +286,30 @@ func (c *cappedReader) Read(p []byte) (int, error) {
 	return n, io.EOF
 }
 
-func (h *minioObjectStorage) putObject(ctx context.Context, operation, objectName string, reader io.Reader, size int64, opts PutObjectOptions, partSize int64) error {
-	_, err := h.putObjectResult(ctx, operation, objectName, reader, size, opts, partSize)
-	return err
-}
-
-func (h *minioObjectStorage) putObjectResult(ctx context.Context, operation, objectName string, reader io.Reader, size int64, opts PutObjectOptions, partSize int64) (*MinioObjectInfo, error) {
-	var metadata map[string]string
-	if len(opts.UserMetadata) > 0 {
-		metadata = make(map[string]string, len(opts.UserMetadata))
-	}
-	for name, value := range opts.UserMetadata {
-		metadata[name] = value
-	}
+func (h *CommonPersistenceHandler[U]) putObject(ctx context.Context, operation, objectName string, reader io.Reader, size int64, opts PutObjectOptions, partSize int64) error {
 	minioOpts := minio.PutObjectOptions{
-		UserMetadata:       metadata,
 		ContentType:        opts.ContentType,
 		ContentEncoding:    opts.ContentEncoding,
 		ContentDisposition: opts.ContentDisposition,
 		CacheControl:       opts.CacheControl,
 		PartSize:           uint64(partSize),
 	}
-	if opts.NoOverwrite {
-		minioOpts.SetMatchETagExcept("*")
-	}
-	info, err := h.minioClient.PutObject(ctx, h.minioBucket, objectName, reader, size, minioOpts)
-	if err != nil {
-		if opts.NoOverwrite && minio.ToErrorResponse(err).Code == "PreconditionFailed" {
-			return nil, ErrPrivateObjectAlreadyExists
-		}
-		return nil, appLogger.WithErrorFields(err,
+	if _, err := h.minioClient.PutObject(ctx, h.minioBucket, objectName, reader, size, minioOpts); err != nil {
+		return appLogger.WithErrorFields(err,
 			zap.String(logkeys.Operation, operation),
 			zap.String(logkeys.Bucket, h.minioBucket),
 			zap.String(appLogger.KeyObjectName, objectName),
 			zap.Int64(appLogger.KeySize, size),
 			zap.String(appLogger.KeyContentType, opts.ContentType))
 	}
-	return &MinioObjectInfo{Size: info.Size, ETag: info.ETag, VersionID: info.VersionID, UserMetadata: metadata, ContentType: opts.ContentType, CacheControl: opts.CacheControl, ContentDisposition: opts.ContentDisposition, ContentEncoding: opts.ContentEncoding}, nil
+	return nil
 }
 
 // CopyObject executes its operation in the persistence flow between service handlers and the database layer.
 // source pins the copy to the observed version of the source object via
 // x-amz-copy-source-if-match; the server rejects the copy atomically when the
 // object has changed, so a stale observation can never be promoted.
-func (h *minioObjectStorage) CopyObject(ctx context.Context, sourceObjectName, destinationObjectName string, source ObjectPrecondition) error {
+func (h *CommonPersistenceHandler[U]) CopyObject(ctx context.Context, sourceObjectName, destinationObjectName string, source ObjectPrecondition) error {
 
 	// Create source info
 	srcOpts := minio.CopySrcOptions{
@@ -383,7 +362,7 @@ func (h *minioObjectStorage) CopyObject(ctx context.Context, sourceObjectName, d
 //   - sourceObjectName: string naming the object in the private bucket.
 //   - destinationObjectName: string naming the object to write in the public bucket.
 //   - source: ObjectPrecondition pinning the private source to its observed version.
-func (h *minioObjectStorage) CopyObjectToPublicBucket(ctx context.Context, sourceObjectName, destinationObjectName string, source ObjectPrecondition) error {
+func (h *CommonPersistenceHandler[U]) CopyObjectToPublicBucket(ctx context.Context, sourceObjectName, destinationObjectName string, source ObjectPrecondition) error {
 	if !h.PublicStorageEnabled() {
 		return ErrPublicStorageDisabled
 	}
@@ -431,11 +410,11 @@ func (h *minioObjectStorage) CopyObjectToPublicBucket(ctx context.Context, sourc
 }
 
 // RemoveObject executes its operation in the persistence flow between service handlers and the database layer.
-func (h *minioObjectStorage) RemoveObject(ctx context.Context, objectName string) error {
+func (h *CommonPersistenceHandler[U]) RemoveObject(ctx context.Context, objectName string) error {
 	return h.removeObjectFromBucket(ctx, h.minioBucket, objectName)
 }
 
-func (h *minioObjectStorage) removeObjectFromBucket(ctx context.Context, bucket, objectName string) error {
+func (h *CommonPersistenceHandler[U]) removeObjectFromBucket(ctx context.Context, bucket, objectName string) error {
 
 	// Delete the object
 	err := h.minioClient.RemoveObject(ctx, bucket, objectName, minio.RemoveObjectOptions{})
@@ -456,7 +435,7 @@ func (h *minioObjectStorage) removeObjectFromBucket(ctx context.Context, bucket,
 }
 
 // ObjectExists executes its operation in the persistence flow between service handlers and the database layer.
-func (h *minioObjectStorage) ObjectExists(ctx context.Context, objectName string) (bool, error) {
+func (h *CommonPersistenceHandler[U]) ObjectExists(ctx context.Context, objectName string) (bool, error) {
 
 	// Use StatObject to check if the object exists
 	_, err := h.minioClient.StatObject(ctx, h.minioBucket, objectName, minio.StatObjectOptions{})
@@ -478,14 +457,14 @@ func (h *minioObjectStorage) ObjectExists(ctx context.Context, objectName string
 // PublicStorageEnabled reports whether a public bucket is configured. When it is
 // false, every public-bucket operation fails with ErrPublicStorageDisabled and
 // callers must keep objects private.
-func (h *minioObjectStorage) PublicStorageEnabled() bool {
+func (h *CommonPersistenceHandler[U]) PublicStorageEnabled() bool {
 	return h.minioPublicBucket != ""
 }
 
 // ObjectExistsInPublicBucket checks whether an object exists in the public bucket.
 // It mirrors ObjectExists but never inspects the private bucket, so the two
 // buckets stay independent namespaces for deduplication purposes.
-func (h *minioObjectStorage) ObjectExistsInPublicBucket(ctx context.Context, objectName string) (bool, error) {
+func (h *CommonPersistenceHandler[U]) ObjectExistsInPublicBucket(ctx context.Context, objectName string) (bool, error) {
 	if !h.PublicStorageEnabled() {
 		return false, ErrPublicStorageDisabled
 	}
@@ -508,13 +487,10 @@ func (h *minioObjectStorage) ObjectExistsInPublicBucket(ctx context.Context, obj
 }
 
 // GetObjectInfo executes its operation in the persistence flow between service handlers and the database layer.
-func (h *minioObjectStorage) GetObjectInfo(ctx context.Context, objectName string) (*MinioObjectInfo, error) {
+func (h *CommonPersistenceHandler[U]) GetObjectInfo(ctx context.Context, objectName string) (*MinioObjectInfo, error) {
 	// Get object statistics
 	stat, err := h.minioClient.StatObject(ctx, h.minioBucket, objectName, minio.StatObjectOptions{})
 	if err != nil {
-		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
-			return nil, ErrPrivateObjectNotFound
-		}
 		return nil, appLogger.WithErrorFields(err,
 			zap.String(logkeys.Operation, "get_object_info"),
 			zap.String(logkeys.Bucket, h.minioBucket),
@@ -522,16 +498,7 @@ func (h *minioObjectStorage) GetObjectInfo(ctx context.Context, objectName strin
 	}
 
 	// Convert MinIO ObjectInfo to our MinioObjectInfo struct
-	var metadata map[string]string
-	if len(stat.UserMetadata) > 0 {
-		metadata = make(map[string]string, len(stat.UserMetadata))
-	}
-	for name, value := range stat.UserMetadata {
-		metadata[name] = value
-	}
 	return &MinioObjectInfo{
-		VersionID:          stat.VersionID,
-		UserMetadata:       metadata,
 		Size:               stat.Size,
 		ContentType:        stat.ContentType,
 		LastModified:       stat.LastModified,
@@ -552,7 +519,7 @@ type DualHashes struct {
 }
 
 // CalculateDualHashesStream executes its operation in the persistence flow between service handlers and the database layer.
-func (h *minioObjectStorage) CalculateDualHashesStream(ctx context.Context, objectName string, precondition ObjectPrecondition) (*DualHashes, error) {
+func (h *CommonPersistenceHandler[U]) CalculateDualHashesStream(ctx context.Context, objectName string, precondition ObjectPrecondition) (*DualHashes, error) {
 	// Get object reader
 	reader, err := h.GetObjectReader(ctx, objectName, precondition)
 	if err != nil {

@@ -187,6 +187,10 @@ func (store *Store) appendWithDatabase(
 	definition SuccessfulEvent,
 ) (Event, error) {
 
+	if err := pgmeta.Lock(database, "audit:audit:"+tenantID); err != nil {
+		return Event{}, err
+	}
+
 	state, err := ensureTenantState(database, tenantID)
 	if err != nil {
 		return Event{}, mapStoreError(ctx, "prepare audit tenant state", err)

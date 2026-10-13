@@ -101,7 +101,7 @@ func (store *ServerSearchSettingsStore) Update(
 	if err != nil {
 		return ServerSearchSettings{}, err
 	}
-	err = pgmeta.Transaction(store.db.orm.WithContext(ctx), func(tx *gorm.DB) error {
+	err = pgmeta.TransactionLocked(store.db.orm.WithContext(ctx), "settings:server_search_settings", func(tx *gorm.DB) error {
 		var current serverSearchSettingsRecord
 		readErr := tx.First(&current, "singleton_id = ?", 1).Error
 		switch {

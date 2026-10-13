@@ -114,7 +114,8 @@ type CommonServiceHandler[U common_service_models.UserLike] struct {
 	// emailClient handles email sending
 	emailClient *email_client.EmailClient
 
-	// emailAuthHandler handles email-based authentication flows
+	// emailAuthHandler handles email-based authentication flows. It is nil when
+	// EnableEmailAuth was off at construction, which disables those flows.
 	emailAuthHandler email.EmailAuthHandlerInterface[U]
 
 	// frontendOrigins derives trusted origins once per immutable generation.

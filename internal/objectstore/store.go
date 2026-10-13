@@ -1,4 +1,4 @@
-// Package objectstore adapts GoCommon's low-level private object storage.
+// Package objectstore owns OpenSplunk's dedicated private artifact storage.
 // It deliberately does not register or publish GoCommon attachments.
 package objectstore
 
@@ -9,15 +9,14 @@ import (
 	"io"
 	"strings"
 
-	"github.com/Suhaibinator/go-common/pkg/common_persistence"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/searchartifacts"
 )
 
 type PrivateObjects interface {
-	PutObjectStreamVersion(context.Context, string, io.Reader, int64, common_persistence.PutObjectOptions) (*common_persistence.MinioObjectInfo, error)
-	GetObjectReader(context.Context, string, common_persistence.ObjectPrecondition) (io.ReadCloser, error)
-	GetObjectInfo(context.Context, string) (*common_persistence.MinioObjectInfo, error)
+	PutObjectStreamVersion(context.Context, string, io.Reader, int64, PutObjectOptions) (*MinioObjectInfo, error)
+	GetObjectReader(context.Context, string, ObjectPrecondition) (io.ReadCloser, error)
+	GetObjectInfo(context.Context, string) (*MinioObjectInfo, error)
 	RemoveObjectVersion(context.Context, string, string) error
 	CheckPrivateObjectVersioning(context.Context) error
 	EnsurePrivateUploadLifecycle(context.Context, string) error
@@ -38,7 +37,7 @@ func NewContext(ctx context.Context, objects PrivateObjects) (*Store, error) {
 		return nil, fmt.Errorf("verify private artifact bucket versioning: %w", err)
 	}
 	lifecycleErr := objects.EnsurePrivateUploadLifecycle(ctx, "open-splunk/")
-	if lifecycleErr != nil && !errors.Is(lifecycleErr, common_persistence.ErrPrivateLifecycleUnsupported) {
+	if lifecycleErr != nil && !errors.Is(lifecycleErr, ErrPrivateLifecycleUnsupported) {
 		return nil, fmt.Errorf("configure incomplete-upload lifecycle: %w", lifecycleErr)
 	}
 	return &Store{objects: objects, lifecycleConfigured: lifecycleErr == nil}, nil
@@ -52,8 +51,8 @@ func (store *Store) Put(ctx context.Context, key string, reader io.Reader, size 
 	if !validKey(key) || reader == nil || size < -1 {
 		return searchartifacts.BlobIdentity{}, searchartifacts.ErrInvalid
 	}
-	info, err := store.objects.PutObjectStreamVersion(ctx, key, reader, size, common_persistence.PutObjectOptions{ContentType: "application/octet-stream", CacheControl: "private, no-store", NoOverwrite: true, UserMetadata: map[string]string{"opensplunk-key": key}})
-	if errors.Is(err, common_persistence.ErrPrivateObjectAlreadyExists) {
+	info, err := store.objects.PutObjectStreamVersion(ctx, key, reader, size, PutObjectOptions{ContentType: "application/octet-stream", CacheControl: "private, no-store", NoOverwrite: true, UserMetadata: map[string]string{"opensplunk-key": key}})
+	if errors.Is(err, ErrPrivateObjectAlreadyExists) {
 		return searchartifacts.BlobIdentity{}, searchartifacts.ErrConflict
 	}
 	if err != nil {
@@ -69,7 +68,7 @@ func (store *Store) Open(ctx context.Context, identity searchartifacts.BlobIdent
 	if !validKey(identity.Key) || identity.ETag == "" || identity.Bytes < 0 || identity.Version == "" || identity.Version == "null" {
 		return nil, searchartifacts.ErrInvalid
 	}
-	return store.objects.GetObjectReader(ctx, identity.Key, common_persistence.ObjectPrecondition{MatchETag: identity.ETag, VersionID: identity.Version})
+	return store.objects.GetObjectReader(ctx, identity.Key, ObjectPrecondition{MatchETag: identity.ETag, VersionID: identity.Version})
 }
 
 func (store *Store) Delete(ctx context.Context, identity searchartifacts.BlobIdentity) error {
@@ -83,7 +82,7 @@ func (store *Store) Delete(ctx context.Context, identity searchartifacts.BlobIde
 		// A durable pending key was recorded before its create-only PUT. Crash
 		// recovery resolves that owned key once, then deletes the exact version.
 		info, err := store.objects.GetObjectInfo(ctx, identity.Key)
-		if errors.Is(err, common_persistence.ErrPrivateObjectNotFound) {
+		if errors.Is(err, ErrPrivateObjectNotFound) {
 			return nil
 		}
 		if err != nil {
@@ -112,7 +111,7 @@ func (store *Store) Current(ctx context.Context, key string) (searchartifacts.Bl
 		return searchartifacts.BlobIdentity{}, searchartifacts.ErrInvalid
 	}
 	info, err := store.objects.GetObjectInfo(ctx, key)
-	if errors.Is(err, common_persistence.ErrPrivateObjectNotFound) {
+	if errors.Is(err, ErrPrivateObjectNotFound) {
 		return searchartifacts.BlobIdentity{}, searchartifacts.ErrNotFound
 	}
 	if err != nil {
@@ -129,3 +128,12 @@ var _ searchartifacts.BlobStore = (*Store)(nil)
 // PrivateUploadLifecycleConfigured reports an optional S3 backend capability.
 // Exact pending-key multipart cleanup remains authoritative on MinIO.
 func (store *Store) PrivateUploadLifecycleConfigured() bool { return store.lifecycleConfigured }
+
+// Close releases the application-owned client's idle connections. Individual
+// streaming readers remain owned and closed by their request or recovery lease.
+func (store *Store) Close() error {
+	if closer, ok := store.objects.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}

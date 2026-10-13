@@ -47,10 +47,9 @@ func runtimeUserDeletionPreservesNativeOwnership(t *testing.T, runtime *Runtime,
 	siteCtx := scontext.WithUser[sm.UserIdType](t.Context(), &sm.User{ID: users[0].ID, UserType: users[0].UserType})
 	siteCtx = scontext.WithUserID[sm.UserIdType, sm.User](siteCtx, users[0].ID)
 	handler := runtime.service.GetOrganizationHandler()
-	creator := handler.(organization.InitialMembershipCreator)
 	create := func(slug string, parent *int64, owner uint64) int64 {
 		org, err := identityNativeTransaction(runtime, siteCtx, func(ctx context.Context) (*organization.OrganizationResponse, error) {
-			return creator.CreateOrganizationWithInitialMemberships(ctx, &sm.Organization{Name: slug, Slug: slug, ParentOrganizationID: parent}, []organization.InitialMembership{{UserID: owner, Role: pb.OrganizationRole_ORGANIZATION_ROLE_OWNER_TIER_10}})
+			return runtime.CreateOrganizationWithInitialMemberships(ctx, &sm.Organization{Name: slug, Slug: slug, ParentOrganizationID: parent}, []InitialMembership{{UserID: owner, Role: pb.OrganizationRole_ORGANIZATION_ROLE_OWNER_TIER_10}})
 		})
 		if err != nil {
 			t.Fatal(err)

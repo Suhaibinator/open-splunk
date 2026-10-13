@@ -545,7 +545,7 @@ func (h *AdminHandler[U]) CreateUser(ctx context.Context, req *proto_models.Admi
 	}
 
 	// Enforce admin tier hierarchy: user type must be strictly lower than creator.
-	if !h.canPromoteToUserType(adminUserType, req.UserType) {
+	if h.permissionHandler.CompareAdminTiers(adminUserType, req.UserType) <= 0 {
 		return nil, contextualAdminWarn(errors.ErrInsufficientPermissions, nil,
 			zap.String(logkeys.Stage, "authorize_create_user_type"),
 			zap.Uint64(appLogger.KeyAdminUserID, uint64(adminUserID)),

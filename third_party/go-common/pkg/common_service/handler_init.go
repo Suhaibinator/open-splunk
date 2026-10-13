@@ -53,7 +53,6 @@ type handlerOptions[U common_service_models.UserLike] struct {
 	notificationWorkerCount          *int
 	notificationFanoutWorkersEnabled *bool
 	organizationCallbacks            *ports.OrganizationCallbackConfig[U]
-	organizationOptions              []organization.HandlerOption
 	chatPermissionCallbacks          *ports.ChatPermissionCallbackConfig[U]
 	notificationApprovers            func(context.Context, uint64) ([]uint64, error)
 	notificationApproverPage         func(context.Context, uint64, uint64, int) ([]uint64, error)
@@ -73,13 +72,6 @@ type HandlerOption[U common_service_models.UserLike] func(*handlerOptions[U])
 func WithOrganizationCallbacks[U common_service_models.UserLike](callbacks *ports.OrganizationCallbackConfig[U]) HandlerOption[U] {
 	return func(options *handlerOptions[U]) {
 		options.organizationCallbacks = callbacks
-	}
-}
-
-// WithOrganizationOptions installs construction-time membership and creation policies.
-func WithOrganizationOptions[U common_service_models.UserLike](options ...organization.HandlerOption) HandlerOption[U] {
-	return func(settings *handlerOptions[U]) {
-		settings.organizationOptions = append(settings.organizationOptions, options...)
 	}
 }
 
@@ -219,7 +211,7 @@ func NewCommonServiceHandler[U common_service_models.UserLike](
 	}
 	// Organization and personal-workspace lifecycle services must exist before
 	// auth/admin handlers capture the internally coordinated user callbacks.
-	if err := handler.initializeOrganizationHandler(logger, cfg, settings.organizationOptions...); err != nil {
+	if err := handler.initializeOrganizationHandler(logger, cfg); err != nil {
 		return nil, fmt.Errorf("failed to initialize organization handler: %w", err)
 	}
 	if err := handler.initializePersonalWorkspaceLifecycle(view); err != nil {
@@ -525,20 +517,24 @@ func (h *CommonServiceHandler[U]) initializeAuthHandlers(
 		return current
 	}
 
-	// Initialize the EmailAuthHandler
-	emailAuthHandler, err := email.NewEmailAuthHandler(
-		context.Background(),
-		logger,
-		func() email.RuntimeConfigView { return cfg() },
-		emailClient,
-		h.commonPersistenceHandler,
-		h.userCallbacks,
-		tokenService,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create email auth handler: %w", err)
+	// EnableEmailAuth is restart-bound: when it is off at startup the email auth
+	// handler is never constructed, and every email credential operation reports
+	// ErrEmailAuthDisabled because emailAuthHandler is nil.
+	if view.EnableEmailAuth() {
+		emailAuthHandler, err := email.NewEmailAuthHandler(
+			context.Background(),
+			logger,
+			func() email.RuntimeConfigView { return cfg() },
+			emailClient,
+			h.commonPersistenceHandler,
+			h.userCallbacks,
+			tokenService,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to create email auth handler: %w", err)
+		}
+		h.emailAuthHandler = emailAuthHandler
 	}
-	h.emailAuthHandler = emailAuthHandler
 
 	// Keep the phone handler available so SMS can enable after startup.
 	var smsService sms_client.SMSService = sms_client.CreateReloadingSMSClient(func() config.SmsView { return cfg() }, logger)
@@ -621,7 +617,6 @@ func (h *CommonServiceHandler[U]) initializeAdminHandler(logger *zap.Logger, inf
 func (h *CommonServiceHandler[U]) initializeOrganizationHandler(
 	logger *zap.Logger,
 	cfg config.ServiceProvider,
-	options ...organization.HandlerOption,
 ) error {
 	organizationHandler, err := organization.NewOrganizationHandler(
 		h.commonPersistenceHandler,
@@ -631,7 +626,6 @@ func (h *CommonServiceHandler[U]) initializeOrganizationHandler(
 		func() organization.PolicyView { return cfg() },
 		h.organizationCallbacks,
 		logger,
-		options...,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create organization handler: %w", err)

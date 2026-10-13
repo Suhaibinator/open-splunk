@@ -12,6 +12,7 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
+	"github.com/Suhaibinator/open-splunk/internal/pgmeta"
 	"github.com/Suhaibinator/open-splunk/internal/resourcepolicy"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -133,7 +134,7 @@ func (store *Store) Prune(ctx context.Context, scope AccessScope) (deleted int64
 }
 
 // Delete removes one entry without disclosing cross-scope existence.
-func (store *Store) Delete(ctx context.Context, scope AccessScope, searchJobID string) error {
+func (store *Store) Delete(ctx context.Context, scope AccessScope, searchJobID string) (returnedErr error) {
 	if err := validateContext(ctx); err != nil {
 		return err
 	}
@@ -145,7 +146,26 @@ func (store *Store) Delete(ctx context.Context, scope AccessScope, searchJobID s
 	if err := validateText("search job ID", searchJobID, maximumSearchJobIDBytes, false); err != nil {
 		return err
 	}
-	result := applyHistoryScope(store.orm.WithContext(ctx), scope).
+	tx := pgmeta.Begin(store.orm.WithContext(ctx))
+	if tx.Error != nil {
+		return mapContextError(ctx, "begin search-history deletion", tx.Error)
+	}
+	defer finishGORMTx(tx, &returnedErr)
+	var identity historyRecord
+	read := applyHistoryScope(tx, scope).Select("search_job_id", "tenant_id", "owner_id").Where("search_job_id = ?", searchJobID).Take(&identity)
+	if errors.Is(read.Error, gorm.ErrRecordNotFound) {
+		return control.ErrNotFound
+	}
+	if read.Error != nil {
+		return mapContextError(ctx, "read search-history deletion owner", read.Error)
+	}
+	if err := lockHistoryOwners(tx, []historyRecord{identity}); err != nil {
+		return mapContextError(ctx, "lock search-history deletion owner", err)
+	}
+	if err := lockHistoryJobs(tx, []historyRecord{identity}); err != nil {
+		return mapContextError(ctx, "lock search-history deletion job", err)
+	}
+	result := applyHistoryScope(tx, scope).
 		Where("search_job_id = ?", searchJobID).
 		Delete(&historyRecord{})
 	if result.Error != nil {
@@ -157,12 +177,15 @@ func (store *Store) Delete(ctx context.Context, scope AccessScope, searchJobID s
 	if result.RowsAffected != 1 {
 		return errors.New("delete search-history entry: database changed an unexpected number of rows")
 	}
+	if err := tx.Commit().Error; err != nil {
+		return mapContextError(ctx, "commit search-history deletion", err)
+	}
 	return nil
 }
 
 // Clear deletes every entry matching an owner-scoped filter and returns the
 // exact affected row count. Confirmation policy belongs to the HTTP adapter.
-func (store *Store) Clear(ctx context.Context, scope AccessScope, filter Filter) (uint64, error) {
+func (store *Store) Clear(ctx context.Context, scope AccessScope, filter Filter) (deleted uint64, returnedErr error) {
 	if err := validateContext(ctx); err != nil {
 		return 0, err
 	}
@@ -170,14 +193,82 @@ func (store *Store) Clear(ctx context.Context, scope AccessScope, filter Filter)
 	if err != nil {
 		return 0, err
 	}
-	result := applyHistoryFilter(store.orm.WithContext(ctx), normalized).Delete(&historyRecord{})
-	if result.Error != nil {
-		return 0, mapContextError(ctx, "clear search history", result.Error)
+	tx := pgmeta.Begin(store.orm.WithContext(ctx))
+	if tx.Error != nil {
+		return 0, mapContextError(ctx, "begin search-history clear", tx.Error)
 	}
-	if result.RowsAffected < 0 {
+	defer finishGORMTx(tx, &returnedErr)
+	// Site administrators can clear multiple creators. Discover only owner
+	// identities, acquire them in stable order, then keep that owner set fixed.
+	var owners []historyRecord
+	read := applyHistoryFilter(tx.Model(&historyRecord{}), normalized).Select("tenant_id", "owner_id").Distinct().Find(&owners)
+	if read.Error != nil {
+		return 0, mapContextError(ctx, "select search-history clear owners", read.Error)
+	}
+	if err := lockHistoryOwners(tx, owners); err != nil {
+		return 0, mapContextError(ctx, "lock search-history clear owners", err)
+	}
+	var affected int64
+	for _, owner := range owners {
+		for {
+			var candidates []historyRecord
+			selection := applyHistoryFilter(tx.Model(&historyRecord{}), normalized).
+				Where("tenant_id = ? AND owner_id = ?", owner.TenantID, owner.OwnerID).
+				Select("search_job_id").Order("search_job_id").Limit(retentionPruneBatchSize).Find(&candidates)
+			if selection.Error != nil {
+				return 0, mapContextError(ctx, "select search-history clear jobs", selection.Error)
+			}
+			if len(candidates) == 0 {
+				break
+			}
+			if err := lockHistoryJobs(tx, candidates); err != nil {
+				return 0, mapContextError(ctx, "lock search-history clear jobs", err)
+			}
+			ids := make([]string, len(candidates))
+			for index, candidate := range candidates {
+				ids[index] = candidate.SearchJobID
+			}
+			result := applyHistoryFilter(tx, normalized).Where("search_job_id IN ?", ids).Delete(&historyRecord{})
+			if result.Error != nil {
+				return 0, mapContextError(ctx, "clear search history", result.Error)
+			}
+			if result.RowsAffected <= 0 || result.RowsAffected > int64(len(candidates)) {
+				return 0, errors.New("clear search history: database changed an unexpected number of rows")
+			}
+			affected += result.RowsAffected
+		}
+	}
+	if affected < 0 {
 		return 0, errors.New("clear search history: database returned a negative row count")
 	}
-	return uint64(result.RowsAffected), nil
+	if err := tx.Commit().Error; err != nil {
+		return 0, mapContextError(ctx, "commit search-history clear", err)
+	}
+	return uint64(affected), nil
+}
+
+// The owner boundary precedes every history row/counter mutation. A row trigger
+// alone cannot establish that order because PostgreSQL locks an UPDATE/DELETE
+// target before executing its BEFORE ROW triggers.
+func lockHistoryOwners(tx *gorm.DB, records []historyRecord) error {
+	keys := make([]string, 0, len(records))
+	seen := make(map[string]struct{}, len(records))
+	for _, record := range records {
+		key := "search-history:" + record.TenantID + ":" + record.OwnerID
+		if _, exists := seen[key]; !exists {
+			keys = append(keys, key)
+			seen[key] = struct{}{}
+		}
+	}
+	return pgmeta.Lock(tx, keys...)
+}
+
+func lockHistoryJobs(tx *gorm.DB, records []historyRecord) error {
+	keys := make([]string, len(records))
+	for index, record := range records {
+		keys[index] = "search-history-job:" + record.SearchJobID
+	}
+	return pgmeta.Lock(tx, keys...)
 }
 
 func historyEntryFromRecord(record historyRecord) (*opensplunk.SearchHistoryEntry, error) {

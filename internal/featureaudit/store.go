@@ -130,7 +130,7 @@ func (store *Store) Append(ctx context.Context, event featureops.Event) (Record,
 	}
 	defer func() { store.appendPermit <- struct{}{} }()
 
-	tx, err := pgmeta.BeginSQL(ctx, store.database, nil)
+	tx, err := pgmeta.BeginSQLLocked(ctx, store.database, "audit:feature:"+store.tenantID)
 	if err != nil {
 		return Record{}, fmt.Errorf("begin feature audit append: %w", err)
 	}
