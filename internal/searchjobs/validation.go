@@ -125,6 +125,15 @@ func (manager *Manager) Validate(ctx context.Context, request ValidateRequest) (
 		return invalidValidationResult(err)
 	}
 
+	if preparation.FullPlan() == nil {
+		if suffixErr := plan.ValidateRuntimeWildcardSuffix(parsed, scope); suffixErr != nil {
+			if contextErr := manager.operationContextError(ctx); contextErr != nil {
+				return ValidationResult{}, contextErr
+			}
+			return invalidValidationResult(suffixErr)
+		}
+	}
+
 	analysis, err := plan.Analyze(logical)
 	if contextErr := manager.operationContextError(ctx); contextErr != nil {
 		return ValidationResult{}, contextErr

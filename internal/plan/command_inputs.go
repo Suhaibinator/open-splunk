@@ -260,6 +260,18 @@ func positiveIndexReferences(
 					return references
 				}
 			}
+		case *spl.ConvertCommand:
+			if command == nil {
+				return references
+			}
+			for _, clause := range command.Clauses {
+				if clause.Function == spl.ConvertFunctionNone {
+					continue
+				}
+				if clause.Output == "index" || (spl.MatchConvertFieldGlob(clause.Input, "index") && !ConvertFieldExcluded(command, "index")) {
+					return references
+				}
+			}
 		case *spl.RexCommand:
 			compiled := rexPatterns[command]
 			for _, capture := range compiled.Captures {

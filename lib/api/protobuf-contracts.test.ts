@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { BinaryReader } from "@bufbuild/protobuf/wire";
 
+import { Timestamp } from "@/gen/ts/google/protobuf/timestamp";
 import { WebhookAlertAction } from "@/gen/ts/open_splunk/alert";
 import { DiagnosticSeverity, SharingScope } from "@/gen/ts/open_splunk/common";
 import {
@@ -37,6 +38,7 @@ import {
   ValidateKnowledgeObjectResponse,
 } from "@/gen/ts/open_splunk/knowledge_api";
 import { SearchJob } from "@/gen/ts/open_splunk/search";
+import { TypedValue } from "@/gen/ts/open_splunk/value";
 
 interface FieldExtractionWireContract {
   name: "regex" | "json";
@@ -730,4 +732,35 @@ test("generated knowledge mutation outcome authority pins canonical wire", () =>
   const second = KnowledgeMutationOutcomeRecord.encode(message).finish();
   assert.deepEqual(first, second);
   assert.deepEqual(first, expected);
+});
+
+test("generated protobuf JSON preserves canonical timestamp fractions and parent Dates", () => {
+  for (const [seconds, nanos, json] of [
+    [0n, 0, "1970-01-01T00:00:00Z"],
+    [-1n, 123456789, "1969-12-31T23:59:59.123456789Z"],
+    [0n, 123000000, "1970-01-01T00:00:00.123Z"],
+  ] as const) {
+    const timestamp = Timestamp.fromPartial({ seconds, nanos });
+    assert.equal(Timestamp.toJSON(timestamp), json);
+    assert.deepEqual(Timestamp.fromJSON(json), timestamp);
+    assert.deepEqual(Timestamp.decode(Timestamp.encode(timestamp).finish()), timestamp);
+  }
+  const date = new Date("2026-10-14T12:34:56.789Z");
+  const job = SearchJob.fromPartial({ searchJobId: "json-date", createdAt: date });
+  const json = SearchJob.toJSON(job) as Record<string, unknown>;
+  assert.equal(json.createdAt, date.toISOString());
+  assert.equal(SearchJob.fromJSON(json).createdAt?.valueOf(), date.valueOf());
+  assert.equal(SearchJob.decode(SearchJob.encode(job).finish()).createdAt?.valueOf(), date.valueOf());
+});
+
+test("generated protobuf JSON represents non-finite doubles without converting them to null", () => {
+  for (const [value, representation] of [[Infinity, "Infinity"], [-Infinity, "-Infinity"], [NaN, "NaN"]] as const) {
+    const message = TypedValue.fromPartial({ kind: { $case: "doubleValue", value } });
+    const json = TypedValue.toJSON(message);
+    assert.deepEqual(json, { doubleValue: representation });
+    assert.deepEqual(JSON.parse(JSON.stringify(json)), { doubleValue: representation });
+    const decoded = TypedValue.fromJSON(json);
+    assert.equal(decoded.kind?.$case, "doubleValue");
+    assert.ok(Object.is(decoded.kind?.value, value));
+  }
 });

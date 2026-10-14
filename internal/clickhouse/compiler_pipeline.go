@@ -434,6 +434,14 @@ func (c Compiler) compileWithFinalizerContext(
 			relation = enriched
 			args = prependArguments(prefixArgs, args)
 			state = nextState
+		case *plan.Convert:
+			enriched, nextState, convertArgs, compileErr := compileConvert(relation, args, operator, state, aliasSequence)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			relation = enriched
+			args = convertArgs
+			state = nextState
 		case *plan.FillNull:
 			enriched, nextState, prefixArgs, compileErr := compileFillNull(
 				relation,

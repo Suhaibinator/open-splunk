@@ -37,6 +37,7 @@ func ClassifyResultShape(query *Query) ResultShape {
 		case *SearchCommand,
 			*WhereCommand,
 			*EvalCommand,
+			*ConvertCommand,
 			*RexCommand,
 			*RegexCommand,
 			*ReverseCommand,

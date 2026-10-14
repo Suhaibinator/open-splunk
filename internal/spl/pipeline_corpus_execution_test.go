@@ -309,8 +309,11 @@ func TestPipelineCorpusOracleRejectsSchemaSourceEvidenceAndFailureDrift(t *testi
 			name: "derived ordered schema",
 			mutate: func(corpus *pipelineExecutableCorpus) {
 				raw := string(corpus.Fixtures["reference.reverse"])
-				last := strings.LastIndex(raw, `"nullable": false`)
-				corpus.Fixtures["reference.reverse"] = json.RawMessage(raw[:last] + `"nullable": true` + raw[last+len(`"nullable": false`):])
+				before, after, found := strings.CutLast(raw, `"nullable": false`)
+				if !found {
+					t.Fatal("reference.reverse fixture has no non-nullable schema field")
+				}
+				corpus.Fixtures["reference.reverse"] = json.RawMessage(before + `"nullable": true` + after)
 			},
 			want: "expected schema does not exactly match",
 		},

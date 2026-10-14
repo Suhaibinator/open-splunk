@@ -155,8 +155,8 @@ func TestCompileStatsWildcardInventoryRejectsRequestForDifferentPrefix(t *testin
 func statsWildcardKnownArgument(t *testing.T, arguments []any) []string {
 	t.Helper()
 	for index, argument := range arguments {
-		ordinals, ok := argument.([]uint8)
-		if !ok || !reflect.DeepEqual(ordinals, []uint8{0}) || index == 0 {
+		ordinals, ok := argument.([]int64)
+		if !ok || !reflect.DeepEqual(ordinals, []int64{0}) || index == 0 {
 			continue
 		}
 		known, ok := arguments[index-1].([]string)

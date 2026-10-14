@@ -380,12 +380,13 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
 
   assert.match(
     dockerfile,
-    /node:26\.7\.0-alpine3\.24@sha256:aadf416b2cdce311a8811ba3f0608a61b77dbf997500e2eafe781b51f6a0b019/,
+    /node:26\.11\.1-alpine3\.24@sha256:143494b1da2945f061539253adc65e4f1569ddf07da2d384c022c791a9d90a4a/,
   );
   assert.match(
     dockerfile,
-    /golang:1\.27\.0-alpine3\.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395/,
+    /golang:1\.27\.2-alpine3\.24@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d/,
   );
+  assert.match(dockerfile, /^RUN npm install --global npm@12\.2\.0 && test "\$\(npm --version\)" = "12\.2\.0"$/m);
   assert.match(dockerfile, /^FROM scratch AS server$/m);
   assert.match(dockerfile, /^FROM scratch AS collector$/m);
   assert.equal((dockerfile.match(/^USER 65532:65532$/gm) ?? []).length, 2);

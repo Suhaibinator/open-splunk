@@ -163,53 +163,40 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 	maximumRuntime := admittedLimits.MaxRuntime
 	remainingRuntime := maximumRuntime
 	if logical == nil {
-		inventoryPrefix, injectErr := plan.InjectKnowledgePrelude(prefix, prelude)
-		if injectErr != nil {
-			return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
-		}
-		inventoryPrefix, inventoryCompiler, compilerErr := configureResolvedPlanLookups(
-			admissionContext,
-			manager.compiler,
-			inventoryPrefix,
-			automaticLookups,
-			lookupResolutions,
-		)
-		if compilerErr != nil {
-			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, compilerErr)
-		}
-		discoveryContext := admissionContext
-		if manager.limitSource != nil {
-			discoveryContext = searchlimits.WithPolicy(discoveryContext, admittedLimits)
-		}
-		var inventory clickhouse.CompiledStatsWildcardInventory
-		var inventoryRuntime time.Duration
-		wildcardExpansion, inventory, inventoryRuntime, err = manager.executeStatsWildcardInventory(
-			discoveryContext,
-			inventoryCompiler,
-			inventoryPrefix,
-			wildcardRequest,
-			maximumRuntime,
-		)
-		if err != nil {
-			if _, ok := errors.AsType[*plan.Diagnostic](err); ok {
-				return preparedKnowledgeAdmission{}, manager.safeSPLAdmissionError(ctx, err, false)
+		inventories := []clickhouse.CompiledStatsWildcardInventory{}
+		for logical == nil {
+			inventoryPrefix, injectErr := plan.InjectKnowledgePrelude(prefix, prelude)
+			if injectErr != nil {
+				return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
 			}
-			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, err)
-		}
-		var remainingOK bool
-		remainingRuntime, remainingOK = remainingStatsWildcardRuntime(
-			maximumRuntime,
-			inventoryRuntime,
-		)
-		if !remainingOK {
-			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(
-				ctx,
-				context.DeadlineExceeded,
-			)
-		}
-		logical, err = plan.BuildWithStatsWildcardExpansion(parsed, scope, wildcardExpansion)
-		if err != nil {
-			return preparedKnowledgeAdmission{}, manager.safeSPLAdmissionError(ctx, err, false)
+			inventoryPrefix, inventoryCompiler, compilerErr := configureResolvedPlanLookups(admissionContext, manager.compiler, inventoryPrefix, automaticLookups, lookupResolutions)
+			if compilerErr != nil {
+				return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, compilerErr)
+			}
+			discoveryContext := admissionContext
+			if manager.limitSource != nil {
+				discoveryContext = searchlimits.WithPolicy(discoveryContext, admittedLimits)
+			}
+			var inventory clickhouse.CompiledStatsWildcardInventory
+			var inventoryRuntime time.Duration
+			wildcardExpansion, inventory, inventoryRuntime, err = manager.executeStatsWildcardInventory(discoveryContext, inventoryCompiler, inventoryPrefix, wildcardRequest, remainingRuntime)
+			if err != nil {
+				if _, ok := errors.AsType[*plan.Diagnostic](err); ok {
+					return preparedKnowledgeAdmission{}, manager.safeSPLAdmissionError(ctx, err, false)
+				}
+				return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, err)
+			}
+			var remainingOK bool
+			remainingRuntime, remainingOK = remainingStatsWildcardRuntime(remainingRuntime, inventoryRuntime)
+			if !remainingOK {
+				return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, context.DeadlineExceeded)
+			}
+			inventories = append(inventories, inventory)
+			nextPreparation, nextErr := plan.PrepareNextStatsWildcard(parsed, scope, wildcardExpansion)
+			if nextErr != nil {
+				return preparedKnowledgeAdmission{}, manager.safeSPLAdmissionError(ctx, nextErr, false)
+			}
+			logical, prefix, wildcardRequest = nextPreparation.FullPlan(), nextPreparation.Prefix(), nextPreparation.Request()
 		}
 		logical, err = plan.InjectKnowledgePrelude(logical, prelude)
 		if err != nil {
@@ -233,15 +220,14 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 		if compileErr != nil {
 			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, compileErr)
 		}
-		sameReadScope, scopeErr := inventory.SameReadScopeContext(
-			admissionContext,
-			compiledCandidate,
-		)
-		if scopeErr != nil {
-			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, scopeErr)
-		}
-		if !sameReadScope {
-			return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
+		for _, inventory := range inventories {
+			sameReadScope, scopeErr := inventory.SameReadScopeContext(admissionContext, compiledCandidate)
+			if scopeErr != nil {
+				return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, scopeErr)
+			}
+			if !sameReadScope {
+				return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
+			}
 		}
 		compiled = compiledCandidate
 	} else {

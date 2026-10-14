@@ -355,6 +355,7 @@ The cumulative command surface is:
 | `spath` | row-preserving typed JSON scalar and wildcard-array extraction (`SPL-SPATH-MULTIVALUE-001`) |
 | `fields`, `table` | exact table projection and exact/wildcard fields inclusion or exclusion |
 | `rename` | exact source/destination pairs |
+| `convert` | ordered field conversions using `ctime`, `mktime`, `dur2sec`, `num`, `auto`, `rmunit`, and wildcard exclusions with `none` |
 | `sort` | bounded exact typed keys, labeled or positional limits, and terminal reversal (`SPL-SORT-001`) |
 | `dedup` | first-N retention by exact key tuple in the established or `sortby ±key` order; `consecutive=true` restarts the count at each run of adjacent duplicates (`SPL-DEDUP-001`) |
 | `head`, `tail` | bounded row selection by positional count or `limit=N`; `tail` publishes reversed selection order |
@@ -386,6 +387,58 @@ Order-sensitive commands consume an established total order. Sort, projection,
 rename, aggregation, expansion, and limit operations either preserve or
 deliberately replace private lineage. Hard failures in regex, multivalue,
 lookup, arithmetic, or resource validation publish no schema or partial rows.
+
+### `convert`
+
+`convert [timeformat="<format>"] <function>(<field-or-pattern>) [AS <new-field>] ...`
+accepts 1–64 ordered clauses, separated by whitespace or commas. Function names
+are case-insensitive; input field names are exact and case-sensitive. An exact
+conversion can write an `AS` alias or replace its input. Later clauses read the
+fields written by earlier clauses. Failed `ctime`, `mktime`, `dur2sec`, and
+`rmunit` conversions preserve the original value; an alias receives that value.
+Failed `num` conversions make the field missing; they never remove a row. Missing/null values remain missing/null;
+Boolean and multivalue inputs are not converted. String conversion work is bounded
+to 4 KiB per input value.
+
+| Function | Behavior |
+| --- | --- |
+| **ctime** | format canonical `_time` or finite Unix seconds as a String in the effective search timezone |
+| **mktime** | parse a String containing a full date into Unix seconds in that timezone |
+| **dur2sec** | parse a duration in `[days+]hours:minutes:seconds[.fraction]` form as numeric seconds |
+| **num** | convert finite decimal/exponent text, strictly grouped comma text, durations, millisecond time text, or binary memory suffixes; remove values that cannot convert |
+| **rmunit** | remove a trailing unit suffix after a decimal/exponent number and return the number |
+| **auto** | use the same eligibility as num, but convert only when every present value in the entire field converts; otherwise preserve the entire field |
+| **none** | exclude matching input fields from all wildcard conversion clauses, regardless of clause order |
+
+Duration hours are 00–23 and minutes/seconds are 00–59; a nonnegative day count
+can prefix the time. `num`/`auto` additionally accept `MM:SS.SSS` millisecond
+time text and positive `k`, `m`, or `g` memory suffixes as binary kilobytes.
+They do not use a numeric-prefix fallback for arbitrary units. Native finite
+numbers retain their type, and integer text retains Int64/UInt64 precision when
+representable. Missing/null values do not make an `auto` field ineligible.
+
+The optional leading `timeformat` is one bounded double-quoted literal, shared
+by `ctime` and `mktime`; its default is `%m/%d/%Y %H:%M:%S`. It uses the same
+bounded format library as `strftime`/`strptime`. `mktime` accepts the deterministic
+full-date subset, so time-only formats fail with a source-located diagnostic.
+Conversion names are command-specific; they are not `eval`/`where` functions.
+
+Wildcard inputs use `*` patterns and cannot use `AS`. `none` is an exclusion
+clause, cannot use `AS`, and does not block explicitly named conversions.
+Patterns expand against a closed upstream schema when available. On raw events,
+the server discovers matching public field names under the admitted tenant,
+index, time, cutoff, visibility, and knowledge authority before execution; this
+discovery cannot widen the search scope. A wildcard with no matches is a no-op.
+A pattern must begin with `_` to select leading-underscore fields such as `_time`.
+Expansion is bounded to 64 writes per convert command and at most eight runtime
+discovery stages shared across `convert` and `stats` in one search.
+Exceeding this bound fails atomically without publishing partial rows. Private
+`__os_` fields cannot be selected or discovered. Retained jobs, paging, export,
+and inspection reuse the captured expansion.
+
+For example, `convert ctime(_time) AS time_text` keeps canonical `_time` for
+subsequent time operations. `convert auto(*) none(request_id)` converts eligible
+fields while preserving `request_id` and every field with an unconvertible value.
 
 ### `fields` and `sort`
 
@@ -486,6 +539,10 @@ families include:
 - `sparkline(...)` over the supported count, distinct-count, numeric, extrema,
   and variance families.
 
+`earliest(_time)` and `latest(_time)`, including fixed time aliases, publish
+exact Unix-second text with nanosecond precision. Both can feed `convert ctime`
+without parsing a display timestamp.
+
 `count(field)` counts immediate non-null occurrences. `dc` and `values` use
 canonical scalar spellings; `values` sorts exact bytes and `list` preserves
 the first 100 eligible occurrences in current order. `dc` is exact to 100,000
@@ -541,6 +598,12 @@ codes such as `SPL_QUERY_TOO_COMPLEX`, `SPL_EXPECTED_FIELD`,
 execution/unsupported-value categories. Generated SQL, arguments, raw backend
 errors, event values, and private definitions are never public diagnostic
 text.
+
+The connected editor reports a command missing from its local catalog as an
+informational unknown-support notice until the connected server validates that
+exact source under the same server, session, and app authority. Server rejection
+messages remain authoritative and are never presented as a newer-catalog claim.
+Completion responses do not establish command acceptance.
 
 Subsearches, joins, generating commands, external calls, mutation commands,
 unbounded row generation, `inputlookup`, `outputlookup`, mutable/external URL

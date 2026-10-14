@@ -568,6 +568,8 @@ func classifySuggestionContext(tokens []token, prefix string, replacement Range)
 		return classifyMVExpandSuggestion(base, body)
 	case "nomv":
 		return classifyNoMVSuggestion(base, body)
+	case "convert":
+		return classifyConvertSuggestion(base, body)
 	case "rename":
 		return classifyRenameSuggestion(base, body)
 	case "stats":

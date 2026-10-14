@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.27.0"
+  GO_VERSION: "1.27.2"
   OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e
 
 concurrency:
@@ -50,6 +50,9 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      - name: Set up pinned npm
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+
       - name: Install protobuf generators
         run: make proto-tools
 
@@ -82,6 +85,9 @@ jobs:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
+
+      - name: Set up pinned npm
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
 
       - name: Cache Next.js
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -149,7 +155,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
         with:
-          version: v2.13.1
+          version: v2.14.0
           # The inherited inventory is clean; enforce the complete Go tree on
           # every push rather than retaining a historical diff-only baseline.
           args: --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
@@ -563,6 +569,9 @@ jobs:
         with:
           node-version-file: .node-version
 
+      - name: Set up pinned npm
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+
       - name: Verify exact SPL pipeline ClickHouse test inventory
         run: |
           set -euo pipefail
@@ -797,6 +806,9 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      - name: Set up pinned npm
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+
       - name: Install frontend dependencies
         run: npm ci
 
@@ -855,6 +867,9 @@ jobs:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
+
+      - name: Set up pinned npm
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
 
       - name: Install frontend and browser dependencies
         run: |
@@ -961,6 +976,9 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
+
+      - name: Set up pinned npm
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
 
       - name: Verify native release recovery with production Compose
         timeout-minutes: 40
@@ -1139,6 +1157,9 @@ jobs:
         with:
           node-version-file: .node-version
 
+      - name: Set up pinned npm
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+
       - name: Install frontend dependencies for macOS launcher tests
         if: runner.os == 'macOS'
         run: npm ci --include=dev
@@ -1261,6 +1282,9 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
+
+      - name: Set up pinned npm
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
 
       - name: Sign in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f

@@ -85,7 +85,7 @@ func (executor *Executor) ExecuteStatsWildcardInventory(
 	}
 	maximumPairs := request.MaximumPairs()
 	if !requestOK || strings.TrimSpace(query.SQL) == "" || request.IsZero() || maximumPairs < 2 ||
-		maximumPairs > spl.MaximumStatsMeasures+1 {
+		maximumPairs > spl.MaximumConvertWrites+1 {
 		return plan.StatsWildcardExpansion{}, invalidStatsWildcardInventoryResult(
 			"compiled query is invalid",
 		)
@@ -191,7 +191,11 @@ func (executor *Executor) ExecuteStatsWildcardInventory(
 				"too many match rows were returned",
 			)
 		}
-		if err := validateStatsWildcardInventoryField(field); err != nil {
+		if request.IsConvert() {
+			if !plan.IsSafeConvertInventoryFieldName(field) {
+				return plan.StatsWildcardExpansion{}, invalidStatsWildcardInventoryResult("conversion field name is invalid")
+			}
+		} else if err := validateStatsWildcardInventoryField(field); err != nil {
 			return plan.StatsWildcardExpansion{}, err
 		}
 		if len(matches) > 0 && (ordinal < previousOrdinal ||
@@ -278,7 +282,7 @@ func settingsForStatsWildcardInventory(
 	base *validatedExecutorSettings,
 	maximumPairs uint8,
 ) (clickhousedriver.Settings, error) {
-	if maximumPairs < 2 || maximumPairs > spl.MaximumStatsMeasures+1 {
+	if maximumPairs < 2 || maximumPairs > spl.MaximumConvertWrites+1 {
 		return nil, errors.New(
 			"execute ClickHouse stats wildcard inventory: pair limit is invalid",
 		)

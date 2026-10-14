@@ -9,6 +9,7 @@ import {
   type CDPSession,
   type Locator,
   type Page,
+  type Request,
   type Response,
   type Route,
   type WebSocket,
@@ -472,6 +473,165 @@ test("backend diagnostics remain authoritative and prevent browser dispatch", as
   expect(safety.createRequests()).toBe(0);
   expect(safety.resultsRequests()).toBe(0);
   assertBrowserSafety(safety);
+});
+
+for (const accepted of [false, true]) {
+  test(`unknown command support stays neutral until ${accepted ? "accepted" : "rejected"} by server validation`, async ({ page }) => {
+    const indexMatch = /\bindex=(?:"([^"]+)"|([^\s|]+))/u.exec(searchSPL);
+    const indexName = indexMatch?.[1] ?? indexMatch?.[2] ?? "main";
+    const source = `index=${JSON.stringify(indexName)} | futurecommand status`;
+    const message = 'unsupported command "futurecommand" at pipeline stage 1';
+    const commandOffset = source.indexOf("futurecommand");
+    const start = BigInt(Buffer.byteLength(source.slice(0, commandOffset), "utf8"));
+    let releaseValidation: (() => void) | undefined;
+    let validationStarted = false;
+    let createRequests = 0;
+    const heldValidation = new Promise<void>((resolve) => { releaseValidation = resolve; });
+    await page.route(
+      (url) => url.origin === origin && url.pathname === "/api/search/validate",
+      async (route) => {
+        const wire = route.request().postDataBuffer();
+        if (wire === null) throw new Error("catalog validation omitted its protobuf body");
+        expect(ValidateSearchRequest.decode(wire).definition?.spl).toBe(source);
+        validationStarted = true;
+        await heldValidation;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/x-protobuf",
+          body: Buffer.from(ValidateSearchResponse.encode(ValidateSearchResponse.fromPartial({
+            valid: accepted,
+            diagnostics: accepted ? [] : [{
+              code: "SPL_UNSUPPORTED_COMMAND",
+              severity: DiagnosticSeverity.DIAGNOSTIC_SEVERITY_ERROR,
+              message,
+              sourceRange: { start: { byteOffset: start }, end: { byteOffset: start + 13n } },
+            }],
+          })).finish()),
+        });
+      },
+    );
+    // Acceptance is determined by validation, independently of later execution
+    // availability. A controlled create failure keeps this test job-free.
+    await page.route(
+      (url) => url.origin === origin && url.pathname === "/api/search/jobs/create",
+      async (route) => {
+        createRequests += 1;
+        await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Execution fixture unavailable." }) });
+      },
+    );
+    await openSearchWorkspace(page);
+    await page.getByTestId("search-input").fill(source);
+    const problems = page.getByTestId("search-diagnostics");
+    await expect(problems.locator('li[data-severity="info"]')).toContainText("server support is unknown");
+    await expect(problems).not.toContainText("newer");
+    await expect(problems.getByRole("button", { name: "Remove stage", exact: true })).toHaveCount(0);
+    await page.getByTestId("run-search").click();
+    try {
+      await expect.poll(() => validationStarted, { timeout }).toBe(true);
+      await expect(problems.locator('li[data-severity="info"]')).toBeVisible();
+      releaseValidation?.();
+      if (accepted) {
+        await expect.poll(() => createRequests, { timeout }).toBe(1);
+        await expect(problems).toHaveCount(0);
+      } else {
+        await expect(page.getByTestId("search-failure-panel")).toContainText(message, { timeout });
+        await expect(problems.locator('li[data-severity="error"]')).toContainText(message);
+        await expect(problems.locator('li[data-severity="info"]')).toHaveCount(0);
+        expect(createRequests).toBe(0);
+      }
+    } finally {
+      releaseValidation?.();
+    }
+  });
+}
+
+test("unknown command support stays neutral until a current verdict supersedes a canceled A-to-B-to-A run", async ({ page }) => {
+  const indexMatch = /\bindex=(?:"([^"]+)"|([^\s|]+))/u.exec(searchSPL);
+  const indexName = indexMatch?.[1] ?? indexMatch?.[2] ?? "main";
+  const sourceA = `index=${JSON.stringify(indexName)} | futurecommand_a status`;
+  const sourceB = `index=${JSON.stringify(indexName)} | futurecommand_b status`;
+  const messages = ["Obsolete rejection from the canceled run.", "Current rejection for B.", "Current rejection for A."];
+  let heldRequest: Request | null = null;
+  let firstAborted = false;
+  let validationRequests = 0;
+  let createRequests = 0;
+  let releaseFirst: (() => void) | undefined;
+  let markFirstSettled: (() => void) | undefined;
+  const heldFirst = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const firstSettled = new Promise<void>((resolve) => { markFirstSettled = resolve; });
+  page.on("requestfailed", (request) => {
+    if (request === heldRequest) firstAborted = true;
+  });
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/search/validate",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("race validation omitted its protobuf body");
+      const source = ValidateSearchRequest.decode(wire).definition?.spl;
+      const ordinal = validationRequests++;
+      expect(source).toBe(ordinal === 1 ? sourceB : sourceA);
+      if (ordinal === 0) {
+        heldRequest = route.request();
+        await heldFirst;
+      }
+      const start = BigInt(Buffer.byteLength(source!.slice(0, source!.indexOf("futurecommand_")), "utf8"));
+      try {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/x-protobuf",
+          body: Buffer.from(ValidateSearchResponse.encode(ValidateSearchResponse.fromPartial({
+            valid: false,
+            diagnostics: [{
+              code: "SPL_UNSUPPORTED_COMMAND",
+              severity: DiagnosticSeverity.DIAGNOSTIC_SEVERITY_ERROR,
+              message: messages[ordinal],
+              sourceRange: { start: { byteOffset: start }, end: { byteOffset: start + 15n } },
+            }],
+          })).finish()),
+        });
+      } catch (error) {
+        if (ordinal !== 0 || !firstAborted) throw error;
+      } finally {
+        if (ordinal === 0) markFirstSettled?.();
+      }
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/search/jobs/create",
+    async (route) => {
+      createRequests += 1;
+      await route.abort();
+    },
+  );
+  await openSearchWorkspace(page);
+  try {
+    await page.getByTestId("search-input").fill(sourceA);
+    await page.getByTestId("run-search").click();
+    await expect.poll(() => validationRequests, { timeout }).toBe(1);
+    await expect(page.getByTestId("search-diagnostics").locator('li[data-severity="info"]')).toContainText("server support is unknown");
+    // Browser Back abandons the pending run, aborting its validation and
+    // returning to the original draft without creating a backend job.
+    await page.goBack();
+    await expect(page.getByTestId("search-input")).toHaveValue(searchSPL);
+    await expect.poll(() => firstAborted, { timeout }).toBe(true);
+    await page.getByTestId("search-input").fill(sourceB);
+    await page.getByTestId("run-search").click();
+    await expect(page.getByTestId("search-failure-panel")).toContainText(messages[1]!, { timeout });
+    await page.getByTestId("search-input").fill(sourceA);
+    await expect(page.getByTestId("search-diagnostics").locator('li[data-severity="info"]')).toContainText("server support is unknown");
+    await page.getByTestId("run-search").click();
+    await expect(page.getByTestId("search-failure-panel")).toContainText(messages[2]!, { timeout });
+    releaseFirst?.();
+    await firstSettled;
+    await expect(page.getByTestId("search-failure-panel")).toContainText(messages[2]!);
+    await expect(page.getByTestId("search-diagnostics")).toContainText(messages[2]!);
+    await expect(page.getByTestId("search-diagnostics")).not.toContainText(messages[0]!);
+    await expect(page.getByTestId("search-diagnostics").locator('li[data-severity="info"]')).toHaveCount(0);
+    expect(validationRequests).toBe(3);
+    expect(createRequests).toBe(0);
+  } finally {
+    releaseFirst?.();
+  }
 });
 
 test("Search Job Inspector renders only capability-gated redacted Knowledge authority", async ({

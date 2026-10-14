@@ -811,6 +811,7 @@ func assertBrowserVisibleResults(
 		grepPattern: "collector event is visible through the compiled backend UI|" +
 			"real backend zero-result search renders the empty state|" +
 			"backend diagnostics remain authoritative and prevent browser dispatch|" +
+			"unknown command support stays neutral until|" +
 			"history Run again delegates persisted intent with source-only rerun provenance|" +
 			"failed search terminal rejects without waiting for results",
 		outputDirectory:    "backend-vertical",

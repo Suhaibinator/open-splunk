@@ -185,6 +185,8 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return p.parseWhereCommand(nameToken)
 	case "eval":
 		return p.parseEvalCommand(nameToken)
+	case "convert":
+		return p.parseConvertCommand(nameToken)
 	case "rex":
 		return p.parseRexCommand(nameToken)
 	case "regex":

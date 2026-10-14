@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"hash"
 	"math"
@@ -29,15 +28,15 @@ const (
 	maximumStatsWildcardReflectionDepth = maximumAnalysisDepth * 8
 )
 
-// StatsWildcardPattern identifies one authored wildcard aggregate by its
-// zero-based ordinal in the stats command. Pattern uses SPL wc-field syntax.
+// StatsWildcardPattern identifies an authored aggregate or conversion clause
+// by its zero-based ordinal. Pattern uses SPL wc-field syntax.
 type StatsWildcardPattern struct {
 	Ordinal uint8
 	Pattern string
 }
 
 // StatsWildcardInventoryMatch is one exact runtime field matched for an
-// authored aggregate. Inventory executors must order rows by Ordinal and then
+// authored wildcard clause. Inventory executors must order rows by Ordinal and then
 // exact bytewise Field spelling before this trust boundary accepts them.
 type StatsWildcardInventoryMatch struct {
 	Ordinal uint8
@@ -46,7 +45,7 @@ type StatsWildcardInventoryMatch struct {
 
 // StatsWildcardRequest is opaque planner authority for one bounded field-name
 // inventory. Its seal binds exact authored source, immutable scan scope,
-// command ordinal, wildcard patterns, and the overflow-sentinel row limit.
+// operation kind, command ordinal, prior evidence, patterns, and overflow limit.
 type StatsWildcardRequest struct {
 	sourceDigest   [sha256.Size]byte
 	scopeDigest    [sha256.Size]byte
@@ -57,6 +56,10 @@ type StatsWildcardRequest struct {
 	scope          Scope
 	basePrefix     [sha256.Size]byte
 	seal           [sha256.Size]byte
+	conversion     bool
+	exclusions     []string
+	additions      []StatsWildcardInventoryMatch
+	previous       *StatsWildcardExpansion
 }
 
 func (request StatsWildcardRequest) IsZero() bool {
@@ -65,16 +68,27 @@ func (request StatsWildcardRequest) IsZero() bool {
 		request.scopeDigest == ([sha256.Size]byte{}) &&
 		request.commandIndex == 0 && request.maximumPairs == 0 &&
 		len(request.patterns) == 0 && request.authoredSource == "" &&
-		request.basePrefix == ([sha256.Size]byte{}) && statsWildcardScopeIsZero(request.scope)
+		request.basePrefix == ([sha256.Size]byte{}) && statsWildcardScopeIsZero(request.scope) &&
+		!request.conversion && len(request.exclusions) == 0 && len(request.additions) == 0 && request.previous == nil
 }
 
 func (request StatsWildcardRequest) Clone() StatsWildcardRequest {
 	if !request.valid() {
 		return StatsWildcardRequest{}
 	}
+	return request.cloneValidated()
+}
+
+func (request StatsWildcardRequest) cloneValidated() StatsWildcardRequest {
 	request.patterns = cloneStatsWildcardPatterns(request.patterns)
 	request.authoredSource = strings.Clone(request.authoredSource)
 	request.scope = cloneStatsWildcardScope(request.scope)
+	request.exclusions = slices.Clone(request.exclusions)
+	request.additions = cloneStatsWildcardMatches(request.additions)
+	if request.previous != nil {
+		cloned := request.previous.cloneValidated()
+		request.previous = &cloned
+	}
 	return request
 }
 
@@ -114,6 +128,10 @@ func (request StatsWildcardRequest) RetainedBytes() (uint64, bool) {
 	if !request.valid() {
 		return 0, false
 	}
+	return request.retainedValidated()
+}
+
+func (request StatsWildcardRequest) retainedValidated() (uint64, bool) {
 	total := uint64(unsafe.Sizeof(request))
 	add := func(charge uint64) bool {
 		if charge > ^uint64(0)-total {
@@ -149,6 +167,25 @@ func (request StatsWildcardRequest) RetainedBytes() (uint64, bool) {
 	if request.scope.VisibilityCutoff != nil &&
 		!add(uint64(unsafe.Sizeof(*request.scope.VisibilityCutoff))) {
 		return 0, false
+	}
+	if !add(uint64(cap(request.exclusions))*uint64(unsafe.Sizeof(""))) || !add(uint64(cap(request.additions))*uint64(unsafe.Sizeof(StatsWildcardInventoryMatch{}))) {
+		return 0, false
+	}
+	for _, exclusion := range request.exclusions {
+		if !add(uint64(len(exclusion))) {
+			return 0, false
+		}
+	}
+	for _, addition := range request.additions {
+		if !add(uint64(len(addition.Field))) {
+			return 0, false
+		}
+	}
+	if request.previous != nil {
+		charge, ok := request.previous.retainedValidated()
+		if !ok || !add(charge) {
+			return 0, false
+		}
 	}
 	return total, true
 }
@@ -208,7 +245,7 @@ func (request StatsWildcardRequest) canonicalBasePrefix() *Query {
 	if !ok {
 		return nil
 	}
-	canonical, err := Build(prefixAST, cloneStatsWildcardScope(request.scope))
+	canonical, err := buildRuntimeWildcardPrefix(prefixAST, cloneStatsWildcardScope(request.scope), request.previous)
 	if err != nil {
 		return nil
 	}
@@ -220,14 +257,28 @@ func (request StatsWildcardRequest) canonicalBasePrefix() *Query {
 	return canonical
 }
 
-func (request StatsWildcardRequest) valid() bool {
+func (request StatsWildcardRequest) valid() bool { return request.validAtDepth(0) }
+
+func (request StatsWildcardRequest) validAtDepth(depth int) bool {
+	if depth >= MaximumRuntimeWildcardStages {
+		return false
+	}
+	maximum := spl.MaximumStatsMeasures
+	if request.conversion {
+		maximum = spl.MaximumExplicitProjectionFields
+	}
+	if request.previous != nil {
+		if !request.previous.validAtDepth(depth+1) || request.previous.request.commandIndex >= request.commandIndex || request.previous.request.sourceDigest != request.sourceDigest {
+			return false
+		}
+	}
 	if request.sourceDigest == ([sha256.Size]byte{}) || request.authoredSource == "" ||
 		sha256.Sum256([]byte(request.authoredSource)) != request.sourceDigest ||
 		request.scopeDigest == ([sha256.Size]byte{}) ||
 		request.basePrefix == ([sha256.Size]byte{}) ||
 		request.maximumPairs < 2 ||
-		request.maximumPairs > uint8(spl.MaximumStatsMeasures+1) ||
-		len(request.patterns) == 0 || len(request.patterns) > spl.MaximumStatsMeasures {
+		int(request.maximumPairs) > maximum+1 ||
+		len(request.patterns) == 0 || len(request.patterns) > maximum {
 		return false
 	}
 	previous := -1
@@ -245,7 +296,7 @@ func (request StatsWildcardRequest) valid() bool {
 	if !ok {
 		return false
 	}
-	prefix, err := Build(prefixAST, cloneStatsWildcardScope(request.scope))
+	prefix, err := buildRuntimeWildcardPrefix(prefixAST, cloneStatsWildcardScope(request.scope), request.previous)
 	if err != nil {
 		return false
 	}
@@ -257,12 +308,16 @@ func (request StatsWildcardRequest) valid() bool {
 	if !ok || subtle.ConstantTimeCompare(basePrefix[:], request.basePrefix[:]) != 1 {
 		return false
 	}
+	if !validRuntimeWildcardCommand(request, parsed) {
+		return false
+	}
 	expected := statsWildcardRequestDigest(request)
 	return subtle.ConstantTimeCompare(expected[:], request.seal[:]) == 1
 }
 
 // StatsWildcardExpansion is replayable, backend-neutral evidence for the
-// exact names used to expand one open-schema stats command.
+// exact names used to expand one open-schema stats or convert command and
+// the ordered evidence required to reconstruct its input relation.
 type StatsWildcardExpansion struct {
 	request StatsWildcardRequest
 	matches []StatsWildcardInventoryMatch
@@ -278,7 +333,11 @@ func (expansion StatsWildcardExpansion) Clone() StatsWildcardExpansion {
 	if !expansion.valid() {
 		return StatsWildcardExpansion{}
 	}
-	expansion.request = expansion.request.Clone()
+	return expansion.cloneValidated()
+}
+
+func (expansion StatsWildcardExpansion) cloneValidated() StatsWildcardExpansion {
+	expansion.request = expansion.request.cloneValidated()
 	expansion.matches = cloneStatsWildcardMatches(expansion.matches)
 	return expansion
 }
@@ -303,7 +362,11 @@ func (expansion StatsWildcardExpansion) RetainedBytes() (uint64, bool) {
 	if !expansion.valid() {
 		return 0, false
 	}
-	requestBytes, ok := expansion.request.RetainedBytes()
+	return expansion.retainedValidated()
+}
+
+func (expansion StatsWildcardExpansion) retainedValidated() (uint64, bool) {
+	requestBytes, ok := expansion.request.retainedValidated()
 	if !ok {
 		return 0, false
 	}
@@ -322,8 +385,10 @@ func (expansion StatsWildcardExpansion) RetainedBytes() (uint64, bool) {
 	return total, true
 }
 
-func (expansion StatsWildcardExpansion) valid() bool {
-	if !expansion.request.valid() || len(expansion.matches) == 0 ||
+func (expansion StatsWildcardExpansion) valid() bool { return expansion.validAtDepth(0) }
+
+func (expansion StatsWildcardExpansion) validAtDepth(depth int) bool {
+	if !expansion.request.validAtDepth(depth) || (!expansion.request.conversion && len(expansion.matches) == 0) ||
 		len(expansion.matches) >= int(expansion.request.maximumPairs) ||
 		!validStatsWildcardMatches(expansion.request, expansion.matches, true) {
 		return false
@@ -335,11 +400,12 @@ func (expansion StatsWildcardExpansion) valid() bool {
 // StatsWildcardPreparation contains exactly one ordinary full plan or one
 // prefix/request pair. Accessors detach all public slices.
 type StatsWildcardPreparation struct {
-	fullPlan   *Query
-	fullSource string
-	fullScope  Scope
-	prefix     *Query
-	request    StatsWildcardRequest
+	fullPlan      *Query
+	fullSource    string
+	fullScope     Scope
+	fullExpansion *StatsWildcardExpansion
+	prefix        *Query
+	request       StatsWildcardRequest
 }
 
 func (preparation *StatsWildcardPreparation) FullPlan() *Query {
@@ -351,7 +417,7 @@ func (preparation *StatsWildcardPreparation) FullPlan() *Query {
 	if err != nil {
 		return nil
 	}
-	logical, err := Build(parsed, cloneStatsWildcardScope(preparation.fullScope))
+	logical, err := buildRuntimeWildcardPrefix(parsed, cloneStatsWildcardScope(preparation.fullScope), preparation.fullExpansion)
 	if err != nil {
 		return nil
 	}
@@ -374,71 +440,19 @@ func (preparation *StatsWildcardPreparation) Request() StatsWildcardRequest {
 	return preparation.request.Clone()
 }
 
-// PrepareStatsWildcard performs ordinary planning when the schema is already
-// closed. Otherwise it returns the exact relation immediately before the first
-// unresolved stats wildcard and an opaque bounded inventory request.
+// PrepareStatsWildcard preserves the existing inventory API for stats and
+// convert. It returns an ordinary full plan or the exact relation before the
+// first unresolved wildcard and an opaque bounded inventory request.
 func PrepareStatsWildcard(query *spl.Query, scope Scope) (*StatsWildcardPreparation, error) {
-	if query == nil {
-		return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "query is nil"}
+	return prepareRuntimeWildcard(query, scope, nil)
+}
+
+// PrepareNextStatsWildcard resumes bounded discovery with replayable prior evidence.
+func PrepareNextStatsWildcard(query *spl.Query, scope Scope, previous StatsWildcardExpansion) (*StatsWildcardPreparation, error) {
+	if !previous.valid() {
+		return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "wildcard expansion is invalid"}
 	}
-	canonical, parsed := query.ParsedCanonicalClone()
-	if !parsed {
-		return nil, &Diagnostic{
-			Code:    "SPL_INVALID_QUERY",
-			Message: "runtime stats wc-field expansion requires an unmodified parser-owned query",
-			Range:   query.Range,
-		}
-	}
-	logical, err := Build(canonical, scope)
-	if err == nil {
-		authoredSource, ok := canonical.ParsedSource()
-		if !ok {
-			return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "parser-owned source is unavailable"}
-		}
-		return &StatsWildcardPreparation{
-			fullPlan: logical, fullSource: authoredSource, fullScope: cloneStatsWildcardScope(scope),
-		}, nil
-	}
-	var diagnostic *Diagnostic
-	if !errors.As(err, &diagnostic) || diagnostic.Code != "SPL_UNSUPPORTED_STATS_WILDCARD" {
-		return nil, err
-	}
-	sourceDigest, parsed := canonical.ParsedSourceDigest()
-	if !parsed {
-		return nil, &Diagnostic{
-			Code:    "SPL_INVALID_QUERY",
-			Message: "runtime stats wc-field expansion requires parser-owned source provenance",
-			Range:   diagnostic.Range,
-		}
-	}
-	commandIndex, command, found := firstStatsWildcardCommand(canonical)
-	if !found {
-		return nil, err
-	}
-	prefixAST, ok := canonical.ParsedPrefix(commandIndex)
-	if !ok {
-		return nil, &Diagnostic{
-			Code:    "SPL_INVALID_QUERY",
-			Message: "runtime stats wc-field prefix provenance is invalid",
-			Range:   command.Range,
-		}
-	}
-	prefix, prefixErr := Build(prefixAST, scope)
-	if prefixErr != nil {
-		return nil, prefixErr
-	}
-	request, requestErr := newStatsWildcardRequest(
-		sourceDigest,
-		canonical,
-		commandIndex,
-		command,
-		prefix,
-	)
-	if requestErr != nil {
-		return nil, requestErr
-	}
-	prefix.statsWildcardRequestDigest = request.seal
-	return &StatsWildcardPreparation{prefix: prefix, request: request}, nil
+	return prepareRuntimeWildcard(query, scope, &previous)
 }
 
 // ValidateStatsWildcardInventory validates a complete, atomically buffered
@@ -454,14 +468,14 @@ func ValidateStatsWildcardInventory(
 			Message: "stats wc-field inventory request is invalid",
 		}
 	}
-	if len(matches) == 0 {
+	if len(matches) == 0 && !request.conversion {
 		return StatsWildcardExpansion{}, &Diagnostic{
 			Code:    "SPL_NO_MATCHING_STATS_FIELDS",
 			Message: fmt.Sprintf("stats wc-field %q matched no fields", request.patterns[0].Pattern),
 		}
 	}
 	if len(matches) >= int(request.maximumPairs) {
-		return StatsWildcardExpansion{}, statsWildcardMeasureLimitDiagnostic(spl.Range{})
+		return StatsWildcardExpansion{}, runtimeWildcardLimitDiagnostic(request, spl.Range{})
 	}
 	if !validStatsWildcardMatches(request, matches, false) {
 		return StatsWildcardExpansion{}, &Diagnostic{
@@ -474,7 +488,7 @@ func ValidateStatsWildcardInventory(
 		seen[match.Ordinal] = true
 	}
 	for _, pattern := range request.patterns {
-		if !seen[pattern.Ordinal] {
+		if !request.conversion && !seen[pattern.Ordinal] {
 			return StatsWildcardExpansion{}, &Diagnostic{
 				Code:    "SPL_NO_MATCHING_STATS_FIELDS",
 				Message: fmt.Sprintf("stats wc-field %q matched no fields", pattern.Pattern),
@@ -497,66 +511,18 @@ func ValidateStatsWildcardInventory(
 
 // BuildWithStatsWildcardExpansion rebuilds the exact authored query with one
 // validated runtime expansion. It never mutates the parser-owned AST.
-func BuildWithStatsWildcardExpansion(
-	query *spl.Query,
-	scope Scope,
-	expansion StatsWildcardExpansion,
-) (*Query, error) {
+func BuildWithStatsWildcardExpansion(query *spl.Query, scope Scope, expansion StatsWildcardExpansion) (*Query, error) {
 	if query == nil || !expansion.valid() {
-		return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "stats wc-field expansion is invalid"}
+		return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "wildcard expansion is invalid"}
 	}
-	preparation, err := PrepareStatsWildcard(query, scope)
+	preparation, err := prepareRuntimeWildcard(query, scope, expansion.request.previous)
 	if err != nil {
 		return nil, err
 	}
-	request := preparation.Request()
-	if request.IsZero() || !request.Equal(expansion.request) {
-		return nil, &Diagnostic{
-			Code:    "SPL_INVALID_QUERY",
-			Message: "stats wc-field expansion does not belong to this query and scope",
-		}
+	if !preparation.Request().Equal(expansion.request) {
+		return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "wildcard expansion does not belong to this query and scope"}
 	}
-	commandIndex := int(request.commandIndex)
-	if commandIndex < 0 || commandIndex >= len(query.Commands) {
-		return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "stats wc-field command ordinal is invalid"}
-	}
-	command, ok := query.Commands[commandIndex].(*spl.StatsCommand)
-	if !ok || command == nil {
-		return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "stats wc-field command changed"}
-	}
-	expandedAggregates, expandErr := expandStatsWildcardInventoryAggregates(
-		command,
-		expansion.matches,
-	)
-	if expandErr != nil {
-		return nil, expandErr
-	}
-	expandedCommand := *command
-	expandedCommand.Aggregates = expandedAggregates
-	canonical, ok := query.ParsedCanonicalClone()
-	if !ok {
-		return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "stats wc-field source AST changed"}
-	}
-	expandedQuery := *canonical
-	expandedQuery.Commands = slices.Clone(canonical.Commands)
-	expandedQuery.Commands[commandIndex] = &expandedCommand
-	return Build(&expandedQuery, scope)
-}
-
-func firstStatsWildcardCommand(query *spl.Query) (int, *spl.StatsCommand, bool) {
-	for index, candidate := range query.Commands {
-		command, ok := candidate.(*spl.StatsCommand)
-		if !ok || command == nil {
-			continue
-		}
-		for _, aggregate := range command.Aggregates {
-			if aggregate.InputGlob != nil ||
-				(aggregate.Sparkline != nil && aggregate.Sparkline.InputGlob != nil) {
-				return index, command, true
-			}
-		}
-	}
-	return 0, nil, false
+	return buildRuntimeWildcardPrefix(query, scope, &expansion)
 }
 
 func newStatsWildcardRequest(
@@ -565,6 +531,7 @@ func newStatsWildcardRequest(
 	commandIndex int,
 	command *spl.StatsCommand,
 	prefix *Query,
+	previous *StatsWildcardExpansion,
 ) (StatsWildcardRequest, error) {
 	authoredSource, parsed := query.ParsedSource()
 	if !parsed || sourceDigest == ([sha256.Size]byte{}) || commandIndex < 0 || commandIndex > int(^uint16(0)) ||
@@ -617,6 +584,7 @@ func newStatsWildcardRequest(
 		authoredSource: strings.Clone(authoredSource),
 		scope:          statsWildcardScopeFromPlan(prefix),
 		basePrefix:     basePrefix,
+		previous:       previous,
 	}
 	request.seal = statsWildcardRequestDigest(request)
 	if !request.valid() {
@@ -636,7 +604,7 @@ func validStatsWildcardMatches(
 	requireComplete bool,
 ) bool {
 	if len(matches) >= int(request.maximumPairs) ||
-		(requireComplete && len(matches) == 0) {
+		(requireComplete && !request.conversion && len(matches) == 0) {
 		return false
 	}
 	patternByOrdinal := make(map[uint8]string, len(request.patterns))
@@ -648,8 +616,12 @@ func validStatsWildcardMatches(
 	previousField := ""
 	for _, match := range matches {
 		pattern, ok := patternByOrdinal[match.Ordinal]
-		if !ok || !spl.IsSafeStatsInventoryFieldName(match.Field) ||
-			!spl.MatchStatsFieldGlob(pattern, match.Field) {
+		safe := spl.IsSafeStatsInventoryFieldName(match.Field)
+		if request.conversion {
+			safe = IsSafeConvertInventoryFieldName(match.Field)
+		}
+		if !ok || !safe ||
+			!runtimeWildcardMatch(request, pattern, match.Field) {
 			return false
 		}
 		if int(match.Ordinal) < previousOrdinal ||
@@ -660,7 +632,7 @@ func validStatsWildcardMatches(
 		previousField = match.Field
 		matchedOrdinals[match.Ordinal] = true
 	}
-	if requireComplete {
+	if requireComplete && !request.conversion {
 		for _, pattern := range request.patterns {
 			if !matchedOrdinals[pattern.Ordinal] {
 				return false
@@ -744,6 +716,20 @@ func statsWildcardRequestDigest(request StatsWildcardRequest) [sha256.Size]byte 
 	writeStatsWildcardString(digest, request.authoredSource)
 	writeStatsWildcardUint64(digest, uint64(request.commandIndex))
 	writeStatsWildcardUint64(digest, uint64(request.maximumPairs))
+	if request.conversion {
+		writeStatsWildcardUint64(digest, 1)
+	} else {
+		writeStatsWildcardUint64(digest, 0)
+	}
+	writeStatsWildcardStrings(digest, request.exclusions)
+	writeStatsWildcardUint64(digest, uint64(len(request.additions)))
+	for _, addition := range request.additions {
+		writeStatsWildcardUint64(digest, uint64(addition.Ordinal))
+		writeStatsWildcardString(digest, addition.Field)
+	}
+	if request.previous != nil {
+		_, _ = digest.Write(request.previous.seal[:])
+	}
 	writeStatsWildcardUint64(digest, uint64(len(request.patterns)))
 	for _, pattern := range request.patterns {
 		writeStatsWildcardUint64(digest, uint64(pattern.Ordinal))

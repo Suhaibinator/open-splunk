@@ -16,6 +16,7 @@ export interface SearchFailurePresentation {
 export type SearchFailureActionId = "retry" | "server-settings";
 
 export interface WorkspaceSearchFailure {
+  authorityKey?: string;
   failure: SearchFailure;
   problems: EditorProblem[];
   source: string;
