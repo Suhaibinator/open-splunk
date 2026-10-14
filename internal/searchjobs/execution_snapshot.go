@@ -40,7 +40,7 @@ type ExecutionSnapshot struct {
 	// path; value copies remain immutable and all accessors detach.
 	KnowledgeSnapshot knowledgesnapshot.Snapshot
 	// StatsWildcardExpansion is opaque, compiler-independent evidence for the
-	// exact runtime field inventory used to expand an open-schema stats stage.
+	// ordered runtime inventories used to expand open-schema stats/convert stages.
 	// Its zero value means no runtime expansion was required.
 	StatsWildcardExpansion plan.StatsWildcardExpansion
 	FinishedAt             time.Time

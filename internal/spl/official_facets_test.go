@@ -91,6 +91,16 @@ func officialFacets(t *testing.T, source string, command spl.Command) map[string
 		return map[string]string{"filter": text(command.Expression.SourceRange())}
 	case *spl.WhereCommand:
 		return map[string]string{"predicate": text(command.Expression.SourceRange())}
+	case *spl.ConvertCommand:
+		clauses := make([]string, len(command.Clauses))
+		for index, clause := range command.Clauses {
+			clauses[index] = text(clause.Range)
+		}
+		format := ""
+		if command.TimeFormatRange != command.Range && !strings.EqualFold(text(command.TimeFormatRange), "convert") {
+			format = command.TimeFormat
+		}
+		return map[string]string{"clauses": strings.Join(clauses, ", "), "timeformat": format}
 	case *spl.EvalCommand:
 		fields := make([]string, len(command.Assignments))
 		expressions := make([]string, len(command.Assignments))

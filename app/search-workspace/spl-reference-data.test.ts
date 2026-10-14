@@ -79,3 +79,16 @@ test("an empty filter keeps every section and a miss keeps none", () => {
   );
   assert.deepEqual(filterSplReference(SPL_REFERENCE_SECTIONS, "no such entry anywhere"), []);
 });
+
+
+test("convert reference lists its command-only functions without advertising scalar calls", () => {
+  const conversion = allEntries.find((entry) => entry.id === "command-convert")!;
+  assert.equal(conversion.supported, true);
+  assert.match(conversion.syntax ?? "", /timeformat/u);
+  assert.match(conversion.syntax ?? "", /AS/u);
+  for (const name of ["ctime", "mktime", "dur2sec", "num", "auto", "rmunit", "none"]) {
+    assert.match(`${conversion.detail} ${conversion.documentation}`, new RegExp(`\\b${name}\\b`, "u"));
+    assert.equal(SPL_FUNCTIONS.some((fn) => fn.name === name), false);
+    assert.equal(SPL_KEYWORDS.find((keyword) => keyword.name === name)?.insertion, `${name}(`);
+  }
+});

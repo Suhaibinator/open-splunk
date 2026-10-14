@@ -2631,6 +2631,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testMatchAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testLikeAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testNowAgainstClickHouse(ctx, t, store, connection, indexTime)
+	testConvertAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testStrftimeAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testStrptimeAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testRelativeTimeAgainstClickHouse(ctx, t, store, connection, indexTime)

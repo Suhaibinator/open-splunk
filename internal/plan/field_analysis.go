@@ -37,7 +37,7 @@ func ValidateFieldAnalysisEligibility(query *Query) error {
 			if index != 0 {
 				return fieldAnalysisPipelineDiagnostic(operator.Range)
 			}
-		case *Filter, *RegexFilter, *Extend, *Strcat, *FillNull, *RowTotal,
+		case *Filter, *RegexFilter, *Extend, *Convert, *Strcat, *FillNull, *RowTotal,
 			*OrderedDelta, *MakeMultivalue, *NoMultivalue, *Extract, *ExtractJSON, *Rename,
 			*Lookup, *AutomaticLookupGroup, *TimeBucket, *NumericBucket, *Sort, *Deduplicate, *Limit, *Reverse,
 			*ConditionalExtract, *ConditionalExtractJSON, *CopyFieldAlias, *ParallelExtend:

@@ -3430,7 +3430,9 @@ type fieldState struct {
 	// immutable event Dynamic payload and still uses the stored field-name
 	// inventory for row-local presence. A later wildcard projection must keep
 	// that inventory entry; calculated and renamed shadows deliberately do not.
-	rawEventDynamic              bool
+	rawEventDynamic bool
+	// convertedContainer gives retained conversion sidecars precedence over raw descendants.
+	convertedContainer           bool
 	relativeFieldNamesSQL        string
 	relativeFieldTypesSQL        string
 	fieldMetadataVersionSQL      string
@@ -4339,6 +4341,7 @@ type compiledScalar struct {
 	// Extend seals the calculated column behind a materialized CTE and an
 	// explicit ignore() consumer before continuing the pipeline.
 	requiresRuntimeValidation bool
+	convertedContainer        bool
 }
 
 // bindCompiledScalarForComparison replaces the authored value and presence
@@ -4462,6 +4465,7 @@ func extendCompileState(
 		)
 	}
 	if !retainDirectSidecars {
+		value.convertedContainer = false
 		value.storedPath = storedPathAuthority{}
 		value.storedMetadataPath = ""
 		value.relativeFieldNamesSQL = ""
@@ -4541,6 +4545,7 @@ func extendCompileState(
 		textEligibleBySemanticBytes:  value.textEligibleBySemanticBytes,
 		stringOrBytes:                value.stringOrBytes,
 		stringOrBytesNullable:        value.stringOrBytesNullable,
+		convertedContainer:           value.convertedContainer,
 		kind:                         value.kind,
 		// An eval output named index is calculated data, not the physical scan
 		// selector. It follows its expression type and ordinary comparison rules.
@@ -5990,6 +5995,7 @@ func projectedRenameField(source fieldState, destination string) fieldState {
 		descendantSQL:                source.descendantSQL,
 		descendantArgs:               append([]any(nil), source.descendantArgs...),
 		storedMetadataPath:           source.storedMetadataPath,
+		convertedContainer:           source.convertedContainer,
 		relativeFieldNamesSQL:        source.relativeFieldNamesSQL,
 		relativeFieldTypesSQL:        source.relativeFieldTypesSQL,
 		fieldMetadataVersionSQL:      source.fieldMetadataVersionSQL,
@@ -7258,6 +7264,7 @@ func compiledScalarFromField(field fieldState) compiledScalar {
 		textEligibleBySemanticBytes:  field.textEligibleBySemanticBytes,
 		stringOrBytes:                field.stringOrBytes,
 		stringOrBytesNullable:        field.stringOrBytesNullable,
+		convertedContainer:           field.convertedContainer,
 		kind:                         field.kind,
 		numberType:                   field.numberType,
 		alwaysNull:                   field.alwaysNull,
@@ -7351,6 +7358,11 @@ func comparisonSQL(operator plan.ComparisonOp) (string, error) {
 func resolveCompiledField(field plan.FieldRef, state compileState) (fieldState, bool, error) {
 	if existing, ok := state.visible[field.Name]; ok {
 		return existing, true, nil
+	}
+	if _, blocked := state.blocked[field.Name]; !blocked {
+		if descendant, found := resolveConvertDescendant(field, state); found {
+			return descendant, true, nil
+		}
 	}
 	if _, blocked := state.blocked[field.Name]; blocked || field.Canonical || !state.allowDynamic {
 		return fieldState{}, false, nil
@@ -7638,6 +7650,7 @@ func compileProjection(operator *plan.Project, state compileState, relationAlias
 			fieldMetadataVersionSQL:      compiled.fieldMetadataVersionSQL,
 			optionalMultivaluePresentSQL: compiled.optionalMultivaluePresentSQL,
 			rawEventDynamic:              compiled.rawEventDynamic,
+			convertedContainer:           compiled.convertedContainer,
 			storedMetadataPath:           storedMetadataPath,
 			semanticBytesSQL:             semanticBytesSQL,
 			semanticBytesByUTF8Validity:  compiled.semanticBytesByUTF8Validity,

@@ -1679,6 +1679,201 @@
           "fields": "value"
         }
       }
+    },
+    {
+      "id": "convert.ctime-default",
+      "command": "convert",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/convert",
+        "release": "10.0",
+        "section": "Convert functions",
+        "kind": "grammar-derived",
+        "fragment": "ctime(_time)",
+        "verified_on": "2026-10-14",
+        "reviewed_evidence": "convert [timeformat=string] (<convert-function> [AS <field>] )..."
+      },
+      "query": "index=main | convert ctime(_time)",
+      "expect": {
+        "support": "executable",
+        "commands": [
+          "convert"
+        ],
+        "facets": {
+          "clauses": "ctime(_time)",
+          "timeformat": ""
+        }
+      }
+    },
+    {
+      "id": "convert.ctime-custom-as",
+      "command": "convert",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/convert",
+        "release": "10.0",
+        "section": "Convert functions",
+        "kind": "grammar-derived",
+        "fragment": "ctime(_time) AS c_time",
+        "verified_on": "2026-10-14",
+        "reviewed_evidence": "convert [timeformat=string] (<convert-function> [AS <field>] )..."
+      },
+      "query": "index=main | convert timeformat=\"%H:%M:%S\" ctime(_time) AS c_time",
+      "expect": {
+        "support": "executable",
+        "commands": [
+          "convert"
+        ],
+        "facets": {
+          "clauses": "ctime(_time) AS c_time",
+          "timeformat": "%H:%M:%S"
+        }
+      }
+    },
+    {
+      "id": "convert.ctime-reported-statistics",
+      "command": "convert",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/convert",
+        "release": "10.0",
+        "section": "Convert functions",
+        "kind": "grammar-derived",
+        "fragment": "ctime(first_seen) ctime(last_seen)",
+        "verified_on": "2026-10-14",
+        "reviewed_evidence": "convert [timeformat=string] (<convert-function> [AS <field>] )..."
+      },
+      "query": "index=main | stats min(_time) AS first_seen latest(_time) AS last_seen BY section_assessment_submission_id | sort - last_seen | convert ctime(first_seen) ctime(last_seen)",
+      "expect": {
+        "support": "executable",
+        "commands": [
+          "stats",
+          "sort",
+          "convert"
+        ],
+        "facets": {
+          "clauses": "ctime(first_seen), ctime(last_seen)",
+          "timeformat": ""
+        }
+      }
+    },
+    {
+      "id": "convert.mktime-default",
+      "command": "convert",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/convert",
+        "release": "10.0",
+        "section": "Convert functions",
+        "kind": "grammar-derived",
+        "fragment": "mktime(started) AS epoch",
+        "verified_on": "2026-10-14",
+        "reviewed_evidence": "convert [timeformat=string] (<convert-function> [AS <field>] )..."
+      },
+      "query": "index=main | convert mktime(started) AS epoch",
+      "expect": {
+        "support": "executable",
+        "commands": [
+          "convert"
+        ],
+        "facets": {
+          "clauses": "mktime(started) AS epoch",
+          "timeformat": ""
+        }
+      }
+    },
+    {
+      "id": "convert.duration-seconds",
+      "command": "convert",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/convert",
+        "release": "10.0",
+        "section": "Convert functions",
+        "kind": "grammar-derived",
+        "fragment": "dur2sec(xdelay) dur2sec(delay)",
+        "verified_on": "2026-10-14",
+        "reviewed_evidence": "convert [timeformat=string] (<convert-function> [AS <field>] )..."
+      },
+      "query": "index=main | convert dur2sec(xdelay) dur2sec(delay)",
+      "expect": {
+        "support": "executable",
+        "commands": [
+          "convert"
+        ],
+        "facets": {
+          "clauses": "dur2sec(xdelay), dur2sec(delay)",
+          "timeformat": ""
+        }
+      }
+    },
+    {
+      "id": "convert.numeric",
+      "command": "convert",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/convert",
+        "release": "10.0",
+        "section": "Convert functions",
+        "kind": "grammar-derived",
+        "fragment": "num(time_elapsed)",
+        "verified_on": "2026-10-14",
+        "reviewed_evidence": "convert [timeformat=string] (<convert-function> [AS <field>] )..."
+      },
+      "query": "index=main | convert num(time_elapsed)",
+      "expect": {
+        "support": "executable",
+        "commands": [
+          "convert"
+        ],
+        "facets": {
+          "clauses": "num(time_elapsed)",
+          "timeformat": ""
+        }
+      }
+    },
+    {
+      "id": "convert.automatic-exclusions",
+      "command": "convert",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/convert",
+        "release": "10.0",
+        "section": "Convert functions",
+        "kind": "grammar-derived",
+        "fragment": "auto(*) none(src_ip)",
+        "verified_on": "2026-10-14",
+        "reviewed_evidence": "convert [timeformat=string] (<convert-function> [AS <field>] )..."
+      },
+      "query": "index=main | table duration,src_ip | convert auto(*) none(src_ip)",
+      "expect": {
+        "support": "executable",
+        "commands": [
+          "table",
+          "convert"
+        ],
+        "facets": {
+          "clauses": "auto(*), none(src_ip)",
+          "timeformat": ""
+        }
+      }
+    },
+    {
+      "id": "convert.remove-units",
+      "command": "convert",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/convert",
+        "release": "10.0",
+        "section": "Convert functions",
+        "kind": "grammar-derived",
+        "fragment": "rmunit(duration)",
+        "verified_on": "2026-10-14",
+        "reviewed_evidence": "convert [timeformat=string] (<convert-function> [AS <field>] )..."
+      },
+      "query": "index=main | convert rmunit(duration)",
+      "expect": {
+        "support": "executable",
+        "commands": [
+          "convert"
+        ],
+        "facets": {
+          "clauses": "rmunit(duration)",
+          "timeformat": ""
+        }
+      }
     }
   ]
 }

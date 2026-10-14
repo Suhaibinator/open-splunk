@@ -505,6 +505,24 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 			}
 		}
 		return nil
+	case *Convert:
+		if operator == nil || len(operator.Assignments) > spl.MaximumConvertWrites {
+			return errors.New("analyze logical query: convert is invalid")
+		}
+		formatCommand := &spl.ConvertCommand{TimeFormat: operator.TimeFormat, TimeFormatRange: operator.TimeFormatRange}
+		for _, assignment := range operator.Assignments {
+			if !assignment.Function.Valid() || assignment.Function == spl.ConvertFunctionNone || !validResolvedEventAggregateField(assignment.Input) || !validResolvedEventAggregateField(assignment.Output) {
+				return errors.New("analyze logical query: convert function is invalid")
+			}
+			if err := analyzer.addField(assignment.Input, depth+1); err != nil {
+				return err
+			}
+			if err := analyzer.validateField(assignment.Output, depth+1); err != nil {
+				return err
+			}
+			formatCommand.Clauses = append(formatCommand.Clauses, spl.ConvertClause{Function: assignment.Function})
+		}
+		return validateConvertFormat(formatCommand)
 	case *Strcat:
 		if operator == nil || len(operator.Operands) < 2 ||
 			len(operator.Operands) > spl.MaximumConcatenationOperands {

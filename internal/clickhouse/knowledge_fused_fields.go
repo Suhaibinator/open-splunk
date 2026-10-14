@@ -122,6 +122,7 @@ func writeKnowledgeFieldStateAuthority(writer hash.Hash, field fieldState) bool 
 	writeTokenPart(writer, field.relativeFieldTypesSQL)
 	writeTokenPart(writer, field.fieldMetadataVersionSQL)
 	writeUint64(writer, uint64(field.kind))
+	writeBool(writer, field.convertedContainer)
 	writeBool(writer, field.caseSensitive)
 	writeTokenPart(writer, field.numberType)
 	writeBool(writer, field.numericSort)

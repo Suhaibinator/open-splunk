@@ -596,3 +596,12 @@ test("diagnostic markers underline slices inside tokens without changing the tex
     renderToStaticMarkup(createElement(Fragment, null, ...syntaxTokens(query))),
   );
 });
+
+
+test("convert is highlighted as a command while literal timeformat pipes stay quoted", () => {
+  const source = 'index=main | convert timeformat="%Y|%m|%d" ctime(_time) AS rendered';
+  const markup = renderToStaticMarkup(createElement(Fragment, null, ...syntaxTokens(source)));
+  assert.match(markup, /class="spl-command">convert<\/span>/u);
+  assert.doesNotMatch(markup, /spl-error-token/u);
+  assert.equal(scanSplStructure(source).pipes.length, 1);
+});

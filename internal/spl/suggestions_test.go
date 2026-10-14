@@ -1153,7 +1153,7 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 	t.Parallel()
 
 	wantCommands := []string{
-		"search", "where", "eval", "rename", "fields", "table", "sort",
+		"search", "where", "eval", "convert", "rename", "fields", "table", "sort",
 		"dedup", "rex", "spath", "lookup", "bin", "bucket", "head", "tail", "regex",
 		"reverse", "accum", "strcat", "addinfo", "fillnull", "addtotals", "delta",
 		"makemv", "mvexpand", "nomv", "stats", "eventstats", "streamstats", "top", "rare",

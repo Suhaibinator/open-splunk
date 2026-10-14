@@ -231,6 +231,15 @@ commands:
 				publishOutputFieldAndTrackTime(assignment.Field)
 			}
 			result.Operators = append(result.Operators, &Extend{Assignments: assignments, Range: command.Range})
+		case *spl.ConvertCommand:
+			operator, convertErr := buildConvert(command, outputSchemaKnown, result.OutputFields)
+			if convertErr != nil {
+				return nil, convertErr
+			}
+			result.Operators = append(result.Operators, operator)
+			for _, assignment := range operator.Assignments {
+				publishOutputFieldAndTrackTime(assignment.Output.Name)
+			}
 		case *spl.RexCommand:
 			if command.MaxMatch != 1 {
 				return nil, &Diagnostic{

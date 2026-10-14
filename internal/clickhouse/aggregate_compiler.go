@@ -6402,7 +6402,7 @@ func singleChronologicalCandidateSQL(
 	}
 
 	if field.kind != fieldKindDynamic {
-		value := statsScalarStringOrNullSQL(field)
+		value := chronologicalScalarStringOrNullSQL(field)
 		existsSQL := field.existsSQL
 		if existsSQL == "" {
 			existsSQL = "1"
@@ -6643,7 +6643,7 @@ func chronologicalCandidatesSQL(
 	}
 
 	if field.kind != fieldKindDynamic {
-		value := statsScalarStringOrNullSQL(field)
+		value := chronologicalScalarStringOrNullSQL(field)
 		existsSQL := field.existsSQL
 		if existsSQL == "" {
 			existsSQL = "1"
@@ -7630,6 +7630,18 @@ func compileScalarExtremaResults(
 
 func compactNullableArraySQL(valuesSQL string) string {
 	return "arrayMap(value -> assumeNotNull(value), arrayFilter(value -> isNotNull(value), " + valuesSQL + "))"
+}
+
+// chronologicalScalarStringOrNullSQL keeps a Time input in the numeric
+// Unix-seconds domain used by SPL. Formatting it as a civil date would make
+// latest(_time) ineligible for subsequent numeric/time commands such as ctime.
+// Decimal arithmetic preserves all nine source fraction digits during the
+// existing chronological String transport.
+func chronologicalScalarStringOrNullSQL(field fieldState) string {
+	if field.kind == fieldKindTime {
+		return "CAST(toString(toDecimal128(toUnixTimestamp64Nano(" + field.valueSQL + "), 9) / toDecimal128(1000000000, 0)) AS Nullable(String))"
+	}
+	return statsScalarStringOrNullSQL(field)
 }
 
 func statsScalarStringOrNullSQL(field fieldState) string {

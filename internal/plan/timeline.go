@@ -67,6 +67,12 @@ func ValidateTimelineEligibility(query *Query) error {
 					return timelineTimeDiagnostic(assignment.Range)
 				}
 			}
+		case *Convert:
+			for _, assignment := range operator.Assignments {
+				if assignment.Output.Name == "_time" {
+					return timelineTimeDiagnostic(assignment.Range)
+				}
+			}
 		case *Strcat:
 			if operator.Destination.Name == "_time" {
 				return timelineTimeDiagnostic(preferTimelineRange(operator.Destination.Range, operator.Range))

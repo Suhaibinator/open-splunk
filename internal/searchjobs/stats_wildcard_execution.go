@@ -14,65 +14,61 @@ import (
 )
 
 // prepareAndCompileStatsWildcard returns an ordinary full plan when no runtime
-// field inventory is required. When the first wildcard stats stage sees an
-// open schema, it executes one compiler-sealed, bounded inventory query and
-// rebuilds the original AST with opaque expansion evidence.
+// field inventory is required. Otherwise it executes ordered compiler-sealed
+// inventories for stats and convert, sharing one runtime budget and retaining
+// the complete replay evidence chain.
 func (manager *Manager) prepareAndCompileStatsWildcard(
 	ctx context.Context,
 	parsed *spl.Query,
 	scope plan.Scope,
 	limits searchlimits.Policy,
 ) (*plan.Query, clickhouse.CompiledQuery, plan.StatsWildcardExpansion, time.Duration, error) {
-	maxRuntime := limits.MaxRuntime
+	remainingRuntime := limits.MaxRuntime
 	preparation, err := plan.PrepareStatsWildcard(parsed, scope)
 	if err != nil {
 		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
-	}
-	if full := preparation.FullPlan(); full != nil {
-		compiled, compileErr := manager.compiler.CompileContext(ctx, full)
-		return full, compiled, plan.StatsWildcardExpansion{}, maxRuntime, compileErr
-	}
-	request := preparation.Request()
-	prefix := preparation.Prefix()
-	if request.IsZero() || prefix == nil {
-		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0,
-			errors.New("compile search query: wildcard preparation is incomplete")
 	}
 	discoveryContext := ctx
 	if manager.limitSource != nil {
 		discoveryContext = searchlimits.WithPolicy(discoveryContext, limits)
 	}
-	expansion, inventory, inventoryRuntime, err := manager.executeStatsWildcardInventory(
-		discoveryContext,
-		manager.compiler,
-		prefix,
-		request,
-		maxRuntime,
-	)
-	if err != nil {
-		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
+	var expansion plan.StatsWildcardExpansion
+	inventories := []clickhouse.CompiledStatsWildcardInventory{}
+	for preparation.FullPlan() == nil {
+		request, prefix := preparation.Request(), preparation.Prefix()
+		if request.IsZero() || prefix == nil {
+			return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, errors.New("compile search query: wildcard preparation is incomplete")
+		}
+		var inventory clickhouse.CompiledStatsWildcardInventory
+		var consumed time.Duration
+		expansion, inventory, consumed, err = manager.executeStatsWildcardInventory(discoveryContext, manager.compiler, prefix, request, remainingRuntime)
+		if err != nil {
+			return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
+		}
+		var ok bool
+		remainingRuntime, ok = remainingStatsWildcardRuntime(remainingRuntime, consumed)
+		if !ok {
+			return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, context.DeadlineExceeded
+		}
+		inventories = append(inventories, inventory)
+		preparation, err = plan.PrepareNextStatsWildcard(parsed, scope, expansion)
+		if err != nil {
+			return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
+		}
 	}
-	remainingRuntime, ok := remainingStatsWildcardRuntime(maxRuntime, inventoryRuntime)
-	if !ok {
-		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0,
-			context.DeadlineExceeded
-	}
-	logical, err := plan.BuildWithStatsWildcardExpansion(parsed, scope, expansion)
-	if err != nil {
-		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
-	}
+	logical := preparation.FullPlan()
 	compiled, err := manager.compiler.CompileContext(ctx, logical)
 	if err != nil {
 		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
 	}
-	sameReadScope, scopeErr := inventory.SameReadScopeContext(ctx, compiled)
-	if scopeErr != nil {
-		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0,
-			scopeErr
-	}
-	if !sameReadScope {
-		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0,
-			fmt.Errorf("%w: stats wildcard read scope changed", ErrInvalidResult)
+	for _, inventory := range inventories {
+		sameReadScope, scopeErr := inventory.SameReadScopeContext(ctx, compiled)
+		if scopeErr != nil {
+			return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, scopeErr
+		}
+		if !sameReadScope {
+			return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, fmt.Errorf("%w: wildcard read scope changed", ErrInvalidResult)
+		}
 	}
 	return logical, compiled, expansion.Clone(), remainingRuntime, nil
 }
@@ -155,7 +151,7 @@ func (manager *Manager) executeStatsWildcardInventory(
 	if err != nil {
 		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, inventoryRuntime, err
 	}
-	if expansion.IsZero() {
+	if !expansion.ValidForRequest(request) {
 		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, inventoryRuntime, ErrInvalidResult
 	}
 	return expansion.Clone(), pristine, inventoryRuntime, nil

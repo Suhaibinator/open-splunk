@@ -80,7 +80,7 @@ func (c Compiler) CompileStatsWildcardInventoryContext(
 	}
 	patterns := request.Patterns()
 	maximumPairs := request.MaximumPairs()
-	if len(patterns) == 0 || maximumPairs < 2 || maximumPairs > spl.MaximumStatsMeasures+1 {
+	if len(patterns) == 0 || maximumPairs < 2 || maximumPairs > spl.MaximumConvertWrites+1 {
 		return CompiledStatsWildcardInventory{}, errors.New(
 			"compile ClickHouse stats wildcard inventory: request is invalid",
 		)
@@ -449,7 +449,7 @@ func finalizeStatsWildcardInventory(
 	}
 	patterns := request.Patterns()
 	maximumPairs := request.MaximumPairs()
-	if len(patterns) == 0 || maximumPairs < 2 || maximumPairs > spl.MaximumStatsMeasures+1 {
+	if len(patterns) == 0 || maximumPairs < 2 || maximumPairs > spl.MaximumConvertWrites+1 {
 		return CompiledQuery{}, errors.New(
 			"compile ClickHouse stats wildcard inventory: request is invalid",
 		)
@@ -579,9 +579,11 @@ func writeStatsWildcardPatternCTE(
 
 func writeStatsWildcardMatchAndLimit(
 	sql *strings.Builder,
+	args []any,
 	candidateRelation string,
-	maximumPairs uint8,
-) {
+	request plan.StatsWildcardRequest,
+) []any {
+	maximumPairs := request.MaximumPairs()
 	q := quoteIdentifier
 	sql.WriteString(q(statsWildcardMatchesCTE))
 	sql.WriteString(" AS (SELECT ")
@@ -596,7 +598,42 @@ func writeStatsWildcardMatchAndLimit(
 	sql.WriteString(q(statsWildcardCandidateInvalid))
 	sql.WriteString(" = 0 AND match(")
 	sql.WriteString(q(statsWildcardCandidateField))
-	sql.WriteString(", __os_stats_wildcard_re2)), ")
+	sql.WriteString(", __os_stats_wildcard_re2)")
+	if request.IsConvert() {
+		allowed := []uint8{}
+		for _, pattern := range request.Patterns() {
+			if strings.HasPrefix(pattern.Pattern, "_") {
+				allowed = append(allowed, pattern.Ordinal)
+			}
+		}
+		sql.WriteString(" AND (NOT startsWith(" + q(statsWildcardCandidateField) + ", '_') OR has(CAST(? AS Array(UInt8)), " + q(statsWildcardCandidateOrdinal) + "))")
+		args = append(args, allowed)
+		exclusionRegex := []string{}
+		exclusionInternal := []uint8{}
+		for _, exclusion := range request.Exclusions() {
+			_, expression := statsWildcardInventoryPatterns([]plan.StatsWildcardPattern{{Pattern: exclusion}})
+			exclusionRegex = append(exclusionRegex, expression[0])
+			if !strings.Contains(exclusion, "*") || strings.HasPrefix(exclusion, "_") {
+				exclusionInternal = append(exclusionInternal, 1)
+			} else {
+				exclusionInternal = append(exclusionInternal, 0)
+			}
+		}
+		sql.WriteString(" AND NOT arrayExists(exclusion -> match(" + q(statsWildcardCandidateField) + ", tupleElement(exclusion, 1)) AND (tupleElement(exclusion, 2) != 0 OR NOT startsWith(" + q(statsWildcardCandidateField) + ", '_')), arrayZip(CAST(? AS Array(String)), CAST(? AS Array(UInt8))))")
+		args = append(args, exclusionRegex, exclusionInternal)
+		additions := request.AdditionalMatches()
+		if len(additions) > 0 {
+			ordinals := make([]uint8, len(additions))
+			fields := make([]string, len(additions))
+			for i, addition := range additions {
+				ordinals[i] = addition.Ordinal
+				fields[i] = addition.Field
+			}
+			sql.WriteString(" UNION DISTINCT SELECT tupleElement(extra, 1), tupleElement(extra, 2) FROM (SELECT arrayJoin(arrayZip(CAST(? AS Array(UInt8)), CAST(? AS Array(String)))) AS extra)")
+			args = append(args, ordinals, fields)
+		}
+	}
+	sql.WriteString("), ")
 	sql.WriteString(q(statsWildcardLimitedCTE))
 	sql.WriteString(" AS (SELECT ")
 	sql.WriteString(q(statsWildcardCandidateOrdinal))
@@ -611,6 +648,7 @@ func writeStatsWildcardMatchAndLimit(
 	sql.WriteString(" ASC LIMIT ")
 	sql.WriteString(fmtUint(uint64(maximumPairs)))
 	sql.WriteString(")")
+	return args
 }
 
 func writeStatsWildcardFinalSelect(
@@ -746,7 +784,7 @@ func finalizeMaterializedStatsWildcardInventory(
 	sql.WriteString("), ")
 
 	args = writeStatsWildcardPatternCTE(&sql, args, ordinals, regularExpressions)
-	writeStatsWildcardMatchAndLimit(&sql, statsWildcardDistinctCTE, request.MaximumPairs())
+	args = writeStatsWildcardMatchAndLimit(&sql, args, statsWildcardDistinctCTE, request)
 	writeStatsWildcardFinalSelect(
 		&sql,
 		"(SELECT "+q(fieldSuggestionMetadataInvalid)+" FROM "+q(fieldSuggestionMetadataCTE)+")",
@@ -772,6 +810,9 @@ func finalizeMaterializedStatsWildcardInventory(
 		SQL:                       sql.String(),
 		Args:                      args,
 		validationDummyProjection: statsWildcardInventoryDummyProjection(),
+	}
+	if len(request.AdditionalMatches()) > 0 {
+		resultDepth = relationalNodeDepth(relationalNodeDepth(relationalNodeDepth(resultDepth)))
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, ownerRange), nil
 }
@@ -842,7 +883,7 @@ func finalizePrerequisiteStatsWildcardInventory(
 	sql.WriteString("), ")
 
 	args = writeStatsWildcardPatternCTE(&sql, args, ordinals, regularExpressions)
-	writeStatsWildcardMatchAndLimit(&sql, statsWildcardDistinctCTE, request.MaximumPairs())
+	args = writeStatsWildcardMatchAndLimit(&sql, args, statsWildcardDistinctCTE, request)
 	writeStatsWildcardFinalSelect(
 		&sql,
 		"(SELECT max("+q(fieldSuggestionGlobalInvalid)+") FROM "+q(fieldSuggestionControlledCTE)+")",
@@ -871,6 +912,9 @@ func finalizePrerequisiteStatsWildcardInventory(
 		SQL:                       sql.String(),
 		Args:                      args,
 		validationDummyProjection: statsWildcardInventoryDummyProjection(),
+	}
+	if len(request.AdditionalMatches()) > 0 {
+		resultDepth = relationalNodeDepth(relationalNodeDepth(relationalNodeDepth(resultDepth)))
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, ownerRange), nil
 }

@@ -72,6 +72,7 @@ import {
   clearAdministratorBearerToken,
   createOpenSplunkApiClient,
   currentAdministratorSessionRevision,
+  subscribeToAdministratorSessionRevision,
   getSystemBootstrap,
   isHttpError,
   isHttpStatus,
@@ -168,6 +169,11 @@ import {
   type ServerSavedSearch,
   type ServerSearchHistoryEntry,
 } from "@/lib/search/server-api";
+import {
+  editorProblems,
+  searchDiagnosticAuthorityKey,
+  type BackendDiagnostics,
+} from "./search-workspace/editor-problems";
 import {
   type EditorDiagnostic,
   editorDiagnosticFromLocal,
@@ -602,12 +608,6 @@ function searchJobIdForWebSocketEvent(event: SearchWebSocketEvent): string | nul
   }
 }
 
-/** The server's diagnostics for one exact query text; markers must never underline other text. */
-interface BackendDiagnostics {
-  source: string;
-  diagnostics: Diagnostic[];
-}
-
 function diagnosticIdentity(diagnostic: Diagnostic): string {
   const start = diagnostic.sourceRange?.start?.byteOffset ?? "";
   const end = diagnostic.sourceRange?.end?.byteOffset ?? "";
@@ -629,9 +629,10 @@ function problemKey(diagnostic: EditorDiagnostic): string {
 function mergeBackendDiagnostics(
   current: BackendDiagnostics | null,
   source: string,
+  authorityKey: string,
   diagnostics: Diagnostic[],
 ): BackendDiagnostics {
-  if (current === null || current.source !== source) return { source, diagnostics };
+  if (current === null || current.source !== source || current.authorityKey !== authorityKey) return { source, authorityKey, diagnostics };
   const seen = new Set(current.diagnostics.map(diagnosticIdentity));
   const merged = [...current.diagnostics];
   for (const diagnostic of diagnostics) {
@@ -640,7 +641,7 @@ function mergeBackendDiagnostics(
     seen.add(identity);
     merged.push(diagnostic);
   }
-  return { source, diagnostics: merged };
+  return { source, authorityKey, diagnostics: merged };
 }
 
 function uniqueMessages(messages: Array<string | undefined>): string[] {
@@ -829,6 +830,11 @@ export function SearchWorkspace({
   const backendEnabled = dataMode === "backend";
   const initialWorkspaceQuery = backendEnabled ? "" : DEFAULT_QUERY;
   const apiClient = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
+  const administratorSessionRevision = useSyncExternalStore(
+    subscribeToAdministratorSessionRevision,
+    currentAdministratorSessionRevision,
+    () => 0,
+  );
   const preferredAppId = useSyncExternalStore(
     subscribeToBackendAppId,
     currentBackendAppId,
@@ -1256,53 +1262,26 @@ export function SearchWorkspace({
     && !searchIsClosed
     && resultSkeletonTab !== null;
   const diagnostic = useMemo(() => query.trim().length === 0 ? null : getQueryDiagnostic(query), [query]);
-  const editorDiagnostic = useMemo(() => {
-    if (!backendEnabled || diagnostic?.kind !== "unsupported") return diagnostic;
-    return {
-      ...diagnostic,
-      message: `Command “${diagnostic.token}” is newer than this editor's local command catalog.`,
-      suggestion: "Run the search to let the connected server validate it.",
-      actionLabel: undefined,
-      removeStart: undefined,
-      removeEnd: undefined,
-    };
-  }, [backendEnabled, diagnostic]);
-  const problems = useMemo((): EditorProblem[] => {
-    // The scanner, the last verdict and the suggestion pass can all report the
-    // same fault; the list shows each distinct one once, first source wins.
-    const items = new Map<string, EditorProblem>();
-    const add = (problem: EditorProblem) => {
-      const key = problemKey(problem.diagnostic);
-      if (!items.has(key)) items.set(key, problem);
-    };
-    if (editorDiagnostic !== null) {
-      add({
-        diagnostic: editorDiagnosticFromLocal(query, editorDiagnostic),
-        stale: false,
-        fix: editorDiagnostic.actionLabel === undefined ? null : editorDiagnostic,
-      });
-    }
-    if (backendVerdict !== null) {
-      const stale = backendVerdict.source !== query;
-      for (const verdict of editorDiagnosticsFromProto(backendVerdict.source, backendVerdict.diagnostics)) {
-        add({ diagnostic: verdict, stale, fix: null });
-      }
-    }
-    if (suggestionDiagnostics !== null && suggestionDiagnostics.source === query) {
-      for (const hint of editorDiagnosticsFromProto(query, suggestionDiagnostics.diagnostics)) {
-        add({ diagnostic: hint, stale: false, fix: null });
-      }
-    }
-    return [...items.values()];
-  }, [backendVerdict, editorDiagnostic, query, suggestionDiagnostics]);
+  const diagnosticAppId = (activeSavedSearchId === null
+    ? undefined
+    : backendSavedSearchesRef.current.get(activeSavedSearchId)?.search.appId)
+    ?? (activeSavedSearchId === null ? backendHistoryRerunRef.current?.search.appId : undefined)
+    ?? backendBootstrapModel?.selectedAppId ?? undefined;
+  const diagnosticAuthorityKey = searchDiagnosticAuthorityKey(apiBaseUrl, administratorSessionRevision, diagnosticAppId);
+  const diagnosticAuthorityKeyRef = useRef(diagnosticAuthorityKey);
+  diagnosticAuthorityKeyRef.current = diagnosticAuthorityKey;
+  const problems = useMemo(() => editorProblems(
+    query, diagnostic, backendEnabled, diagnosticAuthorityKey, backendVerdict, suggestionDiagnostics,
+  ), [backendEnabled, backendVerdict, diagnostic, diagnosticAuthorityKey, query, suggestionDiagnostics]);
   const activeFailureProblems = useMemo(() => {
     if (searchFailure === null) return [];
-    const stale = searchFailure.source !== query;
+    const stale = searchFailure.source !== query
+      || (searchFailure.authorityKey !== undefined && searchFailure.authorityKey !== diagnosticAuthorityKey);
     return searchFailure.problems.map((problem) => ({
       ...problem,
       stale: problem.stale || stale,
     }));
-  }, [query, searchFailure]);
+  }, [diagnosticAuthorityKey, query, searchFailure]);
   const searchFailurePresentation = searchFailure === null
     ? null
     : presentSearchFailure(searchFailure.failure, activeFailureProblems);
@@ -1354,7 +1333,7 @@ export function SearchWorkspace({
         spl: query,
         cursorByteOffset: BigInt(new TextEncoder().encode(query.slice(0, editorCaret)).length),
         timeRange: backendTimeRangeIntent(timeRange, false),
-        appId: bootstrap.response.selectedAppId ?? undefined,
+        appId: diagnosticAppId,
         indexScope,
         maxSuggestions: 50,
       }, { signal: controller.signal, timeoutMs: 5_000 }).then((response) => {
@@ -1367,7 +1346,7 @@ export function SearchWorkspace({
           ]),
         );
         setCompletionIndex(0);
-        setSuggestionDiagnostics({ source: query, diagnostics: response.diagnostics });
+        setSuggestionDiagnostics({ source: query, authorityKey: diagnosticAuthorityKey, diagnostics: response.diagnostics });
         setBackendCompletions(response.suggestions.map((suggestion, index) => {
           const start = suggestion.replacementRange?.start?.byteOffset;
           const end = suggestion.replacementRange?.end?.byteOffset;
@@ -1389,7 +1368,7 @@ export function SearchWorkspace({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [apiClient, backendBootstrapModel, backendCompletionEnabled, editorCaret, query, timeRange]);
+  }, [apiClient, backendBootstrapModel, backendCompletionEnabled, diagnosticAppId, diagnosticAuthorityKey, editorCaret, query, timeRange]);
   const retainedPatternContext = backendEnabled && backendAuthoritativeResultsReady
     && !backendResultsExpired && backendResultKind === ResultSetKind.RESULT_SET_KIND_EVENTS
     && phase === "completed" && backendSnapshotRef && runningSearch.jobSnapshot().id
@@ -2439,7 +2418,10 @@ export function SearchWorkspace({
     const source = job.definition?.spl;
     if (source === undefined) return;
     const diagnostics = [...job.diagnostics, ...(job.failure?.diagnostics ?? [])];
-    setBackendVerdict((current) => mergeBackendDiagnostics(current, source, diagnostics));
+    const authorityKey = searchDiagnosticAuthorityKey(
+      apiBaseUrl, administratorSessionRevision, job.definition?.appId ?? diagnosticAppId,
+    );
+    setBackendVerdict((current) => mergeBackendDiagnostics(current, source, authorityKey, diagnostics));
   }
 
   function updateBackendPreviewStatus(
@@ -4875,11 +4857,22 @@ export function SearchWorkspace({
         sessionRevision: currentAdministratorSessionRevision(),
       });
       if (definition !== undefined && pendingSearchCreateIdRef.current !== clientRequestId) {
+        const authorityKey = searchDiagnosticAuthorityKey(apiBaseUrl, currentAdministratorSessionRevision(), launchAppId);
         const validation = await apiClient.search.validate(
           { definition },
           { signal: controller.signal, timeoutMs: 10_000 },
         );
-        setBackendVerdict({ source: nextQuery, diagnostics: validation.diagnostics });
+        if (!runningSearch.isCurrent(generation) || controller.signal.aborted) return;
+        if (currentAdministratorSessionRevision() !== administratorSessionRevision
+          || diagnosticAuthorityKeyRef.current !== authorityKey) {
+          controller.abort();
+          runningSearch.supersede();
+          setPhase("canceled");
+          setProgress(100);
+          showToast("Search canceled because the backend session or app changed.", "info");
+          return;
+        }
+        setBackendVerdict({ source: nextQuery, authorityKey, diagnostics: validation.diagnostics });
         if (!validation.valid) {
           const detail = validation.diagnostics
             .map((item) => item.message.trim())
@@ -4889,6 +4882,7 @@ export function SearchWorkspace({
           setProgress(100);
           setSearchFailure({
             failure: invalidSplSearchFailure(message, validation.diagnostics),
+            authorityKey,
             problems: problemsFromDiagnostics(nextQuery, validation.diagnostics),
             source: nextQuery,
             timeRange: launchTimeRange,
@@ -8096,7 +8090,7 @@ export function SearchWorkspace({
       {!resultViewUnavailable && searchFailure !== null && searchFailurePresentation !== null ? (
         <SearchFailurePanel
           activeTab={activeTab}
-          canNavigateSource={searchFailure.source === query}
+          canNavigateSource={searchFailure.source === query && (searchFailure.authorityKey === undefined || searchFailure.authorityKey === diagnosticAuthorityKey)}
           onFocusProblem={(problem) => {
             const range = problem.diagnostic.range;
             if (range !== null && searchFailure.source === query) focusEditor(range.start);
