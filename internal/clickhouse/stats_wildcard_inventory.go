@@ -530,13 +530,15 @@ func statsWildcardMatchesAny(patterns []plan.StatsWildcardPattern, name string) 
 	return false
 }
 
+// Numeric UInt8 placeholder arrays use []int64 because clickhouse-go binds
+// top-level []uint8 as binary strings. The explicit SQL casts retain UInt8.
 func statsWildcardInventoryPatterns(
 	patterns []plan.StatsWildcardPattern,
-) ([]uint8, []string) {
-	ordinals := make([]uint8, len(patterns))
+) ([]int64, []string) {
+	ordinals := make([]int64, len(patterns))
 	regularExpressions := make([]string, len(patterns))
 	for index, pattern := range patterns {
-		ordinals[index] = pattern.Ordinal
+		ordinals[index] = int64(pattern.Ordinal)
 		parts := strings.Split(pattern.Pattern, "*")
 		for partIndex := range parts {
 			parts[partIndex] = regexp.QuoteMeta(parts[partIndex])
@@ -560,7 +562,7 @@ const (
 func writeStatsWildcardPatternCTE(
 	sql *strings.Builder,
 	args []any,
-	ordinals []uint8,
+	ordinals []int64,
 	regularExpressions []string,
 ) []any {
 	q := quoteIdentifier
@@ -600,16 +602,16 @@ func writeStatsWildcardMatchAndLimit(
 	sql.WriteString(q(statsWildcardCandidateField))
 	sql.WriteString(", __os_stats_wildcard_re2)")
 	if request.IsConvert() {
-		allowed := []uint8{}
+		allowed := []int64{}
 		for _, pattern := range request.Patterns() {
 			if strings.HasPrefix(pattern.Pattern, "_") {
-				allowed = append(allowed, pattern.Ordinal)
+				allowed = append(allowed, int64(pattern.Ordinal))
 			}
 		}
 		sql.WriteString(" AND (NOT startsWith(" + q(statsWildcardCandidateField) + ", '_') OR has(CAST(? AS Array(UInt8)), " + q(statsWildcardCandidateOrdinal) + "))")
 		args = append(args, allowed)
 		exclusionRegex := []string{}
-		exclusionInternal := []uint8{}
+		exclusionInternal := []int64{}
 		for _, exclusion := range request.Exclusions() {
 			_, expression := statsWildcardInventoryPatterns([]plan.StatsWildcardPattern{{Pattern: exclusion}})
 			exclusionRegex = append(exclusionRegex, expression[0])
@@ -623,10 +625,10 @@ func writeStatsWildcardMatchAndLimit(
 		args = append(args, exclusionRegex, exclusionInternal)
 		additions := request.AdditionalMatches()
 		if len(additions) > 0 {
-			ordinals := make([]uint8, len(additions))
+			ordinals := make([]int64, len(additions))
 			fields := make([]string, len(additions))
 			for i, addition := range additions {
-				ordinals[i] = addition.Ordinal
+				ordinals[i] = int64(addition.Ordinal)
 				fields[i] = addition.Field
 			}
 			sql.WriteString(" UNION DISTINCT SELECT tupleElement(extra, 1), tupleElement(extra, 2) FROM (SELECT arrayJoin(arrayZip(CAST(? AS Array(UInt8)), CAST(? AS Array(String)))) AS extra)")
@@ -692,7 +694,7 @@ func finalizeMaterializedStatsWildcardInventory(
 	ownerRange spl.Range,
 	policy eventAnalysisFinalizationPolicy,
 	knownNames, shadows, blockedPrefixes, reservedRoots []string,
-	ordinals []uint8,
+	ordinals []int64,
 	regularExpressions []string,
 	allowDynamic bool,
 ) (CompiledQuery, error) {
@@ -824,7 +826,7 @@ func finalizePrerequisiteStatsWildcardInventory(
 	ownerRange spl.Range,
 	policy eventAnalysisFinalizationPolicy,
 	knownNames, shadows, blockedPrefixes, reservedRoots []string,
-	ordinals []uint8,
+	ordinals []int64,
 	regularExpressions []string,
 	allowDynamic bool,
 	sidecars []fieldSuggestionSidecar,

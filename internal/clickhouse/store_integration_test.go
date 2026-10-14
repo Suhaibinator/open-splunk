@@ -177,6 +177,21 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = queryConnection.Close() })
+	t.Run("numeric UInt8 arrays preserve binary parameter semantics", func(t *testing.T) {
+		want := []uint8{0, 1, 255}
+		binary := []byte{0, 0xff, '\'', '\\'}
+		var values, empty []uint8
+		var raw string
+		if err := queryConnection.QueryRow(ctx,
+			"SELECT CAST(? AS Array(UInt8)), CAST(? AS Array(UInt8)), CAST(? AS String)",
+			[]int64{0, 1, 255}, []int64{}, binary,
+		).Scan(&values, &empty, &raw); err != nil {
+			t.Fatalf("bind numeric arrays and binary string: %v", err)
+		}
+		if !slices.Equal(values, want) || len(empty) != 0 || !bytes.Equal([]byte(raw), binary) {
+			t.Fatalf("bound values = (%v, %v, %x), want (%v, [], %x)", values, empty, raw, want, binary)
+		}
+	})
 	t.Run("native raw text token index preserves SPL semantics and prunes granules", func(t *testing.T) {
 		testRawTextTokenIndexAgainstClickHouse(t, ctx, queryConnection, indexTime)
 	})
