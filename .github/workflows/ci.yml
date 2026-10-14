@@ -291,7 +291,7 @@ jobs:
 
       - name: Upload Go coverage
         if: matrix.upload_coverage
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: go-coverage
           path: coverage.out
@@ -459,7 +459,7 @@ jobs:
 
       - name: Upload fuzz failure evidence
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: knowledge-object-fuzz-${{ matrix.label }}-failure
           path: |
@@ -917,7 +917,7 @@ jobs:
 
       - name: Upload browser failure artifacts
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: backend-vertical-browser-failure
           path: |
@@ -933,7 +933,7 @@ jobs:
 
       - name: Upload browser rendering measurements
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: browser-fixed-result-rendering
           path: test-results/browser-fixed-result-rendering
@@ -1171,7 +1171,7 @@ jobs:
           cp build/binary-identities.txt release-proof/binary-identities.txt
 
       - name: Upload release proof
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: release-proof-${{ matrix.label }}
           path: release-proof
@@ -1199,7 +1199,7 @@ jobs:
 
       - name: Upload binaries
         if: matrix.label == 'linux-amd64'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: open-splunk-linux-amd64
           path: open-splunk-linux-amd64.tar.gz
