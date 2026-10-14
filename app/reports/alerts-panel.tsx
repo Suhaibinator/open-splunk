@@ -307,7 +307,7 @@ export function AlertsPanel({ apiBaseUrl, initialDraft }: AlertsPanelProps) {
 }
 
 function AlertHistoryDialog({ alert, runs, onClose }: { alert: ServerAlert; runs: ServerAlertRun[]; onClose: () => void }) {
-  const now = new Date();
+  const [now] = useState(() => new Date());
   return <Modal title={`${alert.definition.name} history`} subtitle="Newest retained runs first." wide onClose={onClose} footer={<button className="button button--primary" type="button" onClick={onClose}>Done</button>}><div className="table-wrap"><table className="table table--cards alerts-history-table"><thead><tr><th scope="col">Scheduled</th><th scope="col">Outcome</th><th scope="col">Retained results</th><th scope="col">Details</th></tr></thead><tbody>{runs.length === 0 ? <tr><td colSpan={4}>No runs recorded.</td></tr> : runs.map((run) => {
     const resultPresentation = alertRunResultPresentation(run, now);
     const result = resultPresentation === "available" && run.searchJobId !== null

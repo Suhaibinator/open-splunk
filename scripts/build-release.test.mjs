@@ -173,7 +173,7 @@ async function installReleaseToolShims(fixture) {
     "#!/usr/bin/env bash\n" +
       "set -euo pipefail\n" +
       "if [[ \"${1:-}\" == --version ]]; then\n" +
-      "  printf 'v26.7.0\\n'\n" +
+      "  printf 'v26.11.1\\n'\n" +
       "  exit 0\n" +
       "fi\n" +
       `exec ${JSON.stringify(process.execPath)} "$@"\n`,
@@ -184,14 +184,14 @@ async function installReleaseToolShims(fixture) {
       "set -euo pipefail\n" +
       "test \"${1:-}\" = env\n" +
       "test \"${2:-}\" = GOVERSION\n" +
-      "printf 'go1.27.0\\n'\n",
+      "printf 'go1.27.2\\n'\n",
   );
   await writeFile(
     path.join(binaryDirectory, "npm"),
     "#!/usr/bin/env bash\n" +
       "set -euo pipefail\n" +
       "test \"${1:-}\" = --version\n" +
-      "printf '11.19.0\\n'\n",
+      "printf '12.2.0\\n'\n",
   );
   await Promise.all(
     ["node", "go", "npm"].map((name) =>
