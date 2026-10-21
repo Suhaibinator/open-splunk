@@ -47,11 +47,35 @@ func TestStatsWildcardInventoryAgainstClickHouse(t *testing.T) {
 		t.Fatalf("resolve pinned ClickHouse image: %v", err)
 	}
 
+	for _, testCase := range []struct {
+		name   string
+		source string
+		fields []string
+	}{
+		{
+			name:   "single wildcard ordinal",
+			source: `index=knowledge-runtime service=matrix | stats max(float_*)`,
+			fields: []string{"max(float_copy)", "max(float_source)"},
+		},
+		{
+			name:   "multiple nonconsecutive wildcard ordinals",
+			source: `index=knowledge-runtime service=matrix | stats max(float_*) count min(float_*)`,
+			fields: []string{"max(float_copy)", "max(float_source)", "count", "min(float_copy)", "min(float_source)"},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			testStatsWildcardInventoryAgainstClickHouse(t, image, testCase.source, testCase.fields)
+		})
+	}
+}
+
+func testStatsWildcardInventoryAgainstClickHouse(t *testing.T, image, source string, expectedFields []string) {
+	t.Helper()
+
 	const (
 		indexName         = "knowledge-runtime"
 		selectorIndexName = "selector-runtime"
 		tenantID          = "knowledge-tenant"
-		source            = `index=knowledge-runtime service=matrix | stats max(float_*)`
 	)
 	base := time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC)
 	indexTime := base.Add(10 * time.Minute)
@@ -191,7 +215,7 @@ func TestStatsWildcardInventoryAgainstClickHouse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rebuild plan with stats wildcard expansion: %v", err)
 	}
-	if !slices.Equal(logical.OutputFields, []string{"max(float_copy)", "max(float_source)"}) {
-		t.Fatalf("expanded output fields = %v", logical.OutputFields)
+	if !slices.Equal(logical.OutputFields, expectedFields) {
+		t.Fatalf("expanded output fields = %v, want %v", logical.OutputFields, expectedFields)
 	}
 }

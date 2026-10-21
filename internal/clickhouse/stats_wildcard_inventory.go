@@ -532,11 +532,13 @@ func statsWildcardMatchesAny(patterns []plan.StatsWildcardPattern, name string) 
 
 func statsWildcardInventoryPatterns(
 	patterns []plan.StatsWildcardPattern,
-) ([]uint8, []string) {
-	ordinals := make([]uint8, len(patterns))
+) ([]uint16, []string) {
+	// The driver binds top-level []uint8 (an alias for []byte) as a String.
+	// Widen the ordinals so they bind as a numeric array before the UInt8 cast.
+	ordinals := make([]uint16, len(patterns))
 	regularExpressions := make([]string, len(patterns))
 	for index, pattern := range patterns {
-		ordinals[index] = pattern.Ordinal
+		ordinals[index] = uint16(pattern.Ordinal)
 		parts := strings.Split(pattern.Pattern, "*")
 		for partIndex := range parts {
 			parts[partIndex] = regexp.QuoteMeta(parts[partIndex])
@@ -560,7 +562,7 @@ const (
 func writeStatsWildcardPatternCTE(
 	sql *strings.Builder,
 	args []any,
-	ordinals []uint8,
+	ordinals []uint16,
 	regularExpressions []string,
 ) []any {
 	q := quoteIdentifier
@@ -654,7 +656,7 @@ func finalizeMaterializedStatsWildcardInventory(
 	ownerRange spl.Range,
 	policy eventAnalysisFinalizationPolicy,
 	knownNames, shadows, blockedPrefixes, reservedRoots []string,
-	ordinals []uint8,
+	ordinals []uint16,
 	regularExpressions []string,
 	allowDynamic bool,
 ) (CompiledQuery, error) {
@@ -783,7 +785,7 @@ func finalizePrerequisiteStatsWildcardInventory(
 	ownerRange spl.Range,
 	policy eventAnalysisFinalizationPolicy,
 	knownNames, shadows, blockedPrefixes, reservedRoots []string,
-	ordinals []uint8,
+	ordinals []uint16,
 	regularExpressions []string,
 	allowDynamic bool,
 	sidecars []fieldSuggestionSidecar,
