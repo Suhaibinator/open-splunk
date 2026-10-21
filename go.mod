@@ -7,7 +7,7 @@ require (
 	github.com/ClickHouse/ch-go v0.74.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.49.0
 	github.com/Suhaibinator/SRouter v1.8.1
-	github.com/ebitengine/purego v0.11.1
+	github.com/ebitengine/purego v0.11.2
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/robfig/cron/v3 v3.0.1
