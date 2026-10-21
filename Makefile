@@ -2,7 +2,7 @@
 
 override PROTOC_GEN_GO_VERSION := v1.36.12
 override PROTOC_GEN_GO_GRPC_VERSION := v1.6.2
-override GOLANGCI_LINT_VERSION := v2.13.1
+override GOLANGCI_LINT_VERSION := v2.15.0
 override GO_LINT_TOOL_BIN := $(CURDIR)/.cache/go-lint-tools
 override PROTO_TOOL_BIN := $(CURDIR)/.cache/proto-tools
 override PROTO_LINT_CACHE := $(CURDIR)/.cache/buf
