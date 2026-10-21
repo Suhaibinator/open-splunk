@@ -57,7 +57,7 @@ func TestSenderThrottleReducedLimitsDoesNotDeadLetter(t *testing.T) {
 	}
 
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 // TestSenderExceedsReadyLimitsDeadLetters confirms a batch that exceeds the
@@ -88,7 +88,7 @@ func TestSenderExceedsReadyLimitsDeadLetters(t *testing.T) {
 		t.Fatalf("dead-letter code = %q, want BATCH_TOO_LARGE", rec.Code)
 	}
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 func TestSenderRetainsMultiEventBatchThatRequiresLosslessRepacking(t *testing.T) {
@@ -139,7 +139,7 @@ func TestSenderDeadLettersSingleEventAboveNegotiatedEventLimit(t *testing.T) {
 		t.Fatalf("single-event negotiated dead letter = %+v", records)
 	}
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 // TestSenderRetryFloodCoalescesToSingleResend floods the sender with 100
@@ -198,5 +198,5 @@ func TestSenderRetryFloodCoalescesToSingleResend(t *testing.T) {
 		t.Fatalf("RetriedBatchesTotal = %d, want exactly 1 (coalesced)", retried)
 	}
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }

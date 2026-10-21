@@ -42,7 +42,7 @@ RUN env \
       TZ=UTC \
       npm run build
 
-FROM --platform=${BUILDPLATFORM} golang:1.27.0-alpine3.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395 AS binaries
+FROM --platform=${BUILDPLATFORM} golang:1.27.3-alpine3.23@sha256:895e5feab11a4b3774d24ee3c9579028456b82ad37f42a9eb6f82adaf776a201 AS binaries
 ARG TARGETOS
 ARG TARGETARCH
 ARG OPEN_SPLUNK_EXPECTED_TARGETOS

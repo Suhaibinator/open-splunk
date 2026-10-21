@@ -450,7 +450,10 @@ func TestManagerStagedTransactionPoolAvoidsCrossFilePublicationHOL(t *testing.T)
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-done:
+		case err := <-done:
+			if err != nil {
+				t.Errorf("manager.Run during cleanup: %v", err)
+			}
 		case <-time.After(3 * time.Second):
 			t.Error("manager did not stop after staged-permit test cancellation")
 		}

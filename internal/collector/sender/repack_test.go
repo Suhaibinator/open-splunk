@@ -67,7 +67,7 @@ func TestSenderRepackingRecoversLostChildAckWithoutDuplicateIdentities(t *testin
 	opts.Hello.Capabilities = []opensplunk.CollectorCapability{opensplunk.CollectorCapability_COLLECTOR_CAPABILITY_LOSSLESS_REPACKING}
 	sender := newTestSender(t, opts, queue, sink, nil, startServer(t, server))
 	cancel, done := runSender(t, sender)
-	defer func() { cancel(); <-done }()
+	defer func() { cancel(); waitForSenderStop(t, done) }()
 	waitFor(t, "all repacked children acknowledged", func() bool { return queue.Stats().QueuedBatches == 0 })
 	mu.Lock()
 	defer mu.Unlock()
@@ -108,7 +108,7 @@ func TestSenderLosslessRepackingAgainstRealService(t *testing.T) {
 	sink := &memSink{}
 	s := newTestSender(t, opts, queue, sink, nil, startServer(t, service))
 	cancel, done := runSender(t, s)
-	defer func() { cancel(); <-done }()
+	defer func() { cancel(); waitForSenderStop(t, done) }()
 	waitFor(t, "real service repacking drained", func() bool { return queue.Stats().QueuedBatches == 0 })
 	store.mu.Lock()
 	defer store.mu.Unlock()

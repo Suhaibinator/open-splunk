@@ -61,7 +61,7 @@ func TestSenderRetryDelaySurvivesReconnect(t *testing.T) {
 	}
 
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 func TestCoalescedRetryExtendsPersistentDeadline(t *testing.T) {

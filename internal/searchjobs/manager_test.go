@@ -2062,8 +2062,8 @@ func TestBlockedFailureHookCoalescesWithoutBlockingShutdown(t *testing.T) {
 		close(releaseHook)
 	case <-time.After(time.Second):
 		close(releaseHook)
-		<-closed
-		t.Fatal("blocked failure hook stalled manager shutdown")
+		closeErr := <-closed
+		t.Fatalf("blocked failure hook stalled manager shutdown (Close error: %v)", closeErr)
 	}
 
 	select {

@@ -111,7 +111,7 @@ export function AlertsPanel({ apiBaseUrl, initialDraft }: AlertsPanelProps) {
   const [wizardTarget, setWizardTarget] = useState<AlertWizardTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ServerAlert | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAlertAction | null>(null);
-  const [history, setHistory] = useState<{ alert: ServerAlert; runs: ServerAlertRun[] } | null>(null);
+  const [history, setHistory] = useState<{ alert: ServerAlert; runs: ServerAlertRun[]; loadedAt: Date } | null>(null);
   const creationRef = useRef(new AlertCreationSession());
   const [secretReturnFocus, setSecretReturnFocus] = useState<HTMLElement | null>(null);
   const issuance = useAlertSecretIssuance();
@@ -278,7 +278,7 @@ export function AlertsPanel({ apiBaseUrl, initialDraft }: AlertsPanelProps) {
     try {
       const result = await listServerAlertRuns(client, bootstrap, alert.id);
       if (result.status === "unavailable") throw new Error("Alert run history is unavailable.");
-      setHistory({ alert, runs: result.value.items });
+      setHistory({ alert, runs: result.value.items, loadedAt: new Date() });
     } catch (reason) {
       setAdministratorSignInRequired(isHttpStatus(reason, 401) || isHttpStatus(reason, 403));
       setError(errorMessage(reason));
@@ -300,14 +300,13 @@ export function AlertsPanel({ apiBaseUrl, initialDraft }: AlertsPanelProps) {
       {wizardTarget ? <AlertWizard applications={bootstrap?.apps.map((app) => ({ defaultIndexNames: app.defaultIndexNames, id: app.appId, name: app.displayName || app.slug || app.appId })) ?? []} administratorSignInRequired={administratorSignInRequired} existingWebhookHostname={wizardTarget.kind === "edit" ? wizardTarget.alert.webhookHostname : undefined} title={wizardTarget.kind === "create" ? "Save as alert" : `Edit ${wizardTarget.alert.definition.name}`} submitLabel={wizardTarget.kind === "create" ? "Create disabled alert" : "Save changes"} initialValue={wizardTarget.kind === "create" ? newAlertForm(bootstrap, initialDraft) : alertFormFromServer(wizardTarget.alert)} pending={pendingAction?.kind === "save"} submitError={pendingAction?.kind === "save" ? null : error} navigationBlocked={wizardTarget.kind === "create" && issuance.navigationBlocked} validateSchedule={(value, signal) => validateServerAlertSchedule(client, value, { signal })} onClose={() => { if (wizardTarget.kind === "create") creationRef.current.reset(); setWizardTarget(null); }} onSubmit={(value) => void createAlert(value)} /> : null}
       {pendingAction?.kind === "rotate" && issuance.phase === "issuing" ? <Modal title="Rotating webhook secret" subtitle="Keep this page open while the new one-time secret is issued." dismissible={false} onClose={() => {}}><output className="empty-state" aria-live="polite"><strong>Rotating secret…</strong><span>The recovery screen will appear as soon as the server responds.</span>{issuance.navigationBlocked ? <span role="alert">{ONE_TIME_SECRET_NAVIGATION_BLOCKED_MESSAGE}</span> : null}</output></Modal> : null}
       {issuance.secret ? <AlertSecretRecovery alertName={issuance.secret.name} secret={issuance.secret.value} navigationBlocked={issuance.navigationBlocked} returnFocus={secretReturnFocus} onClose={issuance.closeRecovery} /> : null}
-      {history ? <AlertHistoryDialog alert={history.alert} runs={history.runs} onClose={() => setHistory(null)} /> : null}
+      {history ? <AlertHistoryDialog alert={history.alert} runs={history.runs} now={history.loadedAt} onClose={() => setHistory(null)} /> : null}
       {deleteTarget ? <Modal title="Delete alert" subtitle={`Delete “${deleteTarget.definition.name}” and its run history?`} dismissible={pendingAction === null} onClose={() => setDeleteTarget(null)} footer={<><button className="button button--secondary" type="button" disabled={pendingAction !== null} onClick={() => setDeleteTarget(null)}>Cancel</button><button className="button button--danger" type="button" aria-busy={isPendingAlertAction(pendingAction, deleteTarget.id, "delete")} disabled={pendingAction !== null} onClick={() => void mutate(deleteTarget, "delete")}>Delete alert</button></>}><p>Deletion is rejected while a run is active. This action cannot be undone.</p></Modal> : null}
     </section>
   );
 }
 
-function AlertHistoryDialog({ alert, runs, onClose }: { alert: ServerAlert; runs: ServerAlertRun[]; onClose: () => void }) {
-  const now = new Date();
+function AlertHistoryDialog({ alert, runs, now, onClose }: { alert: ServerAlert; runs: ServerAlertRun[]; now: Date; onClose: () => void }) {
   return <Modal title={`${alert.definition.name} history`} subtitle="Newest retained runs first." wide onClose={onClose} footer={<button className="button button--primary" type="button" onClick={onClose}>Done</button>}><div className="table-wrap"><table className="table table--cards alerts-history-table"><thead><tr><th scope="col">Scheduled</th><th scope="col">Outcome</th><th scope="col">Retained results</th><th scope="col">Details</th></tr></thead><tbody>{runs.length === 0 ? <tr><td colSpan={4}>No runs recorded.</td></tr> : runs.map((run) => {
     const resultPresentation = alertRunResultPresentation(run, now);
     const result = resultPresentation === "available" && run.searchJobId !== null

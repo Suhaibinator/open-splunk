@@ -437,7 +437,10 @@ func TestDaemonQueueFullBarrierDoesNotAdvanceGenerationOnShutdown(t *testing.T) 
 			return
 		}
 		select {
-		case <-runErr:
+		case err := <-runErr:
+			if err != nil {
+				t.Errorf("Daemon.Run during cleanup: %v", err)
+			}
 		case <-time.After(3 * time.Second):
 			t.Error("Daemon.Run did not stop")
 		}
