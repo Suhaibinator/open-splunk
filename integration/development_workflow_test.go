@@ -235,8 +235,8 @@ func stopDevelopmentServer(t *testing.T, process *exec.Cmd, logPath string) {
 		}
 	case <-time.After(30 * time.Second):
 		_ = process.Process.Kill()
-		<-done
-		t.Fatalf("development server did not stop after SIGTERM; log:\n%s", readFileForFailure(logPath))
+		exitErr := <-done
+		t.Fatalf("development server did not stop after SIGTERM (exit: %v); log:\n%s", exitErr, readFileForFailure(logPath))
 	}
 }
 

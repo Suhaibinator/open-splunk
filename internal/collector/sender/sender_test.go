@@ -690,6 +690,13 @@ func runSender(t *testing.T, s *Sender) (context.CancelFunc, <-chan error) {
 	return cancel, done
 }
 
+func waitForSenderStop(t *testing.T, done <-chan error) {
+	t.Helper()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Errorf("sender stopped with an unexpected error: %v", err)
+	}
+}
+
 func waitFor(t *testing.T, msg string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -990,7 +997,7 @@ func TestSenderStreamSequenceStrictlyIncrements(t *testing.T) {
 	cancel, done := runSender(t, s)
 	waitFor(t, "both batches acked", func() bool { return q.ackedSeq() >= 2 })
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 func TestSenderNoTokenInLogs(t *testing.T) {
@@ -1016,7 +1023,7 @@ func TestSenderNoTokenInLogs(t *testing.T) {
 
 	waitFor(t, "batch acked", func() bool { return q.ackedSeq() >= 1 })
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 
 	logs := buf.String()
 	if strings.Contains(logs, secret) {
@@ -1077,7 +1084,7 @@ func TestSenderResumeAfterReplaysBatchesForExplicitOutcomes(t *testing.T) {
 		t.Fatalf("dead-lettered event = %q, want e2-rejected", got)
 	}
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 func TestSenderHonorsInFlightCap(t *testing.T) {
@@ -1146,7 +1153,7 @@ func TestSenderHonorsInFlightCap(t *testing.T) {
 		t.Fatalf("max concurrent in-flight = %d, want exactly 2", maxObserved)
 	}
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 func TestSenderRetryResendsIdenticalBytes(t *testing.T) {
@@ -1204,7 +1211,7 @@ func TestSenderRetryResendsIdenticalBytes(t *testing.T) {
 		return lastStats.RetriedBatchesTotal >= 1
 	})
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 func TestSenderTerminalAckCancelsScheduledRetry(t *testing.T) {
@@ -1234,7 +1241,7 @@ func TestSenderTerminalAckCancelsScheduledRetry(t *testing.T) {
 		t.Fatalf("server received %d batches, want only the original after terminal ack", got)
 	}
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 func TestSenderTerminalAckCancelsRetryBeforeCheckpointCommit(t *testing.T) {
@@ -1286,7 +1293,7 @@ func TestSenderTerminalAckCancelsRetryBeforeCheckpointCommit(t *testing.T) {
 	allowCommitOnce.Do(func() { close(allowCommit) })
 	waitFor(t, "batch acked after checkpoint commit", func() bool { return q.ackedSeq() == 1 })
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 func TestReleaseInflightPromptlyCancelsLongScheduledRetry(t *testing.T) {
@@ -1408,7 +1415,7 @@ func TestSenderRejectsCumulativeAckThatOmitsEarlierTerminalOutcome(t *testing.T)
 		t.Fatalf("unsafe cumulative ack committed checkpoint marks: %+v", gotMarks)
 	}
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 func TestSenderRejectsCumulativeAckBeyondSentHighWater(t *testing.T) {
@@ -1505,7 +1512,7 @@ func TestSenderThrottleAppliesSendDelay(t *testing.T) {
 		t.Fatalf("gap between sends = %v, want >= ~%v (throttle delay)", gap, minDelay)
 	}
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 func TestSenderPartialRejectionDeadLettersExactEvents(t *testing.T) {
@@ -1554,7 +1561,7 @@ func TestSenderPartialRejectionDeadLettersExactEvents(t *testing.T) {
 		return lastStats.RejectedEventsTotal == 2 && lastStats.AcknowledgedEventsTotal == 1
 	})
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 func TestSenderBatchRejectDeadLettersWholeBatch(t *testing.T) {
@@ -1586,7 +1593,7 @@ func TestSenderBatchRejectDeadLettersWholeBatch(t *testing.T) {
 		}
 	}
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 func TestSenderDeadLetterFailureRetainsWALBatch(t *testing.T) {
@@ -1635,7 +1642,7 @@ func TestSenderReconnectsWithBackoff(t *testing.T) {
 		t.Fatalf("server Collect calls = %d, want >= 2 (reconnect)", fs.calls())
 	}
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 func TestSenderGoodbyeOnCancel(t *testing.T) {
@@ -1826,7 +1833,7 @@ func TestHelloClampsLastAcknowledgedSequence(t *testing.T) {
 			hello.LastAcknowledgedBatchSequence, collectorlimits.MaximumFleetCounter)
 	}
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 func TestHandleAckRejectsHostileUint32EventIndex(t *testing.T) {
@@ -2068,7 +2075,7 @@ func TestSenderAgainstRealService(t *testing.T) {
 		t.Fatalf("stored batches = %d, first event = %q; want 1 batch with event-a", storedCount, storedEventID)
 	}
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 func TestSenderAgainstRealServicePartialRejectDeadLetters(t *testing.T) {
@@ -2126,7 +2133,7 @@ func TestSenderAgainstRealServicePartialRejectDeadLetters(t *testing.T) {
 		t.Fatalf("dead-letter code = %q, want UNAUTHORIZED_INDEX", records[0].Code)
 	}
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 type realServiceSessionManager struct {
@@ -2278,7 +2285,7 @@ func TestSenderRedeliversOrphanedInflightAfterReconnect(t *testing.T) {
 		t.Fatalf("batch 1 deliveries = %d, want >= 2 (one per connection)", deliveries)
 	}
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 // TestSenderContinuesWhenResumePointUnknown covers the fresh-state-dir edge: a
@@ -2307,7 +2314,7 @@ func TestSenderContinuesWhenResumePointUnknown(t *testing.T) {
 		t.Fatalf("server Collect calls = %d, want 1 (no reconnect churn)", calls)
 	}
 	cancel()
-	<-done
+	waitForSenderStop(t, done)
 }
 
 // stalledDialClient returns a client whose transport dial never completes

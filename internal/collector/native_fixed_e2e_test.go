@@ -45,7 +45,9 @@ func TestNativeFixedE2EFramingRejectionAndCheckpoint(t *testing.T) {
 			t.Cleanup(func() {
 				cancel()
 				if !stopped {
-					<-runErr
+					if err := <-runErr; err != nil {
+						t.Errorf("Run during cleanup: %v", err)
+					}
 				}
 			})
 			waitFor(t, 10*time.Second, "two valid native events", func() bool { return store.count() == 2 })
@@ -183,7 +185,9 @@ func TestNativeFixedE2ERejectedTailDoesNotInventCheckpoint(t *testing.T) {
 				t.Cleanup(func() {
 					cancel()
 					if !stopped {
-						<-runErr
+						if err := <-runErr; err != nil {
+							t.Errorf("Run during cleanup: %v", err)
+						}
 					}
 				})
 				waitFor(t, 10*time.Second, "two source rejections and terminal acknowledgments", func() bool {

@@ -190,7 +190,7 @@ func (s *Sender) runConnection(parent context.Context) (connected bool, reconnec
 		return false, 0, parent.Err()
 	case <-readyTimer:
 		streamCancel()
-		<-handshakeDone
+		c.logShutdownReceiveError(<-handshakeDone)
 		return false, 0, fmt.Errorf("collector/sender: ready negotiation timed out after %s", s.opts.DialTimeout)
 	}
 	c.observeReadyResume()
@@ -1309,7 +1309,8 @@ func (c *conn) gracefulPreReadyShutdown(readyDone <-chan error) {
 		if remaining > 0 {
 			timer := time.NewTimer(remaining)
 			select {
-			case <-readyDone:
+			case err := <-readyDone:
+				c.logShutdownReceiveError(err)
 				timer.Stop()
 				return
 			case <-timer.C:
@@ -1322,7 +1323,7 @@ func (c *conn) gracefulPreReadyShutdown(readyDone <-chan error) {
 	// Closing the stream is what guarantees the outstanding Recv exits. Join it
 	// before returning so no pre-Ready worker survives into another connection.
 	c.streamCancel()
-	<-readyDone
+	c.logShutdownReceiveError(<-readyDone)
 }
 
 // gracefulShutdown sends Goodbye(SHUTDOWN) best-effort, half-closes the send
@@ -1340,7 +1341,8 @@ func (c *conn) gracefulShutdown(recvDone <-chan error) {
 		if remaining > 0 {
 			timer := time.NewTimer(remaining)
 			select {
-			case <-recvDone:
+			case err := <-recvDone:
+				c.logShutdownReceiveError(err)
 				timer.Stop()
 				return
 			case <-timer.C:
@@ -1352,7 +1354,13 @@ func (c *conn) gracefulShutdown(recvDone <-chan error) {
 	// then join both network workers before resource owners can close beneath them.
 	c.streamCancel()
 	<-sendDone
-	<-recvDone
+	c.logShutdownReceiveError(<-recvDone)
+}
+
+func (c *conn) logShutdownReceiveError(err error) {
+	if err != nil {
+		c.s.logger.Debug("collector receive ended during shutdown", zap.Error(err))
+	}
 }
 
 func (c *conn) beginDraining() {
