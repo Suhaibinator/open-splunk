@@ -639,7 +639,9 @@
     ],
     "statement": "INSERT INTO knowledge_object_list_projections (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, description_present, description, index_selector_count, host_selector_count, source_selector_count, sourcetype_selector_count, selector_value_bytes, canonical_selector_bytes) VALUES ('t1', 'o1', 2, 'search', 'admin', 'field_alias', 'n_o1', 'app', 'active', 1, 'abc', 0, 0, 0, 0, 0, 43)",
     "expect": "reject",
-    "message": "new row for relation \"knowledge_object_list_order_keys\" violates check constraint \"knowledge_object_list_order_keys_check\""
+    "message": "new row for relation \"knowledge_object_list_order_keys\" violates check constraint \"knowledge_object_list_order_keys_check\"",
+    "sqlstate": "23514",
+    "constraint": "knowledge_object_list_order_keys_check"
   },
   {
     "name": "list_selector_insert_accepted",
@@ -1906,7 +1908,9 @@
     ],
     "statement": "DELETE FROM knowledge_mutation_idempotency WHERE tenant_id = 't1'",
     "expect": "reject",
-    "message": "new row for relation \"knowledge_catalog_tenants\" violates check constraint \"knowledge_catalog_tenants_idempotency_count_check\""
+    "message": "new row for relation \"knowledge_catalog_tenants\" violates check constraint \"knowledge_catalog_tenants_idempotency_count_check\"",
+    "sqlstate": "23514",
+    "constraint": "knowledge_catalog_tenants_idempotency_count_check"
   },
   {
     "name": "mutation_idempotency_delete_inside_retention_rejected",

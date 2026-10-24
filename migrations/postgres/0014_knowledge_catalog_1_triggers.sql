@@ -8,8 +8,10 @@
 -- knowledge_projection_tenant_ledgers, knowledge_recovery_audit.
 --
 -- Objects are created unqualified: the migration runner sets
--- search_path = open_splunk before applying this file, and the trigger
--- functions resolve tables through the session search_path at run time.
+-- search_path = open_splunk before applying this file. Every function pins
+-- SET search_path FROM CURRENT (the runner's open_splunk), so a trigger
+-- reads and writes the control tables whatever search_path the firing
+-- session uses, and a same-named table earlier on that path is never used.
 --
 -- Porting notes
 --
@@ -104,6 +106,7 @@
 CREATE FUNCTION knowledge_mutation_idempotency_after_delete()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     UPDATE knowledge_catalog_tenants
@@ -121,6 +124,7 @@ EXECUTE FUNCTION knowledge_mutation_idempotency_after_delete();
 CREATE FUNCTION knowledge_mutation_idempotency_after_insert()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     UPDATE knowledge_catalog_tenants
@@ -138,6 +142,7 @@ EXECUTE FUNCTION knowledge_mutation_idempotency_after_insert();
 CREATE FUNCTION knowledge_mutation_idempotency_capacity_is_available()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF NOT EXISTS (
@@ -165,6 +170,7 @@ EXECUTE FUNCTION knowledge_mutation_idempotency_capacity_is_available();
 CREATE FUNCTION knowledge_mutation_idempotency_delete_in_retention_is_forbidden()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF (extract(epoch FROM clock_timestamp()) * 1000000)::bigint
@@ -183,6 +189,7 @@ EXECUTE FUNCTION knowledge_mutation_idempotency_delete_in_retention_is_forbidden
 CREATE FUNCTION knowledge_mutation_idempotency_identity_collision_is_forbidden()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF EXISTS (
@@ -208,6 +215,7 @@ EXECUTE FUNCTION knowledge_mutation_idempotency_identity_collision_is_forbidden(
 CREATE FUNCTION knowledge_mutation_idempotency_matches_audit_authority()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF (
@@ -278,6 +286,7 @@ EXECUTE FUNCTION knowledge_mutation_idempotency_matches_audit_authority();
 CREATE FUNCTION knowledge_mutation_idempotency_matches_commit_authority()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF NOT EXISTS (
@@ -347,6 +356,7 @@ EXECUTE FUNCTION knowledge_mutation_idempotency_matches_commit_authority();
 CREATE FUNCTION knowledge_mutation_idempotency_update_is_forbidden()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge mutation idempotency outcome is immutable';
@@ -363,6 +373,7 @@ EXECUTE FUNCTION knowledge_mutation_idempotency_update_is_forbidden();
 CREATE FUNCTION knowledge_list_projection_after_delete()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     UPDATE knowledge_projection_tenant_ledgers
@@ -380,6 +391,7 @@ EXECUTE FUNCTION knowledge_list_projection_after_delete();
 CREATE FUNCTION knowledge_list_projection_after_insert()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     UPDATE knowledge_projection_tenant_ledgers
@@ -399,6 +411,7 @@ EXECUTE FUNCTION knowledge_list_projection_after_insert();
 CREATE FUNCTION knowledge_list_projection_capacity_is_available()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF NOT EXISTS (
@@ -422,6 +435,7 @@ EXECUTE FUNCTION knowledge_list_projection_capacity_is_available();
 CREATE FUNCTION knowledge_list_projection_creates_order_key()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF EXISTS (
@@ -460,6 +474,7 @@ EXECUTE FUNCTION knowledge_list_projection_creates_order_key();
 CREATE FUNCTION knowledge_list_projection_delete_requires_unsealed_empty_row()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF EXISTS (
@@ -488,6 +503,7 @@ EXECUTE FUNCTION knowledge_list_projection_delete_requires_unsealed_empty_row();
 CREATE FUNCTION knowledge_list_projection_identity_collision_is_forbidden()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF EXISTS (
@@ -511,6 +527,7 @@ EXECUTE FUNCTION knowledge_list_projection_identity_collision_is_forbidden();
 CREATE FUNCTION knowledge_list_projection_update_is_forbidden()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge list projection is immutable';
@@ -527,6 +544,7 @@ EXECUTE FUNCTION knowledge_list_projection_update_is_forbidden();
 CREATE FUNCTION knowledge_recovery_audit_after_insert()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     UPDATE knowledge_catalog_tenants
@@ -544,6 +562,7 @@ EXECUTE FUNCTION knowledge_recovery_audit_after_insert();
 CREATE FUNCTION knowledge_recovery_audit_capacity_is_available()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF NOT EXISTS (
@@ -567,6 +586,7 @@ EXECUTE FUNCTION knowledge_recovery_audit_capacity_is_available();
 CREATE FUNCTION knowledge_recovery_audit_delete_is_forbidden()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge recovery audit cannot be deleted';
@@ -581,6 +601,7 @@ EXECUTE FUNCTION knowledge_recovery_audit_delete_is_forbidden();
 CREATE FUNCTION knowledge_recovery_audit_identity_collision_is_forbidden()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF EXISTS (
@@ -606,6 +627,7 @@ EXECUTE FUNCTION knowledge_recovery_audit_identity_collision_is_forbidden();
 CREATE FUNCTION knowledge_recovery_audit_matches_terminal_version()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF NOT EXISTS (
@@ -646,6 +668,7 @@ EXECUTE FUNCTION knowledge_recovery_audit_matches_terminal_version();
 CREATE FUNCTION knowledge_recovery_audit_update_is_forbidden()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge recovery audit is immutable';
@@ -662,6 +685,7 @@ EXECUTE FUNCTION knowledge_recovery_audit_update_is_forbidden();
 CREATE FUNCTION knowledge_list_selector_identity_collision_is_forbidden()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF EXISTS (
@@ -687,6 +711,7 @@ EXECUTE FUNCTION knowledge_list_selector_identity_collision_is_forbidden();
 CREATE FUNCTION knowledge_list_selector_ordinal_is_declared()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF NOT EXISTS (
@@ -716,6 +741,7 @@ EXECUTE FUNCTION knowledge_list_selector_ordinal_is_declared();
 CREATE FUNCTION knowledge_list_selector_sealed_projection_is_immutable_delete()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF EXISTS (
@@ -738,6 +764,7 @@ EXECUTE FUNCTION knowledge_list_selector_sealed_projection_is_immutable_delete()
 CREATE FUNCTION knowledge_list_selector_sealed_projection_is_immutable_insert()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF EXISTS (
@@ -760,6 +787,7 @@ EXECUTE FUNCTION knowledge_list_selector_sealed_projection_is_immutable_insert()
 CREATE FUNCTION knowledge_list_selector_update_is_forbidden()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge list selector is immutable';
@@ -776,6 +804,7 @@ EXECUTE FUNCTION knowledge_list_selector_update_is_forbidden();
 CREATE FUNCTION knowledge_definition_blob_after_insert()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     UPDATE knowledge_catalog_tenants
@@ -793,6 +822,7 @@ EXECUTE FUNCTION knowledge_definition_blob_after_insert();
 CREATE FUNCTION knowledge_definition_blob_capacity_is_available()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF NOT EXISTS (
@@ -815,6 +845,7 @@ EXECUTE FUNCTION knowledge_definition_blob_capacity_is_available();
 CREATE FUNCTION knowledge_definition_blob_delete_is_forbidden()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge definition blob cannot be deleted';
@@ -829,6 +860,7 @@ EXECUTE FUNCTION knowledge_definition_blob_delete_is_forbidden();
 CREATE FUNCTION knowledge_definition_blob_identity_collision_is_forbidden()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF EXISTS (
@@ -850,6 +882,7 @@ EXECUTE FUNCTION knowledge_definition_blob_identity_collision_is_forbidden();
 CREATE FUNCTION knowledge_definition_blob_update_is_forbidden()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge definition blob is immutable';
@@ -866,6 +899,7 @@ EXECUTE FUNCTION knowledge_definition_blob_update_is_forbidden();
 CREATE FUNCTION knowledge_projection_ledger_delete_is_forbidden()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge projection tenant ledger cannot be deleted';
@@ -880,6 +914,7 @@ EXECUTE FUNCTION knowledge_projection_ledger_delete_is_forbidden();
 CREATE FUNCTION knowledge_projection_ledger_identity_collision_is_forbidden()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF EXISTS (
@@ -900,6 +935,7 @@ EXECUTE FUNCTION knowledge_projection_ledger_identity_collision_is_forbidden();
 CREATE FUNCTION knowledge_projection_ledger_initial_shape_is_valid()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF NEW.projection_bytes <> 0
@@ -921,6 +957,7 @@ EXECUTE FUNCTION knowledge_projection_ledger_initial_shape_is_valid();
 CREATE FUNCTION knowledge_projection_ledger_transition_is_exact()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF NEW.tenant_id <> OLD.tenant_id
