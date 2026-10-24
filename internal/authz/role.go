@@ -117,3 +117,52 @@ func CapabilitiesFor(role OrgRole, siteAdmin bool) CapabilitySet {
 	}
 	return roleSets[role]
 }
+
+// go-common's OrganizationRole and UserType enums both number their values in
+// four bands of eleven tiers starting at 1 (MEMBER_TIER_0 = 1 … OWNER_TIER_10
+// = 44; LITE_TIER_0 = 1 … ADMIN_TIER_10 = 44), with 0 as UNSPECIFIED.
+const (
+	goCommonBandOrigin = 1
+	goCommonBandWidth  = 11
+	goCommonBands      = len(goCommonOrgRoleBands)
+	// goCommonSiteAdminBand is the UserType Admin band (USER_TYPE_ADMIN_TIER_*).
+	goCommonSiteAdminBand = 3
+)
+
+// goCommonOrgRoleBands is the organization role of each OrganizationRole
+// band, lowest first.
+var goCommonOrgRoleBands = [...]OrgRole{OrgRoleMember, OrgRoleModerator, OrgRoleAdmin, OrgRoleOwner}
+
+// goCommonBand returns the zero-based band of a go-common tiered enum value,
+// or false for UNSPECIFIED, negative, and out-of-range values.
+func goCommonBand(value int32) (int, bool) {
+	if value < goCommonBandOrigin {
+		return 0, false
+	}
+	band := int(value-goCommonBandOrigin) / goCommonBandWidth
+	if band >= goCommonBands {
+		return 0, false
+	}
+	return band, true
+}
+
+// OrgRoleFromGoCommon maps a go-common OrganizationRole enum value, at any
+// tier, to its organization role. UNSPECIFIED and values outside the four
+// bands map to OrgRoleUnspecified, which grants nothing. Callers must use this
+// instead of converting the enum number directly: OrgRole(2) is moderator,
+// while go-common value 2 is MEMBER_TIER_1.
+func OrgRoleFromGoCommon(value int32) OrgRole {
+	band, ok := goCommonBand(value)
+	if !ok {
+		return OrgRoleUnspecified
+	}
+	return goCommonOrgRoleBands[band]
+}
+
+// SiteAdminFromGoCommonUserType reports whether a go-common UserType enum
+// value is in the Admin band, at any tier. UNSPECIFIED, the lower bands, and
+// unknown values are not site administrators.
+func SiteAdminFromGoCommonUserType(value int32) bool {
+	band, ok := goCommonBand(value)
+	return ok && band == goCommonSiteAdminBand
+}
