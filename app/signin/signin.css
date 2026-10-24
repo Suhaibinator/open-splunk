@@ -86,17 +86,18 @@
   color: var(--fg-text);
 }
 
+/* A step's heading takes focus only so a screen reader announces the step;
+   it is not a control, so it draws no focus ring. */
 .signin-card h1:focus {
   outline: 0;
 }
 
-.signin-card h1:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-}
-
 .signin-action {
   min-height: 41px;
+}
+
+.signin-card > .signin-action {
+  margin-top: var(--space-4);
 }
 
 .signin-form .signin-action {

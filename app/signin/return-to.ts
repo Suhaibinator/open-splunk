@@ -5,7 +5,8 @@
  * open-redirect vector until proven otherwise: only a same-origin absolute
  * path survives. Anything that could name another origin -- a scheme, a
  * protocol-relative `//host`, a backslash a browser reads as a slash, a
- * control character a browser strips before parsing -- falls back to the
+ * control character a browser strips before parsing, a dot segment that
+ * collapses to `//host` -- falls back to the
  * product root, and so does a path back into the one-shot auth pages, which
  * would loop or replay a consumed token.
  */
@@ -48,8 +49,22 @@ export function safeReturnTo(raw: string | null | undefined, fallback: string = 
     return fallback;
   }
   if (url.origin !== PROBE_ORIGIN) return fallback;
-  if (isNonReturnable(url.pathname)) return fallback;
+  // Dot segments are resolved by the parse: `/.//host`, `/a/..//host` and
+  // their percent-encoded forms all normalise to `//host`, which a browser
+  // reads as another origin. Only the normalised path is ever returned, so it
+  // is the one checked.
+  if (url.pathname.startsWith("//") || url.pathname.includes("\\")) return fallback;
+  if (isNonReturnable(url.pathname) || isNonReturnable(decodedPath(url.pathname))) return fallback;
   return `${url.pathname}${url.search}${url.hash}`;
+}
+
+/** The path with its percent escapes decoded, so `/%73ignin` is recognised as `/signin`; the raw path if it does not decode. */
+function decodedPath(pathname: string): string {
+  try {
+    return decodeURIComponent(pathname);
+  } catch {
+    return pathname;
+  }
 }
 
 /** Builds a query string from the entries that have a value, with its `?`. */
