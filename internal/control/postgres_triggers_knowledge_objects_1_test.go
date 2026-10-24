@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -44,7 +43,7 @@ var knowledgeObjects1Tables = []string{
 	"knowledge_type_active_counters",
 }
 
-// knowledgeObjects1StateQueries summarise every row the lane's triggers write
+// knowledgeObjects1StateQueries summarize every row the lane's triggers write
 // or remove. An accepted scenario pins each summary after its statement, so a
 // trigger that silently stops maintaining a counter, or removes the wrong
 // projection rows, fails on its own scenario. Each query returns one text row.
@@ -97,6 +96,11 @@ type knowledgeObjects1Scenario struct {
 	// fails on that trigger's own message or on a message whose cause is that
 	// trigger's side effect; disabling it must change the outcome.
 	Trigger string `json:"trigger"`
+	// UnchangedWithoutTrigger marks a reject scenario that proves Trigger did
+	// not act: a BEFORE trigger whose WHEN did not match, or an AFTER trigger
+	// that never ran because the statement was rejected first. Disabling
+	// Trigger must then leave the rejection exactly as it is.
+	UnchangedWithoutTrigger bool `json:"unchanged_without_trigger,omitempty"`
 	// DependsOnLanes names other trigger lanes whose triggers the scenario's
 	// expected outcome requires. Such a scenario runs only in
 	// TestPostgresKnowledgeObjects1CrossLaneTriggerScenarios.
@@ -192,6 +196,9 @@ func TestPostgresKnowledgeObjects1TriggerFixtureIsWellFormed(t *testing.T) {
 			accepts[scenario.Trigger]++
 			if scenario.Message != "" {
 				t.Errorf("accepted scenario %q carries message %q", scenario.Name, scenario.Message)
+			}
+			if scenario.UnchangedWithoutTrigger {
+				t.Errorf("accepted scenario %q sets unchanged_without_trigger, which only applies to rejects", scenario.Name)
 			}
 			if len(scenario.State) != len(knowledgeObjects1StateQueries) {
 				t.Errorf("accepted scenario %q pins %d state summaries, want %d", scenario.Name, len(scenario.State), len(knowledgeObjects1StateQueries))
@@ -290,10 +297,11 @@ func TestPostgresKnowledgeObjects1TriggerScenarios(t *testing.T) {
 }
 
 // TestPostgresKnowledgeObjects1CrossLaneTriggerScenarios runs the scenarios
-// whose expected outcome needs another lane's triggers. It skips, naming
-// each scenario and missing lane, only while a dependency lane's migration
-// is absent from the ledger; once every dependency is installed, any
-// difference fails.
+// whose expected outcome needs another lane's triggers. It never skips. A
+// scenario whose dependency lanes are all in the migration ledger must hold
+// exactly. A scenario with a missing lane must not hold yet: if it already
+// does, its depends_on_lanes entry is wrong and the test fails, so a stale
+// dependency cannot hide a scenario from TestPostgresKnowledgeObjects1TriggerScenarios.
 func TestPostgresKnowledgeObjects1CrossLaneTriggerScenarios(t *testing.T) {
 	t.Parallel()
 	scenarios := loadKnowledgeObjects1Scenarios(t)
@@ -309,28 +317,116 @@ func TestPostgresKnowledgeObjects1CrossLaneTriggerScenarios(t *testing.T) {
 	}
 	db := testsupport.NewPostgresControlDB(t)
 	installed := knowledgeObjects1InstalledLanes(t, db.SQLDB())
-	var missing []string
-	for _, scenario := range crossLane {
-		for _, lane := range scenario.DependsOnLanes {
-			if !installed[lane] {
-				missing = append(missing, fmt.Sprintf("%q needs lane %s", scenario.Name, lane))
-			}
-		}
-	}
-	if len(missing) > 0 {
-		t.Skipf("trigger lanes not yet merged; %d cross-lane scenarios not run: %s", len(crossLane), strings.Join(missing, "; "))
-	}
 	for _, scenario := range crossLane {
 		t.Run(scenario.Name, func(t *testing.T) {
-			runKnowledgeObjects1Scenario(t, db.SQLDB(), scenario, "")
+			var missing []string
+			for _, lane := range scenario.DependsOnLanes {
+				if !installed[lane] {
+					missing = append(missing, lane)
+				}
+			}
+			if len(missing) == 0 {
+				runKnowledgeObjects1Scenario(t, db.SQLDB(), scenario, "")
+				return
+			}
+			if knowledgeObjects1ScenarioHolds(t, db.SQLDB(), scenario) {
+				t.Fatalf("scenario already holds without lanes %s; drop them from depends_on_lanes",
+					strings.Join(missing, ", "))
+			}
+			t.Logf("pending until lanes %s are merged", strings.Join(missing, ", "))
 		})
+	}
+}
+
+// knowledgeObjects1ScenarioHolds reports whether the statement has the
+// scenario's expected outcome, without checking the pinned state.
+func knowledgeObjects1ScenarioHolds(t *testing.T, db *sql.DB, scenario knowledgeObjects1Scenario) bool {
+	t.Helper()
+	withoutState := scenario
+	withoutState.State = nil
+	err := execKnowledgeObjects1Scenario(t, db, withoutState, "")
+	if scenario.Expect == "accept" {
+		return err == nil
+	}
+	message, ok := control.RaiseMessage(err)
+	return ok && message == scenario.Message
+}
+
+// TestPostgresKnowledgeObjects1ActiveDependentCheckFollowsCurrentEdges is the
+// PostgreSQL counterpart of the trigger-SQL assertion in
+// internal/knowledgecatalog/writer_active_dependents_bound_test.go. The
+// writer's hasActiveDependents query and this trigger must agree on what an
+// active dependent is: an active registry row whose current version (not an
+// older one) declares an object edge to the target. The SQLite INDEXED BY
+// hints have no PostgreSQL equivalent; the predicates they guarded must stay.
+// The trigger must also sort first among the BEFORE UPDATE triggers on
+// knowledge_objects, because PostgreSQL fires same-event triggers in name
+// order and the writer maps a blocked direct transition by this message.
+func TestPostgresKnowledgeObjects1ActiveDependentCheckFollowsCurrentEdges(t *testing.T) {
+	t.Parallel()
+	db := testsupport.NewPostgresControlDB(t)
+	ctx := t.Context()
+	const trigger = "knowledge_active_dependency_target_transition_is_blocked"
+	var definition, function string
+	if err := db.SQLDB().QueryRowContext(ctx, `
+		SELECT pg_catalog.pg_get_triggerdef(trigger.oid), pg_catalog.pg_get_functiondef(trigger.tgfoid)
+		FROM pg_catalog.pg_trigger AS trigger
+		JOIN pg_catalog.pg_class AS class ON class.oid = trigger.tgrelid
+		JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+		WHERE namespace.nspname = 'open_splunk'
+		  AND class.relname = 'knowledge_objects'
+		  AND trigger.tgname = $1`, trigger).Scan(&definition, &function); err != nil {
+		t.Fatalf("read %s: %v", trigger, err)
+	}
+	for _, required := range []string{
+		"BEFORE UPDATE OF state ON open_splunk.knowledge_objects FOR EACH ROW",
+		"(old.state = 'active'::text)",
+		"'disabled'::text, 'quarantined'::text, 'deleted'::text",
+	} {
+		if !strings.Contains(definition, required) {
+			t.Errorf("trigger definition lacks %q:\n%s", required, definition)
+		}
+	}
+	for _, required := range []string{
+		"CROSS JOIN knowledge_object_dependencies AS dependency",
+		"dependent.state = 'active'",
+		"dependency.source_object_id = dependent.knowledge_object_id",
+		"dependency.source_object_version = dependent.current_version",
+		"dependency.target_kind = 'object'",
+		"dependency.target_object_id = OLD.knowledge_object_id",
+		"RAISE EXCEPTION 'active knowledge dependency has active dependents'",
+	} {
+		if !strings.Contains(function, required) {
+			t.Errorf("trigger function lacks %q:\n%s", required, function)
+		}
+	}
+
+	var first string
+	if err := db.SQLDB().QueryRowContext(ctx, `
+		SELECT trigger.tgname
+		FROM pg_catalog.pg_trigger AS trigger
+		JOIN pg_catalog.pg_class AS class ON class.oid = trigger.tgrelid
+		JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+		WHERE namespace.nspname = 'open_splunk'
+		  AND class.relname = 'knowledge_objects'
+		  AND NOT trigger.tgisinternal
+		  AND (trigger.tgtype & 2) = 2
+		  AND (trigger.tgtype & 16) = 16
+		ORDER BY trigger.tgname COLLATE "C"
+		LIMIT 1`).Scan(&first); err != nil {
+		t.Fatalf("read first BEFORE UPDATE trigger: %v", err)
+	}
+	if first != trigger {
+		t.Fatalf("first BEFORE UPDATE trigger on knowledge_objects = %s, want %s", first, trigger)
 	}
 }
 
 // TestPostgresKnowledgeObjects1RejectsNeedTheirTrigger disables each reject
 // scenario's trigger and reruns it. The statement must then no longer fail
 // with the scenario's message, proving the scenario exercises the trigger it
-// names rather than passing on another trigger or a constraint.
+// names rather than passing on another trigger or a constraint. A scenario
+// marked unchanged_without_trigger must instead fail exactly as before,
+// proving the trigger did not act.
 func TestPostgresKnowledgeObjects1RejectsNeedTheirTrigger(t *testing.T) {
 	t.Parallel()
 	scenarios := loadKnowledgeObjects1Scenarios(t)
@@ -342,7 +438,12 @@ func TestPostgresKnowledgeObjects1RejectsNeedTheirTrigger(t *testing.T) {
 		}
 		t.Run(scenario.Name, func(t *testing.T) {
 			err := execKnowledgeObjects1Scenario(t, db.SQLDB(), scenario, scenario.Trigger)
-			if message, ok := control.RaiseMessage(err); ok && message == scenario.Message {
+			message, ok := control.RaiseMessage(err)
+			unchanged := ok && message == scenario.Message
+			switch {
+			case scenario.UnchangedWithoutTrigger && !unchanged:
+				t.Fatalf("with trigger %s disabled the statement error = %v, want the same %q", scenario.Trigger, err, scenario.Message)
+			case !scenario.UnchangedWithoutTrigger && unchanged:
 				t.Fatalf("with trigger %s disabled the statement still fails with %q", scenario.Trigger, message)
 			}
 		})
@@ -360,7 +461,7 @@ func knowledgeObjects1LanesInstalled(installed map[string]bool, lanes []string) 
 
 var knowledgeObjects1LaneName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-var knowledgeObjects1LaneMigrationName =regexp.MustCompile(`^[0-9]{4}_([a-z][a-z0-9_]*)_triggers\.sql$`)
+var knowledgeObjects1LaneMigrationName = regexp.MustCompile(`^[0-9]{4}_([a-z][a-z0-9_]*)_triggers\.sql$`)
 
 // knowledgeObjects1InstalledLanes reads the trigger lanes from the migration
 // ledger, where each lane is one NNNN_<lane>_triggers.sql file.

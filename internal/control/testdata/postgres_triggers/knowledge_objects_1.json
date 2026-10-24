@@ -99,7 +99,13 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'target', sharing_scope = 'app', state = 'disabled', definition_digest = '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = 200, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-target'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=0 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=0 | type tenant-a/field_extraction=0 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=0 | owner -",
+      "dependencies": "tenant-a/ko-dependent@1#0->ko-target@1",
+      "projections": "projections tenant-a/ko-dependent@1 draft,tenant-a/ko-target@2 disabled | seals tenant-a/ko-dependent@1,tenant-a/ko-target@2 | selectors -",
+      "registry": "tenant-a/ko-dependent@1 draft app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app dependent,tenant-a/ko-target@2 disabled app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app target"
+    }
   },
   {
     "name": "transition_is_blocked accepts disabling a target after its dependent is disabled",
@@ -139,7 +145,58 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'target', sharing_scope = 'app', state = 'disabled', definition_digest = '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = 200, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-target'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=0 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=0 | type tenant-a/field_extraction=0 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=0 | owner -",
+      "dependencies": "tenant-a/ko-dependent@1#0->ko-target@1,tenant-a/ko-dependent@2#0->ko-target@1",
+      "projections": "projections tenant-a/ko-dependent@2 disabled,tenant-a/ko-target@2 disabled | seals tenant-a/ko-dependent@2,tenant-a/ko-target@2 | selectors -",
+      "registry": "tenant-a/ko-dependent@2 disabled app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app dependent,tenant-a/ko-target@2 disabled app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app target"
+    }
+  },
+  {
+    "name": "transition_is_blocked accepts disabling a target pinned only by a prior version of an active dependent",
+    "trigger": "knowledge_active_dependency_target_transition_is_blocked",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_bbbbbbbbbbbbbbbbbbbbbA', 'tenant-a', 1, 'bravo', 'Bravo', 0, 'archived', 1, 2, 2)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_cccccccccccccccccccccA', 'tenant-a', 1, 'charlie', 'Charlie', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) SELECT 'tenant-a' WHERE NOT EXISTS (SELECT 1 FROM knowledge_catalog_tenants WHERE tenant_id = 'tenant-a')",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) SELECT 'tenant-a' WHERE NOT EXISTS (SELECT 1 FROM knowledge_projection_tenant_ledgers WHERE tenant_id = 'tenant-a')",
+      "INSERT INTO knowledge_definition_blobs (tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro) VALUES ('tenant-a', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, '\\x0a'::bytea, 1, 10)",
+      "INSERT INTO knowledge_definition_blobs (tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro) VALUES ('tenant-a', '\\x0202020202020202020202020202020202020202020202020202020202020202'::bytea, '\\x0a'::bytea, 1, 10)",
+      "INSERT INTO knowledge_definition_blobs (tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro) VALUES ('tenant-a', '\\x0303030303030303030303030303030303030303030303030303030303030303'::bytea, '\\x0a'::bytea, 1, 10)",
+      "INSERT INTO knowledge_definition_blobs (tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro) VALUES ('tenant-a', '\\x0404040404040404040404040404040404040404040404040404040404040404'::bytea, '\\x0a'::bytea, 1, 10)",
+      "INSERT INTO knowledge_object_versions (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, dependency_count, mutation_kind, quarantine_reason, created_at_unix_micro) VALUES ('tenant-a', 'ko-target', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'target', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 0, 'create', NULL, 100)",
+      "INSERT INTO knowledge_object_dependency_seals (tenant_id, knowledge_object_id, object_version, dependency_count) VALUES ('tenant-a', 'ko-target', 1, 0)",
+      "INSERT INTO knowledge_object_list_projections (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, description_present, description, index_selector_count, host_selector_count, source_selector_count, sourcetype_selector_count, selector_value_bytes, canonical_selector_bytes) VALUES ('tenant-a', 'ko-target', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'target', 'app', 'active', 0, '', 0, 0, 0, 0, 0, 43)",
+      "INSERT INTO knowledge_object_list_projection_seals (tenant_id, knowledge_object_id, object_version, projection_bytes, canonical_selector_bytes) VALUES ('tenant-a', 'ko-target', 1, 0, 43)",
+      "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-target', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'target', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 100, 100)",
+      "INSERT INTO knowledge_object_versions (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, dependency_count, mutation_kind, quarantine_reason, created_at_unix_micro) VALUES ('tenant-a', 'ko-dependent', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'dependent', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 1, 'create', NULL, 110)",
+      "INSERT INTO knowledge_object_dependencies (tenant_id, source_object_id, source_object_version, ordinal, target_kind, target_object_id, target_object_version, dependency_role) VALUES ('tenant-a', 'ko-dependent', 1, 0, 'object', 'ko-target', 1, 'field_input')",
+      "INSERT INTO knowledge_object_dependency_seals (tenant_id, knowledge_object_id, object_version, dependency_count) VALUES ('tenant-a', 'ko-dependent', 1, 1)",
+      "INSERT INTO knowledge_object_list_projections (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, description_present, description, index_selector_count, host_selector_count, source_selector_count, sourcetype_selector_count, selector_value_bytes, canonical_selector_bytes) VALUES ('tenant-a', 'ko-dependent', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'dependent', 'app', 'active', 0, '', 0, 0, 0, 0, 0, 43)",
+      "INSERT INTO knowledge_object_list_projection_seals (tenant_id, knowledge_object_id, object_version, projection_bytes, canonical_selector_bytes) VALUES ('tenant-a', 'ko-dependent', 1, 0, 43)",
+      "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-dependent', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'dependent', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 110, 110)",
+      "INSERT INTO knowledge_object_versions (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, dependency_count, mutation_kind, quarantine_reason, created_at_unix_micro) VALUES ('tenant-a', 'ko-target', 2, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'target', 'app', 'disabled', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 0, 'disable', NULL, 200)",
+      "INSERT INTO knowledge_object_dependency_seals (tenant_id, knowledge_object_id, object_version, dependency_count) VALUES ('tenant-a', 'ko-target', 2, 0)",
+      "INSERT INTO knowledge_object_list_projections (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, description_present, description, index_selector_count, host_selector_count, source_selector_count, sourcetype_selector_count, selector_value_bytes, canonical_selector_bytes) VALUES ('tenant-a', 'ko-target', 2, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'target', 'app', 'disabled', 0, '', 0, 0, 0, 0, 0, 43)",
+      "INSERT INTO knowledge_object_list_projection_seals (tenant_id, knowledge_object_id, object_version, projection_bytes, canonical_selector_bytes) VALUES ('tenant-a', 'ko-target', 2, 0, 43)",
+      "INSERT INTO knowledge_object_versions (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, dependency_count, mutation_kind, quarantine_reason, created_at_unix_micro) VALUES ('tenant-a', 'ko-dependent', 2, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'dependent', 'app', 'active', '\\x0202020202020202020202020202020202020202020202020202020202020202'::bytea, 0, 'update', NULL, 150)",
+      "INSERT INTO knowledge_object_dependency_seals (tenant_id, knowledge_object_id, object_version, dependency_count) VALUES ('tenant-a', 'ko-dependent', 2, 0)",
+      "INSERT INTO knowledge_object_list_projections (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, description_present, description, index_selector_count, host_selector_count, source_selector_count, sourcetype_selector_count, selector_value_bytes, canonical_selector_bytes) VALUES ('tenant-a', 'ko-dependent', 2, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'dependent', 'app', 'active', 0, '', 0, 0, 0, 0, 0, 43)",
+      "INSERT INTO knowledge_object_list_projection_seals (tenant_id, knowledge_object_id, object_version, projection_bytes, canonical_selector_bytes) VALUES ('tenant-a', 'ko-dependent', 2, 0, 43)",
+      "UPDATE knowledge_objects SET current_version = 2, definition_digest = '\\x0202020202020202020202020202020202020202020202020202020202020202'::bytea, updated_at_unix_micro = 150 WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-dependent'"
+    ],
+    "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'target', sharing_scope = 'app', state = 'disabled', definition_digest = '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = 200, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-target'",
+    "expect": "accept",
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "tenant-a/ko-dependent@1#0->ko-target@1",
+      "projections": "projections tenant-a/ko-dependent@2 active,tenant-a/ko-target@2 disabled | seals tenant-a/ko-dependent@2,tenant-a/ko-target@2 | selectors -",
+      "registry": "tenant-a/ko-dependent@2 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app dependent,tenant-a/ko-target@2 disabled app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app target"
+    }
   },
   {
     "name": "transition_is_blocked wins over the missing sealed projection (Go expects active dependents)",
@@ -237,7 +294,13 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'target', sharing_scope = 'app', state = 'active', definition_digest = '\\x0202020202020202020202020202020202020202020202020202020202020202'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = NULL, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-target'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "tenant-a/ko-dependent@1#0->ko-target@1",
+      "projections": "projections tenant-a/ko-dependent@1 draft,tenant-a/ko-target@2 active | seals tenant-a/ko-dependent@1,tenant-a/ko-target@2 | selectors -",
+      "registry": "tenant-a/ko-dependent@1 draft app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app dependent,tenant-a/ko-target@2 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app target"
+    }
   },
   {
     "name": "version_advance_is_blocked accepts advancing to the version the dependent pins",
@@ -271,7 +334,13 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'target', sharing_scope = 'app', state = 'active', definition_digest = '\\x0202020202020202020202020202020202020202020202020202020202020202'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = NULL, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-target'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=2 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=2 | type tenant-a/field_extraction=2 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=2 | owner -",
+      "dependencies": "tenant-a/ko-dependent@1#0->ko-target@2",
+      "projections": "projections tenant-a/ko-dependent@1 active,tenant-a/ko-target@2 active | seals tenant-a/ko-dependent@1,tenant-a/ko-target@2 | selectors -",
+      "registry": "tenant-a/ko-dependent@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app dependent,tenant-a/ko-target@2 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app target"
+    }
   },
   {
     "name": "active_app_is_required_insert rejects an active object in an archived app",
@@ -317,7 +386,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-archived-app-draft', 1, 'app_bbbbbbbbbbbbbbbbbbbbbA', 'owner-1', 'field_extraction', 'ko-archived-app-draft', 'app', 'draft', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 100, 100)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=0 | app - | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-archived-app-draft@1 draft | seals tenant-a/ko-archived-app-draft@1 | selectors -",
+      "registry": "tenant-a/ko-archived-app-draft@1 draft app_bbbbbbbbbbbbbbbbbbbbbA owner-1 field_extraction app ko-archived-app-draft"
+    }
   },
   {
     "name": "active_app_is_required_insert accepts an active object in an active app",
@@ -340,7 +415,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-active-app', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'ko-active-app', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 100, 100)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-active-app@1 active | seals tenant-a/ko-active-app@1 | selectors -",
+      "registry": "tenant-a/ko-active-app@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-active-app"
+    }
   },
   {
     "name": "active_app_is_required_update rejects enabling an object in an archived app",
@@ -396,7 +477,13 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'ko-enable-active', sharing_scope = 'app', state = 'active', definition_digest = '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = NULL, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-enable-active'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-enable-active@2 active | seals tenant-a/ko-enable-active@2 | selectors -",
+      "registry": "tenant-a/ko-enable-active@2 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-enable-active"
+    }
   },
   {
     "name": "active_app_is_required_update accepts disabling a draft object in an archived app",
@@ -424,7 +511,13 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_bbbbbbbbbbbbbbbbbbbbbA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'ko-disabled-archived', sharing_scope = 'app', state = 'disabled', definition_digest = '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = 200, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-disabled-archived'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=0 | app - | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-disabled-archived@2 disabled | seals tenant-a/ko-disabled-archived@2 | selectors -",
+      "registry": "tenant-a/ko-disabled-archived@2 disabled app_bbbbbbbbbbbbbbbbbbbbbA owner-1 field_extraction app ko-disabled-archived"
+    }
   },
   {
     "name": "active_capacity_insert rejects when the tenant holds 4096 active objects",
@@ -472,7 +565,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-capacity', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'ko-capacity', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 100, 100)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=4096 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-capacity@1 active | seals tenant-a/ko-capacity@1 | selectors -",
+      "registry": "tenant-a/ko-capacity@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-capacity"
+    }
   },
   {
     "name": "active_capacity_insert rejects when the app holds 1024 active objects",
@@ -520,7 +619,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-capacity', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'ko-capacity', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 100, 100)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1024 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-capacity@1 active | seals tenant-a/ko-capacity@1 | selectors -",
+      "registry": "tenant-a/ko-capacity@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-capacity"
+    }
   },
   {
     "name": "active_capacity_insert rejects when the type holds 2048 active objects",
@@ -616,7 +721,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-capacity', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'ko-capacity', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 100, 100)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner tenant-a/owner-1=512",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-capacity@1 active | seals tenant-a/ko-capacity@1 | selectors -",
+      "registry": "tenant-a/ko-capacity@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-capacity"
+    }
   },
   {
     "name": "active_capacity_insert accepts a draft object when the tenant is full",
@@ -640,7 +751,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-capacity-draft', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'ko-capacity-draft', 'app', 'draft', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 100, 100)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=4096 | app - | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-capacity-draft@1 draft | seals tenant-a/ko-capacity-draft@1 | selectors -",
+      "registry": "tenant-a/ko-capacity-draft@1 draft app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-capacity-draft"
+    }
   },
   {
     "name": "active_capacity_update rejects enabling when the tenant is full",
@@ -698,7 +815,13 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'ko-update-full', sharing_scope = 'app', state = 'active', definition_digest = '\\x0202020202020202020202020202020202020202020202020202020202020202'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = NULL, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-update-full'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=4096 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-update-full@2 active | seals tenant-a/ko-update-full@2 | selectors -",
+      "registry": "tenant-a/ko-update-full@2 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-update-full"
+    }
   },
   {
     "name": "active_capacity_update rejects moving an active object into a full app",
@@ -785,7 +908,13 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'ko-private-stays', sharing_scope = 'private', state = 'active', definition_digest = '\\x0202020202020202020202020202020202020202020202020202020202020202'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = NULL, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-private-stays'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner tenant-a/owner-1=512",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-private-stays@2 active | seals tenant-a/ko-private-stays@2 | selectors -",
+      "registry": "tenant-a/ko-private-stays@2 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction private ko-private-stays"
+    }
   },
   {
     "name": "active_counters_after_insert accepts an active insert and creates every counter",
@@ -808,7 +937,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-counted', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'ko-counted', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 100, 100)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-counted@1 active | seals tenant-a/ko-counted@1 | selectors -",
+      "registry": "tenant-a/ko-counted@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-counted"
+    }
   },
   {
     "name": "active_counters_after_insert accepts a private active insert and counts the owner",
@@ -831,7 +966,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-counted-private', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'ko-counted-private', 'private', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 100, 100)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner tenant-a/owner-1=1",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-counted-private@1 active | seals tenant-a/ko-counted-private@1 | selectors -",
+      "registry": "tenant-a/ko-counted-private@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction private ko-counted-private"
+    }
   },
   {
     "name": "active_counters_after_insert creates the app counter (a manual duplicate is rejected)",
@@ -903,7 +1044,13 @@
     ],
     "statement": "INSERT INTO knowledge_app_active_counters (tenant_id, app_id, active_object_count) VALUES ('tenant-a', 'app_aaaaaaaaaaaaaaaaaaaaaA', 1)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=0 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-not-counted@1 draft | seals tenant-a/ko-not-counted@1 | selectors -",
+      "registry": "tenant-a/ko-not-counted@1 draft app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-not-counted"
+    }
   },
   {
     "name": "active_counters_after_insert increments the tenant count to its bound",
@@ -960,7 +1107,13 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'ko-enabled', sharing_scope = 'app', state = 'active', definition_digest = '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = NULL, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-enabled'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-enabled@2 active | seals tenant-a/ko-enabled@2 | selectors -",
+      "registry": "tenant-a/ko-enabled@2 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-enabled"
+    }
   },
   {
     "name": "active_counters_after_update increments the tenant count to its bound",
@@ -1057,11 +1210,18 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-arriving', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'arriving', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 100, 100)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=4096 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-arriving@1 active,tenant-a/ko-leaving@2 disabled | seals tenant-a/ko-arriving@1,tenant-a/ko-leaving@2 | selectors -",
+      "registry": "tenant-a/ko-arriving@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app arriving,tenant-a/ko-leaving@2 disabled app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-leaving"
+    }
   },
   {
     "name": "active_counters_before_update without a disable leaves the tenant full",
     "trigger": "knowledge_object_active_counters_before_update",
+    "unchanged_without_trigger": true,
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1120,7 +1280,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-arriving', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'arriving', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 100, 100)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=2 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1024,tenant-a/app_cccccccccccccccccccccA=1 | type tenant-a/field_extraction=2 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1,tenant-a/app_cccccccccccccccccccccA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-arriving@1 active,tenant-a/ko-moving@2 active | seals tenant-a/ko-arriving@1,tenant-a/ko-moving@2 | selectors -",
+      "registry": "tenant-a/ko-arriving@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app arriving,tenant-a/ko-moving@2 active app_cccccccccccccccccccccA owner-1 field_extraction app ko-moving"
+    }
   },
   {
     "name": "active_counters_before_update accepts disabling and decrements every counter",
@@ -1148,7 +1314,13 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'ko-disable', sharing_scope = 'app', state = 'disabled', definition_digest = '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = 200, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-disable'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=0 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=0 | type tenant-a/field_extraction=0 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=0 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-disable@2 disabled | seals tenant-a/ko-disable@2 | selectors -",
+      "registry": "tenant-a/ko-disable@2 disabled app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-disable"
+    }
   },
   {
     "name": "active_name_collision rejects a second active app-scoped name in one app",
@@ -1204,7 +1376,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-new', 1, 'app_cccccccccccccccccccccA', 'owner-1', 'field_extraction', 'shared', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 120, 120)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=2 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1,tenant-a/app_cccccccccccccccccccccA=1 | type tenant-a/field_extraction=2 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1,tenant-a/app_cccccccccccccccccccccA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-existing@1 active,tenant-a/ko-new@1 active | seals tenant-a/ko-existing@1,tenant-a/ko-new@1 | selectors -",
+      "registry": "tenant-a/ko-existing@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app shared,tenant-a/ko-new@1 active app_cccccccccccccccccccccA owner-1 field_extraction app shared"
+    }
   },
   {
     "name": "active_name_collision accepts the same name for another object type",
@@ -1232,7 +1410,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-new', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_alias', 'shared', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 120, 120)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=2 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=2 | type tenant-a/field_alias=1,tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_alias=1,tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-existing@1 active,tenant-a/ko-new@1 active | seals tenant-a/ko-existing@1,tenant-a/ko-new@1 | selectors -",
+      "registry": "tenant-a/ko-existing@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app shared,tenant-a/ko-new@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_alias app shared"
+    }
   },
   {
     "name": "active_name_collision rejects a second active global name across apps",
@@ -1316,7 +1500,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-new', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-2', 'field_extraction', 'shared', 'private', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 120, 120)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=2 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=2 | type tenant-a/field_extraction=2 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=2 | owner tenant-a/owner-1=1,tenant-a/owner-2=1",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-existing@1 active,tenant-a/ko-new@1 active | seals tenant-a/ko-existing@1,tenant-a/ko-new@1 | selectors -",
+      "registry": "tenant-a/ko-existing@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction private shared,tenant-a/ko-new@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-2 field_extraction private shared"
+    }
   },
   {
     "name": "active_name_collision accepts an app-scoped name beside a global one",
@@ -1344,7 +1534,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-new', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'shared', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 120, 120)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=2 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=2 | type tenant-a/field_extraction=2 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=2 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-existing@1 active,tenant-a/ko-new@1 active | seals tenant-a/ko-existing@1,tenant-a/ko-new@1 | selectors -",
+      "registry": "tenant-a/ko-existing@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction global shared,tenant-a/ko-new@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app shared"
+    }
   },
   {
     "name": "active_name_collision accepts an active name beside a draft one",
@@ -1372,7 +1568,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-new', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'shared', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 120, 120)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-existing@1 draft,tenant-a/ko-new@1 active | seals tenant-a/ko-existing@1,tenant-a/ko-new@1 | selectors -",
+      "registry": "tenant-a/ko-existing@1 draft app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app shared,tenant-a/ko-new@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app shared"
+    }
   },
   {
     "name": "active_name_collision accepts a draft name beside an active one",
@@ -1400,7 +1602,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-new', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'shared', 'app', 'draft', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 120, 120)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-existing@1 active,tenant-a/ko-new@1 draft | seals tenant-a/ko-existing@1,tenant-a/ko-new@1 | selectors -",
+      "registry": "tenant-a/ko-existing@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app shared,tenant-a/ko-new@1 draft app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app shared"
+    }
   },
   {
     "name": "active_name_update_collision rejects enabling onto an active name",
@@ -1494,7 +1702,13 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'shared', sharing_scope = 'app', state = 'active', definition_digest = '\\x0202020202020202020202020202020202020202020202020202020202020202'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = NULL, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-self'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-self@2 active | seals tenant-a/ko-self@2 | selectors -",
+      "registry": "tenant-a/ko-self@2 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app shared"
+    }
   },
   {
     "name": "active_name_update_collision accepts enabling after the name holder is disabled",
@@ -1532,7 +1746,13 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'shared', sharing_scope = 'app', state = 'active', definition_digest = '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = NULL, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-new'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-existing@2 disabled,tenant-a/ko-new@2 active | seals tenant-a/ko-existing@2,tenant-a/ko-new@2 | selectors -",
+      "registry": "tenant-a/ko-existing@2 disabled app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app shared,tenant-a/ko-new@2 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app shared"
+    }
   },
   {
     "name": "after_insert_count_identity counts each insert toward the identity bound",
@@ -1590,7 +1810,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-second', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'ko-second', 'app', 'draft', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 100, 100)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=8192 active=0 | app - | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-first@1 draft,tenant-a/ko-second@1 draft | seals tenant-a/ko-first@1,tenant-a/ko-second@1 | selectors -",
+      "registry": "tenant-a/ko-first@1 draft app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-first,tenant-a/ko-second@1 draft app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-second"
+    }
   },
   {
     "name": "delete_is_forbidden rejects deleting a registry row",
@@ -1633,7 +1859,13 @@
     ],
     "statement": "DELETE FROM knowledge_objects WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-missing'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=0 active=0 | app - | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections - | seals - | selectors -",
+      "registry": "-"
+    }
   },
   {
     "name": "identity_capacity rejects an insert at 8192 identities",
@@ -1681,7 +1913,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-last', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'ko-last', 'app', 'draft', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 100, 100)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=8192 active=0 | app - | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-last@1 draft | seals tenant-a/ko-last@1 | selectors -",
+      "registry": "tenant-a/ko-last@1 draft app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-last"
+    }
   },
   {
     "name": "identity_collision rejects inserting an existing identity",
@@ -1728,7 +1966,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-once', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'ko-once', 'app', 'draft', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 100, 100)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=0 | app - | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-once@1 draft | seals tenant-a/ko-once@1 | selectors -",
+      "registry": "tenant-a/ko-once@1 draft app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-once"
+    }
   },
   {
     "name": "insert_requires_sealed_list_projection rejects an unsealed projection",
@@ -1819,7 +2063,13 @@
     ],
     "statement": "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-selectors', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'ko-selectors', 'app', 'draft', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 100, 100)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=0 | app - | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-selectors@1 draft | seals tenant-a/ko-selectors@1 | selectors tenant-a/ko-selectors@1/index#0,tenant-a/ko-selectors@1/index#1",
+      "registry": "tenant-a/ko-selectors@1 draft app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-selectors"
+    }
   },
   {
     "name": "registry_transition rejects an update that keeps the version",
@@ -1871,7 +2121,13 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'ko-backwards', sharing_scope = 'app', state = 'active', definition_digest = '\\x0202020202020202020202020202020202020202020202020202020202020202'::bytea, updated_at_unix_micro = 100, disabled_at_unix_micro = NULL, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-backwards'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-backwards@2 active | seals tenant-a/ko-backwards@2 | selectors -",
+      "registry": "tenant-a/ko-backwards@2 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-backwards"
+    }
   },
   {
     "name": "registry_transition rejects a changed created_at",
@@ -1956,7 +2212,13 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'ko-skip', sharing_scope = 'app', state = 'active', definition_digest = '\\x0202020202020202020202020202020202020202020202020202020202020202'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = NULL, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-skip'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=1 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=1 | type tenant-a/field_extraction=1 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=1 | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-skip@2 active | seals tenant-a/ko-skip@2 | selectors -",
+      "registry": "tenant-a/ko-skip@2 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-skip"
+    }
   },
   {
     "name": "update_removes_old_list_projection accepts a version advance and drops v1 rows",
@@ -1985,7 +2247,13 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'ko-reproject', sharing_scope = 'app', state = 'draft', definition_digest = '\\x0202020202020202020202020202020202020202020202020202020202020202'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = NULL, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-reproject'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=0 | app - | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-reproject@2 draft | seals tenant-a/ko-reproject@2 | selectors -",
+      "registry": "tenant-a/ko-reproject@2 draft app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-reproject"
+    }
   },
   {
     "name": "update_removes_old_list_projection frees the v1 projection key (re-projecting v1 is accepted)",
@@ -2015,11 +2283,18 @@
     ],
     "statement": "INSERT INTO knowledge_object_list_projections (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, description_present, description, index_selector_count, host_selector_count, source_selector_count, sourcetype_selector_count, selector_value_bytes, canonical_selector_bytes) VALUES ('tenant-a', 'ko-reproject', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'ko-reproject', 'app', 'draft', 0, '', 0, 0, 0, 0, 0, 43)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=0 | app - | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-reproject@1 draft,tenant-a/ko-reproject@2 draft | seals tenant-a/ko-reproject@2 | selectors -",
+      "registry": "tenant-a/ko-reproject@2 draft app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-reproject"
+    }
   },
   {
     "name": "update_removes_old_list_projection does not run for a rejected version advance",
     "trigger": "knowledge_object_update_removes_old_list_projection",
+    "unchanged_without_trigger": true,
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2098,7 +2373,13 @@
     ],
     "statement": "UPDATE knowledge_objects SET current_version = 2, app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA', owner_id = 'owner-1', object_type = 'field_extraction', name = 'ko-update-sealed', sharing_scope = 'app', state = 'draft', definition_digest = '\\x0202020202020202020202020202020202020202020202020202020202020202'::bytea, updated_at_unix_micro = 200, disabled_at_unix_micro = NULL, deleted_at_unix_micro = NULL WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-update-sealed'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=1 active=0 | app - | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections tenant-a/ko-update-sealed@2 draft | seals tenant-a/ko-update-sealed@2 | selectors -",
+      "registry": "tenant-a/ko-update-sealed@2 draft app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app ko-update-sealed"
+    }
   },
   {
     "name": "dependency_delete_is_forbidden rejects deleting an edge",
@@ -2158,7 +2439,13 @@
     ],
     "statement": "DELETE FROM knowledge_object_dependencies WHERE tenant_id = 'tenant-a' AND source_object_id = 'ko-missing'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=2 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=2 | type tenant-a/field_extraction=2 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=2 | owner -",
+      "dependencies": "tenant-a/ko-dependent@1#0->ko-target@1",
+      "projections": "projections tenant-a/ko-dependent@1 active,tenant-a/ko-target@1 active | seals tenant-a/ko-dependent@1,tenant-a/ko-target@1 | selectors -",
+      "registry": "tenant-a/ko-dependent@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app dependent,tenant-a/ko-target@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app target"
+    }
   },
   {
     "name": "dependency_identity_collision rejects a reused ordinal",
@@ -2251,7 +2538,13 @@
     ],
     "statement": "INSERT INTO knowledge_object_dependencies (tenant_id, source_object_id, source_object_version, ordinal, target_kind, target_object_id, target_object_version, dependency_role) VALUES ('tenant-a', 'ko-source', 1, 1, 'object', 'ko-target-2', 1, 'field_input')",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=2 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=2 | type tenant-a/field_extraction=2 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=2 | owner -",
+      "dependencies": "tenant-a/ko-source@1#0->ko-target@1,tenant-a/ko-source@1#1->ko-target-2@1",
+      "projections": "projections tenant-a/ko-target@1 active,tenant-a/ko-target-2@1 active | seals tenant-a/ko-target@1,tenant-a/ko-target-2@1 | selectors -",
+      "registry": "tenant-a/ko-target@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app target,tenant-a/ko-target-2@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app target-2"
+    }
   },
   {
     "name": "dependency_ordinal_is_declared rejects an ordinal at the declared count",
@@ -2344,7 +2637,13 @@
     ],
     "statement": "INSERT INTO knowledge_object_dependencies (tenant_id, source_object_id, source_object_version, ordinal, target_kind, target_object_id, target_object_version, dependency_role) VALUES ('tenant-a', 'ko-source', 1, 1, 'object', 'ko-target-2', 1, 'field_input')",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=2 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=2 | type tenant-a/field_extraction=2 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=2 | owner -",
+      "dependencies": "tenant-a/ko-source@1#0->ko-target@1,tenant-a/ko-source@1#1->ko-target-2@1",
+      "projections": "projections tenant-a/ko-target@1 active,tenant-a/ko-target-2@1 active | seals tenant-a/ko-target@1,tenant-a/ko-target-2@1 | selectors -",
+      "registry": "tenant-a/ko-target@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app target,tenant-a/ko-target-2@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app target-2"
+    }
   },
   {
     "name": "dependency_sealed_version_is_immutable rejects an edge after the seal",
@@ -2407,7 +2706,13 @@
     ],
     "statement": "INSERT INTO knowledge_object_dependencies (tenant_id, source_object_id, source_object_version, ordinal, target_kind, target_object_id, target_object_version, dependency_role) VALUES ('tenant-a', 'ko-source', 1, 1, 'object', 'ko-target-2', 1, 'field_input')",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=2 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=2 | type tenant-a/field_extraction=2 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=2 | owner -",
+      "dependencies": "tenant-a/ko-source@1#0->ko-target@1,tenant-a/ko-source@1#1->ko-target-2@1",
+      "projections": "projections tenant-a/ko-target@1 active,tenant-a/ko-target-2@1 active | seals tenant-a/ko-target@1,tenant-a/ko-target-2@1 | selectors -",
+      "registry": "tenant-a/ko-target@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app target,tenant-a/ko-target-2@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app target-2"
+    }
   },
   {
     "name": "dependency_update_is_forbidden rejects any edge update",
@@ -2467,7 +2772,13 @@
     ],
     "statement": "UPDATE knowledge_object_dependencies SET ordinal = ordinal WHERE tenant_id = 'tenant-missing'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=2 active=2 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=2 | type tenant-a/field_extraction=2 | app_type tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA/field_extraction=2 | owner -",
+      "dependencies": "tenant-a/ko-dependent@1#0->ko-target@1",
+      "projections": "projections tenant-a/ko-dependent@1 active,tenant-a/ko-target@1 active | seals tenant-a/ko-dependent@1,tenant-a/ko-target@1 | selectors -",
+      "registry": "tenant-a/ko-dependent@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app dependent,tenant-a/ko-target@1 active app_aaaaaaaaaaaaaaaaaaaaaA owner-1 field_extraction app target"
+    }
   },
   {
     "name": "type_active_counter_delete_is_forbidden rejects deleting a counter",
@@ -2506,7 +2817,13 @@
     ],
     "statement": "DELETE FROM knowledge_type_active_counters WHERE tenant_id = 'tenant-a' AND object_type = 'field_extraction'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=0 active=0 | app - | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections - | seals - | selectors -",
+      "registry": "-"
+    }
   },
   {
     "name": "type_active_counter_identity_collision rejects a duplicate counter",
@@ -2546,7 +2863,13 @@
     ],
     "statement": "INSERT INTO knowledge_type_active_counters (tenant_id, object_type, active_object_count) VALUES ('tenant-a', 'field_alias', 0)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=0 active=0 | app - | type tenant-a/field_alias=0,tenant-a/field_extraction=3 | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections - | seals - | selectors -",
+      "registry": "-"
+    }
   },
   {
     "name": "type_active_counter_identity_is_immutable rejects changing the type",
@@ -2606,7 +2929,13 @@
     ],
     "statement": "UPDATE knowledge_type_active_counters SET object_type = 'field_extraction' WHERE tenant_id = 'tenant-a' AND object_type = 'field_extraction'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=0 active=0 | app - | type tenant-a/field_extraction=3 | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections - | seals - | selectors -",
+      "registry": "-"
+    }
   },
   {
     "name": "type_active_counter_identity_is_immutable accepts a count change",
@@ -2626,7 +2955,13 @@
     ],
     "statement": "UPDATE knowledge_type_active_counters SET active_object_count = 4 WHERE tenant_id = 'tenant-a' AND object_type = 'field_extraction'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=0 active=0 | app - | type tenant-a/field_extraction=4 | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections - | seals - | selectors -",
+      "registry": "-"
+    }
   },
   {
     "name": "app_active_counter_delete_is_forbidden rejects deleting a counter",
@@ -2665,7 +3000,13 @@
     ],
     "statement": "DELETE FROM knowledge_app_active_counters WHERE tenant_id = 'tenant-a' AND app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=0 active=0 | app - | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections - | seals - | selectors -",
+      "registry": "-"
+    }
   },
   {
     "name": "app_active_counter_identity_collision rejects a duplicate counter",
@@ -2705,7 +3046,13 @@
     ],
     "statement": "INSERT INTO knowledge_app_active_counters (tenant_id, app_id, active_object_count) VALUES ('tenant-a', 'app_cccccccccccccccccccccA', 0)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=0 active=0 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=3,tenant-a/app_cccccccccccccccccccccA=0 | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections - | seals - | selectors -",
+      "registry": "-"
+    }
   },
   {
     "name": "app_active_counter_identity_is_immutable rejects changing the app",
@@ -2765,7 +3112,13 @@
     ],
     "statement": "UPDATE knowledge_app_active_counters SET app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA' WHERE tenant_id = 'tenant-a' AND app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=0 active=0 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=3 | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections - | seals - | selectors -",
+      "registry": "-"
+    }
   },
   {
     "name": "app_active_counter_identity_is_immutable accepts a count change",
@@ -2785,6 +3138,12 @@
     ],
     "statement": "UPDATE knowledge_app_active_counters SET active_object_count = 4 WHERE tenant_id = 'tenant-a' AND app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "state": {
+      "counters": "tenants tenant-a identities=0 active=0 | app tenant-a/app_aaaaaaaaaaaaaaaaaaaaaA=4 | type - | app_type - | owner -",
+      "dependencies": "-",
+      "projections": "projections - | seals - | selectors -",
+      "registry": "-"
+    }
   }
 ]
