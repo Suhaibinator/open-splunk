@@ -1,4 +1,4 @@
-package testsupport
+package pgtest
 
 import (
 	"context"
@@ -67,7 +67,7 @@ func TestPostgresTemplateBuildDiscardsTemplateFlaggedStaging(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	templateName := postgresTemplateName("stage_" + key)
+	templateName := TemplateDatabaseName("stage_" + key)
 	staging := templateName + "_build"
 	dropTemplateOnCleanup(t, templateName)
 	dropTemplateOnCleanup(t, staging)
@@ -103,7 +103,7 @@ func TestPostgresTemplatePublicationIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	templateName := postgresTemplateName("atomic_" + key)
+	templateName := TemplateDatabaseName("atomic_" + key)
 	staging := templateName + "_build"
 	dropTemplateOnCleanup(t, templateName)
 	dropTemplateOnCleanup(t, staging)
@@ -186,7 +186,7 @@ func TestReclaimDeadOwnerDatabasesSeesOwnersConnectedElsewhere(t *testing.T) {
 	t.Parallel()
 	_, admin := postgresAdminHandle(t)
 	ctx := t.Context()
-	elsewhere := NewPostgresDatabase(t, PostgresTemplate{
+	elsewhere := NewDatabase(t, Template{
 		Key:   "reclaim_elsewhere",
 		Build: func(context.Context, *sql.DB) error { return nil },
 	})

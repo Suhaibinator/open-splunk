@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	// PostgresTxMaxAttempts bounds how many times WriteTx and ReadTx run their
-	// callback when PostgreSQL aborts it with a retryable SQLSTATE. A caller
+	// PostgresTxMaxAttempts bounds how many times WriteTx, ReadTx and
+	// RetryWrite run their callback when PostgreSQL aborts it with a
+	// retryable SQLSTATE. A caller
 	// observing ErrTransactionRetriesExhausted saw exactly this many attempts.
 	PostgresTxMaxAttempts = 8
 
@@ -61,6 +62,9 @@ var (
 // writer did; see postgresWriteQueue. fn must not start another write
 // transaction on the same database, which that single writer never allowed
 // either.
+//
+// Once a server singleton held through db is lost, WriteTx fails with
+// ErrServerSingletonLost without running fn; see OpenPostgresServer.
 func (db *PostgresDB) WriteTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return db.runSQLTx(ctx, "write", postgresWriteTxOptions, fn)
 }
@@ -85,6 +89,52 @@ func (db *PostgresDB) ReadGORMTx(ctx context.Context, fn func(*gorm.DB) error) e
 	return db.runGORMTx(ctx, "read", postgresReadTxOptions, fn)
 }
 
+// WriteGORMTxOn is WriteGORMTx with tx derived from session rather than from
+// GORMDB, so settings the caller gave session, such as a statement-counting
+// logger, apply inside the transaction. session must come from db.GORMDB()
+// through Session, WithContext or similar, outside any transaction; another
+// pool or an open transaction is refused with ErrInvalidArgument.
+func (db *PostgresDB) WriteGORMTxOn(ctx context.Context, session *gorm.DB, fn func(*gorm.DB) error) error {
+	if err := db.validateGORMSession(session); err != nil {
+		return err
+	}
+	return db.runGORMTxOn(ctx, "write", postgresWriteTxOptions, session, fn)
+}
+
+// ReadGORMTxOn is ReadGORMTx with tx derived from session, as for
+// WriteGORMTxOn.
+func (db *PostgresDB) ReadGORMTxOn(ctx context.Context, session *gorm.DB, fn func(*gorm.DB) error) error {
+	if err := db.validateGORMSession(session); err != nil {
+		return err
+	}
+	return db.runGORMTxOn(ctx, "read", postgresReadTxOptions, session, fn)
+}
+
+// RetryWrite runs attempt under WriteTx's retry policy for callers that must
+// begin and end their own transaction, such as a route that holds a LOCK
+// TABLE seam across helpers. Each call of attempt must begin a fresh
+// SERIALIZABLE transaction on db, run all of its work in it, and commit or
+// roll it back before returning; attempt reruns from the beginning after a
+// serialization failure or deadlock, at most PostgresTxMaxAttempts times, so
+// its side effects outside that transaction must be safe to repeat.
+//
+// Attempts join the handle's write queue exactly as WriteTx attempts do: once
+// any write of this handle is retrying, these attempts run one at a time with
+// every other write, so hot-row writers that bypass WriteTx still converge.
+// attempt must not itself call WriteTx or RetryWrite on db. Like WriteTx,
+// RetryWrite refuses to run once the handle's server singleton was lost.
+func (db *PostgresDB) RetryWrite(ctx context.Context, attempt func() error) error {
+	if err := validatePostgresTx(ctx, db, attempt == nil); err != nil {
+		return err
+	}
+	return retryPostgresTx(ctx, "write", db.writeQueue, func() error {
+		if err := db.ServerSingletonErr(); err != nil {
+			return err
+		}
+		return attempt()
+	})
+}
+
 func (db *PostgresDB) runSQLTx(
 	ctx context.Context,
 	kind string,
@@ -95,6 +145,9 @@ func (db *PostgresDB) runSQLTx(
 		return err
 	}
 	return retryPostgresTx(ctx, kind, db.writeQueueFor(options), func() error {
+		if err := db.writeFence(options); err != nil {
+			return err
+		}
 		return runPostgresTxAttempt(ctx, db.sql, options, fn)
 	})
 }
@@ -108,16 +161,57 @@ func (db *PostgresDB) runGORMTx(
 	if err := validatePostgresTx(ctx, db, fn == nil); err != nil {
 		return err
 	}
+	return db.runGORMTxOn(ctx, kind, options, db.orm, fn)
+}
+
+func (db *PostgresDB) runGORMTxOn(
+	ctx context.Context,
+	kind string,
+	options *sql.TxOptions,
+	session *gorm.DB,
+	fn func(*gorm.DB) error,
+) error {
+	if err := validatePostgresTx(ctx, db, fn == nil); err != nil {
+		return err
+	}
 	return retryPostgresTx(ctx, kind, db.writeQueueFor(options), func() error {
+		if err := db.writeFence(options); err != nil {
+			return err
+		}
 		return runPostgresTxAttempt(ctx, db.sql, options, func(tx *sql.Tx) error {
-			return fn(bindGORMTx(ctx, db.orm, tx))
+			return fn(bindGORMTx(ctx, session, tx))
 		})
 	})
 }
 
+// validateGORMSession refuses a session that would not run on db's pool:
+// one from another handle, or one already bound to a transaction.
+func (db *PostgresDB) validateGORMSession(session *gorm.DB) error {
+	if db == nil || session == nil || session.Statement == nil || session.Statement.ConnPool == nil {
+		return fmt.Errorf("%w: transaction database and GORM session are required", ErrInvalidArgument)
+	}
+	if pool, ok := session.Statement.ConnPool.(*sql.DB); !ok || pool != db.sql {
+		return fmt.Errorf(
+			"%w: GORM session must come from this handle's GORMDB outside a transaction",
+			ErrInvalidArgument,
+		)
+	}
+	return nil
+}
+
+// writeFence refuses a write attempt once the handle's server singleton was
+// lost, since another server may now own the database.
+func (db *PostgresDB) writeFence(options *sql.TxOptions) error {
+	if options.ReadOnly {
+		return nil
+	}
+	return db.ServerSingletonErr()
+}
+
 // bindGORMTx returns a fresh GORM session whose statements all run on tx,
 // as gorm.DB.Begin binds one, so both transaction APIs share one attempt
-// implementation and its checks.
+// implementation and its checks. The session keeps orm's configuration,
+// such as its logger.
 func bindGORMTx(ctx context.Context, orm *gorm.DB, tx *sql.Tx) *gorm.DB {
 	session := orm.Session(&gorm.Session{Context: ctx, NewDB: true})
 	session.Statement.ConnPool = tx

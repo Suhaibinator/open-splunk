@@ -3,57 +3,59 @@ package testsupport
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"runtime"
+	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+
+	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport/pgtest"
 )
 
 // uniqueTemplateMigrations returns a migration set whose identity is new to
 // the server, so the test exercises template construction rather than reuse.
 func uniqueTemplateMigrations(t *testing.T) fstest.MapFS {
 	t.Helper()
-	nonce, err := randomHex(8)
-	if err != nil {
-		t.Fatalf("create template nonce: %v", err)
-	}
 	return fstest.MapFS{
 		"0001_baseline.sql": {Data: []byte(fmt.Sprintf(`
--- template nonce %s
+-- template nonce %d %s
 CREATE TABLE marks (owner text PRIMARY KEY, marked_at bigint NOT NULL);
 CREATE FUNCTION mark_count() RETURNS bigint LANGUAGE sql AS $$ SELECT count(*) FROM marks $$;
-`, nonce))},
+`, time.Now().UnixNano(), t.Name()))},
 		"0002_seed.sql": {Data: []byte(`INSERT INTO marks (owner, marked_at) VALUES ('template', 1);`)},
 	}
 }
 
-// dropTemplateOnCleanup removes a template created for one test so a shared
-// server does not accumulate them.
-func dropTemplateOnCleanup(t *testing.T, templateName string) {
+// openAdminPool opens a pool on the administrator database of the test
+// server, for inspecting databases the helpers create.
+func openAdminPool(t *testing.T) *sql.DB {
 	t.Helper()
-	_, admin := postgresAdminHandle(t)
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), postgresDropTimeout)
-		defer cancel()
-		if _, err := admin.ExecContext(ctx,
-			`ALTER DATABASE `+quotePostgresIdentifier(templateName)+` WITH IS_TEMPLATE false`,
-		); err != nil && !strings.Contains(err.Error(), "does not exist") {
-			t.Errorf("unmark template %s: %v", templateName, err)
-		}
-		if err := dropPostgresDatabase(ctx, admin, templateName); err != nil {
-			t.Errorf("drop template %s: %v", templateName, err)
-		}
-	})
+	return openRawPool(t, PostgresAdminDSN(t))
 }
 
-func databaseExists(t *testing.T, name string) bool {
+func openRawPool(t *testing.T, dsn string) *sql.DB {
 	t.Helper()
-	_, admin := postgresAdminHandle(t)
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal("PostgreSQL connection string is invalid")
+	}
+	pool := stdlib.OpenDB(*config)
+	t.Cleanup(func() {
+		if err := pool.Close(); err != nil {
+			t.Errorf("close PostgreSQL pool: %v", err)
+		}
+	})
+	return pool
+}
+
+func databaseExists(t *testing.T, admin *sql.DB, name string) bool {
+	t.Helper()
 	var exists bool
 	if err := admin.QueryRowContext(context.Background(),
 		`SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)`, name,
@@ -66,15 +68,16 @@ func databaseExists(t *testing.T, name string) bool {
 func TestNewPostgresControlDBClonesOneTemplateUnderParallelLoad(t *testing.T) {
 	t.Parallel()
 	files := uniqueTemplateMigrations(t)
-	key, err := controlTemplateKey(files, nil)
+	template, err := PostgresControlTemplate(files)
 	if err != nil {
-		t.Fatalf("controlTemplateKey() = %v", err)
+		t.Fatalf("PostgresControlTemplate() = %v", err)
 	}
-	templateName := postgresTemplateName(key)
-	if databaseExists(t, templateName) {
+	templateName := pgtest.TemplateDatabaseName(template.Key)
+	admin := openAdminPool(t)
+	if databaseExists(t, admin, templateName) {
 		t.Fatalf("template %s predates this test; the build path would go untested", templateName)
 	}
-	dropTemplateOnCleanup(t, templateName)
+	t.Cleanup(func() { DropPostgresTemplate(t, template.Key) })
 
 	const tests = 50
 	var mu sync.Mutex
@@ -82,7 +85,7 @@ func TestNewPostgresControlDBClonesOneTemplateUnderParallelLoad(t *testing.T) {
 	t.Cleanup(func() {
 		// Subtest cleanups have run by now; every clone must be gone.
 		for name := range databases {
-			if databaseExists(t, name) {
+			if databaseExists(t, admin, name) {
 				t.Errorf("test database %s outlived its test", name)
 			}
 		}
@@ -127,186 +130,116 @@ func TestNewPostgresControlDBClonesOneTemplateUnderParallelLoad(t *testing.T) {
 	}
 }
 
-func TestPostgresTemplateIsBuiltOnceAcrossConcurrentProcesses(t *testing.T) {
+// controlSessions counts the server sessions open on the database behind
+// db, other than the counting session itself.
+func controlSessions(t *testing.T, admin *sql.DB, db *control.PostgresDB) int {
+	t.Helper()
+	var name string
+	if err := db.SQLDB().QueryRowContext(t.Context(), `SELECT current_database()`).Scan(&name); err != nil {
+		t.Fatalf("name test database: %v", err)
+	}
+	var sessions int
+	if err := admin.QueryRowContext(t.Context(), `
+		SELECT count(*) FROM pg_stat_activity
+		WHERE datname = $1 AND backend_type = 'client backend'`, name,
+	).Scan(&sessions); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	return sessions
+}
+
+// burst runs count read transactions at once, each holding its session
+// until all of them have one.
+func burst(t *testing.T, db *control.PostgresDB, count int) {
+	t.Helper()
+	var ready sync.WaitGroup
+	ready.Add(count)
+	errs := make(chan error, count)
+	for range count {
+		go func() {
+			errs <- db.ReadTx(t.Context(), func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(t.Context(), `SELECT 1`); err != nil {
+					ready.Done()
+					return err
+				}
+				ready.Done()
+				ready.Wait()
+				return nil
+			})
+		}()
+	}
+	for range count {
+		if err := <-errs; err != nil {
+			t.Fatalf("burst read: %v", err)
+		}
+	}
+}
+
+// A control-plane test handle must not keep the sessions of a burst of
+// concurrent transactions open until the test ends: with many packages'
+// tests running beside each other, that exhausted the server's
+// max_connections.
+func TestPostgresControlDBReleasesIdleSessionsAfterABurst(t *testing.T) {
 	t.Parallel()
-	adminDSN, admin := postgresAdminHandle(t)
-	key, err := randomHex(8)
+	admin := openAdminPool(t)
+	db := NewPostgresControlDB(t)
+	const contenders = 8
+	burst(t, db, contenders)
+	if got := controlSessions(t, admin, db); got < contenders {
+		t.Fatalf("burst left %d sessions, want the %d it used still idle right after", got, contenders)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for controlSessions(t, admin, db) > 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("handle still holds %d sessions 10s after its burst", controlSessions(t, admin, db))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// Plain `go test ./...` needs PostgreSQL, so the contributor guide must say
+// how to point the tests at a server and how to remove the container they
+// start otherwise.
+func TestContributorGuideDocumentsTheTestPostgres(t *testing.T) {
+	t.Parallel()
+	guide, err := os.ReadFile("../../AGENTS.md")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("read AGENTS.md: %v", err)
 	}
-	templateName := postgresTemplateName("xproc_" + key)
-	dropTemplateOnCleanup(t, templateName)
-
-	// Calling buildPostgresTemplate directly bypasses the in-process cache,
-	// so these goroutines contend only on the PostgreSQL advisory lock, as
-	// separate test binaries would.
-	var builds atomic.Int32
-	build := func(ctx context.Context, db *sql.DB) error {
-		builds.Add(1)
-		if _, err := db.ExecContext(ctx, `CREATE TABLE built (id int); SELECT pg_sleep(0.2)`); err != nil {
-			return err
-		}
-		return nil
-	}
-	const builders = 6
-	errs := make([]error, builders)
-	var wg sync.WaitGroup
-	for index := range builders {
-		wg.Go(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), postgresTemplateTimeout)
-			defer cancel()
-			errs[index] = buildPostgresTemplate(ctx, adminDSN, admin, templateName, build)
-		})
-	}
-	wg.Wait()
-	for index, err := range errs {
-		if err != nil {
-			t.Fatalf("builder %d: %v", index, err)
-		}
-	}
-	if got := builds.Load(); got != 1 {
-		t.Fatalf("template built %d times, want 1", got)
-	}
-	if databaseExists(t, templateName+"_build") {
-		t.Fatal("staging database survived publication")
-	}
-	dsn := NewPostgresDatabase(t, PostgresTemplate{Key: "xproc_" + key, Build: build})
-	if got := builds.Load(); got != 1 {
-		t.Fatalf("cloning rebuilt the published template (%d builds)", got)
-	}
-	if !strings.Contains(dsn, "ostest_") {
-		t.Fatalf("clone DSN %q does not name a test database", dsn)
-	}
-}
-
-func TestPostgresTemplateBuildFailureLeavesNothingAndRetries(t *testing.T) {
-	t.Parallel()
-	adminDSN, admin := postgresAdminHandle(t)
-	key, err := randomHex(8)
-	if err != nil {
-		t.Fatal(err)
-	}
-	templateName := postgresTemplateName("fail_" + key)
-	dropTemplateOnCleanup(t, templateName)
-	ctx := t.Context()
-
-	// A stale staging database from a crashed builder is discarded.
-	if _, err := admin.ExecContext(ctx, `CREATE DATABASE `+quotePostgresIdentifier(templateName+"_build")); err != nil {
-		t.Fatalf("plant stale staging database: %v", err)
-	}
-	failure := errors.New("migration exploded")
-	err = buildPostgresTemplate(ctx, adminDSN, admin, templateName, func(context.Context, *sql.DB) error {
-		return failure
-	})
-	if !errors.Is(err, failure) {
-		t.Fatalf("buildPostgresTemplate() = %v, want the build failure", err)
-	}
-	if databaseExists(t, templateName) || databaseExists(t, templateName+"_build") {
-		t.Fatal("failed build left a template or staging database")
-	}
-	if err := buildPostgresTemplate(ctx, adminDSN, admin, templateName, func(context.Context, *sql.DB) error {
-		return nil
-	}); err != nil {
-		t.Fatalf("retry buildPostgresTemplate() = %v", err)
-	}
-	var isTemplate, allowsConnections bool
-	if err := admin.QueryRowContext(ctx,
-		`SELECT datistemplate, datallowconn FROM pg_database WHERE datname = $1`, templateName,
-	).Scan(&isTemplate, &allowsConnections); err != nil {
-		t.Fatalf("inspect template: %v", err)
-	}
-	if !isTemplate || allowsConnections {
-		t.Fatalf("template datistemplate=%v datallowconn=%v", isTemplate, allowsConnections)
-	}
-}
-
-func TestNewPostgresDatabaseRejectsUnsafeTemplateKeys(t *testing.T) {
-	t.Parallel()
-	for _, key := range []string{"", "Upper", "has-dash", `quote"`, strings.Repeat("a", 41)} {
-		recorder := runFatalRecorder(func(tb testing.TB) {
-			NewPostgresDatabase(tb, PostgresTemplate{Key: key, Build: func(context.Context, *sql.DB) error { return nil }})
-		}, t)
-		if !strings.Contains(recorder, "PostgreSQL template needs a key") {
-			t.Fatalf("key %q: fatal = %q", key, recorder)
-		}
-	}
-}
-
-func TestPostgresUnavailableFailsInsteadOfSkipping(t *testing.T) {
-	t.Parallel()
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-
-	_, _, err := resolvePostgresAdmin(ctx,
-		"postgres://postgres:hunter2-secret@127.0.0.1:1/postgres?sslmode=disable&connect_timeout=2",
-		true,
-		func(context.Context) (string, error) {
-			t.Fatal("configured DSN must not start a container")
-			return "", nil
-		},
-	)
-	if err == nil || !strings.Contains(err.Error(), "unreachable") || strings.Contains(err.Error(), "hunter2-secret") {
-		t.Fatalf("unreachable resolvePostgresAdmin() = %v", err)
-	}
-	if _, _, err := resolvePostgresAdmin(ctx, " ", true, nil); err == nil || !strings.Contains(err.Error(), PostgresURLEnv) {
-		t.Fatalf("empty resolvePostgresAdmin() = %v", err)
-	}
-	if _, _, err := resolvePostgresAdmin(ctx, "postgres://u:hunter2-secret@[::1/x", true, nil); err == nil ||
-		strings.Contains(err.Error(), "hunter2-secret") {
-		t.Fatalf("malformed resolvePostgresAdmin() = %v", err)
-	}
-	startFailure := errors.New("docker daemon is not running")
-	if _, _, err := resolvePostgresAdmin(ctx, "", false, func(context.Context) (string, error) {
-		return "", startFailure
-	}); !errors.Is(err, startFailure) {
-		t.Fatalf("container start failure = %v", err)
-	}
-
-	message := runFatalRecorder(func(tb testing.TB) { requirePostgresAvailable(tb, err) }, t)
-	if !strings.Contains(message, "PostgreSQL is required") || !strings.Contains(message, PostgresURLEnv) {
-		t.Fatalf("requirePostgresAvailable() fatal = %q", message)
-	}
-	if message := runFatalRecorder(func(tb testing.TB) { requirePostgresAvailable(tb, nil) }, t); message != "" {
-		t.Fatalf("requirePostgresAvailable(nil) failed: %q", message)
-	}
-}
-
-func TestPostgresDSNForDatabaseRewritesOnlyTheDatabase(t *testing.T) {
-	t.Parallel()
-	for input, want := range map[string]string{
-		"postgres://admin:pw@127.0.0.1:5432/postgres?sslmode=disable": "postgres://admin:pw@127.0.0.1:5432/ostest_x?sslmode=disable",
-		"postgresql://admin@db.test/postgres":                         "postgresql://admin@db.test/ostest_x",
-		"host=127.0.0.1 user=admin dbname=postgres":                   "host=127.0.0.1 user=admin dbname=postgres dbname=ostest_x",
+	for _, want := range []string{
+		PostgresURLEnv,
+		pgtest.SharedContainerName,
+		"docker rm --force --volumes " + pgtest.SharedContainerName,
 	} {
-		got, err := postgresDSNForDatabase(input, "ostest_x")
-		if err != nil || got != want {
-			t.Fatalf("postgresDSNForDatabase(%q) = %q, %v; want %q", input, got, err, want)
+		if !strings.Contains(string(guide), want) {
+			t.Errorf("AGENTS.md does not mention %q", want)
 		}
 	}
 }
 
-// fatalRecorder captures Fatalf so helper failure paths can be asserted. It
-// embeds testing.TB for the unexported method; only the methods the helpers
-// call are overridden.
-type fatalRecorder struct {
-	testing.TB
-	message string
-}
-
-func (recorder *fatalRecorder) Helper() {}
-
-func (recorder *fatalRecorder) Fatalf(format string, args ...any) {
-	recorder.message = fmt.Sprintf(format, args...)
-	runtime.Goexit()
-}
-
-func runFatalRecorder(body func(testing.TB), t *testing.T) string {
-	recorder := &fatalRecorder{TB: t}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		body(recorder)
-	}()
-	<-done
-	return recorder.message
+func TestWithPostgresPoolBoundsTheHandleSessions(t *testing.T) {
+	t.Parallel()
+	admin := openAdminPool(t)
+	db := NewPostgresControlDB(t,
+		WithPostgresPool(control.PostgresPool{MaxOpenConns: 2, MaxIdleConns: 1}))
+	if got := db.SQLDB().Stats().MaxOpenConnections; got != 2 {
+		t.Fatalf("MaxOpenConnections = %d, want 2", got)
+	}
+	errs := make(chan error, 6)
+	for range 6 {
+		go func() {
+			errs <- db.ReadTx(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), `SELECT pg_sleep(0.05)`)
+				return err
+			})
+		}()
+	}
+	for range 6 {
+		if err := <-errs; err != nil {
+			t.Fatalf("bounded read: %v", err)
+		}
+	}
+	if got := controlSessions(t, admin, db); got > 1 {
+		t.Fatalf("pool with MaxIdleConns 1 kept %d sessions", got)
+	}
 }

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Suhaibinator/open-splunk/migrations"
 	"github.com/jackc/pgx/v5"
@@ -58,9 +59,16 @@ type PostgresDB struct {
 	// writeQueue serializes write transactions while any is being retried.
 	writeQueue *postgresWriteQueue
 
+	admission admissionGates
+
 	mu         sync.Mutex
 	closed     bool
 	singletons map[*serverSingleton]struct{}
+	// singletonLost is closed, and singletonLostErr set, once a server
+	// singleton lock held through this handle is found lost. From then on
+	// the handle refuses write transactions.
+	singletonLost    chan struct{}
+	singletonLostErr error
 }
 
 // OpenPostgres connects to the PostgreSQL control plane named by dsn, pins
@@ -68,8 +76,8 @@ type PostgresDB struct {
 // PostgreSQL migrations before returning. It takes no server lock: the
 // server process uses OpenPostgresServer, which fences migrations with the
 // single-active-server lock.
-func OpenPostgres(ctx context.Context, dsn string) (*PostgresDB, error) {
-	return OpenPostgresWithMigrations(ctx, dsn, migrations.Postgres())
+func OpenPostgres(ctx context.Context, dsn string, options ...PostgresOption) (*PostgresDB, error) {
+	return OpenPostgresWithMigrations(ctx, dsn, migrations.Postgres(), options...)
 }
 
 // OpenPostgresWithMigrations is OpenPostgres with an explicit ordered
@@ -78,26 +86,111 @@ func OpenPostgresWithMigrations(
 	ctx context.Context,
 	dsn string,
 	migrationFS fs.FS,
+	options ...PostgresOption,
 ) (*PostgresDB, error) {
-	if ctx == nil {
-		return nil, fmt.Errorf("%w: nil context", ErrInvalidArgument)
-	}
-	if migrationFS == nil {
-		return nil, fmt.Errorf("%w: PostgreSQL migration filesystem is required", ErrInvalidArgument)
-	}
-	connConfig, err := parsePostgresConfig(dsn)
+	connConfig, resolved, err := preparePostgresOpen(ctx, dsn, migrationFS, options)
 	if err != nil {
 		return nil, err
 	}
-	return openPostgres(ctx, connConfig, migrationFS)
+	return openPostgres(ctx, connConfig, migrationFS, resolved)
+}
+
+// PostgresPool sizes the connection pool behind a PostgresDB.
+type PostgresPool struct {
+	// MaxOpenConns bounds the sessions the handle holds at once. It must be
+	// at least 1; a transaction holds one session for its whole run.
+	MaxOpenConns int
+	// MaxIdleConns bounds the idle sessions kept for reuse, from 0 to
+	// MaxOpenConns.
+	MaxIdleConns int
+	// ConnMaxIdleTime closes a session once it has been idle this long, so
+	// a burst of concurrent transactions does not pin its sessions on the
+	// server afterwards. Zero keeps idle sessions until the handle closes.
+	ConnMaxIdleTime time.Duration
+}
+
+// DefaultPostgresPool is the pool a handle uses unless WithPostgresPool
+// chooses another: up to 16 sessions, all kept for reuse.
+func DefaultPostgresPool() PostgresPool {
+	return PostgresPool{
+		MaxOpenConns: defaultPostgresMaxOpenConns,
+		MaxIdleConns: defaultPostgresMaxOpenConns,
+	}
+}
+
+// PostgresOption configures how a PostgresDB is opened.
+type PostgresOption func(*postgresOpenOptions)
+
+type postgresOpenOptions struct {
+	pool PostgresPool
+}
+
+// WithPostgresPool replaces DefaultPostgresPool. Tests that hold many
+// handles at once use it to stay inside the server's max_connections.
+func WithPostgresPool(pool PostgresPool) PostgresOption {
+	return func(options *postgresOpenOptions) {
+		options.pool = pool
+	}
+}
+
+func resolvePostgresOptions(options []PostgresOption) (postgresOpenOptions, error) {
+	resolved := postgresOpenOptions{pool: DefaultPostgresPool()}
+	for _, option := range options {
+		if option != nil {
+			option(&resolved)
+		}
+	}
+	pool := resolved.pool
+	if pool.MaxOpenConns < 1 || pool.MaxIdleConns < 0 || pool.MaxIdleConns > pool.MaxOpenConns ||
+		pool.ConnMaxIdleTime < 0 {
+		return postgresOpenOptions{}, fmt.Errorf(
+			"%w: PostgreSQL pool needs MaxOpenConns >= 1, 0 <= MaxIdleConns <= MaxOpenConns, "+
+				"and a non-negative ConnMaxIdleTime",
+			ErrInvalidArgument,
+		)
+	}
+	return resolved, nil
+}
+
+// preparePostgresOpen validates the arguments every open path shares.
+func preparePostgresOpen(
+	ctx context.Context,
+	dsn string,
+	migrationFS fs.FS,
+	options []PostgresOption,
+) (*pgx.ConnConfig, postgresOpenOptions, error) {
+	if ctx == nil {
+		return nil, postgresOpenOptions{}, fmt.Errorf("%w: nil context", ErrInvalidArgument)
+	}
+	if migrationFS == nil {
+		return nil, postgresOpenOptions{}, fmt.Errorf(
+			"%w: PostgreSQL migration filesystem is required",
+			ErrInvalidArgument,
+		)
+	}
+	resolved, err := resolvePostgresOptions(options)
+	if err != nil {
+		return nil, postgresOpenOptions{}, err
+	}
+	connConfig, err := parsePostgresConfig(dsn)
+	if err != nil {
+		return nil, postgresOpenOptions{}, err
+	}
+	return connConfig, resolved, nil
 }
 
 // openPostgres opens the shared pool for connConfig, applies migrationFS,
 // and returns the handle. Callers have validated their arguments.
-func openPostgres(ctx context.Context, connConfig *pgx.ConnConfig, migrationFS fs.FS) (*PostgresDB, error) {
+func openPostgres(
+	ctx context.Context,
+	connConfig *pgx.ConnConfig,
+	migrationFS fs.FS,
+	options postgresOpenOptions,
+) (*PostgresDB, error) {
 	raw := stdlib.OpenDB(*connConfig.Copy(), stdlib.OptionResetSession(resetPostgresSession))
-	raw.SetMaxOpenConns(defaultPostgresMaxOpenConns)
-	raw.SetMaxIdleConns(defaultPostgresMaxOpenConns)
+	raw.SetMaxOpenConns(options.pool.MaxOpenConns)
+	raw.SetMaxIdleConns(options.pool.MaxIdleConns)
+	raw.SetConnMaxIdleTime(options.pool.ConnMaxIdleTime)
 	closeOnError := func(openErr error) (*PostgresDB, error) {
 		if closeErr := raw.Close(); closeErr != nil {
 			return nil, errors.Join(openErr, fmt.Errorf("close PostgreSQL control plane: %w", closeErr))
@@ -115,11 +208,12 @@ func openPostgres(ctx context.Context, connConfig *pgx.ConnConfig, migrationFS f
 		return closeOnError(fmt.Errorf("configure GORM PostgreSQL control plane: %w", err))
 	}
 	return &PostgresDB{
-		sql:        raw,
-		orm:        orm,
-		connConfig: connConfig,
-		writeQueue: newPostgresWriteQueue(),
-		singletons: make(map[*serverSingleton]struct{}),
+		sql:           raw,
+		orm:           orm,
+		connConfig:    connConfig,
+		writeQueue:    newPostgresWriteQueue(),
+		singletons:    make(map[*serverSingleton]struct{}),
+		singletonLost: make(chan struct{}),
 	}, nil
 }
 

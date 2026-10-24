@@ -81,3 +81,30 @@ func TestEmbeddedPostgresMigrationsAreWellFormed(t *testing.T) {
 		t.Fatalf("embedded PostgreSQL migrations = %v, deployment checksums cover %d files", files, len(goldenSHA256))
 	}
 }
+
+// TestPostgresReadmeDescribesEveryMigration keeps the directory README in
+// step with the files it describes: its Ordering table names every embedded
+// migration, and its introduction no longer says triggers live elsewhere.
+func TestPostgresReadmeDescribesEveryMigration(t *testing.T) {
+	t.Parallel()
+
+	readme, err := fs.ReadFile(Postgres(), "README.md")
+	if err != nil {
+		t.Fatalf("read embedded PostgreSQL README: %v", err)
+	}
+	entries, err := fs.ReadDir(Postgres(), ".")
+	if err != nil {
+		t.Fatalf("read embedded PostgreSQL migrations: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Name() == "README.md" {
+			continue
+		}
+		if !bytes.Contains(readme, []byte("| `"+entry.Name()+"` |")) {
+			t.Errorf("README Ordering table does not list %s", entry.Name())
+		}
+	}
+	if bytes.Contains(bytes.Join(bytes.Fields(readme), []byte(" ")), []byte("Triggers are ported separately")) {
+		t.Error("README still says the triggers are ported outside this directory")
+	}
+}

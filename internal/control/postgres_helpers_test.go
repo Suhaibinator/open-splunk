@@ -13,8 +13,10 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 )
 
-// The PostgreSQL tests live in package control_test because testsupport
-// imports control to build migrated template databases.
+// These black-box PostgreSQL tests use testsupport, which imports control.
+// Tests that need unexported identifiers are package control and use the
+// helpers in postgres_internal_helpers_test.go, built on the leaf package
+// pgtest, instead.
 
 // postgresFixtureBaseline is a stand-in schema exercising every constraint
 // class the error classifier distinguishes, plus a PL/pgSQL RAISE trigger.
