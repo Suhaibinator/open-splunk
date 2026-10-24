@@ -1680,5 +1680,185 @@
       "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 1, 2, 1, 10, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')"
     ],
     "sqlite_statement": "UPDATE ingest_write_groups SET state = 'committed', sending_at_unix_micro = 2000, committed_at_unix_micro = 3000, row_count = row_count WHERE write_group_id = 'g1'"
+  },
+  {
+    "name": "write_group_send_with_header_row_count_above_members_is_rejected",
+    "trigger": "ingest_write_group_seal_is_valid",
+    "setup_sql": [
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b1', 's1', '\\xabababababababababababababababababababababababababababababababab'::bytea, 1, 1)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b2', 's2', '\\xabababababababababababababababababababababababababababababababab'::bytea, 2, 1)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (1, 'b1', 'reserved', 'unsent', 1, '\\x'::bytea, '\\x01'::bytea, 1, NULL, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 1, 10, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (2, 'b2', 'reserved', 'unsent', 1, '\\x'::bytea, '\\x01'::bytea, 1, NULL, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 1, 10, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea)",
+      "INSERT INTO ingest_write_groups (write_group_id, state, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('g1', 'ready', 2, 3, 20, '\\xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'::bytea, 1, 2, 1000)",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 0, 1, 1, 10, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea)",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 1, 2, 1, 10, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea)"
+    ],
+    "statement": "UPDATE ingest_write_groups SET state = 'ambiguous', attempt_id = 'a1', sending_at_unix_micro = 2000 WHERE write_group_id = 'g1'",
+    "expect": "reject",
+    "message": "ingest write group seal does not match its members",
+    "sqlite_setup_sql": [
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b1', 's1', X'abababababababababababababababababababababababababababababababab', 1, 1)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b2', 's2', X'abababababababababababababababababababababababababababababababab', 2, 1)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (1, 'b1', 'reserved', 'unsent', 1, X'', X'01', 1, NULL, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 10, X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (2, 'b2', 'reserved', 'unsent', 1, X'', X'01', 1, NULL, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 10, X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')",
+      "INSERT INTO ingest_write_groups (write_group_id, state, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('g1', 'ready', 2, 3, 20, X'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 1, 2, 1000)",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 0, 1, 1, 10, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 1, 2, 1, 10, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')"
+    ],
+    "sqlite_statement": "UPDATE ingest_write_groups SET state = 'ambiguous', attempt_id = 'a1', sending_at_unix_micro = 2000 WHERE write_group_id = 'g1'",
+    "verify_sql": "SELECT write_group_id, state, attempt_id FROM ingest_write_groups ORDER BY write_group_id",
+    "verify_rows": [
+      "g1|ready|"
+    ]
+  },
+  {
+    "name": "write_group_send_with_header_decoded_bytes_below_members_is_rejected",
+    "trigger": "ingest_write_group_seal_is_valid",
+    "setup_sql": [
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b1', 's1', '\\xabababababababababababababababababababababababababababababababab'::bytea, 1, 1)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b2', 's2', '\\xabababababababababababababababababababababababababababababababab'::bytea, 2, 1)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (1, 'b1', 'reserved', 'unsent', 1, '\\x'::bytea, '\\x01'::bytea, 1, NULL, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 1, 10, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (2, 'b2', 'reserved', 'unsent', 1, '\\x'::bytea, '\\x01'::bytea, 1, NULL, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 1, 10, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea)",
+      "INSERT INTO ingest_write_groups (write_group_id, state, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('g1', 'ready', 2, 2, 19, '\\xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'::bytea, 1, 2, 1000)",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 0, 1, 1, 10, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea)",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 1, 2, 1, 10, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea)"
+    ],
+    "statement": "UPDATE ingest_write_groups SET state = 'ambiguous', attempt_id = 'a1', sending_at_unix_micro = 2000 WHERE write_group_id = 'g1'",
+    "expect": "reject",
+    "message": "ingest write group seal does not match its members",
+    "sqlite_setup_sql": [
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b1', 's1', X'abababababababababababababababababababababababababababababababab', 1, 1)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b2', 's2', X'abababababababababababababababababababababababababababababababab', 2, 1)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (1, 'b1', 'reserved', 'unsent', 1, X'', X'01', 1, NULL, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 10, X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (2, 'b2', 'reserved', 'unsent', 1, X'', X'01', 1, NULL, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 10, X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')",
+      "INSERT INTO ingest_write_groups (write_group_id, state, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('g1', 'ready', 2, 2, 19, X'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 1, 2, 1000)",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 0, 1, 1, 10, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 1, 2, 1, 10, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')"
+    ],
+    "sqlite_statement": "UPDATE ingest_write_groups SET state = 'ambiguous', attempt_id = 'a1', sending_at_unix_micro = 2000 WHERE write_group_id = 'g1'",
+    "verify_sql": "SELECT write_group_id, state, attempt_id FROM ingest_write_groups ORDER BY write_group_id",
+    "verify_rows": [
+      "g1|ready|"
+    ]
+  },
+  {
+    "name": "write_group_send_with_header_first_sequence_after_members_is_rejected",
+    "trigger": "ingest_write_group_seal_is_valid",
+    "setup_sql": [
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b1', 's1', '\\xabababababababababababababababababababababababababababababababab'::bytea, 1, 1)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b2', 's2', '\\xabababababababababababababababababababababababababababababababab'::bytea, 2, 1)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (1, 'b1', 'reserved', 'unsent', 1, '\\x'::bytea, '\\x01'::bytea, 1, NULL, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 1, 10, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (2, 'b2', 'reserved', 'unsent', 1, '\\x'::bytea, '\\x01'::bytea, 1, NULL, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 1, 10, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea)",
+      "INSERT INTO ingest_write_groups (write_group_id, state, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('g1', 'ready', 2, 2, 20, '\\xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'::bytea, 2, 2, 1000)",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 0, 1, 1, 10, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea)",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 1, 2, 1, 10, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea)"
+    ],
+    "statement": "UPDATE ingest_write_groups SET state = 'ambiguous', attempt_id = 'a1', sending_at_unix_micro = 2000 WHERE write_group_id = 'g1'",
+    "expect": "reject",
+    "message": "ingest write group seal does not match its members",
+    "sqlite_setup_sql": [
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b1', 's1', X'abababababababababababababababababababababababababababababababab', 1, 1)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b2', 's2', X'abababababababababababababababababababababababababababababababab', 2, 1)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (1, 'b1', 'reserved', 'unsent', 1, X'', X'01', 1, NULL, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 10, X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (2, 'b2', 'reserved', 'unsent', 1, X'', X'01', 1, NULL, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 10, X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')",
+      "INSERT INTO ingest_write_groups (write_group_id, state, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('g1', 'ready', 2, 2, 20, X'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 2, 2, 1000)",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 0, 1, 1, 10, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 1, 2, 1, 10, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')"
+    ],
+    "sqlite_statement": "UPDATE ingest_write_groups SET state = 'ambiguous', attempt_id = 'a1', sending_at_unix_micro = 2000 WHERE write_group_id = 'g1'",
+    "verify_sql": "SELECT write_group_id, state, attempt_id FROM ingest_write_groups ORDER BY write_group_id",
+    "verify_rows": [
+      "g1|ready|"
+    ]
+  },
+  {
+    "name": "write_group_send_with_header_last_sequence_after_members_is_rejected",
+    "trigger": "ingest_write_group_seal_is_valid",
+    "setup_sql": [
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b1', 's1', '\\xabababababababababababababababababababababababababababababababab'::bytea, 1, 1)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b2', 's2', '\\xabababababababababababababababababababababababababababababababab'::bytea, 2, 1)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (1, 'b1', 'reserved', 'unsent', 1, '\\x'::bytea, '\\x01'::bytea, 1, NULL, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 1, 10, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (2, 'b2', 'reserved', 'unsent', 1, '\\x'::bytea, '\\x01'::bytea, 1, NULL, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 1, 10, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea)",
+      "INSERT INTO ingest_write_groups (write_group_id, state, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('g1', 'ready', 2, 2, 20, '\\xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'::bytea, 1, 3, 1000)",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 0, 1, 1, 10, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea)",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 1, 2, 1, 10, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea)"
+    ],
+    "statement": "UPDATE ingest_write_groups SET state = 'ambiguous', attempt_id = 'a1', sending_at_unix_micro = 2000 WHERE write_group_id = 'g1'",
+    "expect": "reject",
+    "message": "ingest write group seal does not match its members",
+    "sqlite_setup_sql": [
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b1', 's1', X'abababababababababababababababababababababababababababababababab', 1, 1)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b2', 's2', X'abababababababababababababababababababababababababababababababab', 2, 1)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (1, 'b1', 'reserved', 'unsent', 1, X'', X'01', 1, NULL, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 10, X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (2, 'b2', 'reserved', 'unsent', 1, X'', X'01', 1, NULL, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 10, X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')",
+      "INSERT INTO ingest_write_groups (write_group_id, state, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('g1', 'ready', 2, 2, 20, X'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 1, 3, 1000)",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 0, 1, 1, 10, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g1', 1, 2, 1, 10, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')"
+    ],
+    "sqlite_statement": "UPDATE ingest_write_groups SET state = 'ambiguous', attempt_id = 'a1', sending_at_unix_micro = 2000 WHERE write_group_id = 'g1'",
+    "verify_sql": "SELECT write_group_id, state, attempt_id FROM ingest_write_groups ORDER BY write_group_id",
+    "verify_rows": [
+      "g1|ready|"
+    ]
+  },
+  {
+    "name": "reservation_update_over_row_limit_is_rejected",
+    "trigger": "ingest_visibility_reservation_accounting_update_is_valid",
+    "setup_sql": [
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b1', 's1', '\\xabababababababababababababababababababababababababababababababab'::bytea, 1, 1)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (1, 'b1', 'reserved', 'unsent', 1, '\\x'::bytea, '\\x01'::bytea, 1, NULL, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 1, 10, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea)"
+    ],
+    "statement": "UPDATE ingest_visibility_reservations SET stored_row_count = 1001 WHERE sequence = 1",
+    "expect": "reject",
+    "message": "invalid ingest visibility reservation accounting",
+    "sqlite_setup_sql": [
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b1', 's1', X'abababababababababababababababababababababababababababababababab', 1, 1)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (1, 'b1', 'reserved', 'unsent', 1, X'', X'01', 1, NULL, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 10, X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')"
+    ],
+    "sqlite_statement": "UPDATE ingest_visibility_reservations SET stored_row_count = 1001 WHERE sequence = 1",
+    "verify_sql": "SELECT sequence, state, stored_row_count, decoded_event_bytes FROM ingest_visibility_reservations ORDER BY sequence",
+    "verify_rows": [
+      "1|reserved|1|10"
+    ]
+  },
+  {
+    "name": "reservation_update_over_decoded_limit_is_rejected",
+    "trigger": "ingest_visibility_reservation_accounting_update_is_valid",
+    "setup_sql": [
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b1', 's1', '\\xabababababababababababababababababababababababababababababababab'::bytea, 1, 1)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (1, 'b1', 'reserved', 'unsent', 1, '\\x'::bytea, '\\x01'::bytea, 1, NULL, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 1, 10, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea)"
+    ],
+    "statement": "UPDATE ingest_visibility_reservations SET decoded_event_bytes = 8388609 WHERE sequence = 1",
+    "expect": "reject",
+    "message": "invalid ingest visibility reservation accounting",
+    "sqlite_setup_sql": [
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b1', 's1', X'abababababababababababababababababababababababababababababababab', 1, 1)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (1, 'b1', 'reserved', 'unsent', 1, X'', X'01', 1, NULL, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 10, X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')"
+    ],
+    "sqlite_statement": "UPDATE ingest_visibility_reservations SET decoded_event_bytes = 8388609 WHERE sequence = 1",
+    "verify_sql": "SELECT sequence, state, stored_row_count, decoded_event_bytes FROM ingest_visibility_reservations ORDER BY sequence",
+    "verify_rows": [
+      "1|reserved|1|10"
+    ]
+  },
+  {
+    "name": "reservation_update_to_accounting_limits_is_accepted",
+    "trigger": "ingest_visibility_reservation_accounting_update_is_valid",
+    "setup_sql": [
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b1', 's1', '\\xabababababababababababababababababababababababababababababababab'::bytea, 1, 1)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (1, 'b1', 'reserved', 'unsent', 1, '\\x'::bytea, '\\x01'::bytea, 1, NULL, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 1, 10, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea)"
+    ],
+    "statement": "UPDATE ingest_visibility_reservations SET stored_row_count = 1000, decoded_event_bytes = 8388608 WHERE sequence = 1",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b1', 's1', X'abababababababababababababababababababababababababababababababab', 1, 1)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, index_time_unix_milli, metadata, outbox, created_at_unix_micro, committed_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes, principal_sha256) VALUES (1, 'b1', 'reserved', 'unsent', 1, X'', X'01', 1, NULL, X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, 10, X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')"
+    ],
+    "sqlite_statement": "UPDATE ingest_visibility_reservations SET stored_row_count = 1000, decoded_event_bytes = 8388608 WHERE sequence = 1",
+    "verify_sql": "SELECT sequence, state, stored_row_count, decoded_event_bytes FROM ingest_visibility_reservations ORDER BY sequence",
+    "verify_rows": [
+      "1|reserved|1000|8388608"
+    ]
   }
 ]

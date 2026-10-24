@@ -47,6 +47,12 @@ var coreIngest3LaneMarkers = map[string]string{
 	"core_ingest_2": "index_data_deletion_completion_finishes_operation",
 }
 
+// coreIngest3PendingLanes lists the dependency lanes whose migrations this
+// branch does not ship yet; the scenarios needing them wait. When a lane's
+// migration is merged, TestPostgresCoreIngest3CrossLaneTriggerScenarios
+// fails until the lane is removed here, which enables its scenarios.
+var coreIngest3PendingLanes = []string{"core_ingest_1", "core_ingest_2"}
+
 var (
 	coreIngest3CreateTrigger = regexp.MustCompile(`(?s)CREATE TRIGGER ([a-z_][a-z0-9_]*)\s+(?:BEFORE|AFTER)\b.*?\bON\s+([a-z_][a-z0-9_]*)`)
 	coreIngest3RaiseMessage  = regexp.MustCompile(`RAISE EXCEPTION\s+'([^']*)'`)
@@ -176,9 +182,12 @@ func TestPostgresCoreIngest3TriggerScenarios(t *testing.T) {
 
 // TestPostgresCoreIngest3CrossLaneTriggerScenarios runs the scenarios whose
 // expected outcome also depends on another lane's triggers, as recorded by
-// the fixture's depends_on_lanes. While a lane's migration is not embedded,
-// the scenarios needing it are skipped with the lane named; once it is, they
-// run like any other and fail on any difference from the SQLite outcome.
+// the fixture's depends_on_lanes. A scenario runs once none of its lanes is
+// in coreIngest3PendingLanes, and then fails on any difference from the
+// SQLite outcome. The pending list must agree with the embedded migrations
+// in both directions, so nothing is ever skipped silently: a pending lane
+// whose migration has landed fails the test until the integrator enables its
+// scenarios, and an enabled lane whose migration is missing fails it too.
 func TestPostgresCoreIngest3CrossLaneTriggerScenarios(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -186,27 +195,54 @@ func TestPostgresCoreIngest3CrossLaneTriggerScenarios(t *testing.T) {
 	present := coreIngest3PresentLanes(ctx, t, db)
 	before := coreIngest3StateSnapshot(ctx, t, db)
 
-	for _, scenario := range coreIngest3AllScenarios(t) {
+	scenarios := coreIngest3AllScenarios(t)
+	waiting := make(map[string]int, len(coreIngest3PendingLanes))
+	for _, scenario := range scenarios {
+		for _, lane := range scenario.DependsOnLanes {
+			if slices.Contains(coreIngest3PendingLanes, lane) {
+				waiting[lane]++
+			}
+		}
+	}
+	for _, lane := range coreIngest3PendingLanes {
+		if _, known := coreIngest3LaneMarkers[lane]; !known {
+			t.Fatalf("pending lane %q is not a dependency lane this test can detect", lane)
+		}
+		if present[lane] {
+			t.Fatalf("trigger lane %s is now embedded, so the %d scenarios that need it can run: "+
+				"remove %q from coreIngest3PendingLanes", lane, waiting[lane], lane)
+		}
+	}
+	for lane := range coreIngest3LaneMarkers {
+		if !present[lane] && !slices.Contains(coreIngest3PendingLanes, lane) {
+			t.Fatalf("trigger lane %s is enabled in this test but its migration is not embedded; "+
+				"add it to coreIngest3PendingLanes until it is", lane)
+		}
+	}
+
+	ran, pending := 0, 0
+	for _, scenario := range scenarios {
 		if len(scenario.DependsOnLanes) == 0 {
 			continue
 		}
+		if slices.ContainsFunc(scenario.DependsOnLanes, func(lane string) bool {
+			return slices.Contains(coreIngest3PendingLanes, lane)
+		}) {
+			pending++
+			continue
+		}
+		ran++
 		t.Run(scenario.Name, func(t *testing.T) {
-			var missing []string
-			for _, lane := range scenario.DependsOnLanes {
-				if !present[lane] {
-					missing = append(missing, lane)
-				}
-			}
-			if len(missing) != 0 {
-				t.Skipf("needs trigger lanes %v, whose migrations are not embedded; "+
-					"it runs, and must match SQLite, once they are", missing)
-			}
 			runCoreIngest3TriggerScenario(ctx, t, db, scenario)
 		})
+	}
+	if ran+pending == 0 {
+		t.Fatal("no scenario depends on another trigger lane; drop the lane markers")
 	}
 	if after := coreIngest3StateSnapshot(ctx, t, db); !slices.Equal(after, before) {
 		t.Fatalf("rolled-back scenarios left state behind: before %v, after %v", before, after)
 	}
+	t.Logf("ran %d cross-lane scenarios; %d wait for pending lanes %v", ran, pending, coreIngest3PendingLanes)
 }
 
 func runCoreIngest3TriggerScenario(
@@ -493,7 +529,7 @@ func validateCoreIngest3Scenario(t *testing.T, scenario coreIngest3TriggerScenar
 // defensive error paths no plain statement can, by installing a test trigger
 // inside the scenario's transaction (PostgreSQL DDL is transactional, so the
 // rollback removes it); the others port SQLite store tests that assert these
-// triggers' behaviour without matching the message, and PostgreSQL-only
+// triggers' behavior without matching the message, and PostgreSQL-only
 // statement forms such as ON CONFLICT. Each derives its setup from a fixture
 // scenario so the two cannot drift.
 func coreIngest3PostgresScenarios(
@@ -541,11 +577,11 @@ func coreIngest3PostgresScenarios(
 	}
 
 	const (
-		operationInsert = `INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op-1', 'idx-1', 'main1', 'default', 2, 3000)`
+		operationInsert        = `INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op-1', 'idx-1', 'main1', 'default', 2, 3000)`
 		indexAndOperationCount = `SELECT index_id, state, version, updated_at_unix_micro, (SELECT count(*) FROM index_deletion_operations) FROM indexes ORDER BY index_id`
-		tombstoneInsert = `INSERT INTO index_deletion_tombstones (index_id, name, deleted_version, deleted_at_unix_micro) VALUES ('idx-1', 'main1', 2, 2500)`
-		tombstoneAccounting = `SELECT (SELECT count(*) FROM index_deletion_tombstones), revision, physical_count FROM index_catalog_state`
-		hecRequestStates = `SELECT request_id, state, CASE WHEN terminal_at_unix_micro IS NULL THEN 'null' WHEN terminal_at_unix_micro = 5000 THEN '5000' WHEN terminal_at_unix_micro > 1000000000000000 THEN 'clock' ELSE 'other' END FROM hec_requests ORDER BY request_sequence`
+		tombstoneInsert        = `INSERT INTO index_deletion_tombstones (index_id, name, deleted_version, deleted_at_unix_micro) VALUES ('idx-1', 'main1', 2, 2500)`
+		tombstoneAccounting    = `SELECT (SELECT count(*) FROM index_deletion_tombstones), revision, physical_count FROM index_catalog_state`
+		hecRequestStates       = `SELECT request_id, state, CASE WHEN terminal_at_unix_micro IS NULL THEN 'null' WHEN terminal_at_unix_micro = 5000 THEN '5000' WHEN terminal_at_unix_micro > 1000000000000000 THEN 'clock' ELSE 'other' END FROM hec_requests ORDER BY request_sequence`
 	)
 	// The test triggers sort before every shipped trigger name, so on
 	// PostgreSQL they fire first among the BEFORE triggers of their event.
@@ -615,6 +651,24 @@ func coreIngest3PostgresScenarios(
 				` ON CONFLICT (deletion_operation_id) DO UPDATE SET index_id = EXCLUDED.index_id`,
 			coreIngest3ExpectReject, "index deletion operation identity is already in use",
 			indexAndOperationCount, "idx-1|deleting|3|3000|1", "idx-2|archived|2|2000|1"),
+		// Ports of the direct-mutation cases in
+		// TestIndexDeletionOperationSQLGuards: renaming the
+		// operation or moving it to another tenant is refused by the trigger
+		// before the tenant foreign key is examined.
+		derive("operation_update_is_rejected",
+			"postgres_operation_index_name_update_is_rejected",
+			"index_deletion_operation_update_is_forbidden",
+			nil, `UPDATE index_deletion_operations SET index_name = 'changed' WHERE deletion_operation_id = 'op-1'`,
+			coreIngest3ExpectReject, "index deletion operation is immutable",
+			`SELECT deletion_operation_id, index_name, tenant_id FROM index_deletion_operations ORDER BY deletion_operation_id`,
+			"op-1|main1|default"),
+		derive("operation_update_is_rejected",
+			"postgres_operation_tenant_update_is_rejected",
+			"index_deletion_operation_update_is_forbidden",
+			nil, `UPDATE index_deletion_operations SET tenant_id = 'other' WHERE deletion_operation_id = 'op-1'`,
+			coreIngest3ExpectReject, "index deletion operation is immutable",
+			`SELECT deletion_operation_id, index_name, tenant_id FROM index_deletion_operations ORDER BY deletion_operation_id`,
+			"op-1|main1|default"),
 		// Port of TestSQLiteWriteGroupCommitTransitionsAllHECAcknowledgments:
 		// one statement committing several reservations finishes every
 		// pending HEC request bound to them.
