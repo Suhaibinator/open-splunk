@@ -97,6 +97,11 @@ var allCapabilities = [...]Capability{
 	CapabilityOrgsAdmin,
 }
 
+// CapabilitySet stores one bit per capability in a uint32. This constant
+// fails to compile once the vocabulary outgrows it, instead of letting extra
+// capabilities shift to a zero bit that no set can ever hold.
+const _ = uint(32 - len(allCapabilities))
+
 // AllCapabilities returns every capability in canonical order. The result is
 // a fresh slice the caller may modify.
 func AllCapabilities() []Capability {
