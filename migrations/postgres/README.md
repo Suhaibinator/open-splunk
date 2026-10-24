@@ -5,8 +5,12 @@ through `0012`, with every migration applied) to PostgreSQL. This directory
 holds the tables, keys, CHECK constraints, indexes and seed rows. Triggers are
 ported separately and are applied after these files.
 
-The SQLite files are still the live schema; nothing here is embedded or run by
-the server yet.
+The SQLite files are still the live schema. These files are embedded
+(`migrations.Postgres()`) and applied by the control-plane runner
+(`control.ApplyPostgresMigrations`) in tests, but the server does not run them
+yet. Each file's SHA-256 is pinned in `migrations/embed_test.go`; the runner
+refuses a database whose ledger checksum differs, so change the schema with a
+new file rather than by editing an existing one.
 
 ## Ordering
 
