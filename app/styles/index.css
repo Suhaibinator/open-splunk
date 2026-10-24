@@ -74,6 +74,7 @@
 @import url("../search-workspace/search-fields.css");
 @import url("../search-workspace/search-results.css");
 @import url("../admin/admin.css");
+@import url("../admin/site-directory.css");
 @import url("../activity/activity.css");
 @import url("../datasets/datasets.css");
 @import url("../signin/signin.css");

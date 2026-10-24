@@ -22,9 +22,10 @@ import {
 } from "./admin-navigation";
 import { BackendAdminConsole } from "./backend-admin-console";
 import { MembersSection } from "./members-panel";
+import { SiteDirectorySection } from "./site-directory-section";
 import { Select, SelectOption } from "../_components/select";
 
-type AdminSection = "overview" | "indexes" | "collectors" | "access" | "members" | "server";
+type AdminSection = "overview" | "indexes" | "collectors" | "access" | "members" | "users" | "organizations" | "server";
 
 interface IndexRow {
   name: string;
@@ -52,6 +53,8 @@ const NAV_ITEMS: Array<{ key: AdminSection; label: string; detail: string; icon:
   { key: "collectors", label: "Data inputs", detail: "Collectors and tokens", icon: "download" },
   { key: "access", label: "Users & access", detail: "Roles and authentication", icon: "users" },
   { key: "members", label: "Members & invitations", detail: "Organization roles and invites", icon: "users" },
+  { key: "users", label: "Users", detail: "Accounts and site admins", icon: "users" },
+  { key: "organizations", label: "Organizations", detail: "Tenants and hierarchy", icon: "list" },
   { key: "server", label: "Server settings", detail: "Limits and preferences", icon: "settings" },
 ];
 const DEMO_ADMIN_SECTIONS = NAV_ITEMS.map((item) => item.key);
@@ -205,6 +208,7 @@ function DemoAdminConsole() {
           {section === "collectors" ? <CollectorsSection /> : null}
           {section === "access" ? <AccessSection /> : null}
           {section === "members" ? <MembersSection dataMode="demo" /> : null}
+          {section === "users" || section === "organizations" ? <SiteDirectorySection dataMode="demo" view={section} /> : null}
           {section === "server" ? <ServerSection saving={saving} onSave={saveServerSettings} /> : null}
           </>}
         </section>
