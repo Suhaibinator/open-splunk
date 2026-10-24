@@ -6,7 +6,8 @@
    below 760px), status, badge, button, modal and resource-state primitives;
    this file owns only the header's disabled-action note, the identity cell,
    the described menu items, the lineage trail and the form layout those
-   primitives do not describe. */
+   primitives do not describe. Dialog errors are the shared
+   `.backend-inline-error`. */
 
 .site-directory-header-action {
   align-items: flex-end;
@@ -131,17 +132,6 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-
-.site-directory-form-error {
-  align-items: flex-start;
-  background: var(--status-error-soft);
-  border: 1px solid var(--status-error-edge);
-  color: var(--status-error-strong);
-  display: flex;
-  font-size: var(--type-xs);
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
 }
 
 @media (max-width: 760px) {

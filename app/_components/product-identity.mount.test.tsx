@@ -403,12 +403,27 @@ test("the administration console offers only the sections a moderator holds and 
     const sidebar = admin.container.querySelectorAll("aside").find((aside) => aside.getAttribute("aria-label") === "Administration navigation");
     assert.deepEqual(
       sidebar?.querySelectorAll("button").map((item) => item.querySelector("strong")?.textContent),
-      ["System overview", "Indexes", "Data inputs", "Users & access"],
-      "an organization admin manages its data and members, not the server",
+      ["System overview", "Indexes", "Data inputs", "Users & access", "Members & invitations"],
+      "an organization admin manages its data and members, not the server or the site directory",
     );
     assert.ok(buttons(admin.container, " Simulate index").length + buttons(admin.container, "Simulate index").length > 0);
   } finally {
     await admin.unmount();
+  }
+
+  at("/admin/", "?section=organizations");
+  const siteAdmin = await mount(shell(signedIn("ada@open-splunk.test"), "admin", <AdminConsole dataMode="demo" apiBaseUrl="" />));
+  try {
+    await settle();
+    const sidebar = siteAdmin.container.querySelectorAll("aside").find((aside) => aside.getAttribute("aria-label") === "Administration navigation");
+    assert.deepEqual(
+      sidebar?.querySelectorAll("button").map((item) => item.querySelector("strong")?.textContent),
+      ["System overview", "Indexes", "Data inputs", "Users & access", "Members & invitations", "Users", "Organizations", "Server settings"],
+      "a site admin reaches every section, the site directory included",
+    );
+    assert.equal(siteAdmin.container.querySelectorAll("h2").some((element) => element.getAttribute("id") === "suite-access-forbidden-title"), false, "the site directory opens by URL");
+  } finally {
+    await siteAdmin.unmount();
   }
 });
 

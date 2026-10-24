@@ -24,6 +24,7 @@ import { FieldNote, fieldControlProps, type FieldError } from "../_components/fi
 import { IdentityProvider, useIdentity } from "../_components/identity-provider";
 import { Modal } from "../_components/modal";
 import { StatusLabel } from "../_components/status";
+import { DirectoryPager } from "./site-directory-shared";
 import {
   CAPABILITY_LABELS,
   MEMBERS_CAPABILITY,
@@ -126,7 +127,7 @@ export function MembersPanel({ now = Date.now }: MembersPanelProps) {
           kind="unavailable"
           title="You are signed out"
           message="Your session ended or you signed out. Sign in to manage members."
-          action={<Link className="button button--secondary" href="/signin/">Sign in</Link>}
+          action={<Link href="/signin/">Sign in</Link>}
         />
       );
       break;
@@ -358,7 +359,7 @@ function MembersManager({ client, organization, principal, now, onSessionChanged
           organization={organization}
           organizationName={organizationName}
         />
-        <Pager label="Members pages" loaded={members.loaded} onPage={members.setPage} />
+        <Pager label="Members pages" loaded={members.loaded} noun="members" onPage={members.setPage} refreshing={members.refreshing} />
       </section>
 
       <section className="suite-card resource-table-card members-card" aria-labelledby="members-invitations-heading" aria-busy={invitations.refreshing || invitations.loaded === null}>
@@ -375,7 +376,7 @@ function MembersManager({ client, organization, principal, now, onSessionChanged
           onRetry={invitations.reload}
           onRevoke={(invitation) => setDialog({ kind: "revoke", invitation })}
         />
-        <Pager label="Invitation pages" loaded={invitations.loaded} onPage={invitations.setPage} />
+        <Pager label="Invitation pages" loaded={invitations.loaded} noun="invitations" onPage={invitations.setPage} refreshing={invitations.refreshing} />
       </section>
 
       {dialog?.kind === "invite" ? (
@@ -650,17 +651,18 @@ function InvitationsTable({ loaded, memberNames, now, onRevoke, onRetry }: Invit
   );
 }
 
-function Pager<T>({ label, loaded, onPage }: { label: string; loaded: Loaded<Page<T>> | null; onPage: (page: number) => void }) {
+/** The shared admin pagination footer, shown only once a list spans more than one page. */
+function Pager<T>({ label, loaded, noun, onPage, refreshing }: {
+  label: string;
+  loaded: Loaded<Page<T>> | null;
+  noun: string;
+  onPage: (page: number) => void;
+  refreshing: boolean;
+}) {
   if (loaded === null || !loaded.result.ok) return null;
-  const { currentPage, hasNextPage, hasPrevPage, totalPages } = loaded.result.value.page;
-  if (!hasNextPage && !hasPrevPage) return null;
-  return (
-    <nav aria-label={label} className="members-pager">
-      <button className="button button--secondary button--compact" disabled={!hasPrevPage} onClick={() => onPage(currentPage - 1)} type="button">Previous</button>
-      <span>{totalPages === undefined ? `Page ${currentPage}` : `Page ${currentPage} of ${totalPages}`}</span>
-      <button className="button button--secondary button--compact" disabled={!hasNextPage} onClick={() => onPage(currentPage + 1)} type="button">Next</button>
-    </nav>
-  );
+  const page = loaded.result.value;
+  if (!page.page.hasNextPage && !page.page.hasPrevPage) return null;
+  return <DirectoryPager busy={refreshing} label={label} noun={noun} onPage={onPage} page={page} />;
 }
 
 // --------------------------------------------------------------------------

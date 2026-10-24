@@ -73,17 +73,6 @@
   text-align: right;
 }
 
-.members-pager {
-  align-items: center;
-  border-top: 1px solid var(--border-subtle);
-  color: var(--fg-muted);
-  display: flex;
-  font-size: var(--type-xs);
-  gap: var(--space-3);
-  justify-content: flex-end;
-  padding: var(--space-2) var(--space-3);
-}
-
 .members-dialog-copy {
   color: var(--fg-text);
   font-size: var(--type-sm);
@@ -155,9 +144,5 @@
     margin-left: 0;
     max-width: none;
     text-align: left;
-  }
-
-  .members-pager {
-    justify-content: space-between;
   }
 }

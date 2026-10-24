@@ -374,8 +374,7 @@ export function DirectoryToast({ message, onDismiss }: { readonly message: strin
 export function DirectoryFormError({ message }: { readonly message: string | null }) {
   if (message === null) return null;
   return (
-    <div className="site-directory-form-error" role="alert">
-      <AppIcon name="warning" size="sm" />
+    <div className="backend-inline-error" role="alert">
       <span>{message}</span>
     </div>
   );
