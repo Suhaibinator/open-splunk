@@ -24,6 +24,7 @@ Files apply in filename order, and each file depends only on earlier ones:
 | `0004_audit.sql` | audit journals and API mutation receipts |
 | `0005_knowledge.sql` | knowledge objects, versions, projections, idempotency, recovery audit |
 | `0006_lookups.sql` | lookup assets and lookup definitions |
+| `0010_collectors_apps_search_1_triggers.sql` | triggers on `app_workspaces`, `collector_runtime`, `dashboards` and `search_history` |
 
 `0004_audit.sql` comes before knowledge because the knowledge mutation
 authorities reference `audit_events`. Inside a file, tables are ordered by

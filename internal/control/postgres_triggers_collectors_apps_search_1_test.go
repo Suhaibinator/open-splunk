@@ -34,12 +34,33 @@ const (
 	cas1MigrationFile = "0010_collectors_apps_search_1_triggers.sql"
 	cas1FixturePath   = "testdata/postgres_triggers/collectors_apps_search_1.json"
 
+	// cas1TriggerCount is the number of SQLite triggers on cas1Tables in the
+	// final schema, each ported once.
+	cas1TriggerCount = 23
+
 	cas1ExpectAccept = "accept"
 	cas1ExpectReject = "reject"
 	// cas1RaiseSQLState is PL/pgSQL's default RAISE EXCEPTION SQLSTATE. A
 	// reject scenario expects it unless the fixture names another code.
 	cas1RaiseSQLState = "P0001"
 )
+
+// cas1OtherLanes are the trigger lanes a fixture case may depend on: every
+// lane of the PostgreSQL trigger port except this one. A name outside this
+// set is a typo that would keep its case pending forever.
+var cas1OtherLanes = map[string]bool{
+	"audit_1":                  true,
+	"audit_2":                  true,
+	"collectors_apps_search_2": true,
+	"core_ingest_1":            true,
+	"core_ingest_2":            true,
+	"core_ingest_3":            true,
+	"knowledge_catalog_1":      true,
+	"knowledge_catalog_2":      true,
+	"knowledge_objects_1":      true,
+	"knowledge_objects_2":      true,
+	"lookups":                  true,
+}
 
 // cas1Tables are the tables whose triggers this lane owns. No other lane
 // creates a trigger on them.
@@ -130,8 +151,8 @@ func TestPostgresCollectorsAppsSearch1TriggerFixtureIsWellFormed(t *testing.T) {
 
 	scenarios := cas1LoadScenarios(t)
 	triggers, _ := cas1MigrationNames(t)
-	if len(triggers) != 23 {
-		t.Fatalf("%s creates %d triggers, want 23: %v", cas1MigrationFile, len(triggers), triggers)
+	if len(triggers) != cas1TriggerCount {
+		t.Fatalf("%s creates %d triggers, want %d: %v", cas1MigrationFile, len(triggers), cas1TriggerCount, triggers)
 	}
 
 	names := make(map[string]bool, len(scenarios))
@@ -168,8 +189,8 @@ func TestPostgresCollectorsAppsSearch1TriggerFixtureIsWellFormed(t *testing.T) {
 			t.Errorf("%s: expect = %q, want accept or reject", label, scenario.Expect)
 		}
 		for _, lane := range scenario.DependsOnLanes {
-			if lane == cas1Lane || lane == "" {
-				t.Errorf("%s: depends_on_lanes names %q", label, lane)
+			if !cas1OtherLanes[lane] {
+				t.Errorf("%s: depends_on_lanes names %q, which is not another trigger lane", label, lane)
 			}
 		}
 	}
@@ -359,9 +380,12 @@ func TestPostgresCollectorsAppsSearch1TriggerScenarios(t *testing.T) {
 }
 
 // TestPostgresCollectorsAppsSearch1CrossLaneTriggerScenarios runs the cases
-// that hold only once other trigger lanes are installed. When every lane a
-// case names is in the embedded migration set the case must pass; a missing
-// lane is reported as a skip naming the case and the lane, never silently.
+// that hold only once other trigger lanes are installed. A case whose lanes
+// are all in the embedded migration set must pass, so it fails loudly as soon
+// as integration installs its dependencies and the outcome is wrong. A case
+// whose lanes are still missing is logged as pending, never skipped, and the
+// test fails if the fixture has cross-lane cases but none could be pending or
+// run, which would mean the case list was lost.
 func TestPostgresCollectorsAppsSearch1CrossLaneTriggerScenarios(t *testing.T) {
 	t.Parallel()
 
@@ -370,28 +394,33 @@ func TestPostgresCollectorsAppsSearch1CrossLaneTriggerScenarios(t *testing.T) {
 	if !installed[cas1Lane] {
 		t.Fatalf("embedded migrations lack %s; installed trigger lanes = %v", cas1MigrationFile, installed)
 	}
-	var crossLane []cas1Scenario
+	var runnable, pending []cas1Scenario
 	for _, scenario := range scenarios {
-		if len(scenario.DependsOnLanes) != 0 {
-			crossLane = append(crossLane, scenario)
+		if len(scenario.DependsOnLanes) == 0 {
+			continue
 		}
+		var missing []string
+		for _, lane := range scenario.DependsOnLanes {
+			if !installed[lane] {
+				missing = append(missing, lane)
+			}
+		}
+		if len(missing) != 0 {
+			t.Logf("pending until trigger lanes %v are installed: %s", missing, scenario.Name)
+			pending = append(pending, scenario)
+			continue
+		}
+		runnable = append(runnable, scenario)
 	}
-	if len(crossLane) == 0 {
-		t.Log("the fixture has no cross-lane scenarios: every case holds with this lane's triggers alone")
+	if len(runnable)+len(pending) == 0 {
+		t.Fatal("the fixture has no cross-lane scenarios; drop this test only together with depends_on_lanes")
+	}
+	if len(runnable) == 0 {
 		return
 	}
 	db := testsupport.NewPostgresControlDB(t)
-	for _, scenario := range crossLane {
+	for _, scenario := range runnable {
 		t.Run(scenario.Name, func(t *testing.T) {
-			var missing []string
-			for _, lane := range scenario.DependsOnLanes {
-				if !installed[lane] {
-					missing = append(missing, lane)
-				}
-			}
-			if len(missing) != 0 {
-				t.Skipf("needs trigger lanes %v, which are not in the embedded migration set", missing)
-			}
 			cas1RunScenario(t, db.SQLDB(), scenario)
 		})
 	}
@@ -430,9 +459,9 @@ func cas1RequireRaise(t *testing.T, err error, want string) {
 	}
 }
 
-func cas1QueryInt64s(t *testing.T, db *control.PostgresDB, query string, args ...any) []int64 {
+func cas1QueryInt64s(t *testing.T, db *control.PostgresDB, query string) []int64 {
 	t.Helper()
-	rows, err := db.SQLDB().QueryContext(t.Context(), query, args...)
+	rows, err := db.SQLDB().QueryContext(t.Context(), query)
 	if err != nil {
 		t.Fatalf("query %q: %v", query, err)
 	}
@@ -681,9 +710,7 @@ func cas1RaceWriteTx(t *testing.T, db *control.PostgresDB, statements ...string)
 	errs := make([]error, len(statements))
 	var group sync.WaitGroup
 	for index, statement := range statements {
-		group.Add(1)
-		go func() {
-			defer group.Done()
+		group.Go(func() {
 			var attempts atomic.Int32
 			errs[index] = db.WriteTx(ctx, func(tx *sql.Tx) error {
 				if attempts.Add(1) == 1 {
@@ -697,7 +724,7 @@ func cas1RaceWriteTx(t *testing.T, db *control.PostgresDB, statements ...string)
 				_, err := tx.ExecContext(ctx, statement)
 				return err
 			})
-		}()
+		})
 	}
 	group.Wait()
 	return errs

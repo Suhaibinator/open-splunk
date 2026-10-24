@@ -1305,7 +1305,9 @@
     ],
     "statement": "INSERT INTO search_history (search_job_id, tenant_id, owner_id, app_id, saved_search_id, final_state, search_text, created_at_unix_micro, finished_at_unix_micro, duration_nanoseconds, matched_events, entry_proto, entry_sha256) VALUES ('j1', 't1', 'o1', 'search', '', 6, 'index=main', 1, 1, 0, 0, '\\x00'::bytea, '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea)",
     "expect": "reject",
-    "message": "bigint out of range"
+    "message": "bigint out of range",
+    "sqlstate": "22003",
+    "sqlite_message": "cannot store REAL value in INTEGER column search_history_owner_counts.terminal_count"
   },
   {
     "name": "active_app_workspace_cannot_be_deleted raises once the dashboard check is disabled",
@@ -1363,5 +1365,94 @@
     "statement": "UPDATE collector_runtime SET collector_id = 'c2', telemetry_revision = 4 WHERE collector_id = 'c1'",
     "expect": "reject",
     "message": "collector runtime identity is immutable"
+  },
+  {
+    "name": "active_app_workspace_cannot_be_deleted raises once the dashboard check is dropped",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1), ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 't1', 1, 'aslug', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO dashboards (dashboard_id, version, name, app_id, tenant_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('d1', 1, 'n-d1', 'app_aaaaaaaaaaaaaaaaaaaaaA', 't1', 'o1', 1, '\\x00'::bytea, 1, 1)",
+      "DROP TRIGGER app_workspace_delete_restrict_dashboards ON app_workspaces"
+    ],
+    "statement": "DELETE FROM app_workspaces WHERE app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA'",
+    "expect": "reject",
+    "message": "app workspace must be archived before deletion"
+  },
+  {
+    "name": "app_workspaces_identity_is_immutable raises once the active knowledge check is dropped",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1), ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 't1', 1, 'aslug', 'App', 0, 'active', 1, 1, NULL)",
+      "SET session_replication_role = replica",
+      "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro) VALUES ('t1', 'k1', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'o1', 'field_alias', 'n-k1', 'private', 'active', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 1, 1, NULL)",
+      "SET session_replication_role = origin",
+      "DROP TRIGGER knowledge_active_app_workspace_cannot_be_archived ON app_workspaces"
+    ],
+    "statement": "UPDATE app_workspaces SET slug = 'renamed', state = 'archived', archived_at_unix_micro = 2, updated_at_unix_micro = 2 WHERE app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA'",
+    "expect": "reject",
+    "message": "app workspace identity is immutable"
+  },
+  {
+    "name": "knowledge_active_app_workspace_cannot_be_archived raises once the lookup check is dropped",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1), ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 't1', 1, 'aslug', 'App', 0, 'active', 1, 1, NULL)",
+      "SET session_replication_role = replica",
+      "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro) VALUES ('t1', 'k1', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'o1', 'field_alias', 'n-k1', 'private', 'active', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 1, 1, NULL)",
+      "INSERT INTO knowledge_lookup_definitions (tenant_id, lookup_id, owner_id, app_id, name, sharing_scope, automatic, current_version, state, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro) VALUES ('t1', 'l1', 'o1', 'app_aaaaaaaaaaaaaaaaaaaaaA', 'n-l1', 1, 0, 1, 'ACTIVE', 1, 1, NULL)",
+      "SET session_replication_role = origin",
+      "DROP TRIGGER knowledge_lookup_active_app_workspace_cannot_be_archived ON app_workspaces"
+    ],
+    "statement": "UPDATE app_workspaces SET state = 'archived', archived_at_unix_micro = 2, updated_at_unix_micro = 2, version = version + 1 WHERE app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA'",
+    "expect": "reject",
+    "message": "app workspace has active knowledge objects"
+  },
+  {
+    "name": "collector_runtime_identity_is_immutable raises once the monotonic check is dropped",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1), ('t2', 1, 1)",
+      "SET session_replication_role = replica",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c2', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_catalog_revisions (tenant_id, revision, fleet_count, runtime_count) VALUES ('t1', 2, 2, 0)",
+      "SET session_replication_role = origin",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro, disconnected_at_unix_micro) VALUES ('t1', 'c1', 5, 5, 'development', 'host', 'linux', 'arm64', 1, 1, 1, 1)",
+      "DROP TRIGGER collector_runtime_revisions_are_monotonic ON collector_runtime"
+    ],
+    "statement": "UPDATE collector_runtime SET collector_id = 'c2', telemetry_revision = 4 WHERE collector_id = 'c1'",
+    "expect": "reject",
+    "message": "collector runtime identity is immutable"
+  },
+  {
+    "name": "collector_catalog_revision_after_runtime_delete accepts a fleet delete that cascades to the runtime",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1), ('t2', 1, 1)",
+      "SET session_replication_role = replica",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_catalog_revisions (tenant_id, revision, fleet_count, runtime_count) VALUES ('t1', 2, 1, 1)",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro, disconnected_at_unix_micro) VALUES ('t1', 'c1', 5, 5, 'development', 'host', 'linux', 'arm64', 1, 1, 1, 1)",
+      "SET session_replication_role = origin"
+    ],
+    "statement": "DELETE FROM collector_fleet WHERE tenant_id = 't1' AND collector_id = 'c1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_runtime_delete state check: a fleet cascade delete counts both parents",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1), ('t2', 1, 1)",
+      "SET session_replication_role = replica",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_catalog_revisions (tenant_id, revision, fleet_count, runtime_count) VALUES ('t1', 2, 1, 1)",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro, disconnected_at_unix_micro) VALUES ('t1', 'c1', 5, 5, 'development', 'host', 'linux', 'arm64', 1, 1, 1, 1)",
+      "SET session_replication_role = origin",
+      "DELETE FROM collector_fleet WHERE tenant_id = 't1' AND collector_id = 'c1'"
+    ],
+    "statement": "INSERT INTO collector_catalog_revisions (tenant_id, revision, fleet_count, runtime_count) SELECT 't1', 0, 0, 0 WHERE NOT EXISTS (SELECT 1 FROM collector_catalog_revisions WHERE tenant_id = 't1' AND revision = 4 AND fleet_count = 0 AND runtime_count = 0)",
+    "expect": "accept",
+    "message": "",
+    "depends_on_lanes": [
+      "collectors_apps_search_2"
+    ]
   }
 ]

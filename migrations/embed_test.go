@@ -38,6 +38,12 @@ var embeddedMigrationSHA256 = map[string]map[string]string{
 		"0004_audit.sql":               "269b02434caee6843189b6a4992588004944192698ddbe8986f9ab09bc428f87",
 		"0005_knowledge.sql":           "6b26e119ceb0f3ad8e149abb70fa58973be9ca98c3a7812b0514341931109385",
 		"0006_lookups.sql":             "b186d69c8dcbe1745426839443d51e6a210a926405f82ee05eae7be331aa322c",
+		// 0007..0009 are lane-branch stand-ins for other trigger lanes;
+		// integration replaces them and these three pins.
+		"0007_placeholder.sql":                       "98a5f084e6fc15892d10fc262f31f1e1d3baff4f41abf7d1475f8f22282a239b",
+		"0008_placeholder.sql":                       "0b3aad79ab96f30e29e9c5c5326c0777169bd0c910db998f476093e8fd32fad1",
+		"0009_placeholder.sql":                       "f1b38bdbdc0a8278c407cdb5f7b29519fb384a60955f6ffd48fbf950366d19f2",
+		"0010_collectors_apps_search_1_triggers.sql": "37bb742c213585a24c6c03398bb9042f145dadef38f978ec6cb7d7a3723c2d5b",
 	},
 }
 
