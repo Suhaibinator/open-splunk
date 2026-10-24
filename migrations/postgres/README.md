@@ -48,6 +48,15 @@ Objects are created unqualified. The runner sets `search_path = open_splunk`
 before applying a file; the files never name `public`. The database must use
 UTF-8 encoding, and `0001` raises an error otherwise.
 
+The files are ASCII and spell bytea and regex literals with backslashes
+(`'\x'::bytea`, `'[\u0001-\u001f]'`, `strpos(x, '\')`). The runner therefore
+also sets `standard_conforming_strings = on` and `client_encoding = UTF8`, and
+`control.OpenPostgres` pins both, with `search_path` and `TimeZone`, as
+startup parameters on every pooled connection. A database or role default of
+`standard_conforming_strings = off` would otherwise read `'\x'::bytea` as the
+byte `x`, and a non-UTF-8 client encoding would reinterpret every byte pgx
+sends.
+
 ## Translation rules
 
 | SQLite | PostgreSQL |
@@ -93,3 +102,12 @@ Identifiers are limited to 63 bytes, so
 - `durable_search_jobs.row_cursor bigint GENERATED ALWAYS AS IDENTITY`
   (unique) replaces SQLite's implicit `rowid`, which the artifact listing used
   as a high-water cursor. Unlike `rowid`, it is never reused.
+
+## Deviations from SQLite
+
+- `knowledge_list_projection_description_idx` keys
+  `(tenant_id, knowledge_object_id, object_version)` with the same
+  `description_present = 1` predicate. SQLite keyed it on `description`
+  itself, which admits 16384 bytes; a PostgreSQL btree tuple holds at most
+  2704 bytes, so that key refused valid rows with SQLSTATE 54000. No query
+  orders or seeks by description.

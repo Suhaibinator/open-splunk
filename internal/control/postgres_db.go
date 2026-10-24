@@ -29,6 +29,24 @@ const (
 	postgresApplicationName     = "open-splunk-server"
 )
 
+// postgresPinnedSessionParameters are the session settings every
+// control-plane connection starts with, whatever the connection string or the
+// database and role defaults say.
+//   - client_encoding: pgx always sends and expects UTF-8. Under another
+//     client encoding the server would reinterpret every byte: the two UTF-8
+//     bytes of U+00E9 would be stored as two LATIN1 characters, and an emoji
+//     as characters including C1 controls that the schema's
+//     control-character CHECKs refuse.
+//   - standard_conforming_strings: with it off, a backslash in a SQL string
+//     literal is an escape, so '\x'::bytea is the byte 'x' and strpos(x, '\')
+//     no longer parses.
+var postgresPinnedSessionParameters = []struct{ name, value string }{
+	{name: "search_path", value: PostgresSchema},
+	{name: "timezone", value: "UTC"},
+	{name: "client_encoding", value: "UTF8"},
+	{name: "standard_conforming_strings", value: "on"},
+}
+
 // PostgresDB is the PostgreSQL-backed control-plane database. SQLDB and
 // GORMDB share one connection pool; WriteTx and ReadTx are the supported
 // transaction entry points.
@@ -114,15 +132,21 @@ func parsePostgresConfig(dsn string) (*pgx.ConnConfig, error) {
 	}
 	// Startup parameters apply before the first statement on every physical
 	// connection, including ones the pool opens after a reconnect, so no
-	// session can observe a different schema or time zone. PostgreSQL folds
-	// parameter names, so drop every spelling a caller may have supplied.
+	// session can observe a different schema, time zone, or text semantics.
+	// They also override ALTER DATABASE and ALTER ROLE defaults, which an
+	// operator sharing the database with another application may have set.
+	// PostgreSQL folds parameter names, so drop every spelling a caller may
+	// have supplied.
 	for name := range connConfig.RuntimeParams {
-		if strings.EqualFold(name, "search_path") || strings.EqualFold(name, "timezone") {
-			delete(connConfig.RuntimeParams, name)
+		for _, pinned := range postgresPinnedSessionParameters {
+			if strings.EqualFold(name, pinned.name) {
+				delete(connConfig.RuntimeParams, name)
+			}
 		}
 	}
-	connConfig.RuntimeParams["search_path"] = PostgresSchema
-	connConfig.RuntimeParams["timezone"] = "UTC"
+	for _, pinned := range postgresPinnedSessionParameters {
+		connConfig.RuntimeParams[pinned.name] = pinned.value
+	}
 	if strings.TrimSpace(connConfig.RuntimeParams["application_name"]) == "" {
 		connConfig.RuntimeParams["application_name"] = postgresApplicationName
 	}
