@@ -70,8 +70,12 @@ CREATE TABLE app_default_indexes (
     PRIMARY KEY (tenant_id, app_id, index_id),
     FOREIGN KEY (tenant_id, app_id)
         REFERENCES app_workspaces (tenant_id, app_id) ON DELETE CASCADE,
-    FOREIGN KEY (index_id)
-        REFERENCES indexes (index_id) ON DELETE RESTRICT,
+    -- SQLite: FOREIGN KEY (index_id). Scoped by tenant so an app's default
+    -- search scope can only name its own tenant's indexes; the SQLite
+    -- constraint name is kept.
+    CONSTRAINT app_default_indexes_index_id_fkey
+        FOREIGN KEY (tenant_id, index_id)
+        REFERENCES indexes (tenant_id, index_id) ON DELETE RESTRICT,
     CONSTRAINT app_default_indexes_tenant_fk FOREIGN KEY (tenant_id)
         REFERENCES tenants (tenant_id) ON UPDATE RESTRICT ON DELETE RESTRICT
 );

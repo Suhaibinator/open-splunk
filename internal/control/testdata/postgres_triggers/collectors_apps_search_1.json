@@ -289,7 +289,7 @@
     "message": "app ID is already a legacy saved-search namespace"
   },
   {
-    "name": "app_workspace_id_cannot_adopt_legacy_saved_search_namespace matches across tenants",
+    "name": "app_workspace_id_cannot_adopt_legacy_saved_search_namespace ignores another tenant's saved searches",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1), ('t2', 1, 1)",
       "SET session_replication_role = replica",
@@ -297,8 +297,8 @@
       "SET session_replication_role = origin"
     ],
     "statement": "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 't1', 1, 'aslug', 'App', 0, 'active', 1, 1, NULL)",
-    "expect": "reject",
-    "message": "app ID is already a legacy saved-search namespace"
+    "expect": "accept",
+    "message": ""
   },
   {
     "name": "app_workspace_id_cannot_adopt_legacy_saved_search_namespace accepts an unclaimed app ID",
@@ -659,7 +659,7 @@
     "message": "app workspace is referenced by saved searches"
   },
   {
-    "name": "referenced_app_workspace_cannot_be_deleted matches saved searches in any tenant",
+    "name": "referenced_app_workspace_cannot_be_deleted ignores saved searches in another tenant",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1), ('t2', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 't1', 1, 'aslug', 'App', 0, 'active', 1, 1, NULL)",
@@ -669,8 +669,8 @@
       "SET session_replication_role = origin"
     ],
     "statement": "DELETE FROM app_workspaces WHERE app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA'",
-    "expect": "reject",
-    "message": "app workspace is referenced by saved searches"
+    "expect": "accept",
+    "message": ""
   },
   {
     "name": "referenced_app_workspace_cannot_be_deleted accepts when saved searches use another app",

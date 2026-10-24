@@ -1,7 +1,8 @@
--- open-splunk PostgreSQL control plane: triggers on indexes, ingestion_tokens
--- and ingestion_token_hec_profiles (29 triggers). Ported from the final
--- SQLite schema (migrations/sqlite/0001..0012); see
--- migrations/postgres/README.md for the translation rules. Applies after
+-- open-splunk PostgreSQL control plane: triggers on indexes, ingestion_tokens,
+-- ingestion_token_hec_profiles and ingestion_token_indexes (32 triggers). 29
+-- are ported from the final SQLite schema (migrations/sqlite/0001..0012); see
+-- migrations/postgres/README.md for the translation rules. The 3 tenant
+-- guards at the end of the file have no SQLite counterpart. Applies after
 -- 0001..0006.
 --
 -- Porting notes:
@@ -33,6 +34,14 @@
 --   indexes_tenant_name_key UNIQUE (tenant_id, name). A global name check
 --   would forbid two tenants from both having (for example) "main". index_id
 --   stays globally unique (it is the primary key).
+-- * Tenant guards (no SQLite counterpart, where nothing had a tenant):
+--   indexes_tenant_is_immutable and ingestion_token_tenant_is_immutable keep
+--   an index or token in the tenant that created it, and
+--   ingestion_token_index_requires_same_tenant refuses binding a token to
+--   another tenant's index. ingestion_token_indexes has no tenant_id column
+--   of its own, so a trigger stands in for the tenant-scoped foreign keys the
+--   other token and index children use. With both tenants immutable, the
+--   check reads rows no concurrent transaction can change.
 -- * index_catalog_state still counts physical index rows across all tenants
 --   (capacity 1024 for the whole server), exactly as in SQLite. A per-tenant
 --   capacity needs a schema change and is out of scope here.
@@ -667,3 +676,66 @@ CREATE TRIGGER ingestion_token_hec_profile_requires_hec_purpose
 BEFORE INSERT ON ingestion_token_hec_profiles
 FOR EACH ROW
 EXECUTE FUNCTION ingestion_token_hec_profile_requires_hec_purpose();
+
+-- ---------------------------------------------------------------------------
+-- tenant guards (no SQLite counterpart)
+-- ---------------------------------------------------------------------------
+
+CREATE FUNCTION indexes_tenant_is_immutable()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
+BEGIN
+    RAISE EXCEPTION 'index tenant is immutable';
+END;
+$$;
+
+CREATE TRIGGER indexes_tenant_is_immutable
+BEFORE UPDATE OF tenant_id ON indexes
+FOR EACH ROW
+WHEN (NEW.tenant_id <> OLD.tenant_id)
+EXECUTE FUNCTION indexes_tenant_is_immutable();
+
+CREATE FUNCTION ingestion_token_tenant_is_immutable()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
+BEGIN
+    RAISE EXCEPTION 'ingestion token tenant is immutable';
+END;
+$$;
+
+CREATE TRIGGER ingestion_token_tenant_is_immutable
+BEFORE UPDATE OF tenant_id ON ingestion_tokens
+FOR EACH ROW
+WHEN (NEW.tenant_id <> OLD.tenant_id)
+EXECUTE FUNCTION ingestion_token_tenant_is_immutable();
+
+-- A missing token or index is left to the foreign keys (23503), so only a
+-- binding whose two ends both exist in different tenants is refused here.
+CREATE FUNCTION ingestion_token_index_requires_same_tenant()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM ingestion_tokens AS token
+        JOIN indexes AS target_index
+          ON target_index.index_id = NEW.index_id
+        WHERE token.ingestion_token_id = NEW.ingestion_token_id
+          AND target_index.tenant_id <> token.tenant_id
+    ) THEN
+        RAISE EXCEPTION 'ingestion token index belongs to another tenant';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER ingestion_token_index_requires_same_tenant
+BEFORE INSERT OR UPDATE OF ingestion_token_id, index_id ON ingestion_token_indexes
+FOR EACH ROW
+EXECUTE FUNCTION ingestion_token_index_requires_same_tenant();

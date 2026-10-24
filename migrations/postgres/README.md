@@ -24,7 +24,7 @@ Files apply in filename order, and each file depends only on earlier ones:
 | `0004_audit.sql` | audit journals and API mutation receipts |
 | `0005_knowledge.sql` | knowledge objects, versions, projections, idempotency, recovery audit |
 | `0006_lookups.sql` | lookup assets and lookup definitions |
-| `0007_core_ingest_1_triggers.sql` | triggers on `indexes`, `ingestion_tokens`, `ingestion_token_hec_profiles` |
+| `0007_core_ingest_1_triggers.sql` | triggers on `indexes`, `ingestion_tokens`, `ingestion_token_hec_profiles`, `ingestion_token_indexes` |
 | `0008_core_ingest_2_triggers.sql` | triggers on `index_catalog_state`, `index_data_deletion_completions`, `index_deletion_mutation_attempts`, `ingest_write_group_members` |
 | `0009_core_ingest_3_triggers.sql` | triggers on `index_deletion_operations`, `index_deletion_tombstones`, `ingest_visibility_reservations`, `ingest_write_groups` |
 | `0010_collectors_apps_search_1_triggers.sql` | triggers on `app_workspaces`, `collector_runtime`, `dashboards`, `search_history` |
@@ -100,6 +100,23 @@ Identifiers are limited to 63 bytes, so
 - Every table with a `tenant_id` column has
   `<table>_tenant_fk FOREIGN KEY (tenant_id) REFERENCES tenants
   ON UPDATE RESTRICT ON DELETE RESTRICT`.
+- References into those three tables stay inside one tenant. They gain
+  `UNIQUE (tenant_id, <id>)` keys (`indexes_tenant_index_id_key`,
+  `ingestion_tokens_tenant_token_key`, `saved_searches_tenant_saved_search_key`,
+  plus `index_deletion_operations_tenant_operation_key`), and the SQLite
+  single-column foreign keys of `app_default_indexes`, `hec_channels`,
+  `hec_source_sequences`, `ingest_quota_buckets`, `ingest_rejection_buckets`,
+  `index_deletion_operations`, `index_deletion_mutation_attempts`,
+  `index_data_deletion_completions`, `saved_search_schedules` and
+  `saved_search_schedule_runs` become `(tenant_id, <id>)` keys under their
+  SQLite names (for example `hec_channels_ingestion_token_id_fkey`).
+  `ingestion_token_indexes` has no `tenant_id`, so the trigger
+  `ingestion_token_index_requires_same_tenant` refuses a token bound to
+  another tenant's index. The tenant of an index, token or saved search is
+  immutable (`indexes_tenant_is_immutable`,
+  `ingestion_token_tenant_is_immutable`, `saved_search_tenant_is_immutable`),
+  and the saved-search app checks in `0010` and `0011` match on
+  `(tenant_id, app_id)`.
 - `durable_search_jobs.row_cursor bigint GENERATED ALWAYS AS IDENTITY`
   (unique) replaces SQLite's implicit `rowid`, which the artifact listing used
   as a high-water cursor. Unlike `rowid`, it is never reused.

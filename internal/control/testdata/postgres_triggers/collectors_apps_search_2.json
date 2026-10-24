@@ -999,15 +999,15 @@
     "message": ""
   },
   {
-    "name": "canonical_saved_search_app_exists_insert/accept_app_of_other_tenant",
+    "name": "canonical_saved_search_app_exists_insert/reject_app_of_other_tenant",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't2', 1, 'search', 'App', 0, 'active', 1, 1, NULL)"
     ],
     "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'app_0123456789abcdefghijkA', 'u1', 1, decode('01', 'hex'), 1, 1)",
-    "expect": "accept",
-    "message": ""
+    "expect": "reject",
+    "message": "canonical saved-search app does not exist"
   },
   {
     "name": "canonical_saved_search_app_exists_insert/reject_multi_row_first_new",
@@ -1409,5 +1409,27 @@
     "statement": "DELETE FROM collector_fleet WHERE collector_id = 'c1'",
     "expect": "reject",
     "message": "collector catalog fleet count underflow"
+  },
+  {
+    "name": "saved_search_tenant_is_immutable/reject_move_to_other_tenant",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1), ('t2', 1, 1)",
+      "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'search', 'u1', 1, decode('01', 'hex'), 1, 1)"
+    ],
+    "statement": "UPDATE saved_searches SET tenant_id = 't2' WHERE saved_search_id = 'ss1'",
+    "expect": "reject",
+    "message": "saved search tenant is immutable"
+  },
+  {
+    "name": "saved_search_tenant_is_immutable/accept_same_tenant",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1), ('t2', 1, 1)",
+      "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'search', 'u1', 1, decode('01', 'hex'), 1, 1)"
+    ],
+    "statement": "UPDATE saved_searches SET tenant_id = 't1', version = 2 WHERE saved_search_id = 'ss1'",
+    "expect": "accept",
+    "message": "",
+    "check_sql": "SELECT tenant_id || ',' || version FROM saved_searches WHERE saved_search_id = 'ss1'",
+    "check_result": "t1,2"
   }
 ]

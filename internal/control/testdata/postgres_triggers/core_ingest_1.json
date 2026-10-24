@@ -1510,5 +1510,80 @@
     "note": "this lane's update accounting must satisfy index_catalog_state_transition_is_valid (core_ingest_2)",
     "check_sql": "SELECT revision || ',' || physical_count FROM index_catalog_state WHERE singleton_id = 1",
     "check_result": "3,1"
+  },
+  {
+    "name": "index_tenant_change_rejected",
+    "trigger": "indexes_tenant_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET tenant_id = 'other' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index tenant is immutable",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
+  },
+  {
+    "name": "index_tenant_unchanged_update_accepted",
+    "trigger": "indexes_tenant_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET tenant_id = 'default', description = 'same tenant' WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": "",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
+  },
+  {
+    "name": "ingestion_token_tenant_change_rejected",
+    "trigger": "ingestion_token_tenant_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET tenant_id = 'other' WHERE ingestion_token_id = 'tok_hec'",
+    "expect": "reject",
+    "message": "ingestion token tenant is immutable",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
+  },
+  {
+    "name": "ingestion_token_tenant_unchanged_update_accepted",
+    "trigger": "ingestion_token_tenant_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET tenant_id = 'default', description = 'same tenant' WHERE ingestion_token_id = 'tok_hec'",
+    "expect": "accept",
+    "message": "",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
+  },
+  {
+    "name": "ingestion_token_index_of_other_tenant_rejected",
+    "trigger": "ingestion_token_index_requires_same_tenant",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_other_main', 'other', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id) VALUES ('tok_hec', 'idx_other_main')",
+    "expect": "reject",
+    "message": "ingestion token index belongs to another tenant",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
+  },
+  {
+    "name": "ingestion_token_index_of_own_tenant_accepted",
+    "trigger": "ingestion_token_index_requires_same_tenant",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_other_main', 'other', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id) VALUES ('tok_hec', 'idx_main')",
+    "expect": "accept",
+    "message": "",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
   }
 ]

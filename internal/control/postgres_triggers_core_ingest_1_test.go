@@ -21,15 +21,17 @@ import (
 
 // The core_ingest_1 trigger lane ports the SQLite triggers on indexes,
 // ingestion_tokens and ingestion_token_hec_profiles to
-// migrations/postgres/0007_core_ingest_1_triggers.sql. Its scenarios live in
-// testdata/postgres_triggers/core_ingest_1.json; each one was checked against
-// SQLite when the lane was ported, and these tests hold PostgreSQL to them.
+// migrations/postgres/0007_core_ingest_1_triggers.sql, which also holds three
+// tenant guards with no SQLite counterpart (one on ingestion_token_indexes).
+// Its scenarios live in testdata/postgres_triggers/core_ingest_1.json; each
+// ported one was checked against SQLite when the lane was ported, and these
+// tests hold PostgreSQL to them.
 
 const coreIngest1FixturePath = "testdata/postgres_triggers/core_ingest_1.json"
 
 // coreIngest1Tables are the tables whose triggers this lane owns. Trigger
 // lanes partition tables, so every user trigger on them belongs here.
-var coreIngest1Tables = []string{"indexes", "ingestion_token_hec_profiles", "ingestion_tokens"}
+var coreIngest1Tables = []string{"indexes", "ingestion_token_hec_profiles", "ingestion_token_indexes", "ingestion_tokens"}
 
 // coreIngest1KnownLanes are the trigger lanes a scenario may depend on. A
 // lane is present when the embedded migrations hold NNNN_<lane>_triggers.sql.
@@ -342,7 +344,8 @@ func TestPostgresCoreIngest1TriggerCatalogMatchesFixture(t *testing.T) {
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		t.Fatalf("read lane triggers: %v", err)
 	}
-	const wantTriggers = 29
+	// 29 ported from SQLite plus the 3 tenant guards.
+	const wantTriggers = 32
 	if len(installed) != wantTriggers {
 		t.Fatalf("lane tables carry %d user triggers, want %d: %v", len(installed), wantTriggers, installed)
 	}

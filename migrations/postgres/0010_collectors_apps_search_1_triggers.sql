@@ -87,11 +87,15 @@
 --   FOR NO KEY UPDATE before its bounds are checked, so those checks also see
 --   the latest committed row under READ COMMITTED.
 --
--- * saved_searches gained tenant_id in PostgreSQL, but
---   app_workspace_id_cannot_adopt_legacy_saved_search_namespace and
---   referenced_app_workspace_cannot_be_deleted keep SQLite's tenant-blind
---   app_id match: app_workspaces.app_id is globally unique, so a saved search
---   in any tenant that uses an app ID still claims it.
+-- * saved_searches gained tenant_id in PostgreSQL, so
+--   app_workspace_id_cannot_adopt_legacy_saved_search_namespace,
+--   referenced_app_workspace_cannot_be_deleted and the saved-search deferral
+--   in active_app_workspace_cannot_be_deleted match saved searches by
+--   (tenant_id, app_id) rather than SQLite's bare app_id. app_id is globally
+--   unique, but a saved search names an app only within its own tenant
+--   (canonical_saved_search_app_exists in 0011 checks the same pair), so
+--   another tenant's saved searches must neither block this tenant's app
+--   from being created or deleted nor be claimed by it.
 --
 -- * No type, NUL or GLOB-only checks needed translating except the canonical
 --   app ID test on dashboards: length() -> char_length(),
@@ -165,7 +169,9 @@ BEGIN
               WHEN current_setting('session_replication_role') = 'replica'
                   THEN 'R' ELSE 'O' END)
     ) AND EXISTS (
-        SELECT 1 FROM saved_searches WHERE app_id = OLD.app_id
+        SELECT 1
+        FROM saved_searches
+        WHERE tenant_id = OLD.tenant_id AND app_id = OLD.app_id
     ) THEN
         RETURN OLD;
     END IF;
@@ -312,7 +318,9 @@ SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF EXISTS (
-        SELECT 1 FROM saved_searches WHERE app_id = NEW.app_id
+        SELECT 1
+        FROM saved_searches
+        WHERE tenant_id = NEW.tenant_id AND app_id = NEW.app_id
     ) THEN
         RAISE EXCEPTION 'app ID is already a legacy saved-search namespace';
     END IF;
@@ -559,7 +567,9 @@ SET search_path FROM CURRENT
 AS $$
 BEGIN
     IF EXISTS (
-        SELECT 1 FROM saved_searches WHERE app_id = OLD.app_id
+        SELECT 1
+        FROM saved_searches
+        WHERE tenant_id = OLD.tenant_id AND app_id = OLD.app_id
     ) THEN
         RAISE EXCEPTION 'app workspace is referenced by saved searches';
     END IF;
