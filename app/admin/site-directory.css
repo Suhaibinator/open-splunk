@@ -87,11 +87,16 @@
   gap: var(--space-2);
 }
 
+/* "Root organization" and "No description" are information, not a disabled
+   label: --fg-faint is 3.1:1 on the table's surface. */
 .site-directory-muted {
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 
+/* A block inside the cell, because a table cell's own max-width does not
+   bound its column; below 760px the card prints the description whole. */
 .site-directory-description {
+  display: block;
   max-width: 280px;
   overflow: hidden;
   text-overflow: ellipsis;

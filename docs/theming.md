@@ -513,8 +513,9 @@ its token file; everything else is the guardrails' job.
    `app/styles/tokens-palette-<name>.css` and `@import` it in
    `app/styles/index.css` after `tokens-scale.css`, among the other palette
    files in name order, and add its row to the cascade table under
-   [Where a rule lives](#where-a-rule-lives) (no test holds that table to
-   `index.css`). The file holds exactly two blocks, light then dark, and
+   [Where a rule lives](#where-a-rule-lives) (the style invariants fail
+   until the table reads exactly as `index.css` imports). The file holds
+   exactly two blocks, light then dark, and
    nothing that is not a token (or `color-scheme`).
 2. **Add hue steps to tier 1.** Any colour the palette needs that no
    primitive already provides goes into the base `:root` of
@@ -615,7 +616,23 @@ class ledgers, and selector reachability. Its palette section holds
 any prelude but the four above, and measures every mandated text pairing in
 all twelve scopes. The reverse markup-to-CSS feature-prefix list is explicit
 rather than derived; when adding a feature stylesheet, add its namespace to
-that list as part of the same change.
+that list as part of the same change. The cascade table above is held to
+`index.css` row for row, and every namespace its ownership column names must
+be on that list.
+
+Its identity section holds the surfaces that print user-supplied text (the
+organization switcher, the user summary and avatars, the access states, the
+members panel, the site directory and the sign-in cards) to three further
+rules: no identity rule paints a shared primitive (`.button`, `.badge`,
+`.status`, `.table`, the drawer, the modal card, `.backend-resource-state`)
+from outside it; no identity rule writes a colour, type, face, corner or
+stacking literal, even one an existing ledger row would admit; and every ink
+those surfaces lay on a ground, listed with the rule that paints it, clears
+its floor in every palette and mode (the palette's text floor, AA for status
+inks, 3:1 for icons and state stripes). A name, address or description the
+user typed is wrapped in `<bdi>` so a right-to-left value cannot reorder the
+text around it, and a container that prints one breaks a long unbroken value
+(`overflow-wrap: anywhere`) or truncates it with its full text on `title`.
 
 `scripts/style-guardrails.test.mjs` verifies that lint and CI wiring cannot be
 silently disabled and covers shorthand/inline spellings that property-based

@@ -217,16 +217,19 @@
   margin: 5px 0;
 }
 
+/* The search workspace's own user menu prints the signed-in name and
+   address: the text column may shrink, and a long value breaks inside it. */
 .user-summary {
   display: grid;
-  grid-template-columns: 34px 1fr;
+  grid-template-columns: 34px minmax(0, 1fr);
+  overflow-wrap: anywhere;
   padding: var(--space-2) var(--space-3) var(--space-3);
 }
 
 .user-summary > span {
   align-items: center;
   background: var(--accent);
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   color: var(--fg-inverse);
   display: inline-flex;
   font-size: var(--type-xxs);
@@ -452,20 +455,31 @@
   gap: 6px;
 }
 
+/* The avatar's initials are text, so its ground is --accent: --fg-inverse
+   clears AA on it in every palette and mode, where on --accent-bright the
+   bar's own ink fell to 1:1 in terminal dark and the initials vanished. */
 .suite-user-button > span {
   align-items: center;
-  background: var(--accent-bright);
-  border-radius: 50%;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  color: var(--fg-inverse);
   display: inline-flex;
+  flex: 0 0 auto;
   font-size: var(--type-xs);
   height: 17px;
   justify-content: center;
   width: 17px;
 }
 
+/* A display name is the user's own text and can be any length: the bar
+   truncates it, and the user menu's summary prints it whole. */
 .suite-user-button > b {
   font-size: var(--type-xs);
   font-weight: 600;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .suite-user-button > i {
@@ -553,6 +567,14 @@
   box-shadow: inset 3px 0 var(--accent);
 }
 
+/* --fg-muted falls below AA on the --accent-soft wash of a chosen row
+   (4.35:1 in classic light, 3.72:1 in glass dark); the row's second line
+   takes the ink one step stronger. */
+.suite-app-popover > a.selected small,
+.suite-org-popover > button[aria-checked="true"] small {
+  color: var(--fg-secondary);
+}
+
 .suite-app-catalog-state {
   align-items: center;
   color: var(--fg-text);
@@ -616,10 +638,11 @@
 
 .suite-user-summary > span {
   align-items: center;
-  background: var(--accent-bright);
-  border-radius: 50%;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
   color: var(--fg-inverse);
   display: inline-flex;
+  flex: 0 0 auto;
   height: 32px;
   justify-content: center;
   width: 32px;
@@ -629,6 +652,14 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The summary wraps a long name or address instead of widening the menu
+   past the viewport. */
+.suite-user-popover {
+  max-width: 340px;
 }
 
 .suite-user-summary small { color: var(--fg-muted); font-size: var(--type-xs); }
@@ -729,12 +760,12 @@
 
 .suite-access-state[data-state="signed-out"] { border-left-color: var(--status-info); }
 .suite-access-state[data-state="error"] { border-left-color: var(--status-error); }
-.suite-access-state[data-state="forbidden"] { border-left-color: var(--status-warning-bright); }
+.suite-access-state[data-state="forbidden"] { border-left-color: var(--status-warning); }
 
 .suite-access-icon {
   align-items: center;
   background: var(--status-neutral-soft);
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   color: var(--fg-secondary);
   display: flex;
   height: 40px;
@@ -1156,10 +1187,10 @@
   }
 
   .drawer > header { align-items: center; background: var(--chrome-bar); color: var(--chrome-fg); display: flex; justify-content: space-between; min-height: calc(69px + env(safe-area-inset-top)); padding: calc(10px + env(safe-area-inset-top)) 11px 10px 15px; position: sticky; top: 0; z-index: 2; }
-  .drawer > header > div { align-items: center; display: flex; gap: 9px; }
-  .drawer > header > div > span:last-child { display: flex; flex-direction: column; gap: 2px; }
-  .drawer > header small { color: var(--chrome-fg-faint); font-size: var(--type-xs); }
-.suite-user-avatar { align-items: center; background: var(--accent); border-radius: 50%; color: var(--fg-inverse); display: flex; height: 34px; justify-content: center; width: 34px; }
+  .drawer > header > div { align-items: center; display: flex; gap: 9px; min-width: 0; }
+  .drawer > header > div > span:last-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+  .drawer > header small { color: var(--chrome-fg-muted); font-size: var(--type-xs); }
+.suite-user-avatar { align-items: center; background: var(--accent); border-radius: var(--radius-pill); color: var(--fg-inverse); display: flex; height: 34px; justify-content: center; width: 34px; }
   .drawer > header button { background: transparent; border: 0; color: var(--chrome-fg-muted); font-size: var(--type-xxl); height: 44px; justify-content: center; padding: 0; width: 44px; }
   .drawer-label { color: var(--fg-muted); font-size: var(--type-xs); font-weight: 700; letter-spacing: 0.1em; padding: 15px var(--space-4) 6px; }
   .drawer > a,
@@ -1186,8 +1217,8 @@
   .drawer > .drawer-action { background: transparent; border-block: 0; border-right: 0; color: var(--fg-text); text-align: left; width: 100%; }
   .drawer > .drawer-org[aria-disabled="true"] { cursor: progress; }
   .drawer > .drawer-org > span:first-child { align-items: center; background: var(--accent); color: var(--fg-inverse); display: flex; flex: 0 0 auto; font-size: var(--type-sm); height: 22px; justify-content: center; width: 22px; }
-  .drawer > .drawer-org > span:nth-child(2) { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
-  .drawer > .drawer-org small { color: var(--fg-muted); font-size: var(--type-xs); font-weight: 400; }
+  .drawer > .drawer-org > span:nth-child(2) { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+  .drawer > .drawer-org small { color: var(--fg-secondary); font-size: var(--type-xs); font-weight: 400; }
   .drawer-org-error { margin: var(--space-1) var(--space-4); }
   .suite-access-state { padding: var(--space-4); }
 

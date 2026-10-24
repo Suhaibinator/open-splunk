@@ -11,14 +11,11 @@
   font-size: var(--type-sm);
   gap: var(--space-2);
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .members-context strong {
   color: var(--fg-text);
-}
-
-.members-card .backend-resource-state {
-  border: 0;
 }
 
 .members-card h3:focus-visible {
@@ -120,6 +117,11 @@
 .members-role-option small {
   color: var(--fg-muted);
   font-size: var(--type-xs);
+}
+
+/* On the chosen option's --accent-soft wash --fg-muted is below AA. */
+.members-role-option:has(input:checked) small {
+  color: var(--fg-secondary);
 }
 
 .members-capability-change {

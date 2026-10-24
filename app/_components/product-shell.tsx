@@ -19,6 +19,7 @@ import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
 import {
   ADMIN_CONSOLE_ACCESS,
   PRODUCT_SECTION_ACCESS,
+  initialOf,
   returnPathFor,
   signInHref,
   type ProductSection,
@@ -446,7 +447,7 @@ function ProductShellFrame({
                   const selected = app.appId === displayedBackendAppId;
                   const label = appLabel(app);
                   const contents = <>
-                      <i className="suite-app-icon" aria-hidden="true">{label.charAt(0).toUpperCase() || "⌕"}</i>
+                      <i className="suite-app-icon" aria-hidden="true">{initialOf(label) || "⌕"}</i>
                       <span><strong>{label}</strong><small>{appDetail(app, selected)}</small></span>
                     </>;
                   return backendAppCatalog || catalogActionsBlocked ? (
@@ -508,16 +509,16 @@ function ProductShellFrame({
           </form>
           <div className="suite-menu-anchor">
             <button className="suite-user-button" type="button" aria-label={`${sessionLabel} menu`} aria-controls={productMenuControlId(menu, "user")} aria-haspopup="menu" aria-expanded={menu === "user"} onClick={(event) => { const opening = menu !== "user"; toggleMenu("user", event.currentTarget); if (opening && event.detail === 0) focusFirstMenuItem("user"); }} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}>
-              <span>{sessionInitial}</span><b>{sessionLabel}</b><AppIcon name="chevron-down" size="xs" />
+              <span>{sessionInitial}</span><b title={sessionLabel}><bdi>{sessionLabel}</bdi></b><AppIcon name="chevron-down" size="xs" />
             </button>
             {menu === "user" ? (
               <div className="suite-popover suite-utility-popover suite-user-popover" id={PRODUCT_MENU_POPOVER_IDS.user} role="menu" data-suite-menu="user">
                 <div className="suite-user-summary">
                   <span aria-hidden="true">{sessionInitial}</span>
                   <div>
-                    <strong>{sessionLabel}</strong>
-                    <small>{sessionDetail}</small>
-                    {sessionContext === null ? null : <small>{sessionContext}</small>}
+                    <strong><bdi>{sessionLabel}</bdi></strong>
+                    <small><bdi>{sessionDetail}</bdi></small>
+                    {sessionContext === null ? null : <small><bdi>{sessionContext}</bdi></small>}
                     {siteAdmin ? <span className="badge badge--info">Site admin</span> : null}
                   </div>
                 </div>
@@ -555,7 +556,7 @@ function ProductShellFrame({
 
       {mobileOpen ? (
         <dialog ref={mobileDrawerRef} className="drawer" open aria-modal="true" aria-label="Mobile product navigation">
-          <header><div><span className="suite-user-avatar" aria-hidden="true">{sessionInitial}</span><span><strong>{sessionLabel}</strong><small>{sessionContext ?? sessionDetail}</small></span></div><button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)}><AppIcon name="close" size="lg" /></button></header>
+          <header><div><span className="suite-user-avatar" aria-hidden="true">{sessionInitial}</span><span><strong><bdi>{sessionLabel}</bdi></strong><small><bdi>{sessionContext ?? sessionDetail}</bdi></small></span></div><button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)}><AppIcon name="close" size="lg" /></button></header>
           <OrganizationDrawerSection onSwitched={() => setMobileOpen(false)} />
           <span className="drawer-label">APPLICATION</span>
           {offersSection("home") ? <Link className={activeSection === "home" ? "active" : undefined} aria-current={activeSection === "home" ? "page" : undefined} href={productHref("/")}><span aria-hidden="true"><AppIcon name="home" size="md" /></span>Home</Link> : null}
@@ -574,7 +575,7 @@ function ProductShellFrame({
               {displayedBackendApps.map((app) => {
               const label = appLabel(app);
               const selected = app.appId === displayedBackendAppId;
-              const contents = <><span aria-hidden="true">{label.charAt(0).toUpperCase() || "⌕"}</span>{label}{selected ? <b>Selected</b> : null}</>;
+              const contents = <><span aria-hidden="true">{initialOf(label) || "⌕"}</span>{label}{selected ? <b>Selected</b> : null}</>;
               return backendAppCatalog || catalogActionsBlocked
                 ? <button className={selected ? "selected-app" : undefined} type="button" disabled={catalogActionsBlocked} onClick={() => { backendAppCatalog?.onSelect(app.appId); setMobileOpen(false); }} key={`mobile-${app.appId}`}>{contents}</button>
                 : <Link className={selected ? "selected-app" : undefined} href={backendAppSearchHref(app.appId)} key={`mobile-${app.appId}`}>{contents}</Link>;

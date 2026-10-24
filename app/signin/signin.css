@@ -38,7 +38,7 @@
 .signin-signal span { background: linear-gradient(to top, transparent, var(--accent-inverse)); height: var(--signal-height); width: 8%; }
 
 .signin-panel { align-items: center; display: flex; justify-content: center; padding: 36px; }
-.signin-card { max-width: 390px; width: 100%; }
+.signin-card { max-width: 390px; overflow-wrap: anywhere; width: 100%; }
 .signin-mobile-brand { display: none; color: var(--fg-text); }
 .signin-card > header { margin-bottom: var(--space-6); }
 .signin-lock { align-items: center; background: var(--accent-soft); color: var(--accent); display: flex; font-size: var(--type-xxl); height: 42px; justify-content: center; margin-bottom: var(--space-4); width: 42px; }
@@ -55,7 +55,7 @@
 .signin-password-field button { background: transparent; border: 0; color: var(--fg-link); font-size: var(--type-xs); font-weight: 600; height: 38px; padding: 0 11px; }
 .signin-error { align-items: center; background: var(--status-error-soft); border: 1px solid var(--status-error-edge); color: var(--status-error-strong); display: flex; font-size: var(--type-xs); gap: 7px; margin-top: 10px; padding: var(--space-2); }
 .signin-error > span { align-items: center; background: var(--status-error); border-radius: 50%; color: var(--fg-inverse); display: flex; flex: 0 0 16px; height: 16px; justify-content: center; width: 16px; }
-.signin-help-notice { align-items: center; background: var(--status-info-soft); border: 1px solid var(--status-info-edge); color: var(--fg-secondary); display: flex; font-size: var(--type-xs); gap: 7px; margin-top: 10px; padding: var(--space-2); }
+.signin-help-notice { align-items: center; background: var(--status-info-soft); border: 1px solid var(--status-info-edge); color: var(--status-info-strong); display: flex; font-size: var(--type-xs); gap: 7px; margin-top: 10px; padding: var(--space-2); }
 .signin-help-notice > span { align-items: center; background: var(--status-info); border-radius: 50%; color: var(--fg-inverse); display: flex; flex: 0 0 16px; height: 16px; justify-content: center; width: 16px; }
 .signin-submit { align-items: center; background: var(--accent); border: 1px solid var(--accent-hover); border-radius: var(--radius-sm); color: var(--fg-inverse); display: flex; font-weight: 600; gap: 7px; height: 41px; justify-content: center; text-decoration: none; width: 100%; }
 .signin-submit:hover { background: var(--accent-hover); }
@@ -139,8 +139,10 @@
   margin: 2px 0 0;
 }
 
+/* A link inside a notice keeps the notice's own -strong ink and is told
+   apart by its underline and weight: --fg-link drops below AA on the info,
+   success and error washes in the dark scopes (3.3:1 on success in ember). */
 .signin-message a {
-  color: var(--fg-link);
   font-weight: 600;
 }
 
@@ -151,6 +153,7 @@
 .signin-help-notice[data-tone="success"] {
   background: var(--status-success-soft);
   border-color: var(--status-success-edge);
+  color: var(--status-success-strong);
 }
 
 .signin-help-notice[data-tone="success"] > span {

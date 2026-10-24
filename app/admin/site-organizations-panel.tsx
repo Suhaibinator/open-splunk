@@ -269,7 +269,7 @@ function OrganizationRow({ organization, names }: {
   return (
     <tr data-organization-id={organization.id}>
       <td data-label="Organization">
-        <strong className="site-directory-name">{organization.name}</strong>
+        <strong className="site-directory-name"><bdi>{organization.name}</bdi></strong>
         <small className="table-secondary"><code>{organization.slug}</code> · ID {organization.id}</small>
       </td>
       <td data-label="Type">
@@ -280,15 +280,18 @@ function OrganizationRow({ organization, names }: {
           <span className="site-directory-muted">Root organization</span>
         ) : (
           <ol className="site-directory-lineage" aria-label={`Ancestors of ${organization.name}`}>
-            {ancestry.map((ancestor) => <li key={ancestor.id}>{ancestor.name}</li>)}
-            <li aria-current="true">{organization.name}</li>
+            {ancestry.map((ancestor) => <li key={ancestor.id}><bdi>{ancestor.name}</bdi></li>)}
+            <li aria-current="true"><bdi>{organization.name}</bdi></li>
           </ol>
         )}
       </td>
-      <td data-label="Description" className="site-directory-description">
+      {/* The cap sits on a block inside the cell: a table cell's own max-width
+          is ignored by the table's layout, so a long description widened the
+          whole column. The full text stays on the title. */}
+      <td data-label="Description">
         {organization.description === undefined || organization.description.length === 0
           ? <span className="site-directory-muted">No description</span>
-          : organization.description}
+          : <span className="site-directory-description" title={organization.description}><bdi>{organization.description}</bdi></span>}
       </td>
       <td data-label="Created">{formatMediumDateTime(new Date(organization.createdAt), "Unknown")}</td>
     </tr>
