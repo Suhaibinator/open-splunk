@@ -1,0 +1,1091 @@
+[
+  {
+    "name": "app_catalog_revision_insert_duplicate_with_bad_shape",
+    "group": "app_catalog_revisions BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 5)",
+    "expect": "reject",
+    "message": "app catalog revision authority must begin with its first app",
+    "sqlite_expect": "reject",
+    "sqlite_message": "app catalog revision authority must begin with its first app"
+  },
+  {
+    "name": "app_catalog_revision_update_tenant_and_skip",
+    "group": "app_catalog_revisions BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)"
+    ],
+    "statement": "UPDATE app_catalog_revisions SET tenant_id = 't2', revision = revision + 5 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "app catalog revision must advance by exactly one",
+    "sqlite_expect": "reject",
+    "sqlite_message": "app catalog revision must advance by exactly one"
+  },
+  {
+    "name": "app_catalog_revision_update_skip_only",
+    "group": "app_catalog_revisions BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)"
+    ],
+    "statement": "UPDATE app_catalog_revisions SET revision = revision + 5 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "app catalog revision must advance by exactly one",
+    "sqlite_expect": "reject",
+    "sqlite_message": "app catalog revision must advance by exactly one"
+  },
+  {
+    "name": "app_delete_active_with_dashboard_and_saved_search",
+    "group": "app_workspaces BEFORE DELETE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO dashboards (dashboard_id, version, name, app_id, tenant_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('d1', 1, 'n-d1', 'app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 'o1', 1, '\\x00'::bytea, 1, 1)",
+      "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n-ss1', 'app_AAAAAAAAAAAAAAAAAAAAAA', 'u1', 1, '\\x01'::bytea, 1, 1)"
+    ],
+    "statement": "DELETE FROM app_workspaces WHERE app_id = 'app_AAAAAAAAAAAAAAAAAAAAAA'",
+    "expect": "reject",
+    "message": "app is referenced by a dashboard",
+    "sqlite_expect": "reject",
+    "sqlite_message": "app is referenced by a dashboard"
+  },
+  {
+    "name": "app_delete_active_with_saved_search_only",
+    "group": "app_workspaces BEFORE DELETE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n-ss1', 'app_AAAAAAAAAAAAAAAAAAAAAA', 'u1', 1, '\\x01'::bytea, 1, 1)"
+    ],
+    "statement": "DELETE FROM app_workspaces WHERE app_id = 'app_AAAAAAAAAAAAAAAAAAAAAA'",
+    "expect": "reject",
+    "message": "app workspace is referenced by saved searches",
+    "sqlite_expect": "reject",
+    "sqlite_message": "app workspace is referenced by saved searches"
+  },
+  {
+    "name": "app_delete_archived_with_every_reference",
+    "group": "app_workspaces BEFORE DELETE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO knowledge_definition_blobs (tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro) VALUES ('t1', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, '\\x0a'::bytea, 1, 10)",
+      "SET session_replication_role = replica",
+      "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro) VALUES ('t1', 'ko1', 1, 'app_AAAAAAAAAAAAAAAAAAAAAA', 'owner-1', 'field_extraction', 'ko1', 'app', 'disabled', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 100, 100, 100)",
+      "INSERT INTO knowledge_lookup_definitions (tenant_id, lookup_id, owner_id, app_id, name, sharing_scope, automatic, current_version, state, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro) VALUES ('t1', 'lookup-1', 'owner-a', 'app_AAAAAAAAAAAAAAAAAAAAAA', 'lookup-1', 2, 0, 1, 'DISABLED', 200, 200, 200)",
+      "SET session_replication_role = origin",
+      "INSERT INTO dashboards (dashboard_id, version, name, app_id, tenant_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('d1', 1, 'n-d1', 'app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 'o1', 1, '\\x00'::bytea, 1, 1)",
+      "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n-ss1', 'app_AAAAAAAAAAAAAAAAAAAAAA', 'u1', 1, '\\x01'::bytea, 1, 1)",
+      "UPDATE app_workspaces SET state = 'archived', archived_at_unix_micro = 3, updated_at_unix_micro = 3, version = 2 WHERE app_id = 'app_AAAAAAAAAAAAAAAAAAAAAA'"
+    ],
+    "statement": "DELETE FROM app_workspaces WHERE app_id = 'app_AAAAAAAAAAAAAAAAAAAAAA'",
+    "expect": "reject",
+    "message": "app is referenced by a dashboard",
+    "sqlite_expect": "reject",
+    "sqlite_message": "app is referenced by a dashboard"
+  },
+  {
+    "name": "app_delete_archived_with_lookup_knowledge_and_saved_search",
+    "group": "app_workspaces BEFORE DELETE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO knowledge_definition_blobs (tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro) VALUES ('t1', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, '\\x0a'::bytea, 1, 10)",
+      "SET session_replication_role = replica",
+      "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro) VALUES ('t1', 'ko1', 1, 'app_AAAAAAAAAAAAAAAAAAAAAA', 'owner-1', 'field_extraction', 'ko1', 'app', 'disabled', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 100, 100, 100)",
+      "INSERT INTO knowledge_lookup_definitions (tenant_id, lookup_id, owner_id, app_id, name, sharing_scope, automatic, current_version, state, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro) VALUES ('t1', 'lookup-1', 'owner-a', 'app_AAAAAAAAAAAAAAAAAAAAAA', 'lookup-1', 2, 0, 1, 'DISABLED', 200, 200, 200)",
+      "SET session_replication_role = origin",
+      "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n-ss1', 'app_AAAAAAAAAAAAAAAAAAAAAA', 'u1', 1, '\\x01'::bytea, 1, 1)",
+      "UPDATE app_workspaces SET state = 'archived', archived_at_unix_micro = 3, updated_at_unix_micro = 3, version = 2 WHERE app_id = 'app_AAAAAAAAAAAAAAAAAAAAAA'"
+    ],
+    "statement": "DELETE FROM app_workspaces WHERE app_id = 'app_AAAAAAAAAAAAAAAAAAAAAA'",
+    "expect": "reject",
+    "message": "app workspace is referenced by lookup definitions",
+    "sqlite_expect": "reject",
+    "sqlite_message": "app workspace is referenced by lookup definitions"
+  },
+  {
+    "name": "app_archive_with_active_lookup_and_active_knowledge",
+    "group": "app_workspaces BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO knowledge_definition_blobs (tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro) VALUES ('t1', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, '\\x0a'::bytea, 1, 10)",
+      "SET session_replication_role = replica",
+      "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro) VALUES ('t1', 'ko1', 1, 'app_AAAAAAAAAAAAAAAAAAAAAA', 'owner-1', 'field_extraction', 'ko1', 'app', 'active', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 100, 100, NULL)",
+      "INSERT INTO knowledge_lookup_definitions (tenant_id, lookup_id, owner_id, app_id, name, sharing_scope, automatic, current_version, state, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro) VALUES ('t1', 'lookup-1', 'owner-a', 'app_AAAAAAAAAAAAAAAAAAAAAA', 'lookup-1', 2, 0, 1, 'ACTIVE', 200, 200, NULL)",
+      "SET session_replication_role = origin"
+    ],
+    "statement": "UPDATE app_workspaces SET state = 'archived', archived_at_unix_micro = 3, updated_at_unix_micro = 3, version = 2 WHERE app_id = 'app_AAAAAAAAAAAAAAAAAAAAAA'",
+    "expect": "reject",
+    "message": "app workspace has active lookup definitions",
+    "sqlite_expect": "reject",
+    "sqlite_message": "app workspace has active lookup definitions",
+    "consumer": "internal/lookupcatalog/catalog_test.go expects 'active lookup definitions' when an app with active lookups is archived"
+  },
+  {
+    "name": "app_archive_and_rename_slug_with_active_lookup",
+    "group": "app_workspaces BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)",
+      "SET session_replication_role = replica",
+      "INSERT INTO knowledge_lookup_definitions (tenant_id, lookup_id, owner_id, app_id, name, sharing_scope, automatic, current_version, state, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro) VALUES ('t1', 'lookup-1', 'owner-a', 'app_AAAAAAAAAAAAAAAAAAAAAA', 'lookup-1', 2, 0, 1, 'ACTIVE', 200, 200, NULL)",
+      "SET session_replication_role = origin"
+    ],
+    "statement": "UPDATE app_workspaces SET slug = 'renamed', state = 'archived', archived_at_unix_micro = 3, updated_at_unix_micro = 3, version = 2 WHERE app_id = 'app_AAAAAAAAAAAAAAAAAAAAAA'",
+    "expect": "reject",
+    "message": "app workspace has active lookup definitions",
+    "sqlite_expect": "reject",
+    "sqlite_message": "app workspace has active lookup definitions"
+  },
+  {
+    "name": "app_reactivate_with_unsearchable_index_and_slug_change",
+    "group": "app_workspaces BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'archived', 1, 2, 2)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'main', 'Display main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) SELECT 't1', 'app_AAAAAAAAAAAAAAAAAAAAAA', 'idx_main'",
+      "UPDATE indexes SET search_enabled = 0, version = 2, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main'"
+    ],
+    "statement": "UPDATE app_workspaces SET slug = 'renamed', state = 'active', archived_at_unix_micro = NULL, updated_at_unix_micro = 3, version = 2 WHERE app_id = 'app_AAAAAAAAAAAAAAAAAAAAAA'",
+    "expect": "reject",
+    "message": "reactivated app requires searchable indexes",
+    "sqlite_expect": "reject",
+    "sqlite_message": "reactivated app requires searchable indexes"
+  },
+  {
+    "name": "collector_runtime_identity_and_regression",
+    "group": "collector_runtime BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, boot_epoch, stream_id, active_instance_id, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro) VALUES ('t1', 'c1', 5, 5, 'b1', 's1', 'i1', 'development', 'h', 'linux', 'arm64', 1, 1, 1)"
+    ],
+    "statement": "UPDATE collector_runtime SET collector_id = 'c2', lease_generation = 1 WHERE collector_id = 'c1'",
+    "expect": "reject",
+    "message": "collector runtime revisions cannot move backward",
+    "sqlite_expect": "reject",
+    "sqlite_message": "collector runtime revisions cannot move backward"
+  },
+  {
+    "name": "audit_tenant_state_duplicate_with_nonempty_shape",
+    "group": "audit_tenant_state BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)"
+    ],
+    "statement": "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 2, 1)",
+    "expect": "reject",
+    "message": "audit tenant state must begin empty",
+    "sqlite_expect": "reject",
+    "sqlite_message": "audit tenant state must begin empty"
+  },
+  {
+    "name": "audit_event_duplicate_with_stale_sequence",
+    "group": "audit_events BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1000, 'browser', 'admin1', 'administrator', 'knowledge.object.create', 'knowledge_object', 'ko1', 1, 'app_AAAAAAAAAAAAAAAAAAAAAA', 'field_alias', 'private')"
+    ],
+    "statement": "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'browser', 'admin1', 'administrator', 'knowledge.object.create', 'knowledge_object', 'ko1', 1, 'app_AAAAAAAAAAAAAAAAAAAAAA', 'field_alias', 'private')",
+    "expect": "reject",
+    "message": "audit tenant state is invalid or capacity is exhausted",
+    "sqlite_expect": "reject",
+    "sqlite_message": "audit tenant state is invalid or capacity is exhausted"
+  },
+  {
+    "name": "search_attempt_state_duplicate_with_nonempty_shape",
+    "group": "search_attempt_audit_tenant_state BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 10)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 2, 0, 10)",
+    "expect": "reject",
+    "message": "search-attempt audit tenant state must begin empty",
+    "sqlite_expect": "reject",
+    "sqlite_message": "search-attempt audit tenant state must begin empty"
+  },
+  {
+    "name": "knowledge_attempt_state_duplicate_with_nonempty_shape",
+    "group": "knowledge_attempt_audit_tenant_state BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ],
+    "statement": "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 2, 0)",
+    "expect": "reject",
+    "message": "knowledge-attempt audit tenant state must begin empty",
+    "sqlite_expect": "reject",
+    "sqlite_message": "knowledge-attempt audit tenant state must begin empty"
+  },
+  {
+    "name": "knowledge_attempt_event_duplicate_with_stale_sequence",
+    "group": "knowledge_attempt_audit_events BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)",
+      "INSERT INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason) VALUES ('t1', 1, 1000, 'browser', 'u1', 'user', 'create', 'rejected', 'not_administrator')"
+    ],
+    "statement": "INSERT INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason) VALUES ('t1', 1, 1001, 'browser', 'u1', 'user', 'create', 'rejected', 'not_administrator')",
+    "expect": "reject",
+    "message": "knowledge-attempt audit tenant state is invalid or sequence is exhausted",
+    "sqlite_expect": "reject",
+    "sqlite_message": "knowledge-attempt audit tenant state is invalid or sequence is exhausted"
+  },
+  {
+    "name": "index_catalog_state_identity_and_bad_transition",
+    "group": "index_catalog_state BEFORE UPDATE",
+    "setup_sql": [],
+    "statement": "UPDATE index_catalog_state SET singleton_id = 2, revision = revision + 7",
+    "expect": "reject",
+    "message": "index catalog state transition is invalid",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index catalog state transition is invalid"
+  },
+  {
+    "name": "index_catalog_state_identity_and_good_transition",
+    "group": "index_catalog_state BEFORE UPDATE",
+    "setup_sql": [],
+    "statement": "UPDATE index_catalog_state SET singleton_id = 2, revision = revision + 1",
+    "expect": "reject",
+    "message": "index catalog state identity is immutable",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index catalog state identity is immutable"
+  },
+  {
+    "name": "index_insert_duplicate_id_unaligned_retention",
+    "group": "indexes BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'main', 'Display main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'other', 'Other', '', 1, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog identity is already in use",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index catalog identity is already in use"
+  },
+  {
+    "name": "index_insert_duplicate_deleting_unbounded",
+    "group": "indexes BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'main', 'Display main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'main', '', '', 1, 1, 1, '', 'deleting', 1000, 1000)",
+    "expect": "reject",
+    "message": "deleting index creation requires a deletion operation",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index catalog identity is already in use",
+    "note": "deleting_index_insert_is_forbidden sorts first in PostgreSQL; SQLite checks identity collision first."
+  },
+  {
+    "name": "index_insert_deleting_and_unbounded",
+    "group": "indexes BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_new', 't1', 1, 'new', '', '', 0, 1, 1, '', 'deleting', 1000, 1000)",
+    "expect": "reject",
+    "message": "deleting index creation requires a deletion operation",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index catalog record is invalid or unbounded",
+    "note": "deleting_index_insert_is_forbidden sorts before index_catalog_record_is_bounded in PostgreSQL."
+  },
+  {
+    "name": "index_insert_deleting_and_unaligned",
+    "group": "indexes BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_new', 't1', 1, 'new', 'New', '', 1, 1, 1, '', 'deleting', 1000, 1000)",
+    "expect": "reject",
+    "message": "deleting index creation requires a deletion operation",
+    "sqlite_expect": "reject",
+    "sqlite_message": "deleting index creation requires a deletion operation"
+  },
+  {
+    "name": "index_insert_unbounded_and_unaligned",
+    "group": "indexes BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_new', 't1', 1, 'new', '', '', 1, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_at_capacity_and_unbounded",
+    "group": "indexes BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "ALTER TABLE index_catalog_state DISABLE TRIGGER USER",
+      "UPDATE index_catalog_state SET physical_count = 1024 WHERE singleton_id = 1",
+      "ALTER TABLE index_catalog_state ENABLE TRIGGER USER"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_new', 't1', 1, 'new', '', '', 1, 1, 1, '', 'deleting', 1000, 1000)",
+    "expect": "reject",
+    "message": "deleting index creation requires a deletion operation",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index catalog state is invalid or capacity is exhausted",
+    "note": "index_catalog_before_index_insert is the newest SQLite trigger; in PostgreSQL deleting_index_insert_is_forbidden sorts before it."
+  },
+  {
+    "name": "index_update_rename_and_unaligned_retention",
+    "group": "indexes BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'main', 'Display main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET name = 'renamed', retention_nanoseconds = 1, version = 2, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index name is immutable",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index retention must use whole milliseconds",
+    "note": "indexes_name_is_immutable sorts before the retention check. Go refuses a rename before it writes (control.ErrImmutableName)."
+  },
+  {
+    "name": "index_update_rename_and_unbounded_display",
+    "group": "indexes BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'main', 'Display main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET name = 'renamed', display_name = '', version = 2, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_update_id_and_name",
+    "group": "indexes BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'main', 'Display main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET index_id = 'idx_other', name = 'renamed' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index ID is immutable",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index ID is immutable"
+  },
+  {
+    "name": "index_update_disable_search_of_active_app_index_and_rename",
+    "group": "indexes BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'main', 'Display main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('t1', 'app_AAAAAAAAAAAAAAAAAAAAAA', 'idx_main')"
+    ],
+    "statement": "UPDATE indexes SET search_enabled = 0, name = 'renamed', version = 2, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "active app requires searchable index",
+    "sqlite_expect": "reject",
+    "sqlite_message": "active app requires searchable index"
+  },
+  {
+    "name": "index_update_to_deleting_without_operation_and_unaligned",
+    "group": "indexes BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'main', 'Display main', '', 0, 1, 1, '', 'archived', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET state = 'deleting', retention_nanoseconds = 1, version = 2, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "deleting index transition requires a matching deletion operation",
+    "sqlite_expect": "reject",
+    "sqlite_message": "deleting index transition requires a matching deletion operation"
+  },
+  {
+    "name": "index_update_tombstoned_unaligned",
+    "group": "indexes BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'main', 'Display main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_tombstones (index_id, name, deleted_version, deleted_at_unix_micro) VALUES ('idx_main', 'main', 1, 3000)"
+    ],
+    "statement": "UPDATE indexes SET retention_nanoseconds = 1 WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index retention must use whole milliseconds",
+    "sqlite_expect": "reject",
+    "sqlite_message": "tombstoned index is immutable",
+    "note": "indexes_retention_is_millisecond_aligned_on_update sorts before tombstoned_index_update_is_forbidden."
+  },
+  {
+    "name": "index_update_tombstoned_unbounded",
+    "group": "indexes BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'main', 'Display main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_tombstones (index_id, name, deleted_version, deleted_at_unix_micro) VALUES ('idx_main', 'main', 1, 3000)"
+    ],
+    "statement": "UPDATE indexes SET display_name = '' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_delete_tombstoned",
+    "group": "indexes BEFORE DELETE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'main', 'Display main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_tombstones (index_id, name, deleted_version, deleted_at_unix_micro) VALUES ('idx_main', 'main', 1, 3000)"
+    ],
+    "statement": "DELETE FROM indexes WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog identity cannot be deleted",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index catalog identity cannot be deleted"
+  },
+  {
+    "name": "token_update_purpose_and_digest",
+    "group": "ingestion_tokens BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 't1', 1, 'Token tok_native', 'osk_abcd1234', '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 'active', 1000, 1000, NULL, NULL, 'hec')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET purpose = 'native_collector', token_digest = '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea WHERE ingestion_token_id = 'tok_native'",
+    "expect": "reject",
+    "message": "ingestion token digest is immutable",
+    "sqlite_expect": "reject",
+    "sqlite_message": "ingestion token purpose is immutable",
+    "note": "ingestion_token_digest_is_immutable sorts first. Go refuses purpose changes before it writes."
+  },
+  {
+    "name": "token_update_binding_and_revoked_reactivation",
+    "group": "ingestion_tokens BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 't1', 1, 'Token tok_native', 'osk_abcd1234', '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 'revoked', 1000, 1000, 1000, 'collector-1', 'native_collector')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET bound_collector_id = 'collector-2', state = 'active', revoked_at_unix_micro = NULL WHERE ingestion_token_id = 'tok_native'",
+    "expect": "reject",
+    "message": "ingestion token collector binding is immutable",
+    "sqlite_expect": "reject",
+    "sqlite_message": "ingestion token collector binding is immutable"
+  },
+  {
+    "name": "token_update_hec_binding_and_digest",
+    "group": "ingestion_tokens BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 't1', 1, 'Token tok_native', 'osk_abcd1234', '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 'active', 1000, 1000, NULL, NULL, 'hec')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET bound_collector_id = 'collector-2', token_digest = '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea WHERE ingestion_token_id = 'tok_native'",
+    "expect": "reject",
+    "message": "ingestion token digest is immutable",
+    "sqlite_expect": "reject",
+    "sqlite_message": "HEC ingestion token cannot have a collector binding",
+    "note": "ingestion_token_digest_is_immutable sorts before the HEC binding check."
+  },
+  {
+    "name": "token_update_purpose_and_revoked_reactivation",
+    "group": "ingestion_tokens BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 't1', 1, 'Token tok_native', 'osk_abcd1234', '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 'revoked', 1000, 1000, 1000, 'collector-1', 'native_collector')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET purpose = 'hec', bound_collector_id = NULL, state = 'active', revoked_at_unix_micro = NULL WHERE ingestion_token_id = 'tok_native'",
+    "expect": "reject",
+    "message": "ingestion token collector binding is immutable",
+    "sqlite_expect": "reject",
+    "sqlite_message": "ingestion token purpose is immutable",
+    "note": "ingestion_token_collector_binding_is_immutable sorts before ingestion_token_purpose_is_immutable."
+  },
+  {
+    "name": "knowledge_catalog_tenant_duplicate_nonempty",
+    "group": "knowledge_catalog_tenants BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)"
+    ],
+    "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id, catalog_revision) VALUES ('t1', 3)",
+    "expect": "reject",
+    "message": "knowledge catalog tenant must begin empty",
+    "sqlite_expect": "reject",
+    "sqlite_message": "knowledge catalog tenant must begin empty"
+  },
+  {
+    "name": "knowledge_catalog_tenant_rename_and_skip_revision",
+    "group": "knowledge_catalog_tenants BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)"
+    ],
+    "statement": "UPDATE knowledge_catalog_tenants SET tenant_id = 't2', catalog_revision = catalog_revision + 3 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "knowledge catalog tenant identity is immutable",
+    "sqlite_expect": "reject",
+    "sqlite_message": "knowledge catalog tenant identity is immutable"
+  },
+  {
+    "name": "knowledge_catalog_tenant_rename_and_next_revision",
+    "group": "knowledge_catalog_tenants BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)"
+    ],
+    "statement": "UPDATE knowledge_catalog_tenants SET tenant_id = 't2', catalog_revision = catalog_revision + 1 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "knowledge catalog tenant identity is immutable",
+    "sqlite_expect": "reject",
+    "sqlite_message": "knowledge catalog tenant identity is immutable"
+  },
+  {
+    "name": "knowledge_catalog_tenant_skip_revision_without_head",
+    "group": "knowledge_catalog_tenants BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)",
+      "ALTER TABLE knowledge_catalog_revision_heads DISABLE TRIGGER USER",
+      "DELETE FROM knowledge_catalog_revision_heads WHERE tenant_id = 't1'",
+      "ALTER TABLE knowledge_catalog_revision_heads ENABLE TRIGGER USER"
+    ],
+    "statement": "UPDATE knowledge_catalog_tenants SET catalog_revision = catalog_revision + 3 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "knowledge catalog revision head is missing",
+    "sqlite_expect": "reject",
+    "sqlite_message": "knowledge catalog revision head is missing"
+  },
+  {
+    "name": "knowledge_catalog_tenant_rename_without_head",
+    "group": "knowledge_catalog_tenants BEFORE UPDATE",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)",
+      "ALTER TABLE knowledge_catalog_revision_heads DISABLE TRIGGER USER",
+      "DELETE FROM knowledge_catalog_revision_heads WHERE tenant_id = 't1'",
+      "ALTER TABLE knowledge_catalog_revision_heads ENABLE TRIGGER USER"
+    ],
+    "statement": "UPDATE knowledge_catalog_tenants SET tenant_id = 't2', catalog_revision = catalog_revision + 1 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "knowledge catalog revision head is missing",
+    "sqlite_expect": "reject",
+    "sqlite_message": "knowledge catalog revision head is missing"
+  },
+  {
+    "name": "knowledge_catalog_revision_head_duplicate_disagreeing",
+    "group": "knowledge_catalog_revision_heads BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)"
+    ],
+    "statement": "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 9, '\\x3333333333333333333333333333333333333333333333333333333333333333'::bytea)",
+    "expect": "reject",
+    "message": "knowledge catalog revision head disagrees with tenant",
+    "sqlite_expect": "reject",
+    "sqlite_message": "knowledge catalog revision head disagrees with tenant"
+  },
+  {
+    "name": "knowledge_projection_ledger_duplicate_nonempty",
+    "group": "knowledge_projection_tenant_ledgers BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)"
+    ],
+    "statement": "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id, projection_bytes) VALUES ('t1', 6)",
+    "expect": "reject",
+    "message": "knowledge projection tenant ledger already exists",
+    "sqlite_expect": "reject",
+    "sqlite_message": "knowledge projection tenant ledger must begin empty",
+    "note": "identity collision sorts before initial shape (documented in 0014)."
+  },
+  {
+    "name": "knowledge_definition_blob_duplicate_over_capacity",
+    "group": "knowledge_definition_blobs BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO knowledge_definition_blobs (tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro) VALUES ('t1', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, '\\x0a'::bytea, 1, 10)",
+      "UPDATE knowledge_catalog_tenants SET definition_body_bytes = 536870912 WHERE tenant_id = 't1'"
+    ],
+    "statement": "INSERT INTO knowledge_definition_blobs (tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro) VALUES ('t1', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, '\\x0a'::bytea, 1, 10)",
+    "expect": "reject",
+    "message": "knowledge definition body capacity exhausted",
+    "sqlite_expect": "reject",
+    "sqlite_message": "knowledge definition blob already exists",
+    "note": "capacity sorts before identity collision (documented in 0014)."
+  },
+  {
+    "name": "lookup_ledger_duplicate_nonempty",
+    "group": "knowledge_lookup_asset_tenant_ledgers BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)"
+    ],
+    "statement": "INSERT INTO knowledge_lookup_asset_tenant_ledgers (tenant_id, staged_asset_count) VALUES ('t1', 1)",
+    "expect": "reject",
+    "message": "lookup asset tenant ledger must begin empty",
+    "sqlite_expect": "reject",
+    "sqlite_message": "lookup asset tenant ledger must begin empty"
+  },
+  {
+    "name": "fleet_delete_cascades_runtime_accounting",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, boot_epoch, stream_id, active_instance_id, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro) VALUES ('t1', 'c1', 5, 5, 'b1', 's1', 'i1', 'development', 'h', 'linux', 'arm64', 1, 1, 1)"
+    ],
+    "statement": "DELETE FROM collector_fleet WHERE tenant_id = 't1' AND collector_id = 'c1'",
+    "expect": "accept",
+    "check_sql": "SELECT revision, fleet_count, runtime_count FROM collector_catalog_revisions WHERE tenant_id = 't1'",
+    "check_result": "4|0|0",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "fleet_multi_row_delete_cascades_runtime_accounting",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, boot_epoch, stream_id, active_instance_id, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro) VALUES ('t1', 'c1', 5, 5, 'b1', 's1', 'i1', 'development', 'h', 'linux', 'arm64', 1, 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c2', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, boot_epoch, stream_id, active_instance_id, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro) VALUES ('t1', 'c2', 5, 5, 'b1', 's1', 'i1', 'development', 'h', 'linux', 'arm64', 1, 1, 1)"
+    ],
+    "statement": "DELETE FROM collector_fleet WHERE tenant_id = 't1'",
+    "expect": "accept",
+    "check_sql": "SELECT revision, fleet_count, runtime_count FROM collector_catalog_revisions WHERE tenant_id = 't1'",
+    "check_result": "8|0|0",
+    "sqlite_expect": "accept",
+    "note": "the ON DELETE CASCADE into collector_runtime runs before the fleet AFTER DELETE accounting in both engines."
+  },
+  {
+    "name": "fleet_multi_row_insert_accounting",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1), ('t1', 'c2', 1, NULL, 'enabled', 1, 1)",
+    "expect": "accept",
+    "check_sql": "SELECT revision, fleet_count, runtime_count FROM collector_catalog_revisions WHERE tenant_id = 't1'",
+    "check_result": "2|2|0",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "write_group_members_multi_row_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('batch-1', 'seq-1', '\\x9999999999999999999999999999999999999999999999999999999999999999'::bytea, 1, 1000)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, attempt_id, index_time_unix_milli, metadata, outbox, created_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes) VALUES (1, 'batch-1', 'reserved', 'unsent', '', 1, '\\x6d'::bytea, '\\x6f'::bytea, 1000, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 2, 20)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('batch-2', 'seq-2', '\\x9999999999999999999999999999999999999999999999999999999999999999'::bytea, 2, 1000)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, attempt_id, index_time_unix_milli, metadata, outbox, created_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes) VALUES (2, 'batch-2', 'reserved', 'unsent', '', 1, '\\x6d'::bytea, '\\x6f'::bytea, 1000, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea, 2, 20)",
+      "INSERT INTO ingest_write_groups (write_group_id, state, attempt_id, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('g-1', 'ready', '', 2, 4, 40, '\\x9999999999999999999999999999999999999999999999999999999999999999'::bytea, 1, 2, 1000)"
+    ],
+    "statement": "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g-1', 0, 1, 2, 20, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea), ('g-1', 1, 2, 2, 20, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea)",
+    "expect": "accept",
+    "check_sql": "SELECT count(*) FROM ingest_write_group_members",
+    "check_result": "2",
+    "sqlite_expect": "accept",
+    "note": "BEFORE ROW checks of the second row see the first row in both engines."
+  },
+  {
+    "name": "write_group_members_multi_row_insert_reversed",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('batch-1', 'seq-1', '\\x9999999999999999999999999999999999999999999999999999999999999999'::bytea, 1, 1000)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, attempt_id, index_time_unix_milli, metadata, outbox, created_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes) VALUES (1, 'batch-1', 'reserved', 'unsent', '', 1, '\\x6d'::bytea, '\\x6f'::bytea, 1000, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 2, 20)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('batch-2', 'seq-2', '\\x9999999999999999999999999999999999999999999999999999999999999999'::bytea, 2, 1000)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, attempt_id, index_time_unix_milli, metadata, outbox, created_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes) VALUES (2, 'batch-2', 'reserved', 'unsent', '', 1, '\\x6d'::bytea, '\\x6f'::bytea, 1000, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea, 2, 20)",
+      "INSERT INTO ingest_write_groups (write_group_id, state, attempt_id, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('g-1', 'ready', '', 2, 4, 40, '\\x9999999999999999999999999999999999999999999999999999999999999999'::bytea, 1, 2, 1000)"
+    ],
+    "statement": "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g-1', 1, 2, 2, 20, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea), ('g-1', 0, 1, 2, 20, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea)",
+    "expect": "reject",
+    "message": "ingest write group ordinals must be contiguous",
+    "sqlite_expect": "reject",
+    "sqlite_message": "ingest write group ordinals must be contiguous",
+    "note": "row 1 is out of order until row 0 lands"
+  },
+  {
+    "name": "write_group_delete_cascades_into_active_members",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('batch-1', 'seq-1', '\\x9999999999999999999999999999999999999999999999999999999999999999'::bytea, 1, 1000)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, attempt_id, index_time_unix_milli, metadata, outbox, created_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes) VALUES (1, 'batch-1', 'reserved', 'unsent', '', 1, '\\x6d'::bytea, '\\x6f'::bytea, 1000, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 2, 20)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('batch-2', 'seq-2', '\\x9999999999999999999999999999999999999999999999999999999999999999'::bytea, 2, 1000)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, attempt_id, index_time_unix_milli, metadata, outbox, created_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes) VALUES (2, 'batch-2', 'reserved', 'unsent', '', 1, '\\x6d'::bytea, '\\x6f'::bytea, 1000, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea, 2, 20)",
+      "INSERT INTO ingest_write_groups (write_group_id, state, attempt_id, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('g-1', 'ready', '', 2, 4, 40, '\\x9999999999999999999999999999999999999999999999999999999999999999'::bytea, 1, 2, 1000)",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g-1', 0, 1, 2, 20, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea)",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g-1', 1, 2, 2, 20, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea)"
+    ],
+    "statement": "DELETE FROM ingest_write_groups WHERE write_group_id = 'g-1'",
+    "expect": "accept",
+    "check_sql": "SELECT count(*) FROM ingest_write_group_members",
+    "check_result": "0",
+    "sqlite_expect": "accept",
+    "note": "the member BEFORE DELETE guard reads the parent row the cascade already removed, so NULL <> 'committed' does not raise, in both engines."
+  },
+  {
+    "name": "write_group_seal_after_multi_row_members",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('batch-1', 'seq-1', '\\x9999999999999999999999999999999999999999999999999999999999999999'::bytea, 1, 1000)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, attempt_id, index_time_unix_milli, metadata, outbox, created_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes) VALUES (1, 'batch-1', 'reserved', 'unsent', '', 1, '\\x6d'::bytea, '\\x6f'::bytea, 1000, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 2, 20)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('batch-2', 'seq-2', '\\x9999999999999999999999999999999999999999999999999999999999999999'::bytea, 2, 1000)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, attempt_id, index_time_unix_milli, metadata, outbox, created_at_unix_micro, outbox_sha256, stored_row_count, decoded_event_bytes) VALUES (2, 'batch-2', 'reserved', 'unsent', '', 1, '\\x6d'::bytea, '\\x6f'::bytea, 1000, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea, 2, 20)",
+      "INSERT INTO ingest_write_groups (write_group_id, state, attempt_id, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('g-1', 'ready', '', 2, 4, 40, '\\x9999999999999999999999999999999999999999999999999999999999999999'::bytea, 1, 2, 1000)",
+      "INSERT INTO ingest_write_group_members (write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256) VALUES ('g-1', 0, 1, 2, 20, '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea), ('g-1', 1, 2, 2, 20, '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea)"
+    ],
+    "statement": "UPDATE ingest_write_groups SET state = 'ambiguous', attempt_id = 'attempt-1', sending_at_unix_micro = 2000 WHERE write_group_id = 'g-1'",
+    "expect": "accept",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "archived_app_delete_cascades_default_indexes",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'main', 'Display main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'App search', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('t1', 'app_AAAAAAAAAAAAAAAAAAAAAA', 'idx_main')",
+      "UPDATE app_workspaces SET state = 'archived', archived_at_unix_micro = 3, updated_at_unix_micro = 3, version = 2 WHERE app_id = 'app_AAAAAAAAAAAAAAAAAAAAAA'"
+    ],
+    "statement": "DELETE FROM app_workspaces WHERE app_id = 'app_AAAAAAAAAAAAAAAAAAAAAA'",
+    "expect": "accept",
+    "check_sql": "SELECT (SELECT count(*) FROM app_default_indexes), (SELECT revision FROM app_catalog_revisions WHERE tenant_id = 't1')",
+    "check_result": "0|3",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "app_multi_row_insert_one_tenant",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'one', 'One', 0, 'active', 1, 2, NULL), ('app_BBBBBBBBBBBBBBBBBBBBBQ', 't1', 1, 'two', 'Two', 0, 'active', 1, 2, NULL)",
+    "expect": "accept",
+    "check_sql": "SELECT revision FROM app_catalog_revisions WHERE tenant_id = 't1'",
+    "check_result": "2",
+    "sqlite_expect": "accept",
+    "note": "app_catalog_revision_after_insert is a statement trigger over a transition table in PostgreSQL; the revision still advances once per app."
+  },
+  {
+    "name": "app_multi_row_insert_two_tenants",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)"
+    ],
+    "statement": "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'one', 'One', 0, 'active', 1, 2, NULL), ('app_BBBBBBBBBBBBBBBBBBBBBQ', 't2', 1, 'two', 'Two', 0, 'active', 1, 2, NULL)",
+    "expect": "accept",
+    "check_sql": "SELECT tenant_id, revision FROM app_catalog_revisions ORDER BY tenant_id",
+    "check_result": "t1|1\nt2|1",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "indexes_multi_row_update_accounting",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'main', 'Display main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_two', 't1', 1, 'two', 'Display two', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET version = version + 1, updated_at_unix_micro = 5000 WHERE tenant_id = 't1'",
+    "expect": "accept",
+    "check_sql": "SELECT revision, physical_count FROM index_catalog_state",
+    "check_result": "5|2",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "indexes_multi_row_insert_accounting",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_a', 't1', 1, 'a', 'A', '', 0, 1, 1, '', 'active', 1000, 1000), ('idx_b', 't1', 1, 'b', 'B', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "accept",
+    "check_sql": "SELECT revision, physical_count FROM index_catalog_state",
+    "check_result": "3|2",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "indexes_multi_row_insert_overruns_capacity",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "ALTER TABLE index_catalog_state DISABLE TRIGGER USER",
+      "UPDATE index_catalog_state SET physical_count = 1023 WHERE singleton_id = 1",
+      "ALTER TABLE index_catalog_state ENABLE TRIGGER USER"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_a', 't1', 1, 'a', 'A', '', 0, 1, 1, '', 'active', 1000, 1000), ('idx_b', 't1', 1, 'b', 'B', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "sqlstate": "23514",
+    "constraint": "index_catalog_state_physical_count_check",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index catalog state is invalid or capacity is exhausted",
+    "note": "AFTER ROW accounting is queued to the end of the statement, so the second row passes the capacity pre-check and the physical_count CHECK refuses the increment. Go inserts one index per statement."
+  },
+  {
+    "name": "indexes_multi_row_insert_same_name",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_a', 't1', 1, 'a', 'A', '', 0, 1, 1, '', 'active', 1000, 1000), ('idx_b', 't1', 1, 'a', 'B', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog identity is already in use",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index catalog identity is already in use"
+  },
+  {
+    "name": "index_rename_swap_in_one_statement",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 't1', 1, 'main', 'Display main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_two', 't1', 1, 'two', 'Display two', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET name = CASE name WHEN 'main' THEN 'two' ELSE 'main' END WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "index name is immutable",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index name is immutable"
+  },
+  {
+    "name": "tokens_multi_row_insert_mixed_violations",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_a', 't1', 1, 'A', 'osk_abcd1234', '\\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::bytea, 'active', 1000, 1000, NULL, NULL, 'native_collector'), ('tok_b', 't1', 1, 'B', 'osk_abcd1235', '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea, 'active', 1000, 1000, NULL, 'collector-1', 'hec')",
+    "expect": "reject",
+    "message": "ingestion token collector binding is required",
+    "sqlite_expect": "reject",
+    "sqlite_message": "ingestion token collector binding is required",
+    "note": "row 1 lacks a binding, row 2 is a bound HEC token"
+  },
+  {
+    "name": "token_insert_hec_bound_and_native_unbound_single_row_purpose_hec",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_b', 't1', 1, 'B', 'osk_abcd1235', '\\xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'::bytea, 'active', 1000, 1000, NULL, 'collector-1', 'hec')",
+    "expect": "reject",
+    "message": "HEC ingestion token cannot have a collector binding",
+    "sqlite_expect": "reject",
+    "sqlite_message": "HEC ingestion token cannot have a collector binding"
+  },
+  {
+    "name": "knowledge_tenant_provisioning_cascade",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'one', 'One', 0, 'active', 1, 2, NULL)",
+    "expect": "accept",
+    "check_sql": "SELECT (SELECT count(*) FROM knowledge_catalog_tenants), (SELECT count(*) FROM knowledge_catalog_revision_heads), (SELECT count(*) FROM knowledge_projection_tenant_ledgers), (SELECT count(*) FROM knowledge_lookup_asset_tenant_ledgers)",
+    "check_result": "1|1|1|1",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "knowledge_tenant_provisioning_with_planted_lookup_ledger",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t0', 1, 1)",
+      "SET session_replication_role = replica",
+      "INSERT INTO knowledge_lookup_asset_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "SET session_replication_role = origin"
+    ],
+    "statement": "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'one', 'One', 0, 'active', 1, 2, NULL)",
+    "expect": "reject",
+    "message": "lookup asset tenant ledger already exists",
+    "sqlite_expect": "reject",
+    "sqlite_message": "lookup asset tenant ledger already exists",
+    "note": "two AFTER INSERT triggers on knowledge_catalog_tenants run in different orders; one of them collides"
+  },
+  {
+    "name": "knowledge_tenant_provisioning_with_planted_head_and_ledger",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "SET session_replication_role = replica",
+      "INSERT INTO knowledge_lookup_asset_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, '\\x0000000000000000000000000000000000000000000000000000000000000000'::bytea)",
+      "SET session_replication_role = origin"
+    ],
+    "statement": "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'one', 'One', 0, 'active', 1, 2, NULL)",
+    "expect": "reject",
+    "message": "app catalog tenant knowledge prestate is incomplete or corrupt",
+    "sqlite_expect": "reject",
+    "sqlite_message": "app catalog tenant knowledge prestate is incomplete or corrupt",
+    "note": "app_catalog_revision_provisions_knowledge_catalog_after_insert checks the knowledge prestate before inserting the catalog tenant."
+  },
+  {
+    "name": "knowledge_catalog_tenant_insert_with_planted_head_and_ledger",
+    "group": "knowledge_catalog_tenants AFTER INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "SET session_replication_role = replica",
+      "INSERT INTO knowledge_lookup_asset_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, '\\x0000000000000000000000000000000000000000000000000000000000000000'::bytea)",
+      "SET session_replication_role = origin"
+    ],
+    "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+    "expect": "reject",
+    "message": "knowledge catalog revision head already exists",
+    "sqlite_expect": "reject",
+    "sqlite_message": "lookup asset tenant ledger already exists",
+    "note": "AFTER INSERT provisioning: PostgreSQL creates the revision head first, SQLite provisions the lookup asset ledger first."
+  },
+  {
+    "name": "knowledge_catalog_tenant_insert_with_planted_ledger",
+    "group": "knowledge_catalog_tenants AFTER INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "SET session_replication_role = replica",
+      "INSERT INTO knowledge_lookup_asset_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "SET session_replication_role = origin"
+    ],
+    "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+    "expect": "reject",
+    "message": "lookup asset tenant ledger already exists",
+    "sqlite_expect": "reject",
+    "sqlite_message": "lookup asset tenant ledger already exists"
+  },
+  {
+    "name": "knowledge_catalog_tenant_insert_with_planted_head",
+    "group": "knowledge_catalog_tenants AFTER INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "SET session_replication_role = replica",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, '\\x0000000000000000000000000000000000000000000000000000000000000000'::bytea)",
+      "SET session_replication_role = origin"
+    ],
+    "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+    "expect": "reject",
+    "message": "knowledge catalog revision head already exists",
+    "sqlite_expect": "reject",
+    "sqlite_message": "knowledge catalog revision head already exists"
+  },
+  {
+    "name": "lookup_stage_without_tenant_ledger",
+    "group": "knowledge_lookup_asset_stages BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO knowledge_lookup_asset_stages (tenant_id, stage_id, owner_id, source_sha256, content_sha256, source_bytes, canonical_csv, canonical_bytes, row_count, column_count, created_at_unix_micro, expires_at_unix_micro) VALUES ('t1', 'stage-1', 'owner-a', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, '\\x2222222222222222222222222222222222222222222222222222222222222222'::bytea, 1, '\\x41'::bytea, 1, 0, 1, 10, 20)",
+    "expect": "reject",
+    "message": "lookup asset tenant ledger is missing",
+    "sqlite_expect": "reject",
+    "sqlite_message": "lookup asset tenant ledger is missing",
+    "consumer": "internal/lookupasset mapStorageError maps 'capacity' to ErrResourceLimit before 'ledger is missing' to ErrNotFound",
+    "note": "SQLite's capacity trigger also fires without a ledger; PostgreSQL's yields to the ledger check it sorts before"
+  },
+  {
+    "name": "lookup_stage_with_full_tenant_ledger",
+    "group": "knowledge_lookup_asset_stages BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'Search', 0, 'active', 1, 2, NULL)",
+      "ALTER TABLE knowledge_lookup_asset_tenant_ledgers DISABLE TRIGGER USER",
+      "UPDATE knowledge_lookup_asset_tenant_ledgers SET staged_asset_count = 64 WHERE tenant_id = 't1'",
+      "ALTER TABLE knowledge_lookup_asset_tenant_ledgers ENABLE TRIGGER USER"
+    ],
+    "statement": "INSERT INTO knowledge_lookup_asset_stages (tenant_id, stage_id, owner_id, source_sha256, content_sha256, source_bytes, canonical_csv, canonical_bytes, row_count, column_count, created_at_unix_micro, expires_at_unix_micro) VALUES ('t1', 'stage-1', 'owner-a', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, '\\x2222222222222222222222222222222222222222222222222222222222222222'::bytea, 1, '\\x41'::bytea, 1, 0, 1, 10, 20)",
+    "expect": "reject",
+    "message": "lookup asset staging capacity exhausted",
+    "sqlite_expect": "reject",
+    "sqlite_message": "lookup asset staging capacity exhausted",
+    "consumer": "internal/lookupasset mapStorageError maps 'capacity' to ErrResourceLimit before 'ledger is missing' to ErrNotFound"
+  },
+  {
+    "name": "lookup_asset_without_tenant_ledger_and_second_version",
+    "group": "knowledge_lookup_assets BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO knowledge_lookup_assets (tenant_id, lookup_asset_id, current_version, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'asset-1', 2, 100, 100)",
+    "expect": "reject",
+    "message": "lookup asset tenant ledger is missing",
+    "sqlite_expect": "reject",
+    "sqlite_message": "lookup asset tenant ledger is missing",
+    "consumer": "internal/lookupasset mapStorageError maps 'capacity' to ErrResourceLimit before 'ledger is missing' to ErrNotFound"
+  },
+  {
+    "name": "lookup_asset_with_full_tenant_ledger",
+    "group": "knowledge_lookup_assets BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'Search', 0, 'active', 1, 2, NULL)",
+      "ALTER TABLE knowledge_lookup_asset_tenant_ledgers DISABLE TRIGGER USER",
+      "UPDATE knowledge_lookup_asset_tenant_ledgers SET asset_identity_count = 2048 WHERE tenant_id = 't1'",
+      "ALTER TABLE knowledge_lookup_asset_tenant_ledgers ENABLE TRIGGER USER"
+    ],
+    "statement": "INSERT INTO knowledge_lookup_assets (tenant_id, lookup_asset_id, current_version, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'asset-1', 1, 100, 100)",
+    "expect": "reject",
+    "message": "lookup asset identity capacity is unavailable or first version is invalid",
+    "sqlite_expect": "reject",
+    "sqlite_message": "lookup asset identity capacity is unavailable or first version is invalid",
+    "consumer": "internal/lookupasset mapStorageError maps 'capacity' to ErrResourceLimit before 'ledger is missing' to ErrNotFound"
+  },
+  {
+    "name": "lookup_asset_version_without_tenant_ledger_and_gap",
+    "group": "knowledge_lookup_asset_versions BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO knowledge_lookup_asset_versions (tenant_id, lookup_asset_id, asset_version, source_sha256, content_sha256, source_bytes, canonical_csv, canonical_bytes, row_count, column_count, created_at_unix_micro) VALUES ('t1', 'asset-1', 2, '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, '\\x2222222222222222222222222222222222222222222222222222222222222222'::bytea, 1, '\\x41'::bytea, 1, 0, 1, 100)",
+    "expect": "reject",
+    "message": "lookup asset version sequence is invalid",
+    "sqlite_expect": "reject",
+    "sqlite_message": "lookup asset version sequence is invalid",
+    "consumer": "internal/lookupasset mapStorageError maps 'capacity' to ErrResourceLimit before 'ledger is missing' to ErrNotFound"
+  },
+  {
+    "name": "lookup_asset_version_without_tenant_ledger",
+    "group": "knowledge_lookup_asset_versions BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "SET session_replication_role = replica",
+      "INSERT INTO knowledge_lookup_assets (tenant_id, lookup_asset_id, current_version, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'asset-1', 1, 100, 100)",
+      "SET session_replication_role = origin"
+    ],
+    "statement": "INSERT INTO knowledge_lookup_asset_versions (tenant_id, lookup_asset_id, asset_version, source_sha256, content_sha256, source_bytes, canonical_csv, canonical_bytes, row_count, column_count, created_at_unix_micro) VALUES ('t1', 'asset-1', 1, '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, '\\x2222222222222222222222222222222222222222222222222222222222222222'::bytea, 1, '\\x41'::bytea, 1, 0, 1, 100)",
+    "expect": "reject",
+    "message": "lookup asset tenant ledger is missing",
+    "sqlite_expect": "reject",
+    "sqlite_message": "lookup asset tenant ledger is missing",
+    "consumer": "internal/lookupasset mapStorageError maps 'capacity' to ErrResourceLimit before 'ledger is missing' to ErrNotFound"
+  },
+  {
+    "name": "lookup_asset_version_with_full_ledger_and_gap",
+    "group": "knowledge_lookup_asset_versions BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'Search', 0, 'active', 1, 2, NULL)",
+      "ALTER TABLE knowledge_lookup_asset_tenant_ledgers DISABLE TRIGGER USER",
+      "UPDATE knowledge_lookup_asset_tenant_ledgers SET published_version_count = 8192 WHERE tenant_id = 't1'",
+      "ALTER TABLE knowledge_lookup_asset_tenant_ledgers ENABLE TRIGGER USER"
+    ],
+    "statement": "INSERT INTO knowledge_lookup_asset_versions (tenant_id, lookup_asset_id, asset_version, source_sha256, content_sha256, source_bytes, canonical_csv, canonical_bytes, row_count, column_count, created_at_unix_micro) VALUES ('t1', 'asset-1', 2, '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, '\\x2222222222222222222222222222222222222222222222222222222222222222'::bytea, 1, '\\x41'::bytea, 1, 0, 1, 100)",
+    "expect": "reject",
+    "message": "lookup asset version sequence is invalid",
+    "sqlite_expect": "reject",
+    "sqlite_message": "lookup asset version sequence is invalid",
+    "consumer": "internal/lookupasset mapStorageError maps 'capacity' to ErrResourceLimit before 'ledger is missing' to ErrNotFound"
+  },
+  {
+    "name": "lookup_asset_version_with_full_ledger",
+    "group": "knowledge_lookup_asset_versions BEFORE INSERT",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'Search', 0, 'active', 1, 2, NULL)",
+      "ALTER TABLE knowledge_lookup_asset_tenant_ledgers DISABLE TRIGGER USER",
+      "UPDATE knowledge_lookup_asset_tenant_ledgers SET published_version_count = 8192 WHERE tenant_id = 't1'",
+      "ALTER TABLE knowledge_lookup_asset_tenant_ledgers ENABLE TRIGGER USER",
+      "SET session_replication_role = replica",
+      "INSERT INTO knowledge_lookup_assets (tenant_id, lookup_asset_id, current_version, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'asset-1', 1, 100, 100)",
+      "SET session_replication_role = origin"
+    ],
+    "statement": "INSERT INTO knowledge_lookup_asset_versions (tenant_id, lookup_asset_id, asset_version, source_sha256, content_sha256, source_bytes, canonical_csv, canonical_bytes, row_count, column_count, created_at_unix_micro) VALUES ('t1', 'asset-1', 1, '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, '\\x2222222222222222222222222222222222222222222222222222222222222222'::bytea, 1, '\\x41'::bytea, 1, 0, 1, 100)",
+    "expect": "reject",
+    "message": "lookup asset version capacity exhausted",
+    "sqlite_expect": "reject",
+    "sqlite_message": "lookup asset version capacity exhausted",
+    "consumer": "internal/lookupasset mapStorageError maps 'capacity' to ErrResourceLimit before 'ledger is missing' to ErrNotFound"
+  }
+]
