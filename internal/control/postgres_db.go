@@ -36,6 +36,9 @@ type PostgresDB struct {
 	orm        *gorm.DB
 	connConfig *pgx.ConnConfig
 
+	// writeQueue serializes write transactions while any is being retried.
+	writeQueue *postgresWriteQueue
+
 	mu         sync.Mutex
 	closed     bool
 	singletons map[*serverSingleton]struct{}
@@ -89,6 +92,7 @@ func OpenPostgresWithMigrations(
 		sql:        raw,
 		orm:        orm,
 		connConfig: connConfig,
+		writeQueue: newPostgresWriteQueue(),
 		singletons: make(map[*serverSingleton]struct{}),
 	}, nil
 }
