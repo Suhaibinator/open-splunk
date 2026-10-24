@@ -5,12 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"io/fs"
 	"maps"
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -20,7 +18,6 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
-	"github.com/Suhaibinator/open-splunk/migrations"
 )
 
 // Lane collectors_apps_search_2 ports the SQLite triggers on
@@ -136,34 +133,18 @@ func loadCAS2TriggerScenarios(t *testing.T) []cas2TriggerScenario {
 		default:
 			t.Fatalf("scenario %q has expect %q, want reject or accept", scenario.Name, scenario.Expect)
 		}
-		for index, lane := range scenario.DependsOnLanes {
-			if lane == cas2Lane || !cas2LaneName.MatchString(lane) ||
-				slices.Contains(scenario.DependsOnLanes[:index], lane) {
-				t.Fatalf("scenario %q depends on invalid or repeated lane %q", scenario.Name, lane)
-			}
+		if err := checkPostgresTriggerLaneDependencies(cas2Lane, scenario.DependsOnLanes); err != nil {
+			t.Fatalf("scenario %q: %v", scenario.Name, err)
 		}
 	}
 	return scenarios
 }
 
-var cas2LaneName = regexp.MustCompile(`^[a-z0-9]+(?:_[a-z0-9]+)*$`)
-
-var cas2TriggerMigration = regexp.MustCompile(`^[0-9]{4}_([a-z0-9_]+)_triggers\.sql$`)
-
 // cas2EmbeddedLanes returns the trigger lanes whose migration files the
 // shipped PostgreSQL set embeds.
 func cas2EmbeddedLanes(t *testing.T) map[string]bool {
 	t.Helper()
-	entries, err := fs.ReadDir(migrations.Postgres(), ".")
-	if err != nil {
-		t.Fatalf("read embedded PostgreSQL migrations: %v", err)
-	}
-	lanes := make(map[string]bool)
-	for _, entry := range entries {
-		if matches := cas2TriggerMigration.FindStringSubmatch(entry.Name()); matches != nil {
-			lanes[matches[1]] = true
-		}
-	}
+	lanes := postgresEmbeddedTriggerLanes(t)
 	if !lanes[cas2Lane] {
 		t.Fatalf("embedded PostgreSQL migrations do not include the %s trigger file", cas2Lane)
 	}
@@ -195,43 +176,24 @@ func TestPostgresTriggersCollectorsAppsSearch2(t *testing.T) {
 
 // TestPostgresTriggersCollectorsAppsSearch2CrossLane runs the scenarios whose
 // setup or outcome needs another lane's triggers, with every embedded trigger
-// enabled. A scenario runs as soon as all of its lanes are embedded and must
-// then pass exactly; there is no skip, so a lane that is merged but behaves
-// differently fails here. Scenarios still waiting for a lane are listed in
-// the test log by name.
+// enabled. Every lane is merged, so every such scenario must name only
+// embedded lanes and pass exactly; there is no skip and no waiting list, so a
+// lane that behaves differently, or a misspelled lane, fails here.
 func TestPostgresTriggersCollectorsAppsSearch2CrossLane(t *testing.T) {
 	t.Parallel()
 
 	scenarios := loadCAS2TriggerScenarios(t)
 	embedded := cas2EmbeddedLanes(t)
-	var runnable, waiting []cas2TriggerScenario
-	waitingFor := make(map[string][]string)
+	var runnable []cas2TriggerScenario
 	for _, scenario := range scenarios {
 		if len(scenario.DependsOnLanes) == 0 {
 			continue
 		}
-		var missing []string
-		for _, lane := range scenario.DependsOnLanes {
-			if !embedded[lane] {
-				missing = append(missing, lane)
-			}
-		}
-		if len(missing) > 0 {
-			waiting = append(waiting, scenario)
-			waitingFor[scenario.Name] = missing
-			continue
-		}
+		requirePostgresTriggerLanesEmbedded(t, embedded, scenario.DependsOnLanes)
 		runnable = append(runnable, scenario)
 	}
-	if len(runnable)+len(waiting) == 0 {
-		t.Fatal("trigger fixture has no cross-lane scenarios")
-	}
-	for _, scenario := range waiting {
-		t.Logf("not yet runnable, waiting for lane(s) %s: %s",
-			strings.Join(waitingFor[scenario.Name], ", "), scenario.Name)
-	}
 	if len(runnable) == 0 {
-		return
+		t.Fatal("trigger fixture has no cross-lane scenarios")
 	}
 	db := testsupport.NewPostgresControlDB(t)
 	for _, scenario := range runnable {

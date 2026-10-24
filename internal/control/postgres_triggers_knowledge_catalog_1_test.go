@@ -6,9 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"io/fs"
 	"os"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -18,7 +16,6 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
-	"github.com/Suhaibinator/open-splunk/migrations"
 )
 
 // The knowledge_catalog_1 trigger lane ports the SQLite triggers on the
@@ -107,8 +104,9 @@ var knowledgeCatalog1Triggers = []knowledgeCatalog1Trigger{
 // statement may be followed by check_sql, whose single text value must equal
 // check_result. Everything is rolled back afterwards.
 //
-// depends_on_lanes lists other trigger lanes the outcome needs installed;
-// those scenarios run in TestPostgresKnowledgeCatalog1CrossLaneTriggerScenarios.
+// depends_on_lanes lists other trigger lanes the outcome needs installed.
+// Every scenario runs with every shipped trigger enabled, so those lanes only
+// have to be embedded.
 type knowledgeCatalog1Scenario struct {
 	Name           string   `json:"name"`
 	SetupSQL       []string `json:"setup_sql"`
@@ -186,24 +184,6 @@ func validateKnowledgeCatalog1Scenario(scenario knowledgeCatalog1Scenario) error
 		return nil
 	}
 	return errors.New(strings.Join(problems, "; "))
-}
-
-// knowledgeCatalog1PresentLanes returns the trigger lanes whose migration
-// file is embedded in migrationFS.
-func knowledgeCatalog1PresentLanes(t *testing.T, migrationFS fs.FS) map[string]bool {
-	t.Helper()
-	names, err := fs.Glob(migrationFS, "*.sql")
-	if err != nil {
-		t.Fatalf("list PostgreSQL migrations: %v", err)
-	}
-	present := make(map[string]bool)
-	pattern := regexp.MustCompile(`^\d{4}_([a-z0-9_]+)_triggers\.sql$`)
-	for _, name := range names {
-		if matches := pattern.FindStringSubmatch(name); matches != nil {
-			present[matches[1]] = true
-		}
-	}
-	return present
 }
 
 // runKnowledgeCatalog1Scenario executes one scenario in its own transaction on
@@ -305,52 +285,22 @@ func runKnowledgeCatalog1Scenarios(t *testing.T, scenarios []knowledgeCatalog1Sc
 }
 
 // TestPostgresKnowledgeCatalog1TriggerScenarios runs every fixture scenario
-// that needs no other trigger lane.
+// with every shipped trigger enabled. Every trigger lane is merged, so a
+// scenario that depends on another lane runs here too; a lane it names that
+// the embedded migrations lack fails the test instead of leaving the
+// scenario pending.
 func TestPostgresKnowledgeCatalog1TriggerScenarios(t *testing.T) {
 	t.Parallel()
-	var standalone []knowledgeCatalog1Scenario
-	for _, scenario := range loadKnowledgeCatalog1Scenarios(t) {
-		if len(scenario.DependsOnLanes) == 0 {
-			standalone = append(standalone, scenario)
-		}
+	scenarios := loadKnowledgeCatalog1Scenarios(t)
+	if len(scenarios) == 0 {
+		t.Fatal("the fixture holds no scenarios")
 	}
-	if len(standalone) == 0 {
-		t.Fatal("the fixture holds no standalone scenarios")
+	embedded := postgresEmbeddedTriggerLanes(t)
+	requirePostgresTriggerLanesEmbedded(t, embedded, []string{"knowledge_catalog_1"})
+	for _, scenario := range scenarios {
+		requirePostgresTriggerLanesEmbedded(t, embedded, scenario.DependsOnLanes)
 	}
-	runKnowledgeCatalog1Scenarios(t, standalone)
-}
-
-// TestPostgresKnowledgeCatalog1CrossLaneTriggerScenarios runs the scenarios
-// whose outcome needs another lane's triggers. A scenario runs, and any
-// difference fails the test, as soon as every lane it names is embedded. It
-// never skips: until then the scenario is only listed in the log, and the
-// test still checks that this lane is embedded.
-func TestPostgresKnowledgeCatalog1CrossLaneTriggerScenarios(t *testing.T) {
-	t.Parallel()
-	present := knowledgeCatalog1PresentLanes(t, migrations.Postgres())
-	if !present["knowledge_catalog_1"] {
-		t.Fatal("the embedded PostgreSQL migrations hold no NNNN_knowledge_catalog_1_triggers.sql")
-	}
-	var runnable []knowledgeCatalog1Scenario
-	for _, scenario := range loadKnowledgeCatalog1Scenarios(t) {
-		if len(scenario.DependsOnLanes) == 0 {
-			continue
-		}
-		var missing []string
-		for _, lane := range scenario.DependsOnLanes {
-			if !present[lane] {
-				missing = append(missing, lane)
-			}
-		}
-		if len(missing) > 0 {
-			t.Logf("scenario %s waits for trigger lanes %s", scenario.Name, strings.Join(missing, ", "))
-			continue
-		}
-		runnable = append(runnable, scenario)
-	}
-	if len(runnable) > 0 {
-		runKnowledgeCatalog1Scenarios(t, runnable)
-	}
+	runKnowledgeCatalog1Scenarios(t, scenarios)
 }
 
 // TestPostgresKnowledgeCatalog1TriggerCatalogMatchesFixture checks that the

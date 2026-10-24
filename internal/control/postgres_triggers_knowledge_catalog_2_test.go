@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -106,6 +107,10 @@ type knowledgeCatalog2Scenario struct {
 	// needs. Such scenarios run in
 	// TestPostgresKnowledgeCatalog2TriggerCrossLaneScenarios.
 	DependsOnLanes []string `json:"depends_on_lanes,omitempty"`
+	// ReplaysWithEveryTrigger marks a lane-local scenario whose setup also
+	// succeeds with every shipped trigger enabled. It must then hold exactly
+	// there too; see TestPostgresKnowledgeCatalog2TriggerCrossLaneScenarios.
+	ReplaysWithEveryTrigger bool `json:"replays_with_every_trigger,omitempty"`
 }
 
 func loadKnowledgeCatalog2Scenarios(t *testing.T) []knowledgeCatalog2Scenario {
@@ -145,6 +150,9 @@ func loadKnowledgeCatalog2Scenarios(t *testing.T) []knowledgeCatalog2Scenario {
 			if lane == knowledgeCatalog2Lane || !slices.Contains(knowledgeCatalog2KnownLanes, lane) {
 				t.Fatalf("knowledge_catalog_2 scenario %q depends on unknown lane %q", scenario.Name, lane)
 			}
+		}
+		if scenario.ReplaysWithEveryTrigger && len(scenario.DependsOnLanes) > 0 {
+			t.Fatalf("knowledge_catalog_2 scenario %q already runs with every trigger; drop replays_with_every_trigger", scenario.Name)
 		}
 		seen[scenario.Name] = true
 	}
@@ -276,7 +284,13 @@ func disableOtherLanesKnowledgeCatalog2Triggers(ctx context.Context, t *testing.
 
 func runKnowledgeCatalog2Scenario(t *testing.T, db *control.PostgresDB, scenario knowledgeCatalog2Scenario) {
 	t.Helper()
-	laneOnly := len(scenario.DependsOnLanes) == 0
+	runKnowledgeCatalog2ScenarioWith(t, db, len(scenario.DependsOnLanes) == 0, scenario)
+}
+
+// runKnowledgeCatalog2ScenarioWith is runKnowledgeCatalog2Scenario with the
+// trigger set chosen as in inKnowledgeCatalog2TxWith.
+func runKnowledgeCatalog2ScenarioWith(t *testing.T, db *control.PostgresDB, laneOnly bool, scenario knowledgeCatalog2Scenario) {
+	t.Helper()
 	inKnowledgeCatalog2TxWith(t, db, laneOnly, scenario.SetupSQL, func(ctx context.Context, tx *sql.Tx) {
 		_, err := tx.ExecContext(ctx, scenario.Statement)
 		if scenario.Expect == "reject" {
@@ -387,38 +401,64 @@ func requireKnowledgeCatalog2CleanDatabase(t *testing.T, db *control.PostgresDB)
 	}
 }
 
-// TestPostgresKnowledgeCatalog2TriggerCrossLaneScenarios replays the scenarios
-// that need another lane's triggers. It never skips: once every lane a
-// scenario names is in the embedded migration set the scenario runs and any
-// difference fails; until then it logs which lanes are missing, and the
-// integrator that installs them makes the scenario binding.
+// TestPostgresKnowledgeCatalog2TriggerCrossLaneScenarios replays the fixture
+// with every shipped trigger enabled, the trigger set production runs. Every
+// lane is merged, so a scenario that depends on another lane must name only
+// embedded lanes and then hold exactly; it never waits.
+//
+// The lane-local scenarios ran in TestPostgresKnowledgeCatalog2TriggerScenarios
+// with every other lane's triggers disabled, so here each replays once more
+// with them on. One marked replays_with_every_trigger must hold exactly. Any
+// other must fail during setup, because another lane's side effects (the
+// version lifecycle rows of knowledge_objects_2) collide with its hand-built
+// rows; one whose setup succeeds fails the test until it is marked, so its
+// outcome is pinned too. The test fails when nothing replays, so it cannot
+// pass empty.
 func TestPostgresKnowledgeCatalog2TriggerCrossLaneScenarios(t *testing.T) {
 	t.Parallel()
 	scenarios := loadKnowledgeCatalog2Scenarios(t)
 	installed := knowledgeCatalog2InstalledLanes(t)
-	var db *control.PostgresDB
+	db := testsupport.NewPostgresControlDB(t)
+	replayed := 0
 	for _, scenario := range scenarios {
-		if len(scenario.DependsOnLanes) == 0 {
+		switch {
+		case len(scenario.DependsOnLanes) > 0:
+			requirePostgresTriggerLanesEmbedded(t, installed, scenario.DependsOnLanes)
+		case scenario.ReplaysWithEveryTrigger:
+		default:
+			t.Run(scenario.Name, func(t *testing.T) {
+				if err := knowledgeCatalog2SetupWithEveryTrigger(t, db, scenario.SetupSQL); err == nil {
+					t.Fatal("setup succeeds with every trigger enabled; mark the scenario replays_with_every_trigger so its outcome is pinned")
+				}
+			})
 			continue
 		}
-		var missing []string
-		for _, lane := range scenario.DependsOnLanes {
-			if !installed[lane] {
-				missing = append(missing, lane)
-			}
-		}
-		if len(missing) > 0 {
-			t.Logf("scenario %q waits for trigger lanes %v, which the embedded PostgreSQL migrations do not carry yet",
-				scenario.Name, missing)
-			continue
-		}
-		if db == nil {
-			db = testsupport.NewPostgresControlDB(t)
-		}
+		replayed++
 		t.Run(scenario.Name, func(t *testing.T) {
-			runKnowledgeCatalog2Scenario(t, db, scenario)
+			runKnowledgeCatalog2ScenarioWith(t, db, false, scenario)
 		})
 	}
+	if replayed == 0 {
+		t.Fatal("no knowledge_catalog_2 scenario replays with every trigger enabled")
+	}
+	requireKnowledgeCatalog2CleanDatabase(t, db)
+}
+
+// knowledgeCatalog2SetupWithEveryTrigger runs setup with every shipped
+// trigger enabled inside a transaction it rolls back, and returns the first
+// failing statement's error.
+func knowledgeCatalog2SetupWithEveryTrigger(t *testing.T, db *control.PostgresDB, setup []string) error {
+	t.Helper()
+	var setupErr error
+	inKnowledgeCatalog2Tx(t, db, nil, func(ctx context.Context, tx *sql.Tx) {
+		for index, statement := range setup {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				setupErr = fmt.Errorf("setup statement %d: %w", index, err)
+				return
+			}
+		}
+	})
+	return setupErr
 }
 
 // TestPostgresKnowledgeCatalog2FixtureCoversEveryRaise requires the fixture to

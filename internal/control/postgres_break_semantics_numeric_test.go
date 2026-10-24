@@ -50,7 +50,7 @@ const semNumFixturePath = "testdata/postgres_break/semantics_numeric.json"
 //
 // A rejection happens at reject_at ("statement", the default, or "deferred")
 // and carries sqlstate (default P0001) and, when given, constraint and the
-// exact RAISE message. An accepted scenario's check_sql must return
+// exact RAISE message; it must pin a message or a sqlstate. An accepted scenario's check_sql must return
 // check_result as its single text value. Everything is rolled back.
 type semNumScenario struct {
 	Name                      string              `json:"name"`
@@ -147,6 +147,11 @@ func validateSemNumScenario(scenario semNumScenario) error {
 		if scenario.Constraint != "" && scenario.SQLState == "" {
 			problems = append(problems, "a constraint needs its SQLSTATE")
 		}
+		// An unpinned rejection would pass on any error at all, a misspelled
+		// column (42703) included, so every rejection names what it expects.
+		if scenario.Message == "" && scenario.SQLState == "" {
+			problems = append(problems, "a rejection needs a message or a sqlstate")
+		}
 	default:
 		problems = append(problems, "expect must be accept or reject")
 	}
@@ -198,6 +203,35 @@ func TestPostgresBreakSemanticsNumericScenarios(t *testing.T) {
 		if perArea[area] == 0 {
 			t.Errorf("area %s has no scenario", area)
 		}
+	}
+}
+
+// TestPostgresBreakSemanticsNumericRejectionsArePinned guards the validator:
+// a rejection that pins neither a message nor a SQLSTATE would pass on any
+// error, so it must be refused as malformed.
+func TestPostgresBreakSemanticsNumericRejectionsArePinned(t *testing.T) {
+	t.Parallel()
+	base := semNumScenario{
+		Name:          "ceiling/pinned",
+		Area:          "ceiling",
+		Statements:    []string{"SELECT 1"},
+		Expect:        "reject",
+		SQLiteExpect:  "reject",
+		SQLiteMessage: "boom",
+	}
+	withMessage := base
+	withMessage.Message = "boom"
+	if err := validateSemNumScenario(withMessage); err != nil {
+		t.Fatalf("a rejection pinned by message is malformed: %v", err)
+	}
+	withCode := base
+	withCode.SQLState = "23505"
+	if err := validateSemNumScenario(withCode); err != nil {
+		t.Fatalf("a rejection pinned by sqlstate is malformed: %v", err)
+	}
+	err := validateSemNumScenario(base)
+	if err == nil || !strings.Contains(err.Error(), "a rejection needs a message or a sqlstate") {
+		t.Fatalf("an unpinned rejection validates (err = %v)", err)
 	}
 }
 
@@ -288,13 +322,12 @@ func runSemNumScenario(ctx context.Context, t *testing.T, db *sql.DB, scenario s
 	if wantCode == "" && scenario.Message != "" {
 		wantCode = "P0001"
 	}
-	if wantCode != "" && code != wantCode {
-		t.Fatalf("SQLSTATE = %s, want %s: %v", code, wantCode, outcome)
+	if wantCode == "" {
+		// validateSemNumScenario requires a message or a sqlstate.
+		t.Fatalf("rejection pins neither a message nor a sqlstate: %v", outcome)
 	}
-	if wantCode == "" && code == "22003" {
-		// An unpinned rejection may be any integrity or RAISE error, never
-		// an arithmetic overflow escaping a trigger that SQLite reports.
-		t.Fatalf("rejection is a bigint overflow (22003): %v", outcome)
+	if code != wantCode {
+		t.Fatalf("SQLSTATE = %s, want %s: %v", code, wantCode, outcome)
 	}
 	if scenario.Constraint != "" {
 		if constraint, _ := control.PostgresConstraintName(outcome); constraint != scenario.Constraint {
