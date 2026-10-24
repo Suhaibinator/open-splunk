@@ -24,6 +24,7 @@ import { FieldNote, fieldControlProps, type FieldError } from "../_components/fi
 import { IdentityProvider, useIdentity } from "../_components/identity-provider";
 import { Modal } from "../_components/modal";
 import { StatusLabel } from "../_components/status";
+import { SubmitFocusAnnouncement, useSubmitFocus } from "../_components/submit-focus";
 import { DirectoryPager } from "./site-directory-shared";
 import {
   CAPABILITY_LABELS,
@@ -703,11 +704,15 @@ function RoleChoices({ legend, name, options, value, disabled, onChange }: RoleC
       <legend>{legend}</legend>
       {options.map((option) => {
         const id = `${baseId}-${option.role}`;
+        const labelId = `${id}-label`;
         const noteId = `${id}-note`;
+        // Named by the role alone: the wrapping label would also fold the
+        // note into the name, and the note is already the description.
         return (
           <label className="members-role-option" htmlFor={id} key={option.role}>
             <input
               aria-describedby={noteId}
+              aria-labelledby={labelId}
               checked={value === option.role}
               disabled={option.disabled}
               id={id}
@@ -716,7 +721,7 @@ function RoleChoices({ legend, name, options, value, disabled, onChange }: RoleC
               type="radio"
               value={option.role}
             />
-            <strong>{option.current ? `${ROLE_LABELS[option.role]} (current)` : ROLE_LABELS[option.role]}</strong>
+            <strong id={labelId}>{option.current ? `${ROLE_LABELS[option.role]} (current)` : ROLE_LABELS[option.role]}</strong>
             <small id={noteId}>{option.disabled && option.reason !== undefined ? option.reason : ROLE_SUMMARIES[option.role]}</small>
           </label>
         );
@@ -744,7 +749,7 @@ function InviteDialog({ actor, client, organization, onClose, onFailed, onInvite
   const [pending, setPending] = useState(false);
   const [emailError, setEmailError] = useState<FieldError>(null);
   const [failure, setFailure] = useState<FailureDescription | null>(null);
-  const emailRef = useRef<HTMLInputElement>(null);
+  const { attachForm, attachRegion, refocus } = useSubmitFocus();
   const options = ORG_ROLES.map((option): RoleOption => (grantable.includes(option)
     ? { role: option, current: false, disabled: false }
     : { role: option, current: false, disabled: true, reason: "Above what your role can grant." }));
@@ -753,11 +758,12 @@ function InviteDialog({ actor, client, organization, onClose, onFailed, onInvite
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (pending) return;
     setSubmitted(true);
     setFailure(null);
     setEmailError(null);
     if (inviteEmailError(email) !== null) {
-      emailRef.current?.focus();
+      refocus();
       return;
     }
     setPending(true);
@@ -768,10 +774,11 @@ function InviteDialog({ actor, client, organization, onClose, onFailed, onInvite
       setPending(false);
       if (isIdentityError(error, "invalid") || isIdentityError(error, "conflict")) {
         setEmailError(error.message);
-        emailRef.current?.focus();
       } else {
         setFailure(describeMembersFailure(error, "send the invitation"));
       }
+      // The email field and the role choices were disabled while pending.
+      refocus();
       onFailed(error);
     }
   }
@@ -781,7 +788,7 @@ function InviteDialog({ actor, client, organization, onClose, onFailed, onInvite
       footer={(
         <>
           <button className="button button--secondary" onClick={onClose} type="button">Cancel</button>
-          <button className="button button--primary" disabled={pending} form="members-invite-form" type="submit">{pending ? "Sending…" : "Send invitation"}</button>
+          <button aria-disabled={pending || undefined} className="button button--primary" form="members-invite-form" type="submit">{pending ? "Sending…" : "Send invitation"}</button>
         </>
       )}
       initialFocus={`#${INVITE_EMAIL_ID}`}
@@ -789,7 +796,7 @@ function InviteDialog({ actor, client, organization, onClose, onFailed, onInvite
       subtitle={`They join ${organization.name} with this role once they accept.`}
       title="Invite member"
     >
-      <form className="admin-form" id="members-invite-form" noValidate onSubmit={(event) => { void submit(event); }}>
+      <form className="admin-form" id="members-invite-form" noValidate onSubmit={(event) => { void submit(event); }} ref={attachForm}>
         <DialogFailure failure={failure} />
         <label htmlFor={INVITE_EMAIL_ID}>
           <span>Email address</span>
@@ -801,7 +808,6 @@ function InviteDialog({ actor, client, organization, onClose, onFailed, onInvite
             inputMode="email"
             onChange={(event) => { setEmail(event.target.value); setEmailError(null); }}
             placeholder="name@example.com"
-            ref={emailRef}
             type="email"
             value={email}
           />
@@ -813,6 +819,7 @@ function InviteDialog({ actor, client, organization, onClose, onFailed, onInvite
             Once they accept, an owner holds every capability in {organization.name}, including changing and removing the other owners it outranks.
           </Notice>
         ) : null}
+        <SubmitFocusAnnouncement attach={attachRegion} />
       </form>
     </Modal>
   );
@@ -842,6 +849,7 @@ function RoleDialog({ actor, client, member, organization, organizationName, pol
   const change = capabilityChange(current, selected);
   const selfDemotion = notices.some((notice) => notice.kind === "self_demotion");
   const name = member.user.displayPrimary;
+  const { attachForm, refocus } = useSubmitFocus();
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -854,6 +862,8 @@ function RoleDialog({ actor, client, member, organization, organizationName, pol
     } catch (error) {
       setPending(false);
       setFailure(describeMembersFailure(error, "change the role"));
+      // The role choices were disabled while pending; Enter on one left focus nowhere.
+      refocus();
       onFailed(error);
     }
   }
@@ -863,7 +873,13 @@ function RoleDialog({ actor, client, member, organization, organizationName, pol
       footer={(
         <>
           <button className="button button--secondary" onClick={onClose} type="button">Cancel</button>
-          <button className={`button ${selfDemotion ? "button--danger" : "button--primary"}`} disabled={!canSave} form="members-role-form" type="submit">
+          <button
+            aria-disabled={pending || undefined}
+            className={`button ${selfDemotion ? "button--danger" : "button--primary"}`}
+            disabled={!canSave && !pending}
+            form="members-role-form"
+            type="submit"
+          >
             {pending ? "Saving…" : selfDemotion ? "Lower my role" : "Save role"}
           </button>
         </>
@@ -875,7 +891,7 @@ function RoleDialog({ actor, client, member, organization, organizationName, pol
         : `Explicit role ${ROLE_LABELS[current].toLowerCase()}; effective role ${ROLE_LABELS[member.effectiveRole].toLowerCase()} through ${organizationName(member.inheritedFromOrganizationId)}.`}
       title={policy.self ? "Change your role" : `Change role for ${name}`}
     >
-      <form className="admin-form" id="members-role-form" onSubmit={(event) => { void submit(event); }}>
+      <form className="admin-form" id="members-role-form" onSubmit={(event) => { void submit(event); }} ref={attachForm}>
         <DialogFailure failure={failure} />
         <RoleChoices disabled={pending} legend={`Role in ${organization.name}`} name="members-role" onChange={setSelected} options={options} value={selected} />
         {notices.map((notice) => {
@@ -953,7 +969,7 @@ function RemoveDialog({ client, member, organization, organizationName, policy, 
       footer={(
         <>
           <button className="button button--secondary" onClick={onClose} type="button">Cancel</button>
-          <button className="button button--danger" disabled={pending || !removal.allowed} onClick={() => { void confirm(); }} type="button">
+          <button aria-disabled={pending || undefined} className="button button--danger" disabled={!removal.allowed} onClick={() => { void confirm(); }} type="button">
             {pending ? "Removing…" : policy.self ? "Leave organization" : "Remove member"}
           </button>
         </>
@@ -1011,7 +1027,7 @@ function RevokeDialog({ client, invitation, organization, onClose, onFailed, onR
       footer={(
         <>
           <button className="button button--secondary" onClick={onClose} type="button">Cancel</button>
-          <button className="button button--danger" disabled={pending} onClick={() => { void confirm(); }} type="button">{pending ? "Revoking…" : "Revoke invitation"}</button>
+          <button aria-disabled={pending || undefined} className="button button--danger" onClick={() => { void confirm(); }} type="button">{pending ? "Revoking…" : "Revoke invitation"}</button>
         </>
       )}
       onClose={onClose}

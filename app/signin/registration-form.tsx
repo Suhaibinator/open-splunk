@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { useIdentity } from "../_components/identity-provider";
+import { SubmitFocusAnnouncement, useSubmitFocus } from "../_components/submit-focus";
 import { AuthAlert, PasswordField, SubmitButton, TextField } from "./auth-frame";
 import { describeAuthError, type AuthErrorCopy } from "./auth-error-copy";
 import { useCooldown } from "./auth-hooks";
@@ -46,20 +47,13 @@ export function RegistrationForm({ initialEmail, returnTo, onRegistered, onCance
   const cooldown = useCooldown();
   const emailRef = useRef<HTMLInputElement>(null);
   const firstNameRef = useRef<HTMLInputElement>(null);
-  const lastNameRef = useRef<HTMLInputElement>(null);
-  const usernameRef = useRef<HTMLInputElement>(null);
-  const passwordRef = useRef<HTMLInputElement>(null);
+  const { attachForm, attachRegion, refocus } = useSubmitFocus();
   // Read once: the form opens on the first field the link could not prefill.
   const [prefilled] = useState(() => initialEmail.length > 0);
 
   useEffect(() => {
     (prefilled ? firstNameRef : emailRef).current?.focus();
   }, [prefilled]);
-
-  function focus(field: Field): void {
-    const target = { email: emailRef, firstName: firstNameRef, lastName: lastNameRef, username: usernameRef, password: passwordRef }[field];
-    target.current?.focus();
-  }
 
   function update(field: Field, value: string): void {
     setValues((current) => ({ ...current, [field]: value }));
@@ -78,9 +72,8 @@ export function RegistrationForm({ initialEmail, returnTo, onRegistered, onCance
       password: values.password.length === 0 ? "Choose a password." : null,
     };
     setErrors(next);
-    const firstInvalid = (Object.keys(next) as Field[]).find((field) => next[field] !== null);
-    if (firstInvalid !== undefined) {
-      focus(firstInvalid);
+    if ((Object.keys(next) as Field[]).some((field) => next[field] !== null)) {
+      refocus();
       return;
     }
     setPending(true);
@@ -100,12 +93,12 @@ export function RegistrationForm({ initialEmail, returnTo, onRegistered, onCance
       const copy = describeAuthError(caught, "register");
       if (copy.kind === "conflict" && copy.title.includes("username")) {
         setErrors({ ...NO_ERRORS, username: copy.detail });
-        focus("username");
+        refocus();
         return;
       }
       if (copy.kind === "invalid" && /password/iu.test(copy.detail)) {
         setErrors({ ...NO_ERRORS, password: copy.detail });
-        focus("password");
+        refocus();
         return;
       }
       setFailure(copy);
@@ -114,12 +107,13 @@ export function RegistrationForm({ initialEmail, returnTo, onRegistered, onCance
   }
 
   return (
-    <form className="signin-form" noValidate aria-busy={pending} aria-label="Create an account" onSubmit={(event) => { void submit(event); }}>
+    <form className="signin-form" noValidate aria-busy={pending} aria-label="Create an account" onSubmit={(event) => { void submit(event); }} ref={attachForm}>
+      <SubmitFocusAnnouncement attach={attachRegion} />
       <TextField autoComplete="email" error={errors.email} hint="Use the address the invitation was sent to." id="register-email" inputMode="email" inputRef={emailRef} label="Email" onValueChange={(value) => update("email", value)} type="email" value={values.email} />
       <TextField autoComplete="given-name" error={errors.firstName} id="register-first-name" inputRef={firstNameRef} label="First name" onValueChange={(value) => update("firstName", value)} value={values.firstName} />
-      <TextField autoComplete="family-name" error={errors.lastName} id="register-last-name" inputRef={lastNameRef} label="Last name" onValueChange={(value) => update("lastName", value)} value={values.lastName} />
-      <TextField autoComplete="username" error={errors.username} hint="Letters, digits, dashes and underscores." id="register-username" inputRef={usernameRef} label="Username" maxLength={50} onValueChange={(value) => update("username", value)} value={values.username} />
-      <PasswordField autoComplete="new-password" error={errors.password} hint={PASSWORD_HINT} id="register-password" inputRef={passwordRef} label="Password" onValueChange={(value) => update("password", value)} value={values.password} />
+      <TextField autoComplete="family-name" error={errors.lastName} id="register-last-name" label="Last name" onValueChange={(value) => update("lastName", value)} value={values.lastName} />
+      <TextField autoComplete="username" error={errors.username} hint="Letters, digits, dashes and underscores." id="register-username" label="Username" maxLength={50} onValueChange={(value) => update("username", value)} value={values.username} />
+      <PasswordField autoComplete="new-password" error={errors.password} hint={PASSWORD_HINT} id="register-password" label="Password" onValueChange={(value) => update("password", value)} value={values.password} />
       {failure === null ? null : (
         <AuthAlert
           copy={failure}

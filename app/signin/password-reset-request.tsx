@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { useIdentity } from "../_components/identity-provider";
+import { SubmitFocusAnnouncement, useSubmitFocus } from "../_components/submit-focus";
 import { AuthAlert, AuthCardHeader, AuthNotice, SubmitButton, TextField } from "./auth-frame";
 import { describeAuthError, type AuthErrorCopy } from "./auth-error-copy";
 import { useCooldown } from "./auth-hooks";
@@ -30,6 +31,7 @@ export function PasswordResetRequest({ initialEmail = "", demo = false }: Passwo
   const [sentTo, setSentTo] = useState<string | null>(null);
   const cooldown = useCooldown();
   const input = useRef<HTMLInputElement>(null);
+  const { attachForm, attachRegion, refocus } = useSubmitFocus();
 
   useEffect(() => {
     input.current?.focus();
@@ -42,7 +44,7 @@ export function PasswordResetRequest({ initialEmail = "", demo = false }: Passwo
     const error = emailFieldError(address);
     setFieldError(error);
     if (error !== null) {
-      input.current?.focus();
+      refocus();
       return;
     }
     setPending(true);
@@ -87,7 +89,8 @@ export function PasswordResetRequest({ initialEmail = "", demo = false }: Passwo
   return (
     <>
       <AuthCardHeader title="Reset your password" intro="Enter the email address you sign in with and we'll send a link to choose a new password." />
-      <form className="signin-form" noValidate aria-busy={pending} aria-label="Request a password reset" onSubmit={(event) => { void submit(event); }}>
+      <form className="signin-form" noValidate aria-busy={pending} aria-label="Request a password reset" onSubmit={(event) => { void submit(event); }} ref={attachForm}>
+        <SubmitFocusAnnouncement attach={attachRegion} />
         <TextField
           autoComplete="email"
           error={fieldError}

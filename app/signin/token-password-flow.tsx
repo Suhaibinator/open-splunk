@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
+import { SubmitFocusAnnouncement, useSubmitFocus } from "../_components/submit-focus";
 import { AuthAlert, AuthCardHeader, AuthNotice, PasswordField, SubmitButton } from "./auth-frame";
 import { describeAuthError, type AuthErrorCopy, type AuthFlow } from "./auth-error-copy";
 import { useCooldown } from "./auth-hooks";
@@ -51,7 +52,7 @@ export function TokenPasswordFlow({
   const [done, setDone] = useState(false);
   const cooldown = useCooldown();
   const passwordInput = useRef<HTMLInputElement>(null);
-  const confirmationInput = useRef<HTMLInputElement>(null);
+  const { attachForm, attachRegion, refocus } = useSubmitFocus();
 
   useEffect(() => {
     passwordInput.current?.focus();
@@ -101,8 +102,10 @@ export function TokenPasswordFlow({
       confirmation: confirmation !== password ? "The two passwords do not match." : null,
     };
     setErrors(next);
-    if (next.password !== null) { passwordInput.current?.focus(); return; }
-    if (next.confirmation !== null) { confirmationInput.current?.focus(); return; }
+    if (next.password !== null || next.confirmation !== null) {
+      refocus();
+      return;
+    }
     setPending(true);
     setFailure(null);
     try {
@@ -115,7 +118,7 @@ export function TokenPasswordFlow({
         setDeadLink(copy);
       } else if (copy.kind === "invalid") {
         setErrors({ password: copy.detail, confirmation: null });
-        passwordInput.current?.focus();
+        refocus();
       } else {
         setFailure(copy);
         if (copy.kind === "rate_limited" && copy.retryAfterMs !== null) cooldown.start(copy.retryAfterMs);
@@ -128,7 +131,8 @@ export function TokenPasswordFlow({
   return (
     <>
       <AuthCardHeader title={title} intro={intro} />
-      <form className="signin-form" noValidate aria-busy={pending} aria-label={title} onSubmit={(event) => { void submit(event); }}>
+      <form className="signin-form" noValidate aria-busy={pending} aria-label={title} onSubmit={(event) => { void submit(event); }} ref={attachForm}>
+        <SubmitFocusAnnouncement attach={attachRegion} />
         <PasswordField
           autoComplete="new-password"
           error={errors.password}
@@ -143,7 +147,6 @@ export function TokenPasswordFlow({
           autoComplete="new-password"
           error={errors.confirmation}
           id="confirm-password"
-          inputRef={confirmationInput}
           label="Confirm password"
           onValueChange={(value) => { setConfirmation(value); setErrors((current) => ({ ...current, confirmation: null })); }}
           value={confirmation}
