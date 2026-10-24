@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jackc/pgx/v5/stdlib"
 	"gorm.io/gorm"
 )
 
@@ -26,7 +27,16 @@ const (
 // ErrTransactionRetriesExhausted means every bounded attempt of a transaction
 // was aborted by a serialization failure or deadlock. The final PostgreSQL
 // error remains in the chain, so IsRetryable and IsContention still report it.
+// It is terminal: a transaction whose callback returns it is not retried.
 var ErrTransactionRetriesExhausted = errors.New("control: transaction retries exhausted")
+
+// ErrTransactionEndedByCallback means a transaction callback ended the
+// transaction it was given, by calling Commit or Rollback on it or by running
+// COMMIT, ROLLBACK, END, or ABORT as SQL. Statements after that ran outside
+// the transaction, without its isolation or rollback, so the attempt is
+// neither committed nor retried. Work the callback committed itself stays
+// committed. It is a programming error, never contention.
+var ErrTransactionEndedByCallback = errors.New("control: transaction callback ended its own transaction")
 
 var (
 	postgresWriteTxOptions = &sql.TxOptions{Isolation: sql.LevelSerializable}
@@ -40,7 +50,10 @@ var (
 // attempt back and reruns fn from the beginning after a jittered backoff, at
 // most PostgresTxMaxAttempts times. fn must therefore confine its side effects
 // to tx and be safe to run again; any other error is returned unchanged after
-// rollback.
+// rollback. Ending the transaction belongs to WriteTx: an attempt whose fn
+// commits or rolls back tx itself fails with ErrTransactionEndedByCallback.
+// A nested transaction that exhausted its own retries is returned without
+// retrying this one.
 //
 // Write transactions of one handle run concurrently until one of them is
 // aborted. From then until every aborted transaction has finished, retries
@@ -54,7 +67,8 @@ func (db *PostgresDB) WriteTx(ctx context.Context, fn func(*sql.Tx) error) error
 
 // ReadTx runs fn in a READ ONLY, REPEATABLE READ transaction so every query in
 // fn reads one consistent snapshot. Attempts to write fail inside PostgreSQL.
-// The transaction is always rolled back after fn returns.
+// The transaction is always rolled back after fn returns, and fn ending it
+// early fails with ErrTransactionEndedByCallback as for WriteTx.
 func (db *PostgresDB) ReadTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return db.runSQLTx(ctx, "read", postgresReadTxOptions, fn)
 }
@@ -81,7 +95,7 @@ func (db *PostgresDB) runSQLTx(
 		return err
 	}
 	return retryPostgresTx(ctx, kind, db.writeQueueFor(options), func() error {
-		return runSQLTxAttempt(ctx, db.sql, options, fn)
+		return runPostgresTxAttempt(ctx, db.sql, options, fn)
 	})
 }
 
@@ -95,8 +109,19 @@ func (db *PostgresDB) runGORMTx(
 		return err
 	}
 	return retryPostgresTx(ctx, kind, db.writeQueueFor(options), func() error {
-		return runGORMTxAttempt(ctx, db.orm, options, fn)
+		return runPostgresTxAttempt(ctx, db.sql, options, func(tx *sql.Tx) error {
+			return fn(bindGORMTx(ctx, db.orm, tx))
+		})
 	})
+}
+
+// bindGORMTx returns a fresh GORM session whose statements all run on tx,
+// as gorm.DB.Begin binds one, so both transaction APIs share one attempt
+// implementation and its checks.
+func bindGORMTx(ctx context.Context, orm *gorm.DB, tx *sql.Tx) *gorm.DB {
+	session := orm.Session(&gorm.Session{Context: ctx, NewDB: true})
+	session.Statement.ConnPool = tx
+	return session
 }
 
 func validatePostgresTx(ctx context.Context, db *PostgresDB, nilCallback bool) error {
@@ -115,13 +140,26 @@ func (db *PostgresDB) writeQueueFor(options *sql.TxOptions) *postgresWriteQueue 
 	return db.writeQueue
 }
 
-func runSQLTxAttempt(
+// runPostgresTxAttempt runs one attempt on a dedicated pooled connection so it
+// can read the server's transaction status after fn returns. database/sql
+// cannot tell that fn ran COMMIT or ROLLBACK as SQL: it would report success
+// for work that was rolled back, or retry work that was already committed.
+func runPostgresTxAttempt(
 	ctx context.Context,
-	db *sql.DB,
+	pool *sql.DB,
 	options *sql.TxOptions,
 	fn func(*sql.Tx) error,
 ) (err error) {
-	tx, err := db.BeginTx(ctx, options)
+	conn, err := pool.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("begin PostgreSQL transaction: %w", err)
+	}
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil && !errors.Is(closeErr, sql.ErrConnDone) {
+			err = errors.Join(err, fmt.Errorf("release PostgreSQL connection: %w", closeErr))
+		}
+	}()
+	tx, err := conn.BeginTx(ctx, options)
 	if err != nil {
 		return fmt.Errorf("begin PostgreSQL transaction: %w", err)
 	}
@@ -136,8 +174,12 @@ func runSQLTxAttempt(
 			err = errors.Join(err, fmt.Errorf("roll back PostgreSQL transaction: %w", rollbackErr))
 		}
 	}()
-	if err := fn(tx); err != nil {
-		return err
+	fnErr := fn(tx)
+	if callbackEndedPostgresTx(ctx, conn) {
+		return errors.Join(ErrTransactionEndedByCallback, fnErr)
+	}
+	if fnErr != nil {
+		return fnErr
 	}
 	if options.ReadOnly {
 		return nil
@@ -149,36 +191,21 @@ func runSQLTxAttempt(
 	return nil
 }
 
-func runGORMTxAttempt(
-	ctx context.Context,
-	db *gorm.DB,
-	options *sql.TxOptions,
-	fn func(*gorm.DB) error,
-) (err error) {
-	tx := db.WithContext(ctx).Begin(options)
-	if tx.Error != nil {
-		return fmt.Errorf("begin PostgreSQL transaction: %w", tx.Error)
-	}
-	finished := false
-	defer func() {
-		if finished {
-			return
+// callbackEndedPostgresTx reports whether the session behind conn has left the
+// transaction database/sql still holds open on it. database/sql also rolls a
+// transaction back by itself once ctx ends; that is cancellation, not misuse.
+func callbackEndedPostgresTx(ctx context.Context, conn *sql.Conn) bool {
+	idle := false
+	if err := conn.Raw(func(driverConn any) error {
+		if stdConn, ok := driverConn.(*stdlib.Conn); ok {
+			pgConn := stdConn.Conn().PgConn()
+			idle = !pgConn.IsClosed() && pgConn.TxStatus() == 'I'
 		}
-		if rollbackErr := tx.Rollback().Error; rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			err = errors.Join(err, fmt.Errorf("roll back PostgreSQL transaction: %w", rollbackErr))
-		}
-	}()
-	if err := fn(tx); err != nil {
-		return err
-	}
-	if options.ReadOnly {
 		return nil
+	}); err != nil {
+		return false
 	}
-	finished = true
-	if err := tx.Commit().Error; err != nil {
-		return fmt.Errorf("commit PostgreSQL transaction: %w", err)
-	}
-	return nil
+	return idle && ctx.Err() == nil
 }
 
 // postgresWriteQueue makes the write transactions of one handle run one at a
@@ -242,7 +269,7 @@ func retryPostgresTx(ctx context.Context, kind string, queue *postgresWriteQueue
 		if errors.Is(err, errPostgresWriteQueueWait) {
 			return errors.Join(ctx.Err(), previous)
 		}
-		if err == nil || !IsRetryable(err) {
+		if !retryablePostgresAttempt(err) {
 			return err
 		}
 		previous = err
@@ -271,6 +298,18 @@ func retryPostgresTx(ctx context.Context, kind string, queue *postgresWriteQueue
 		}
 		delay = min(delay*2, postgresTxRetryMaximumDelay)
 	}
+}
+
+// retryablePostgresAttempt reports whether a failed attempt may run again. A
+// nested transaction that exhausted its own bound must not be rerun by every
+// enclosing one, which would multiply attempts per nesting level. A callback
+// that ended its transaction ran later statements outside it, so rerunning it
+// would repeat work that may already be committed.
+func retryablePostgresAttempt(err error) bool {
+	return err != nil &&
+		IsRetryable(err) &&
+		!errors.Is(err, ErrTransactionRetriesExhausted) &&
+		!errors.Is(err, ErrTransactionEndedByCallback)
 }
 
 // jitteredPostgresRetryDelay picks uniformly from [delay/2, delay] so writers
