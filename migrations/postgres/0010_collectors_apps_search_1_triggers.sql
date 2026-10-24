@@ -1,6 +1,8 @@
 -- open-splunk PostgreSQL control plane: triggers on app_workspaces,
 -- collector_runtime, dashboards and search_history, ported from the final
--- SQLite schema. Applied after 0001..0006; see migrations/postgres/README.md.
+-- SQLite schema. Applied as version 0010, after the tables (0001..0006) and
+-- the core-ingest trigger files (0007..0009), none of which touch these
+-- tables; see migrations/postgres/README.md.
 --
 -- Porting notes:
 --
