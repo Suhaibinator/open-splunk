@@ -14,8 +14,15 @@ import { isSameOriginPath } from "./return-to";
  */
 export function useAuthNavigate(): AuthNavigate {
   const router = useRouter();
-  return useCallback((url: string) => {
-    if (isSameOriginPath(url)) router.push(url);
-    else window.location.assign(url);
+  return useCallback((url, options) => {
+    const replace = options?.replace === true;
+    if (isSameOriginPath(url)) {
+      if (replace) router.replace(url);
+      else router.push(url);
+    } else if (replace) {
+      window.location.replace(url);
+    } else {
+      window.location.assign(url);
+    }
   }, [router]);
 }

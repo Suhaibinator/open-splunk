@@ -43,6 +43,8 @@ const testFiles = [
   path.join("app", "signin", "sign-in.mount.test.tsx"),
   path.join("app", "signin", "auth-links.mount.test.tsx"),
   path.join("app", "signin", "auth-a11y.mount.test.tsx"),
+  path.join("app", "signin", "return-to-hostile.test.ts"),
+  path.join("app", "signin", "auth-flow-states.mount.test.tsx"),
   path.join("app", "_components", "modal.test.tsx"),
   path.join("app", "_components", "product-shell.test.tsx"),
   path.join("app", "_components", "product-identity.mount.test.tsx"),

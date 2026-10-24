@@ -126,7 +126,13 @@ export function createIdentitySessionStore(
     },
     adopt,
     async signOut(options) {
-      await requireClient().logout(options);
+      try {
+        await requireClient().logout(options);
+      } catch (caught) {
+        // A session that already ended -- expired, revoked, or signed out in
+        // another tab -- is what signing out asked for; anything else failed.
+        if (!isIdentityError(caught, "unauthenticated")) throw caught;
+      }
       adopt(null);
     },
     async setActiveOrganization(organizationId) {

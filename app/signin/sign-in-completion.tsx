@@ -101,7 +101,12 @@ export function NoOrganizationCard({ principal, navigate, onSignOut }: {
       {state.status === "error" ? (
         <AuthAlert
           copy={state.copy}
-          action={(
+          action={state.copy.kind === "unauthenticated" ? (
+            // The session ended after sign-in; reading again would only fail again.
+            <button className="button button--secondary button--compact" type="button" onClick={onSignOut}>
+              Sign in again
+            </button>
+          ) : (
             <button className="button button--secondary button--compact" type="button" onClick={retry}>
               Try again
             </button>

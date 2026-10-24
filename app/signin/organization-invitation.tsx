@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { OrganizationInvitation, Principal } from "@/lib/api/identity";
 
@@ -41,6 +41,15 @@ export interface OrganizationInvitationFlowProps {
 export function OrganizationInvitationFlow({ invitationId, invitedEmail: linkEmail, navigate, demo = false, now = Date.now }: OrganizationInvitationFlowProps) {
   const identity = useIdentity();
   const invitedEmail = linkEmail === null || linkEmail.length === 0 ? null : linkEmail;
+  const [sessionEnded, setSessionEnded] = useState(false);
+  const { adoptPrincipal } = identity;
+  // The server refused the session mid-flow: the page drops to its signed-out
+  // card, whose sign-in comes back here, instead of offering buttons that can
+  // only be refused again.
+  const endSession = useCallback(() => {
+    setSessionEnded(true);
+    adoptPrincipal(null);
+  }, [adoptPrincipal]);
 
   if (invitationId === null || invitationId.length === 0) {
     return (
@@ -76,18 +85,20 @@ export function OrganizationInvitationFlow({ invitationId, invitedEmail: linkEma
     );
   }
   if (identity.status === "signed_out" || identity.principal === null) {
-    return <SignedOutInvitation href={href} invitedEmail={invitedEmail} navigate={navigate} demo={demo} />;
+    return <SignedOutInvitation href={href} invitedEmail={invitedEmail} navigate={navigate} demo={demo} sessionEnded={sessionEnded} />;
   }
-  return <SignedInInvitation invitationId={invitationId} principal={identity.principal} navigate={navigate} now={now} />;
+  return <SignedInInvitation invitationId={invitationId} principal={identity.principal} navigate={navigate} now={now} onSessionEnded={endSession} />;
 }
 
 type SignedOutMode = { readonly kind: "choose" } | { readonly kind: "register" } | { readonly kind: "registered"; readonly email: string };
 
-function SignedOutInvitation({ href, invitedEmail, navigate, demo }: {
+function SignedOutInvitation({ href, invitedEmail, navigate, demo, sessionEnded }: {
   readonly href: string;
   readonly invitedEmail: string | null;
   readonly navigate: AuthNavigate;
   readonly demo: boolean;
+  /** The session ended while this page had it signed in. */
+  readonly sessionEnded: boolean;
 }) {
   const { client } = useIdentity();
   const [mode, setMode] = useState<SignedOutMode>({ kind: "choose" });
@@ -133,6 +144,7 @@ function SignedOutInvitation({ href, invitedEmail, navigate, demo }: {
           ? "Sign in with the address the invitation was sent to, or create an account for it."
           : <>This invitation was sent to <b>{invitedEmail}</b>. Sign in with that address, or create an account for it.</>}
       />
+      {sessionEnded ? <AuthNotice title="Your session has ended">Sign in again to answer this invitation.</AuthNotice> : null}
       <div className="signin-actions">
         <SubmitButton pending={false} pendingLabel="Opening sign-in…" type="button" onClick={() => navigate(signInHref({ returnTo: href, email: invitedEmail }))}>
           Sign in to accept
@@ -157,11 +169,13 @@ type Outcome =
   | { readonly kind: "expired" }
   | { readonly kind: "unavailable" };
 
-function SignedInInvitation({ invitationId, principal, navigate, now }: {
+function SignedInInvitation({ invitationId, principal, navigate, now, onSessionEnded }: {
   readonly invitationId: string;
   readonly principal: Principal;
   readonly navigate: AuthNavigate;
   readonly now: () => number;
+  /** A request was refused as unauthenticated: this session is over. */
+  readonly onSessionEnded: () => void;
 }) {
   const identity = useIdentity();
   const { client } = identity;
@@ -179,6 +193,11 @@ function SignedInInvitation({ invitationId, principal, navigate, now }: {
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [action, setAction] = useState<"accept" | "decline" | "open" | "sign_out" | null>(null);
   const [failure, setFailure] = useState<AuthErrorCopy | null>(null);
+  const lookupSessionEnded = lookup.status === "error" && lookup.copy.kind === "unauthenticated";
+
+  useEffect(() => {
+    if (lookupSessionEnded) onSessionEnded();
+  }, [lookupSessionEnded, onSessionEnded]);
 
   async function signOut(): Promise<void> {
     setAction("sign_out");
@@ -205,7 +224,8 @@ function SignedInInvitation({ invitationId, principal, navigate, now }: {
       }
     } catch (error) {
       const copy = describeAuthError(error, kind === "accept" ? "accept_invitation" : "decline_invitation");
-      if (copy.kind === "conflict") setOutcome({ kind: "already_member" });
+      if (copy.kind === "unauthenticated") onSessionEnded();
+      else if (copy.kind === "conflict") setOutcome({ kind: "already_member" });
       else if (copy.deadLink) setOutcome({ kind: "expired" });
       else if (copy.kind === "not_found" || copy.kind === "forbidden") setOutcome({ kind: "unavailable" });
       else setFailure(copy);
@@ -221,8 +241,10 @@ function SignedInInvitation({ invitationId, principal, navigate, now }: {
       await identity.setActiveOrganization(organizationId);
       navigate(DEFAULT_RETURN_TO);
     } catch (error) {
-      setFailure(describeAuthError(error, "session"));
+      const copy = describeAuthError(error, "session");
       setAction(null);
+      if (copy.kind === "unauthenticated") onSessionEnded();
+      else setFailure(copy);
     }
   }
 

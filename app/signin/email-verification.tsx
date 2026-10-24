@@ -47,7 +47,8 @@ export function EmailVerification({ token, navigate }: EmailVerificationProps) {
     handled.current = result;
     if (result.principal === null) return;
     adoptPrincipal(result.principal);
-    if (canEnter) navigate(target);
+    // The verification token is spent: Back must not land on it and replay it.
+    if (canEnter) navigate(target, { replace: true });
   }, [adoptPrincipal, canEnter, navigate, result, target]);
 
   if (token === null || token.length === 0) {
@@ -102,7 +103,7 @@ export function EmailVerification({ token, navigate }: EmailVerificationProps) {
       <NoOrganizationCard
         principal={principal}
         navigate={navigate}
-        onSignOut={() => { void identity.signOut().then(() => navigate(signInHref())).catch(() => undefined); }}
+        onSignOut={() => { void identity.signOut().then(() => navigate(signInHref(), { replace: true })).catch(() => undefined); }}
       />
     );
   }
