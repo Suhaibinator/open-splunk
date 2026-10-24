@@ -188,6 +188,27 @@ func inKnowledgeCatalog2Tx(
 	fn func(ctx context.Context, tx *sql.Tx),
 ) {
 	t.Helper()
+	inKnowledgeCatalog2TxWith(t, db, false, setup, fn)
+}
+
+// inKnowledgeCatalog2TxWith is inKnowledgeCatalog2Tx with a choice of
+// trigger set. With laneOnly, every trigger another lane owns is disabled
+// inside the transaction before setup runs, so the scenario sees exactly the
+// triggers of knowledge_catalog_2, the environment the fixture's lane-local
+// scenarios were written and replayed against. The other lanes install rows
+// as side effects (version lifecycle, list order keys) and require a sealed
+// list projection before a registry row, so with every lane enabled the
+// hand-built setups would collide with those side effects instead of
+// reaching the statement under test. The rollback re-enables the triggers;
+// requireKnowledgeCatalog2CleanDatabase checks that none stays disabled.
+func inKnowledgeCatalog2TxWith(
+	t *testing.T,
+	db *control.PostgresDB,
+	laneOnly bool,
+	setup []string,
+	fn func(ctx context.Context, tx *sql.Tx),
+) {
+	t.Helper()
 	ctx := t.Context()
 	tx, err := db.SQLDB().BeginTx(ctx, nil)
 	if err != nil {
@@ -201,6 +222,9 @@ func inKnowledgeCatalog2Tx(
 	if _, err := tx.ExecContext(ctx, `SET LOCAL search_path TO `+control.PostgresSchema); err != nil {
 		t.Fatalf("pin scenario search_path: %v", err)
 	}
+	if laneOnly {
+		disableOtherLanesKnowledgeCatalog2Triggers(ctx, t, tx)
+	}
 	for index, statement := range setup {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			t.Fatalf("setup statement %d failed: %v\n%s", index, err, statement)
@@ -209,9 +233,51 @@ func inKnowledgeCatalog2Tx(
 	fn(ctx, tx)
 }
 
+// disableOtherLanesKnowledgeCatalog2Triggers disables, inside tx, every user
+// trigger in the open_splunk schema that knowledgeCatalog2Triggers does not
+// list. PostgreSQL builds the DDL so identifiers stay quoted.
+func disableOtherLanesKnowledgeCatalog2Triggers(ctx context.Context, t *testing.T, tx *sql.Tx) {
+	t.Helper()
+	var lane []string
+	for _, names := range knowledgeCatalog2Triggers {
+		lane = append(lane, names...)
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT format('ALTER TABLE %I.%I DISABLE TRIGGER %I', n.nspname, c.relname, tg.tgname)
+		FROM pg_catalog.pg_trigger AS tg
+		JOIN pg_catalog.pg_class AS c ON c.oid = tg.tgrelid
+		JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+		WHERE n.nspname = $1 AND NOT tg.tgisinternal AND NOT (tg.tgname = ANY($2))
+		ORDER BY c.relname, tg.tgname`, control.PostgresSchema, lane)
+	if err != nil {
+		t.Fatalf("list other lanes' triggers: %v", err)
+	}
+	var statements []string
+	for rows.Next() {
+		var statement string
+		if err := rows.Scan(&statement); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan other lane trigger: %v", err)
+		}
+		statements = append(statements, statement)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close other lanes' triggers: %v", err)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read other lanes' triggers: %v", err)
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+}
+
 func runKnowledgeCatalog2Scenario(t *testing.T, db *control.PostgresDB, scenario knowledgeCatalog2Scenario) {
 	t.Helper()
-	inKnowledgeCatalog2Tx(t, db, scenario.SetupSQL, func(ctx context.Context, tx *sql.Tx) {
+	laneOnly := len(scenario.DependsOnLanes) == 0
+	inKnowledgeCatalog2TxWith(t, db, laneOnly, scenario.SetupSQL, func(ctx context.Context, tx *sql.Tx) {
 		_, err := tx.ExecContext(ctx, scenario.Statement)
 		if scenario.Expect == "reject" {
 			requireKnowledgeCatalog2Rejection(t, err, scenario.Message)
