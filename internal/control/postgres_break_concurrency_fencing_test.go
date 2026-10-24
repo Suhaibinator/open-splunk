@@ -447,3 +447,66 @@ func TestBreakSearchJobCursorsAreDrawnInCommitOrder(t *testing.T) {
 		t.Fatalf("cursor %d after a rolled-back %d; a cursor was reused", lastCursor, abortedCursor)
 	}
 }
+
+// RetryWrite callers commit their own transactions, so they confirm the
+// singleton with ConfirmServerSingleton as WriteTx does before COMMIT. A
+// held lock passes, a handle without a singleton passes, and a lost lock
+// keeps the row from committing whether the confirmation or the background
+// probe sees the loss first.
+func TestBreakSingletonConfirmationFencesManualCommits(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	dsn := newSingletonDatabase(t)
+	db := openSecondPostgresHandle(t, dsn)
+	var confirmed atomic.Int32
+	manualWrite := func(id int64) error {
+		return db.RetryWrite(ctx, func() error {
+			tx, err := db.SQLDB().BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO probes (id, label) VALUES ($1, $2)`, id, fmt.Sprintf("manual-%d", id)); err != nil {
+				return errors.Join(err, tx.Rollback())
+			}
+			if err := db.ConfirmServerSingleton(ctx, tx); err != nil {
+				confirmed.Add(1)
+				return errors.Join(err, tx.Rollback())
+			}
+			return tx.Commit()
+		})
+	}
+	if err := manualWrite(1); err != nil {
+		t.Fatalf("manual write without a singleton = %v", err)
+	}
+	release, err := control.AcquireServerSingleton(ctx, db)
+	if err != nil {
+		t.Fatalf("AcquireServerSingleton() = %v", err)
+	}
+	if err := manualWrite(2); err != nil {
+		t.Fatalf("manual write under a held singleton = %v", err)
+	}
+	terminateSingletonHolder(t, dsn)
+	if err := manualWrite(3); !errors.Is(err, control.ErrServerSingletonLost) {
+		t.Fatalf("manual write after the singleton session died = %v, want ErrServerSingletonLost", err)
+	}
+	if !singletonLostFired(db) {
+		t.Fatal("ServerSingletonLost did not fire once the loss was seen")
+	}
+	if confirmed.Load() > 1 {
+		t.Fatalf("ConfirmServerSingleton refused %d attempts, want at most 1 before the handle is fenced",
+			confirmed.Load())
+	}
+	var stored int
+	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM probes WHERE label LIKE 'manual-%'`).Scan(&stored); err != nil {
+		t.Fatalf("count manual rows: %v", err)
+	}
+	if stored != 2 {
+		t.Fatalf("manual rows stored = %d, want 2 (the write after the loss must not commit)", stored)
+	}
+	if err := release(); !errors.Is(err, control.ErrServerSingletonLost) {
+		t.Fatalf("release() = %v, want ErrServerSingletonLost", err)
+	}
+	if err := db.ConfirmServerSingleton(ctx, nil); !errors.Is(err, control.ErrInvalidArgument) {
+		t.Fatalf("ConfirmServerSingleton(nil tx) = %v, want ErrInvalidArgument", err)
+	}
+}
