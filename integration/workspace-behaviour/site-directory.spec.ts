@@ -106,7 +106,8 @@ test("a row action runs from the keyboard through its confirmation and returns f
   const selfMenu = page.getByRole("menu", { name: "Actions for Ada Lovelace" });
   await expect(selfMenu.getByRole("menuitem", { name: /Delete user/u })).toBeDisabled();
   await expect(selfMenu).toContainText("You cannot delete your own account.");
-  await expect(selfMenu.getByRole("menuitem", { name: "Sign out my sessions" })).toBeFocused();
+  await expect(selfMenu.getByRole("menuitem", { name: /^Remove site admin/u })).toBeFocused();
+  await expect(selfMenu.getByRole("menuitem", { name: "Sign out my sessions" })).toBeEnabled();
   await page.keyboard.press("Escape");
 });
 

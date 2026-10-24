@@ -95,7 +95,7 @@ const mounts = new Set<Mounted>();
 
 test.afterEach(async () => {
   await Promise.all(Array.from(mounts, (mounted) => mounted.unmount()));
-  assert.deepEqual(reactErrors, []);
+  assert.equal(reactErrors.length, 0, reactErrors.slice(0, 3).map((values) => values.map((value) => String(value).slice(0, 400)).join(" ")).join("\n"));
 });
 
 test.beforeEach(() => {
@@ -279,7 +279,7 @@ test("signed out, the panel offers sign-in; with no client it reports identity u
 
   const backend = await mount(<IdentityProvider dataMode="backend"><SiteUsersPanel /></IdentityProvider>);
   assert.match(backend.text(), /Identity is not configured/u);
-  assert.equal(backend.maybeButton("Try again"), undefined);
+  assert.equal(backend.maybeButton("Try again") === undefined, true);
 });
 
 // --------------------------------------------------------------------------
@@ -323,7 +323,7 @@ test("search and filters narrow the directory, and an empty match offers to clea
   assert.equal(rowIds(mounted).length, 9);
   assert.equal(searchInput(mounted).value, "");
   await settle();
-  assert.equal(browser.document.activeElement, searchInput(mounted));
+  assert.equal(browser.document.activeElement === searchInput(mounted), true, "focus is not where it should be");
 
   const filter = (value: string) => {
     const option = searchForm(mounted).querySelector(`[data-option="${value}"]`);
@@ -400,19 +400,19 @@ test("the row menu takes focus, moves with the arrows, and bans through a confir
     "Revoke sessions",
     "Delete user",
   ]);
-  assert.equal(browser.document.activeElement, menuItem(mounted, "Make site admin"));
+  assert.equal(browser.document.activeElement === menuItem(mounted, "Make site admin"), true, "focus is not where it should be");
   const menu = mounted.container.querySelector('[role="menu"]');
   assert.ok(menu);
   await mounted.key(menu, "ArrowDown");
-  assert.equal(browser.document.activeElement, menuItem(mounted, "Ban user"));
+  assert.equal(browser.document.activeElement === menuItem(mounted, "Ban user"), true, "focus is not where it should be");
   await mounted.key(menu, "End");
-  assert.equal(browser.document.activeElement, menuItem(mounted, "Delete user"));
+  assert.equal(browser.document.activeElement === menuItem(mounted, "Delete user"), true, "focus is not where it should be");
   await mounted.key(menu, "ArrowDown");
-  assert.equal(browser.document.activeElement, menuItem(mounted, "Make site admin"));
+  assert.equal(browser.document.activeElement === menuItem(mounted, "Make site admin"), true, "focus is not where it should be");
   await mounted.key(menu, "Escape");
   await settle();
-  assert.equal(mounted.container.querySelector('[role="menu"]'), null);
-  assert.equal(browser.document.activeElement, trigger);
+  assert.equal(mounted.container.querySelector('[role="menu"]') === null, true);
+  assert.equal(browser.document.activeElement === trigger, true, "focus is not where it should be");
 
   await mounted.click(trigger);
   await mounted.click(menuItem(mounted, "Ban user"));
@@ -422,14 +422,14 @@ test("the row menu takes focus, moves with the arrows, and bans through a confir
   assert.ok(reason);
   await mounted.type(reason, "Shared credentials");
   await mounted.submit(dialogForm(mounted));
-  assert.equal(mounted.container.querySelector("[data-modal]"), null);
+  assert.equal(mounted.container.querySelector("[data-modal]") === null, true);
   assert.match(mounted.container.querySelector("output")?.textContent ?? "", /Mark Mendez is banned\./u);
   const row = mounted.rows().find((candidate) => candidate.getAttribute("data-user-id") === "5");
   assert.ok(row);
   assert.match(textOf(row), /Banned/u);
 
   await mounted.click(mounted.button("Dismiss notification"));
-  assert.equal(mounted.container.querySelector("output"), null);
+  assert.equal(mounted.container.querySelector("output") === null, true);
   await mounted.click(mounted.button("Actions for Mark Mendez"));
   assert.ok(menuItem(mounted, "Unban user"));
   assert.equal(menuItem(mounted, "Revoke sessions").getAttribute("aria-disabled"), "true");
@@ -456,7 +456,7 @@ test("a failed change stays in the dialog with an alert, and a vanished user rel
   await mounted.submit(dialogForm(mounted));
   assert.match(textOf(dialog(mounted)), /no longer exists/u);
   await mounted.click(mounted.button("Cancel"));
-  assert.equal(mounted.container.querySelector("[data-modal]"), null);
+  assert.equal(mounted.container.querySelector("[data-modal]") === null, true);
   assert.equal(rowIds(mounted).includes("2"), false);
 });
 
@@ -477,11 +477,11 @@ test("delete waits for the typed email, then removes the row and returns focus t
   assert.equal(dialogSubmit(mounted).disabled, false);
   await mounted.submit(dialogForm(mounted));
   await settle();
-  assert.equal(mounted.container.querySelector("[data-modal]"), null);
+  assert.equal(mounted.container.querySelector("[data-modal]") === null, true);
   assert.match(mounted.container.querySelector("output")?.textContent ?? "", /Tess Takahashi was deleted\./u);
   assert.equal(rowIds(mounted).includes("6"), false);
   assert.equal(rowIds(mounted).length, 8);
-  assert.equal(browser.document.activeElement, searchInput(mounted));
+  assert.equal(browser.document.activeElement === searchInput(mounted), true, "focus is not where it should be");
 });
 
 test("the self row explains its disabled actions, and signing out its sessions signs the panel out", async () => {
@@ -496,15 +496,15 @@ test("the self row explains its disabled actions, and signing out its sessions s
   assert.equal(menuItem(mounted, "Delete user").getAttribute("aria-disabled"), "true");
   assert.equal(menuItem(mounted, "Sign out my sessions").hasAttribute("aria-disabled"), false);
   // A disabled item stays focusable, so the arrows reach it and its reason is read.
-  assert.equal(browser.document.activeElement, removeAdmin);
+  assert.equal(browser.document.activeElement === removeAdmin, true, "focus is not where it should be");
   const menu = mounted.container.querySelector('[role="menu"]');
   assert.ok(menu);
   await mounted.key(menu, "ArrowDown");
-  assert.equal(browser.document.activeElement, menuItem(mounted, "Ban user"));
+  assert.equal(browser.document.activeElement === menuItem(mounted, "Ban user"), true, "focus is not where it should be");
   // Activating a disabled item neither closes the menu nor opens a dialog.
   await mounted.click(menuItem(mounted, "Ban user"));
   assert.ok(mounted.container.querySelector('[role="menu"]'));
-  assert.equal(mounted.container.querySelector("[data-modal]"), null);
+  assert.equal(mounted.container.querySelector("[data-modal]") === null, true);
 
   await mounted.click(menuItem(mounted, "Sign out my sessions"));
   assert.match(textOf(dialog(mounted)), /including this one/u);
@@ -540,7 +540,7 @@ test("create user validates each field, maps a conflict onto its field, and send
   assert.match(dialog(mounted).querySelector("#site-users-create-email-note")?.textContent ?? "", /Email already exists/u);
 
   // The password field appears only with its access mode.
-  assert.equal(dialog(mounted).querySelector("#site-users-create-password"), null);
+  assert.equal(dialog(mounted).querySelector("#site-users-create-password") === null, true);
   const passwordMode = dialog(mounted).querySelectorAll('input[type="radio"]').find((radio) => radio.value === "password");
   assert.ok(passwordMode);
   await act(async () => {
@@ -557,7 +557,7 @@ test("create user validates each field, maps a conflict onto its field, and send
 
   await mounted.type(email, "new.person@open-splunk.test");
   await mounted.submit(dialogForm(mounted));
-  assert.equal(mounted.container.querySelector("[data-modal]"), null);
+  assert.equal(mounted.container.querySelector("[data-modal]") === null, true);
   assert.match(
     mounted.container.querySelector("output")?.textContent ?? "",
     /Created newbie and sent an invitation to new\.person@open-splunk\.test\./u,
@@ -632,7 +632,7 @@ test("create organization suggests the slug, picks a parent, and maps a taken sl
   await mounted.click(parent);
   assert.equal(dialog(mounted).querySelector("#site-orgs-create-parent")?.getAttribute("data-select-value"), "3");
   await mounted.submit(dialogForm(mounted));
-  assert.equal(mounted.container.querySelector("[data-modal]"), null);
+  assert.equal(mounted.container.querySelector("[data-modal]") === null, true);
   assert.match(mounted.container.querySelector("output")?.textContent ?? "", /Created Acme Edge Europe\./u);
   const created = mounted.rows().find((row) => textOf(row).includes("Acme Edge Europe"));
   assert.ok(created);
@@ -667,7 +667,7 @@ test("a personal workspace is flagged and is never offered as a parent", async (
 
   await mounted.click(mounted.button("Create organization"));
   assert.ok(dialog(mounted).querySelector('[data-option="1"]'));
-  assert.equal(dialog(mounted).querySelector('[data-option="40"]'), null);
+  assert.equal(dialog(mounted).querySelector('[data-option="40"]') === null, true);
 });
 
 test("a failed create keeps the dialog open with an alert, and a disabled parent picker says why", async () => {
@@ -681,7 +681,7 @@ test("a failed create keeps the dialog open with an alert, and a disabled parent
   await mounted.click(mounted.button("Create organization"));
   assert.match(textOf(dialog(mounted)), /only a top-level organization can be created/u);
   assert.equal(dialog(mounted).querySelector('[data-option="__top_level__"]')?.disabled, true);
-  assert.equal(dialog(mounted).querySelector('[data-option="1"]'), null);
+  assert.equal(dialog(mounted).querySelector('[data-option="1"]') === null, true);
 
   const name = dialog(mounted).querySelector("#site-orgs-create-name");
   assert.ok(name);
@@ -690,6 +690,6 @@ test("a failed create keeps the dialog open with an alert, and a disabled parent
   await mounted.submit(dialogForm(mounted));
   assert.match(dialog(mounted).querySelector('[role="alert"]')?.textContent ?? "", /Try again in 3 s/u);
   await mounted.submit(dialogForm(mounted));
-  assert.equal(mounted.container.querySelector("[data-modal]"), null);
+  assert.equal(mounted.container.querySelector("[data-modal]") === null, true);
   assert.match(mounted.container.querySelector("output")?.textContent ?? "", /Created Initech\./u);
 });
