@@ -86,6 +86,7 @@ import {
 import { BrowserCreateAction } from "@/lib/api/client-request-id";
 import { useAppCatalog } from "@/app/_components/use-app-catalog";
 import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
+import { ADMIN_CONSOLE_ACCESS } from "@/lib/product-access";
 import {
   adaptSearchResults,
   compareWorkspaceStatisticValues,
@@ -198,6 +199,7 @@ import { AppIcon, type AppIconName } from "./_components/app-icon";
 import { BackendResourceState } from "./_components/backend-resource-state";
 import { StatusDot, statusClassName } from "./_components/status";
 import { ProductShell, ThemeMenu } from "./_components/product-shell";
+import { ShellOffer, ShellSessionText, ShellSignOutItems } from "./_components/product-identity";
 import { AlertSecretRecovery } from "./reports/alert-secret-recovery";
 import { AlertWizard } from "./reports/alert-wizard";
 import { defaultAlertForm } from "./reports/alerts-ui-state";
@@ -7498,7 +7500,7 @@ export function SearchWorkspace({
                 <Link role="menuitem" href="/dashboards/"><span className="app-glyph">G</span><span><strong>GradeThis Operations</strong><small>Default index: gradethis</small></span></Link>
               </>}
           <div className="menu-separator" />
-          <Link role="menuitem" href={productHref("/admin/")}><span className="app-glyph"><AppIcon name="plus" size="md" /></span><span><strong>Manage apps</strong></span></Link>
+          <ShellOffer requirement={ADMIN_CONSOLE_ACCESS}><Link role="menuitem" href={productHref("/admin/")}><span className="app-glyph"><AppIcon name="plus" size="md" /></span><span><strong>Manage apps</strong></span></Link></ShellOffer>
         </div>
       ) : null}
     </div>
@@ -7508,7 +7510,7 @@ export function SearchWorkspace({
     <nav className="suite-utilities" aria-label="Product utilities">
       <Link className="health-indicator" href={productHref("/admin/")} title="Open system administration">{backendEnabled ? "Backend mode" : "Demo workspace"}</Link>
       <button type="button" onClick={() => showToast("No new messages.")}>Messages</button>
-      <Link href={productHref("/admin/")}>Settings</Link>
+      <ShellOffer requirement={ADMIN_CONSOLE_ACCESS}><Link href={productHref("/admin/")}>Settings</Link></ShellOffer>
       <div className="suite-menu-anchor">
         <button type="button" aria-haspopup="menu" aria-expanded={menu === "activity"} onClick={() => setMenu(menu === "activity" ? null : "activity")} onKeyDown={(event) => openMenuFromKeyboard(event, "activity")}>Activity <span className="activity-count">1</span> <AppIcon name="chevron-down" size="xs" /></button>
         {menu === "activity" ? (
@@ -7537,13 +7539,13 @@ export function SearchWorkspace({
         <button type="submit" aria-label="Run Find"><AppIcon name="search" size="sm" /></button>
       </form>
       <div className="suite-menu-anchor">
-        <button className="suite-user-button" type="button" aria-label="User menu" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={() => setMenu(menu === "user" ? null : "user")} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}><span>A</span><b>Administrator</b><AppIcon name="chevron-down" size="xs" /></button>
+        <button className="suite-user-button" type="button" aria-label="User menu" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={() => setMenu(menu === "user" ? null : "user")} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}><span><ShellSessionText part="initial" legacy="A" /></span><b><ShellSessionText part="label" legacy="Administrator" /></b><AppIcon name="chevron-down" size="xs" /></button>
         {menu === "user" ? (
           <div className="floating-menu utility-menu user-menu" role="menu">
-            <div className="user-summary"><span>A</span><strong>Administrator</strong><small>admin@localhost</small></div>
-            <Link role="menuitem" href={productHref("/admin/")}>Account settings</Link>
+            <div className="user-summary"><span><ShellSessionText part="initial" legacy="A" /></span><strong><ShellSessionText part="label" legacy="Administrator" /></strong><small><ShellSessionText part="detail" legacy="admin@localhost" /></small></div>
+            <ShellOffer requirement={ADMIN_CONSOLE_ACCESS}><Link role="menuitem" href={productHref("/admin/")}>Account settings</Link></ShellOffer>
             <button role="menuitem" type="button" onClick={() => showToast("Open Splunk is running in trusted-network mode.")}>Session details</button>
-            <Link role="menuitem" tabIndex={0} href="/signin/" onClick={clearAdministratorBearerToken}>Sign out</Link>
+            <ShellSignOutItems legacy={<Link role="menuitem" tabIndex={0} href="/signin/" onClick={clearAdministratorBearerToken}>Sign out</Link>} onSelect={() => setMenu(null)} />
             <ThemeMenu preference={themePreference} onSelect={setThemePreference} />
           </div>
         ) : null}

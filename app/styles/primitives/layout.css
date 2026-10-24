@@ -632,6 +632,178 @@
 }
 
 .suite-user-summary small { color: var(--fg-muted); font-size: var(--type-xs); }
+.suite-user-summary .badge { align-self: flex-start; margin-top: var(--space-1); }
+
+/* The organization switcher: the bar's control, its menu of memberships, and
+   the failures identity reports in place (a refused switch, a failed sign-out). */
+.suite-org-switcher {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--chrome-fg) 9%, transparent);
+  color: inherit;
+  display: flex;
+  font-size: var(--type-sm);
+  gap: var(--space-1);
+  height: 38px;
+  max-width: 300px;
+  padding: 0 11px;
+  white-space: nowrap;
+}
+
+.suite-org-switcher:hover,
+.suite-org-switcher[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--chrome-fg) 9%, transparent);
+}
+
+.suite-org-switcher[aria-busy="true"] { cursor: progress; }
+
+.suite-org-switcher > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.suite-org-switcher-label { color: var(--chrome-fg-muted); }
+
+.suite-org-popover {
+  left: 0;
+  max-height: min(70dvh, 540px);
+  overflow-y: auto;
+  width: 340px;
+}
+
+.suite-org-popover > button[aria-checked="true"] {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.suite-org-popover > button[aria-disabled="true"] { cursor: progress; }
+.suite-org-popover > button[aria-checked="false"] > .suite-org-check { visibility: hidden; }
+
+.suite-org-popover strong,
+.suite-org-popover small { overflow-wrap: anywhere; }
+
+.suite-org-check {
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+
+.suite-org-icon[data-personal] { background: var(--status-info); }
+
+.suite-identity-error {
+  background: var(--status-error-soft);
+  border: 1px solid var(--status-error-edge);
+  color: var(--status-error-strong);
+  font-size: var(--type-xs);
+  margin: var(--space-1) var(--space-3);
+  overflow-wrap: anywhere;
+  padding: var(--space-2) var(--space-3);
+}
+
+/* What a page shows instead of its content while the session is checked, or
+   when the principal is signed out, unreadable, or lacks the capability. */
+.suite-access-page {
+  display: flex;
+  justify-content: center;
+}
+
+.suite-access-state {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--status-neutral);
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: auto minmax(0, 1fr);
+  max-width: 720px;
+  padding: var(--space-6);
+  width: 100%;
+}
+
+.suite-access-state[data-state="loading"] {
+  border-left-color: var(--status-info);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.suite-access-state[data-state="signed-out"] { border-left-color: var(--status-info); }
+.suite-access-state[data-state="error"] { border-left-color: var(--status-error); }
+.suite-access-state[data-state="forbidden"] { border-left-color: var(--status-warning-bright); }
+
+.suite-access-icon {
+  align-items: center;
+  background: var(--status-neutral-soft);
+  border-radius: 50%;
+  color: var(--fg-secondary);
+  display: flex;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+
+.suite-access-state[data-state="signed-out"] > .suite-access-icon { background: var(--status-info-soft); color: var(--status-info-strong); }
+.suite-access-state[data-state="error"] > .suite-access-icon { background: var(--status-error-soft); color: var(--status-error-strong); }
+.suite-access-state[data-state="forbidden"] > .suite-access-icon { background: var(--status-warning-soft); color: var(--status-warning-strong); }
+
+.suite-access-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.suite-access-body h1,
+.suite-access-body h2 {
+  color: var(--fg-strong);
+  font-size: var(--type-xl);
+  margin: 0;
+}
+
+.suite-access-body p {
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
+  line-height: 1.5;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.suite-access-body > .suite-access-requirement-label {
+  color: var(--fg-secondary);
+  font-weight: 600;
+  margin-top: var(--space-2);
+}
+
+.suite-access-requirements {
+  display: grid;
+  gap: var(--space-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.suite-access-requirements li {
+  align-items: baseline;
+  color: var(--fg-text);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--type-sm);
+  gap: var(--space-2);
+}
+
+.suite-access-requirements code {
+  background: var(--bg-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--type-xs);
+  padding: 0 var(--space-1);
+}
+
+.suite-access-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
 
 .suite-app-bar {
   align-items: stretch;
@@ -885,7 +1057,7 @@
 
   .suite-find,
   .suite-context,
-  .suite-utilities > a:first-of-type {
+  .suite-utilities > .suite-settings-link {
     display: none;
   }
 }
@@ -895,6 +1067,8 @@
   .suite-utilities > button,
   .suite-utilities > .suite-menu-anchor:not(:last-child) { display: none; }
   .suite-page { padding-inline: var(--space-4); }
+  .suite-org-switcher { max-width: 220px; }
+  .suite-org-switcher-label { display: none; }
 }
 
 @media (max-width: 760px) {
@@ -988,17 +1162,33 @@
 .suite-user-avatar { align-items: center; background: var(--accent); border-radius: 50%; color: var(--fg-inverse); display: flex; height: 34px; justify-content: center; width: 34px; }
   .drawer > header button { background: transparent; border: 0; color: var(--chrome-fg-muted); font-size: var(--type-xxl); height: 44px; justify-content: center; padding: 0; width: 44px; }
   .drawer-label { color: var(--fg-muted); font-size: var(--type-xs); font-weight: 700; letter-spacing: 0.1em; padding: 15px var(--space-4) 6px; }
-  .drawer > a { align-items: center; border-left: 3px solid transparent; display: flex; font-size: var(--type-sm); gap: var(--space-3); min-height: 47px; padding: 0 var(--space-4); text-decoration: none; }
-  .drawer > a:hover { background: var(--bg-subtle); }
-  .drawer > a.active { background: var(--accent-soft); border-left-color: var(--accent); font-weight: 700; }
+  .drawer > a,
+  .drawer > .drawer-org,
+  .drawer > .drawer-action { align-items: center; border-left: 3px solid transparent; display: flex; font-size: var(--type-sm); gap: var(--space-3); min-height: 47px; padding: 0 var(--space-4); text-decoration: none; }
+  .drawer > a:hover,
+  .drawer > .drawer-org:hover,
+  .drawer > .drawer-action:hover { background: var(--bg-subtle); }
+  .drawer > a.active,
+  .drawer > .drawer-org[aria-pressed="true"] { background: var(--accent-soft); border-left-color: var(--accent); font-weight: 700; }
   .drawer > a.selected-app { background: var(--accent-soft); border-left-color: var(--accent-bright); }
-  .drawer > a > span { align-items: center; color: var(--fg-muted); display: flex; font-size: var(--type-lg); justify-content: center; width: 22px; }
+  .drawer > a > span,
+  .drawer > .drawer-action > span { align-items: center; color: var(--fg-muted); display: flex; font-size: var(--type-lg); justify-content: center; width: 22px; }
   .drawer > a > b { margin-left: auto; }
   .drawer-app-state,
   .drawer-app-retry { color: var(--fg-muted); display: block; font-size: var(--type-xs); margin: var(--space-1) var(--space-4) var(--space-2); padding: 10px; }
   .drawer-app-state { background: var(--bg-subtle); }
   .drawer-app-retry { background: var(--bg-surface); border: 1px solid var(--border-strong); text-align: left; }
   .drawer-rule { border-top: 1px solid var(--border); margin: 9px var(--space-4); }
+  .suite-product-bar > .suite-org-anchor { display: none; }
+  /* The drawer's buttons take the link row above; these undo the button's own chrome. */
+  .drawer > .drawer-org,
+  .drawer > .drawer-action { background: transparent; border-block: 0; border-right: 0; color: var(--fg-text); text-align: left; width: 100%; }
+  .drawer > .drawer-org[aria-disabled="true"] { cursor: progress; }
+  .drawer > .drawer-org > span:first-child { align-items: center; background: var(--accent); color: var(--fg-inverse); display: flex; flex: 0 0 auto; font-size: var(--type-sm); height: 22px; justify-content: center; width: 22px; }
+  .drawer > .drawer-org > span:nth-child(2) { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+  .drawer > .drawer-org small { color: var(--fg-muted); font-size: var(--type-xs); font-weight: 400; }
+  .drawer-org-error { margin: var(--space-1) var(--space-4); }
+  .suite-access-state { padding: var(--space-4); }
 
   .suite-page { padding: 15px 10px calc(30px + env(safe-area-inset-bottom)); }
   .suite-page-heading,

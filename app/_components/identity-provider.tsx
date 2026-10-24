@@ -226,6 +226,15 @@ export function useIdentity(): IdentityContextValue {
   return value;
 }
 
+/**
+ * The identity context, or null when no `IdentityProvider` is above: for a
+ * shared component (the product shell) that mounts its own provider only when
+ * the page has not already supplied one.
+ */
+export function useOptionalIdentity(): IdentityContextValue | null {
+  return useContext(IdentityContext);
+}
+
 export interface RequireCapabilityProps {
   /** One capability, or several that must all be held (or any one, with `match="any"`). */
   readonly capability: Capability | readonly Capability[];
