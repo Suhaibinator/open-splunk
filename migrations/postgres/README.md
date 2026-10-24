@@ -1,9 +1,11 @@
 # PostgreSQL control-plane schema
 
 These files port the final SQLite control-plane schema (`migrations/sqlite/0001`
-through `0012`, with every migration applied) to PostgreSQL. This directory
-holds the tables, keys, CHECK constraints, indexes and seed rows. Triggers are
-ported separately and are applied after these files.
+through `0012`, with every migration applied) to PostgreSQL. `0001` through
+`0006` hold the tables, keys, CHECK constraints, indexes and seed rows;
+`0007` through `0018` port the triggers onto those tables, and `0019` pins the
+`search_path` of the routines that came without it. The
+[Ordering](#ordering) table lists every file.
 
 The SQLite files are still the live schema. These files are embedded
 (`migrations.Postgres()`) and applied by the control-plane runner

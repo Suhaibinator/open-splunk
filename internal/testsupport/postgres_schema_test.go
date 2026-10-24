@@ -175,28 +175,10 @@ func sortedWith(values []string, extra string) []string {
 // the open_splunk schema, and drops it when the test finishes.
 func newEmptyPostgresDatabase(t *testing.T) *sql.DB {
 	t.Helper()
-	adminDSN, admin := postgresAdminHandle(t)
-	suffix, err := randomHex(8)
-	if err != nil {
-		t.Fatalf("name PostgreSQL test database: %v", err)
-	}
-	name := "ostest_" + suffix
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), postgresDropTimeout)
-		defer cancel()
-		if err := dropPostgresDatabase(ctx, admin, name); err != nil {
-			t.Errorf("drop PostgreSQL test database %s: %v", name, err)
-		}
+	dsn := NewPostgresDatabase(t, PostgresTemplate{
+		Key:   "empty_database",
+		Build: func(context.Context, *sql.DB) error { return nil },
 	})
-	createContext, cancel := context.WithTimeout(context.Background(), postgresCloneTimeout)
-	defer cancel()
-	if _, err := admin.ExecContext(createContext, `CREATE DATABASE `+quotePostgresIdentifier(name)); err != nil {
-		t.Fatalf("create empty PostgreSQL database: %v", err)
-	}
-	dsn, err := postgresDSNForDatabase(adminDSN, name)
-	if err != nil {
-		t.Fatalf("address PostgreSQL test database: %v", err)
-	}
 	config, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		t.Fatal("PostgreSQL test database connection string is invalid")
