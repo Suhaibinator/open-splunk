@@ -1874,5 +1874,181 @@
     "statement": "UPDATE audit_tenant_state SET event_count = event_count WHERE tenant_id = 't1'",
     "expect": "reject",
     "message": "audit tenant state transition is invalid"
+  },
+  {
+    "name": "as_upsert_replacement_rejected",
+    "trigger": "audit_tenant_state_initial_shape_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)"
+    ],
+    "statement": "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 2, 1) ON CONFLICT (tenant_id) DO UPDATE SET next_sequence = excluded.next_sequence, event_count = excluded.event_count",
+    "sqlite_statement": "INSERT OR REPLACE INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 2, 1)",
+    "expect": "reject",
+    "message": "audit tenant state must begin empty",
+    "note": "audit store test 'duplicate state replacement': SQLite INSERT OR REPLACE, PostgreSQL ON CONFLICT DO UPDATE; the BEFORE INSERT triggers reject before the conflict is resolved"
+  },
+  {
+    "name": "as_upsert_empty_replacement_rejected",
+    "trigger": "audit_tenant_state_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)"
+    ],
+    "statement": "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0) ON CONFLICT (tenant_id) DO UPDATE SET next_sequence = excluded.next_sequence, event_count = excluded.event_count",
+    "sqlite_statement": "INSERT OR REPLACE INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+    "expect": "reject",
+    "message": "audit tenant state already exists",
+    "note": "an upsert whose row has the empty shape is still refused, so it cannot reset an existing journal"
+  },
+  {
+    "name": "ss_upsert_replacement_rejected",
+    "trigger": "search_attempt_audit_state_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 10)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 20) ON CONFLICT (tenant_id) DO UPDATE SET maximum_retained_attempts = excluded.maximum_retained_attempts",
+    "sqlite_statement": "INSERT OR REPLACE INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 20)",
+    "expect": "reject",
+    "message": "search-attempt audit tenant state already exists",
+    "note": "an upsert cannot replace the retention maximum of an existing state"
+  },
+  {
+    "name": "fs_upsert_replacement_rejected",
+    "trigger": "feature_operation_audit_state_initial_shape_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)"
+    ],
+    "statement": "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 2, 1, 1000) ON CONFLICT (tenant_id) DO UPDATE SET next_sequence = excluded.next_sequence, retained_count = excluded.retained_count, last_occurred_at_unix_micro = excluded.last_occurred_at_unix_micro",
+    "sqlite_statement": "INSERT OR REPLACE INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 2, 1, 1000)",
+    "expect": "reject",
+    "message": "feature-operation audit tenant state must begin empty",
+    "note": "a forged non-empty state cannot be written through an upsert"
+  },
+  {
+    "name": "ka_upsert_event_replacement_rejected",
+    "trigger": "knowledge_attempt_audit_event_insert_requires_current_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)",
+      "INSERT INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason) VALUES ('t1', 1, 1000, 'browser', 'u1', 'user', 'create', 'rejected', 'not_administrator')"
+    ],
+    "statement": "INSERT INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason) VALUES ('t1', 1, 1000, 'browser', 'attacker', 'user', 'create', 'rejected', 'not_administrator') ON CONFLICT (tenant_id, sequence) DO UPDATE SET actor_id = excluded.actor_id",
+    "sqlite_statement": "INSERT OR REPLACE INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason) VALUES ('t1', 1, 1000, 'browser', 'attacker', 'user', 'create', 'rejected', 'not_administrator')",
+    "expect": "reject",
+    "message": "knowledge-attempt audit tenant state is invalid or sequence is exhausted",
+    "note": "knowledgeattemptaudit TestORReplaceCannotBypassImmutability: replacing a retained event is refused before the conflict is resolved"
+  },
+  {
+    "name": "ka_upsert_event_do_nothing_rejected",
+    "trigger": "knowledge_attempt_audit_event_insert_requires_current_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)",
+      "INSERT INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason) VALUES ('t1', 1, 1000, 'browser', 'u1', 'user', 'create', 'rejected', 'not_administrator')"
+    ],
+    "statement": "INSERT INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason) VALUES ('t1', 1, 1000, 'browser', 'attacker', 'user', 'create', 'rejected', 'not_administrator') ON CONFLICT (tenant_id, sequence) DO NOTHING",
+    "sqlite_statement": "INSERT OR IGNORE INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason) VALUES ('t1', 1, 1000, 'browser', 'attacker', 'user', 'create', 'rejected', 'not_administrator')",
+    "expect": "reject",
+    "message": "knowledge-attempt audit tenant state is invalid or sequence is exhausted",
+    "note": "a stale append is refused even when the caller asks to ignore the conflict"
+  },
+  {
+    "name": "ka_multi_row_insert_rejected",
+    "trigger": "knowledge_attempt_audit_event_insert_requires_current_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ],
+    "statement": "INSERT INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason) VALUES ('t1', 1, 1000, 'browser', 'u1', 'user', 'create', 'rejected', 'not_administrator'), ('t1', 2, 1000, 'browser', 'u1', 'user', 'create', 'rejected', 'not_administrator')",
+    "expect": "reject",
+    "message": "knowledge-attempt audit tenant state is invalid or sequence is exhausted",
+    "sqlite_expect": "accept",
+    "note": "deliberate difference: PostgreSQL runs every row's BEFORE INSERT check before any row's AFTER INSERT accounting, so the second row sees a stale state; the Go store appends one row per statement"
+  },
+  {
+    "name": "r_insert_other_tenant_at_capacity_accepted",
+    "trigger": "api_mutation_receipt_capacity_is_available",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "ALTER TABLE api_mutation_receipt_tenant_state DISABLE TRIGGER USER",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 100000, 1000, 1000)",
+      "ALTER TABLE api_mutation_receipt_tenant_state ENABLE TRIGGER USER",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t2', 0, 0, 1000)"
+    ],
+    "sqlite_setup_sql": [
+      "DROP TRIGGER IF EXISTS api_mutation_receipt_tenant_state_delete_is_forbidden",
+      "DROP TRIGGER IF EXISTS api_mutation_receipt_tenant_state_initial_shape_is_valid",
+      "DROP TRIGGER IF EXISTS api_mutation_receipt_tenant_state_transition_is_valid",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 100000, 1000, 1000)",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t2', 0, 0, 1000)"
+    ],
+    "statement": "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t2', 'browser', 'u1', '/api/apps/create', 'request-00000001', 1, decode('abababababababababababababababababababababababababababababababab', 'hex'), 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178)",
+    "sqlite_statement": "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t2', 'browser', 'u1', '/api/apps/create', 'request-00000001', 1, X'abababababababababababababababababababababababababababababababab', 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178)",
+    "expect": "accept",
+    "message": "",
+    "check_sql": "SELECT tenant_id, receipt_count, encoded_bytes, (SELECT count(*) FROM api_mutation_receipts AS r WHERE r.tenant_id = s.tenant_id) FROM api_mutation_receipt_tenant_state AS s ORDER BY tenant_id",
+    "check_result": "t1|100000|1000|0;t2|1|178|1",
+    "note": "requestidempotency receipt capacity test: one tenant's exhausted capacity does not block another"
+  },
+  {
+    "name": "r_multi_row_insert_over_capacity_reaches_check",
+    "trigger": "api_mutation_receipt_capacity_is_available",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "ALTER TABLE api_mutation_receipt_tenant_state DISABLE TRIGGER USER",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 99999, 1000, 1000)"
+    ],
+    "sqlite_setup_sql": [
+      "DROP TRIGGER IF EXISTS api_mutation_receipt_tenant_state_delete_is_forbidden",
+      "DROP TRIGGER IF EXISTS api_mutation_receipt_tenant_state_initial_shape_is_valid",
+      "DROP TRIGGER IF EXISTS api_mutation_receipt_tenant_state_transition_is_valid",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 99999, 1000, 1000)"
+    ],
+    "statement": "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000001', 1, decode('abababababababababababababababababababababababababababababababab', 'hex'), 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178), ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000002', 1, decode('abababababababababababababababababababababababababababababababab', 'hex'), 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178)",
+    "sqlite_statement": "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000001', 1, X'abababababababababababababababababababababababababababababababab', 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178), ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000002', 1, X'abababababababababababababababababababababababababababababababab', 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178)",
+    "expect": "reject",
+    "message": "API mutation receipt capacity is exhausted",
+    "note": "each row passes the per-row check against the statement-start counters; the statement-level accounting refuses the total before advancing them"
+  },
+  {
+    "name": "r_multi_row_insert_last_slots_accepted",
+    "trigger": "api_mutation_receipt_after_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "ALTER TABLE api_mutation_receipt_tenant_state DISABLE TRIGGER USER",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 99998, 1000, 1000)"
+    ],
+    "sqlite_setup_sql": [
+      "DROP TRIGGER IF EXISTS api_mutation_receipt_tenant_state_delete_is_forbidden",
+      "DROP TRIGGER IF EXISTS api_mutation_receipt_tenant_state_initial_shape_is_valid",
+      "DROP TRIGGER IF EXISTS api_mutation_receipt_tenant_state_transition_is_valid",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 99998, 1000, 1000)"
+    ],
+    "statement": "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000001', 1, decode('abababababababababababababababababababababababababababababababab', 'hex'), 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178), ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000002', 1, decode('abababababababababababababababababababababababababababababababab', 'hex'), 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178)",
+    "sqlite_statement": "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000001', 1, X'abababababababababababababababababababababababababababababababab', 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178), ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000002', 1, X'abababababababababababababababababababababababababababababababab', 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178)",
+    "expect": "accept",
+    "message": "",
+    "check_sql": "SELECT tenant_id, receipt_count, encoded_bytes, (SELECT count(*) FROM api_mutation_receipts AS r WHERE r.tenant_id = s.tenant_id) FROM api_mutation_receipt_tenant_state AS s ORDER BY tenant_id",
+    "check_result": "t1|100000|1356|2",
+    "note": "a multi-row statement that exactly fills the count capacity is accepted"
+  },
+  {
+    "name": "r_multi_row_insert_accounted_accepted",
+    "trigger": "api_mutation_receipt_after_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ],
+    "statement": "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000001', 1, decode('abababababababababababababababababababababababababababababababab', 'hex'), 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178), ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000002', 1, decode('abababababababababababababababababababababababababababababababab', 'hex'), 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178), ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000003', 1, decode('abababababababababababababababababababababababababababababababab', 'hex'), 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178), ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000004', 1, decode('abababababababababababababababababababababababababababababababab', 'hex'), 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178), ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000005', 1, decode('abababababababababababababababababababababababababababababababab', 'hex'), 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178)",
+    "sqlite_statement": "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000001', 1, X'abababababababababababababababababababababababababababababababab', 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178), ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000002', 1, X'abababababababababababababababababababababababababababababababab', 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178), ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000003', 1, X'abababababababababababababababababababababababababababababababab', 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178), ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000004', 1, X'abababababababababababababababababababababababababababababababab', 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178), ('t1', 'browser', 'u1', '/api/apps/create', 'request-00000005', 1, X'abababababababababababababababababababababababababababababababab', 'app', 'app1', 1, NULL, 1000, 2000, NULL, 178)",
+    "expect": "accept",
+    "message": "",
+    "check_sql": "SELECT tenant_id, receipt_count, encoded_bytes, (SELECT count(*) FROM api_mutation_receipts AS r WHERE r.tenant_id = s.tenant_id) FROM api_mutation_receipt_tenant_state AS s ORDER BY tenant_id",
+    "check_result": "t1|5|890|5",
+    "note": "five rows in one statement are accounted once, with the same totals as SQLite's five row-level updates"
   }
 ]

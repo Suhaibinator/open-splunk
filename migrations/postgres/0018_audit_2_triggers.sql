@@ -3,10 +3,11 @@
 -- knowledge_attempt_audit_events and search_attempt_audit_tenant_state
 -- (22 triggers). Ported from the final SQLite schema
 -- (migrations/sqlite/0001..0012); see migrations/postgres/README.md for the
--- translation rules. Applies after 0001..0006. The companion triggers on
--- audit_events, api_mutation_receipt_tenant_state,
--- feature_operation_audit_events, knowledge_attempt_audit_tenant_state and
--- search_attempt_audit_events live in 0111_audit_1_triggers.sql.
+-- translation rules. Applies after 0001..0006 and needs no other trigger
+-- file. The companion triggers on audit_events,
+-- api_mutation_receipt_tenant_state, feature_operation_audit_events,
+-- knowledge_attempt_audit_tenant_state and search_attempt_audit_events live
+-- in 0017_audit_1_triggers.sql.
 --
 -- Porting notes:
 --
@@ -56,7 +57,7 @@
 --   PostgreSQL queues every AFTER ROW trigger until the statement ends. The
 --   receipt store reclaims expired receipts with one multi-row DELETE
 --   (internal/requestidempotency reclaimExpiredGORM, up to 256 rows), and
---   api_mutation_receipt_tenant_state_transition_is_valid (0111) requires
+--   api_mutation_receipt_tenant_state_transition_is_valid (0017) requires
 --   receipt_count and encoded_bytes to equal count(*) and sum() of the
 --   receipts at every state UPDATE. Row-level decrements would each see all
 --   N rows already gone and be rejected. The statement triggers apply one
@@ -68,12 +69,13 @@
 --   'knowledge-attempt audit tenant state is invalid or sequence is
 --   exhausted') where SQLite would accept it, because the BEFORE ROW
 --   sequence check for row 2 runs before row 1's AFTER ROW accounting. The
---   Go store appends one row per statement. The same applies to a
---   multi-row INSERT into api_mutation_receipts near capacity: the BEFORE ROW
---   capacity check reads counters that the statement trigger only advances at
---   statement end, so overflow is refused by the tenant-state CHECK (23514)
---   instead of 'API mutation receipt capacity is exhausted'. The Go store
---   inserts one receipt per statement.
+--   Go store appends one row per statement.
+-- * A multi-row INSERT into api_mutation_receipts is checked for capacity
+--   twice: per row by api_mutation_receipt_capacity_is_available, which only
+--   sees counters as of the statement start, and for the statement total by
+--   api_mutation_receipt_after_insert before it advances the counters. A
+--   statement that would overflow is therefore refused with 'API mutation
+--   receipt capacity is exhausted', as SQLite refuses its overflowing row.
 --
 -- Concurrency (load-bearing assumptions):
 --
@@ -343,6 +345,24 @@ DECLARE
     tenants_touched bigint;
 BEGIN
     SELECT count(DISTINCT tenant_id) INTO tenants_touched FROM added_receipts;
+
+    -- The per-row capacity check sees the counters as of the statement
+    -- start, so a multi-row statement is checked again in total here.
+    IF EXISTS (
+        SELECT 1
+        FROM api_mutation_receipt_tenant_state AS state
+        JOIN (
+            SELECT tenant_id,
+                   count(*) AS receipt_count,
+                   sum(encoded_bytes) AS encoded_bytes
+            FROM added_receipts
+            GROUP BY tenant_id
+        ) AS added ON added.tenant_id = state.tenant_id
+        WHERE state.receipt_count + added.receipt_count > 100000
+           OR state.encoded_bytes + added.encoded_bytes > 67108864
+    ) THEN
+        RAISE EXCEPTION 'API mutation receipt capacity is exhausted';
+    END IF;
 
     UPDATE api_mutation_receipt_tenant_state AS state
     SET receipt_count = state.receipt_count + added.receipt_count,
