@@ -2,6 +2,7 @@ package control_test
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -35,11 +36,17 @@ const (
 )
 
 // audit1LaneMigrations names the trigger lanes that fixture scenarios may
-// depend on, by the fixed migration file each lane ships. A scenario that
-// lists a lane runs only once that file is part of the embedded set.
+// depend on, by the fixed migration file each lane ships.
 var audit1LaneMigrations = map[string]string{
 	"audit_2": "0018_audit_2_triggers.sql",
 }
+
+// audit1CrossLaneScenariosEnabled turns on the fixture scenarios that also
+// need another lane's triggers (depends_on_lanes). While it is false those
+// lanes must be absent, and TestPostgresAudit1TriggerScenariosAcrossLanes
+// fails as soon as one of them is merged, so the integrator that merges the
+// lane has to set it to true and make the scenarios pass. It is never a skip.
+const audit1CrossLaneScenariosEnabled = false
 
 type audit1TriggerScenario struct {
 	Name            string   `json:"name"`
@@ -77,10 +84,14 @@ func loadAudit1TriggerScenarios(t *testing.T) []audit1TriggerScenario {
 var (
 	audit1CreateTriggerPattern = regexp.MustCompile(`(?m)^CREATE TRIGGER ([a-z_][a-z0-9_]*)\s`)
 	audit1RaisePattern         = regexp.MustCompile(`RAISE EXCEPTION\s+'([^']*)'`)
+	audit1SQLCommentPattern    = regexp.MustCompile(`--[^\n]*`)
 )
 
 // audit1TriggerSource returns the lane's migration as embedded in the server,
-// failing when the lane's file is missing or shipped under another version.
+// with its "--" comments removed so that SQL quoted in the porting notes is
+// not mistaken for a trigger or a raise. It fails when the lane's file is
+// missing or shipped under another version. No literal in the file contains
+// "--", so stripping comments cannot cut a message short.
 func audit1TriggerSource(t *testing.T) string {
 	t.Helper()
 	entries, err := fs.ReadDir(migrations.Postgres(), ".")
@@ -100,7 +111,7 @@ func audit1TriggerSource(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("read %s: %v", audit1TriggerMigration, err)
 	}
-	return string(contents)
+	return audit1SQLCommentPattern.ReplaceAllString(string(contents), "")
 }
 
 // audit1MissingLanes reports which of lanes are not yet in the embedded
@@ -232,12 +243,15 @@ func TestPostgresAudit1TriggerScenarios(t *testing.T) {
 	}
 }
 
-// TestPostgresAudit1TriggerScenariosAcrossLanes replays the fixture
-// scenarios whose outcome also depends on another trigger lane, such as the
-// knowledge-attempt event and receipt accounting of lane audit_2. A scenario
-// is skipped, by name, only while a lane it lists is absent from the embedded
-// migrations. Once the lane is merged the scenario runs and any difference
-// fails the test.
+// TestPostgresAudit1TriggerScenariosAcrossLanes covers the fixture scenarios
+// whose outcome also depends on another trigger lane, such as the
+// knowledge-attempt event and receipt accounting of lane audit_2. It never
+// skips. While audit1CrossLaneScenariosEnabled is false it requires every
+// lane a scenario names to be absent and checks that the scenario's setup
+// still applies to the shipped schema; the moment a named lane is merged it
+// fails, telling the integrator to enable the scenarios. Once enabled, every
+// named lane must be present and each scenario must produce its recorded
+// outcome exactly.
 func TestPostgresAudit1TriggerScenariosAcrossLanes(t *testing.T) {
 	t.Parallel()
 	scenarios := loadAudit1TriggerScenarios(t)
@@ -248,27 +262,40 @@ func TestPostgresAudit1TriggerScenariosAcrossLanes(t *testing.T) {
 		}
 	}
 	if len(dependent) == 0 {
-		t.Fatal("the fixture has no cross-lane scenarios; drop this test if that is intended")
+		t.Fatal("the fixture has no cross-lane scenarios; drop this test and audit1CrossLaneScenariosEnabled if that is intended")
 	}
-	missing := make(map[string][]string, len(dependent))
-	var db *control.PostgresDB
-	for _, scenario := range dependent {
-		missing[scenario.Name] = audit1MissingLanes(t, scenario.DependsOnLanes)
-		if len(missing[scenario.Name]) == 0 && db == nil {
-			db = newAudit1TriggerDB(t)
-		}
-	}
+	db := newAudit1TriggerDB(t)
 	for _, scenario := range dependent {
 		t.Run(scenario.Name, func(t *testing.T) {
-			if lanes := missing[scenario.Name]; len(lanes) > 0 {
-				t.Skipf("needs trigger lanes %v, which are not in migrations/postgres yet", lanes)
+			missing := audit1MissingLanes(t, scenario.DependsOnLanes)
+			if audit1CrossLaneScenariosEnabled {
+				if len(missing) > 0 {
+					t.Fatalf("cross-lane scenarios are enabled, but trigger lanes %v are not in migrations/postgres", missing)
+				}
+				runAudit1TriggerScenario(t, db, scenario)
+				return
 			}
-			runAudit1TriggerScenario(t, db, scenario)
+			if present := audit1PresentLanes(scenario.DependsOnLanes, missing); len(present) > 0 {
+				t.Fatalf("trigger lanes %v are now in migrations/postgres: set audit1CrossLaneScenariosEnabled = true "+
+					"so this scenario runs against them", present)
+			}
+			runAudit1TriggerScenarioSetup(t, db, scenario)
 		})
 	}
 }
 
-// TestPostgresAudit1TriggerStoreScenarios covers trigger behaviour the
+// audit1PresentLanes returns the lanes that are not in missing.
+func audit1PresentLanes(lanes, missing []string) []string {
+	var present []string
+	for _, lane := range lanes {
+		if !slices.Contains(missing, lane) {
+			present = append(present, lane)
+		}
+	}
+	return present
+}
+
+// TestPostgresAudit1TriggerStoreScenarios covers trigger behavior the
 // SQLite store tests rely on but the differential fixture does not
 // exercise: ON CONFLICT DO UPDATE as PostgreSQL's counterpart of the
 // INSERT OR REPLACE attacks, the sequence ceiling, the receipt store's
@@ -316,24 +343,8 @@ func newAudit1TriggerDB(t *testing.T) *control.PostgresDB {
 func runAudit1TriggerScenario(t *testing.T, db *control.PostgresDB, scenario audit1TriggerScenario) {
 	t.Helper()
 	ctx := t.Context()
-	tx, err := db.SQLDB().BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatalf("begin: %v", err)
-	}
-	defer func() {
-		if err := tx.Rollback(); err != nil {
-			t.Errorf("roll back scenario %s: %v", scenario.Name, err)
-		}
-	}()
-	if _, err := tx.ExecContext(ctx, `SET LOCAL search_path = `+control.PostgresSchema); err != nil {
-		t.Fatalf("set search_path: %v", err)
-	}
-	for index, statement := range scenario.SetupSQL {
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			t.Fatalf("setup statement %d failed: %v\n%s", index+1, err, statement)
-		}
-	}
-	_, err = tx.ExecContext(ctx, scenario.Statement)
+	tx := beginAudit1TriggerScenario(t, db, scenario)
+	_, err := tx.ExecContext(ctx, scenario.Statement)
 	switch scenario.Expect {
 	case "accept":
 		if err != nil {
@@ -363,9 +374,45 @@ func runAudit1TriggerScenario(t *testing.T, db *control.PostgresDB, scenario aud
 	}
 }
 
+// runAudit1TriggerScenarioSetup applies only a scenario's setup, in a
+// transaction that is rolled back, for scenarios whose statement needs a
+// trigger lane that is not merged yet.
+func runAudit1TriggerScenarioSetup(t *testing.T, db *control.PostgresDB, scenario audit1TriggerScenario) {
+	t.Helper()
+	beginAudit1TriggerScenario(t, db, scenario)
+}
+
+// beginAudit1TriggerScenario opens the scenario's transaction, pins its
+// search_path to the control schema and applies the setup statements. The
+// transaction is rolled back when the (sub)test finishes.
+func beginAudit1TriggerScenario(t *testing.T, db *control.PostgresDB, scenario audit1TriggerScenario) *sql.Tx {
+	t.Helper()
+	ctx := t.Context()
+	// The transaction outlives ctx, which is canceled before cleanups run;
+	// a canceled transaction context would roll back on its own and make the
+	// cleanup's Rollback report ErrTxDone.
+	tx, err := db.SQLDB().BeginTx(context.WithoutCancel(ctx), nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := tx.Rollback(); err != nil {
+			t.Errorf("roll back scenario %s: %v", scenario.Name, err)
+		}
+	})
+	if _, err := tx.ExecContext(ctx, `SET LOCAL search_path = `+control.PostgresSchema); err != nil {
+		t.Fatalf("set search_path: %v", err)
+	}
+	for index, statement := range scenario.SetupSQL {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("setup statement %d failed: %v\n%s", index+1, describeAudit1Error(err), statement)
+		}
+	}
+	return tx
+}
+
 func describeAudit1Error(err error) string {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 		return fmt.Sprintf("SQLSTATE %s %q (%s)", pgErr.Code, pgErr.Message, pgErr.Where)
 	}
 	return err.Error()
@@ -445,6 +492,9 @@ const (
 		target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES `
 	audit1KnowledgeStateColumns = `INSERT INTO knowledge_attempt_audit_tenant_state (
 		tenant_id, first_sequence, next_sequence, retained_count) VALUES `
+	audit1FeatureStateSQL = `INSERT INTO feature_operation_audit_tenant_state (
+		tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro)
+		VALUES ('t1', 1, 1, 0, NULL)`
 )
 
 func audit1SearchEvent(sequence int64, job string) string {
@@ -458,7 +508,7 @@ func audit1AuditEvent(sequence int64, targetVersion int64) string {
 }
 
 // audit1StoreScenarios are PostgreSQL-only scenarios. Each note names the
-// SQLite test whose behaviour it carries over.
+// SQLite test whose behavior it carries over.
 func audit1StoreScenarios() []audit1TriggerScenario {
 	const maxSequence = "9223372036854775807"
 	return []audit1TriggerScenario{
@@ -556,6 +606,22 @@ func audit1StoreScenarios() []audit1TriggerScenario {
 			Note:    "searchaudit TestStartupIntegrityRejectsGapAndForgedRows forges rows only after dropping the update guard; an upsert cannot.",
 		},
 		{
+			Name:    "search_retained_job_on_conflict_update_is_rejected",
+			Trigger: "search_attempt_audit_event_job_identity_collision_is_forbidden",
+			SetupSQL: []string{
+				audit1TenantsSQL,
+				`INSERT INTO search_attempt_audit_tenant_state (
+					tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts)
+					VALUES ('t1', 1, 1, 0, 3)`,
+				audit1SearchEventColumns + audit1SearchEvent(1, "job-duplicate"),
+			},
+			Statement: audit1SearchEventColumns + audit1SearchEvent(2, "job-duplicate") + `
+				ON CONFLICT (tenant_id, sequence) DO UPDATE SET search_job_id = EXCLUDED.search_job_id`,
+			Expect:  "reject",
+			Message: "search-attempt audit retained job identity already exists",
+			Note:    "searchaudit TestDuplicateRetainedJobPublicationRollsBackWithoutAdvancingState: INSERT OR REPLACE of a retained job at the next sequence.",
+		},
+		{
 			Name:    "audit_event_on_conflict_update_is_rejected",
 			Trigger: "audit_event_insert_requires_current_tenant_state",
 			SetupSQL: []string{
@@ -594,6 +660,33 @@ func audit1StoreScenarios() []audit1TriggerScenario {
 			Expect:    "reject",
 			Message:   "search-attempt audit tenant state is invalid or sequence is exhausted",
 			Note:      "Documented divergence: PostgreSQL defers AFTER ROW accounting to the end of the statement, so the stores append one event per INSERT.",
+		},
+		{
+			Name:    "feature_event_on_conflict_update_is_rejected",
+			Trigger: "feature_operation_audit_event_insert_requires_current_state",
+			SetupSQL: []string{
+				audit1TenantsSQL,
+				audit1FeatureStateSQL,
+				audit1FeatureEventColumns + `('t1', 1, 1001, 1, 2, 3, 4, 5)`,
+			},
+			Statement: audit1FeatureEventColumns + `('t1', 1, 1001, 1, 2, 3, 99, 5)
+				ON CONFLICT (tenant_id, sequence) DO UPDATE SET items = EXCLUDED.items`,
+			Expect:  "reject",
+			Message: "feature-operation audit tenant state is invalid or sequence is exhausted",
+			Note:    "featureaudit TestStorePersistsImmutableEventsAcrossRestart: an upsert cannot rewrite a committed event either.",
+		},
+		{
+			Name:    "feature_multi_row_insert_is_rejected_at_second_row",
+			Trigger: "feature_operation_audit_event_insert_requires_current_state",
+			SetupSQL: []string{
+				audit1TenantsSQL,
+				audit1FeatureStateSQL,
+			},
+			Statement: audit1FeatureEventColumns + `('t1', 1, 1001, 3, 14, 1, 0, 0), ('t1', 2, 1002, 3, 14, 1, 0, 0)`,
+			Expect:    "reject",
+			Message:   "feature-operation audit tenant state is invalid or sequence is exhausted",
+			Note: "featureaudit TestFeatureAuditRollsOldestEventAtRetentionLimit seeds 100001 events with one INSERT ... SELECT; " +
+				"PostgreSQL defers AFTER ROW accounting to the end of the statement, so that seed must append one event per INSERT.",
 		},
 		{
 			Name:    "audit_sequential_inserts_in_one_transaction_are_accepted",
