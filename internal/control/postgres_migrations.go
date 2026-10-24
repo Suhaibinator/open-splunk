@@ -19,6 +19,8 @@ const (
 	// one database. Advisory locks are scoped per database, and the 0x6f73
 	// ("os") prefix keeps open-splunk keys apart from other tenants of the
 	// shared database, which use hashtext-derived two-key locks.
+	// 0x6f73_0000_0000_0002 is taken by the durable_search_jobs cursor lock
+	// (migrations/postgres/0020_sqlite_parity_repairs.sql).
 	postgresMigrationAdvisoryLockKey = int64(0x6f73_0000_0000_0001)
 
 	postgresMigrationIdentityFormat = "open-splunk/postgres-migrations/format-1\x00"

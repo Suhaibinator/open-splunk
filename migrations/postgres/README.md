@@ -37,6 +37,7 @@ Files apply in filename order, and each file depends only on earlier ones:
 | `0017_audit_1_triggers.sql` | triggers on `audit_events`, feature-operation and search-attempt audit events, receipt and knowledge-attempt tenant state |
 | `0018_audit_2_triggers.sql` | triggers on `api_mutation_receipts`, `knowledge_attempt_audit_events`, the audit, feature-operation and search-attempt tenant state |
 | `0019_pin_routine_search_path.sql` | pins `search_path = open_splunk` on the 136 routines that `0008`, `0009`, `0012`, `0016` and `0017` created without it |
+| `0020_sqlite_parity_repairs.sql` | assigns `durable_search_jobs.row_cursor` in commit order, makes the version and idempotency-receipt capacities hold for multi-row INSERTs, and bounds five multi-column btree keys under the index-row limit |
 
 `0004_audit.sql` comes before knowledge because the knowledge mutation
 authorities reference `audit_events`. Inside a file, tables are ordered by
@@ -131,7 +132,16 @@ Identifiers are limited to 63 bytes, so
   `(tenant_id, app_id)`.
 - `durable_search_jobs.row_cursor bigint GENERATED ALWAYS AS IDENTITY`
   (unique) replaces SQLite's implicit `rowid`, which the artifact listing used
-  as a high-water cursor. Unlike `rowid`, it is never reused.
+  as a high-water cursor. Unlike `rowid`, it is never reused. An identity
+  value is drawn at INSERT time, not at commit, so on its own it would let a
+  late-committing row land under a high-water mark a reader already took.
+  `0020` adds `durable_search_jobs_insert_takes_cursor_lock`, a BEFORE INSERT
+  statement trigger that takes the transaction-scoped advisory lock
+  `0x6f73000000000002` before the identity default runs. Job inserts
+  therefore draw cursors one transaction at a time, in commit order, as
+  SQLite's single writer did, and the listing's `row_cursor <= mark` pages
+  stay a stable snapshot across processes. Concurrent job inserts queue on
+  that lock until the holder commits.
 
 ## Deviations from SQLite
 
@@ -141,3 +151,33 @@ Identifiers are limited to 63 bytes, so
   itself, which admits 16384 bytes; a PostgreSQL btree tuple holds at most
   2704 bytes, so that key refused valid rows with SQLSTATE 54000. No query
   orders or seeks by description.
+- The same limit applies to five multi-column keys whose per-column
+  `char_length` bounds admit up to 1020 bytes per column: the `dashboards`
+  and `saved_searches` `UNIQUE (tenant_id, owner_id, app_id, name)`,
+  `search_history_owner_app_created_idx`,
+  `search_history_owner_saved_created_idx` and
+  `knowledge_lookup_definitions_resolution` (whose columns include
+  `knowledge_lookup_definitions_private_name`'s). `0020` keeps every
+  per-column bound and adds one named CHECK per key
+  (`dashboards_owner_app_name_key_bytes_bounded`,
+  `saved_searches_owner_app_name_key_bytes_bounded`,
+  `search_history_owner_app_key_bytes_bounded`,
+  `search_history_owner_saved_key_bytes_bounded`,
+  `knowledge_lookup_definitions_resolution_key_bytes_bounded`) that caps the
+  sum of the key's text columns at 2560 octets. A row SQLite would store
+  with a larger key is refused with 23514 on that constraint instead of
+  54000; every row under the cap fits the index even when its values do not
+  compress. The Go validators cap each of these columns at 255 bytes, so the
+  API cannot reach the cap. Keys over identifiers that have no length bound
+  in SQLite either (`index_id`, `ingestion_token_id`) are unchanged.
+- AFTER ROW triggers run at the end of the statement in PostgreSQL, not
+  after each row as in SQLite, so a BEFORE ROW capacity check that reads a
+  counter maintained by an AFTER ROW trigger sees the count from before a
+  multi-row INSERT. Where the soft limit sits below the counter's column
+  CHECK (`knowledge_object_versions`: 61440 of 65536,
+  `knowledge_mutation_idempotency`: 16384 of 20480) `0020` makes the
+  AFTER ROW increment refuse to pass the limit for the row's
+  `mutation_kind`, with the BEFORE trigger's message, so a multi-row INSERT
+  is refused at the same row as in SQLite. The other counter-backed limits
+  equal their column CHECK, so a multi-row INSERT past them fails with
+  23514.

@@ -510,10 +510,13 @@ var semNumRenamedTriggers = map[string]string{
 
 // semNumPostgresOnlyTrigger is a trigger SQLite never had: the tenant guards
 // of 0007 and 0011, which keep rows from referencing or moving into another
-// tenant where SQLite had no tenant to compare.
+// tenant where SQLite had no tenant to compare, and the 0020 cursor lock on
+// durable_search_jobs, which stands in for SQLite's single writer. Every one
+// is BEFORE; statement marks the FOR EACH STATEMENT ones.
 type semNumPostgresOnlyTrigger struct {
 	table, event string
 	updateOf     []string
+	statement    bool
 }
 
 var semNumPostgresOnlyTriggers = map[string]semNumPostgresOnlyTrigger{
@@ -522,6 +525,7 @@ var semNumPostgresOnlyTriggers = map[string]semNumPostgresOnlyTrigger{
 	"ingestion_token_index_requires_same_tenant_update": {table: "ingestion_token_indexes", event: "UPDATE", updateOf: []string{"index_id", "ingestion_token_id"}},
 	"ingestion_token_tenant_is_immutable":               {table: "ingestion_tokens", event: "UPDATE", updateOf: []string{"tenant_id"}},
 	"saved_search_tenant_is_immutable":                  {table: "saved_searches", event: "UPDATE", updateOf: []string{"tenant_id"}},
+	"durable_search_jobs_insert_takes_cursor_lock":      {table: "durable_search_jobs", event: "INSERT", statement: true},
 }
 
 // semNumStatementTriggers are the documented FOR EACH STATEMENT ports
@@ -562,9 +566,13 @@ func TestPostgresBreakTriggerSignaturesMatchSQLite(t *testing.T) {
 		case got.update:
 			event = "UPDATE"
 		}
-		if got.table != want.table || !got.before || !got.row || event != want.event ||
+		level := "ROW"
+		if want.statement {
+			level = "STATEMENT"
+		}
+		if got.table != want.table || !got.before || got.row == want.statement || event != want.event ||
 			!slices.Equal(got.updateOf, want.updateOf) {
-			t.Errorf("%s is not BEFORE %s OF %v ON %s FOR EACH ROW", name, want.event, want.updateOf, want.table)
+			t.Errorf("%s is not BEFORE %s OF %v ON %s FOR EACH %s", name, want.event, want.updateOf, want.table, level)
 		}
 	}
 	withUpdateOf := 0
