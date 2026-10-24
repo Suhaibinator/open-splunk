@@ -90,10 +90,14 @@ test("a member is offered no administration, and opening it by URL explains what
   await expect(page.getByText("Any one of these permissions is needed:")).toBeVisible();
   await expect(page.getByRole("link", { name: "Go to Search" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Switch organization" }).click();
+  await page.getByRole("button", { name: "Switch organization", exact: true }).click();
   const menu = page.getByRole("menu", { name: "Organizations" });
   await expect(menu.getByRole("menuitemradio", { name: /^Acme Operations/u })).toBeFocused();
+  // Acme Platform (inherited from Acme Operations) sits between the two memberships.
   await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitemradio", { name: /^Acme Platform/u })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitemradio", { name: /^Globex Security/u })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(organizationTrigger(page)).toContainText("Globex Security");
   await expect(page.getByText("Your role in Globex Security is Member.")).toBeVisible();

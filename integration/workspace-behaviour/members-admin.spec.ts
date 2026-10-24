@@ -100,11 +100,16 @@ test("a pending invitation is revoked after confirmation", async ({ page }) => {
   await expect(page.getByRole("heading", { level: 3, name: "Pending invitations" })).toBeFocused();
 });
 
-test("a member without members.admin sees why the panel is closed", async ({ page }) => {
-  await signInAs(page, "5");
-  await openMembers(page);
-  await expect(page.locator('[data-members-state="forbidden"]')).toBeVisible();
-  await expect(page.getByText("Members are managed by admins")).toBeVisible();
+test("a moderator without members.admin sees why the panel is closed", async ({ page }) => {
+  // The administration console opens for a moderator, but the shell closes the
+  // Members section before the panel mounts and says what is missing.
+  await signInAs(page, "4");
+  await page.goto("/admin/?section=members");
+  await expect(page.getByRole("heading", { level: 2, name: "You do not have access to Members & invitations" })).toBeVisible();
+  await expect(page.getByText("Ask an owner or admin of Acme Operations for the Admin role or higher.", { exact: false })).toBeVisible();
+  await expect(page.getByText("Manage members and invitations")).toBeVisible();
+  const navigation = page.getByRole("complementary", { name: "Administration navigation" });
+  await expect(navigation.getByRole("button", { name: /Members & invitations/u })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Invite member" })).toHaveCount(0);
   await expect(page.getByRole("table")).toHaveCount(0);
 });

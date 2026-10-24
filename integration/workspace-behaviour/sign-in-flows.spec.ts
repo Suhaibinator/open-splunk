@@ -55,7 +55,9 @@ test("an account with an authenticator asks for the code on a second step", asyn
   await expect(code).toBeFocused();
   await code.fill("000000");
   await code.press("Enter");
-  await expect(page.getByText("That code was not accepted")).toBeVisible();
+  // The field note shows the refusal and the form's alert announces it.
+  await expect(code).toHaveAccessibleDescription(/That code was not accepted/u);
+  await expect(page.getByRole("form", { name: "Verification code" }).getByRole("alert")).toContainText("That code was not accepted");
   await code.fill(OTP_CODE);
   await page.getByRole("button", { name: "Verify and sign in" }).click();
   await expect(page).toHaveURL(/\/reports\/$/u);

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { usePathname } from "next/navigation";
 
 /**
  * Moves the browser. A flow component receives it as a prop so a test can
@@ -12,12 +13,17 @@ function subscribeToNothing(): () => void {
   return () => undefined;
 }
 
-function readSearch(): string {
-  return window.location.search;
+/** The location's path and query, separated by a newline neither can contain unescaped. */
+function readLocation(): string {
+  return `${window.location.pathname}\n${window.location.search}`;
 }
 
-function readNoSearch(): null {
+function readNoLocation(): null {
   return null;
+}
+
+function withoutTrailingSlash(pathname: string): string {
+  return pathname.length > 1 && pathname.endsWith("/") ? pathname.replace(/\/+$/u, "") : pathname;
 }
 
 /**
@@ -26,8 +32,20 @@ function readNoSearch(): null {
  * says which link it was opened from.
  */
 export function useLocationQuery(): URLSearchParams | null {
-  const search = useSyncExternalStore<string | null>(subscribeToNothing, readSearch, readNoSearch);
-  return useMemo(() => (search === null ? null : new URLSearchParams(search)), [search]);
+  // A client-side navigation renders the new page before the router writes
+  // its URL to history, so `window.location` still describes the page being
+  // left. The router's pathname is already the new one: until the two agree,
+  // the query is not known yet. React rereads the snapshot once the render
+  // commits, which is after the router has written the URL.
+  const routePathname = usePathname();
+  const location = useSyncExternalStore<string | null>(subscribeToNothing, readLocation, readNoLocation);
+  return useMemo(() => {
+    if (location === null) return null;
+    const separator = location.indexOf("\n");
+    const pathname = location.slice(0, separator);
+    if (routePathname !== null && withoutTrailingSlash(routePathname) !== withoutTrailingSlash(pathname)) return null;
+    return new URLSearchParams(location.slice(separator + 1));
+  }, [location, routePathname]);
 }
 
 export interface Cooldown {
