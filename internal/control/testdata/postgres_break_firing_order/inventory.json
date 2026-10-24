@@ -1,0 +1,974 @@
+[
+  {
+    "table": "app_catalog_revisions",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0011_collectors_apps_search_2_triggers.sql",
+    "postgres_order": [
+      "app_catalog_revision_identity_collision_is_forbidden",
+      "app_catalog_revision_initial_shape_is_exact"
+    ],
+    "sqlite_order": [
+      "app_catalog_revision_initial_shape_is_exact",
+      "app_catalog_revision_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "app_catalog_revisions",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0011_collectors_apps_search_2_triggers.sql",
+    "postgres_order": [
+      "app_catalog_revision_tenant_is_immutable",
+      "app_catalog_revision_transition_is_exact"
+    ],
+    "sqlite_order": [
+      "app_catalog_revision_transition_is_exact",
+      "app_catalog_revision_tenant_is_immutable"
+    ]
+  },
+  {
+    "table": "app_workspaces",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "DELETE",
+    "migration": "0010_collectors_apps_search_1_triggers.sql",
+    "postgres_order": [
+      "active_app_workspace_cannot_be_deleted",
+      "app_workspace_delete_restrict_dashboards",
+      "knowledge_lookup_referenced_app_workspace_cannot_be_deleted",
+      "knowledge_referenced_app_workspace_cannot_be_deleted",
+      "referenced_app_workspace_cannot_be_deleted"
+    ],
+    "sqlite_order": [
+      "app_workspace_delete_restrict_dashboards",
+      "knowledge_lookup_referenced_app_workspace_cannot_be_deleted",
+      "knowledge_referenced_app_workspace_cannot_be_deleted",
+      "referenced_app_workspace_cannot_be_deleted",
+      "active_app_workspace_cannot_be_deleted"
+    ]
+  },
+  {
+    "table": "app_workspaces",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0010_collectors_apps_search_1_triggers.sql",
+    "postgres_order": [
+      "app_workspaces_identity_is_immutable",
+      "knowledge_active_app_workspace_cannot_be_archived",
+      "knowledge_lookup_active_app_workspace_cannot_be_archived",
+      "reactivated_app_requires_searchable_indexes"
+    ],
+    "sqlite_order": [
+      "knowledge_lookup_active_app_workspace_cannot_be_archived",
+      "knowledge_active_app_workspace_cannot_be_archived",
+      "reactivated_app_requires_searchable_indexes",
+      "app_workspaces_identity_is_immutable"
+    ]
+  },
+  {
+    "table": "audit_events",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0017_audit_1_triggers.sql",
+    "postgres_order": [
+      "audit_event_identity_collision_is_forbidden",
+      "audit_event_insert_requires_current_tenant_state"
+    ],
+    "sqlite_order": [
+      "audit_event_insert_requires_current_tenant_state",
+      "audit_event_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "audit_tenant_state",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0018_audit_2_triggers.sql",
+    "postgres_order": [
+      "audit_tenant_state_identity_collision_is_forbidden",
+      "audit_tenant_state_initial_shape_is_valid"
+    ],
+    "sqlite_order": [
+      "audit_tenant_state_initial_shape_is_valid",
+      "audit_tenant_state_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "collector_fleet",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0011_collectors_apps_search_2_triggers.sql",
+    "postgres_order": [
+      "collector_fleet_admin_version_is_monotonic",
+      "collector_fleet_identity_is_immutable"
+    ],
+    "sqlite_order": [
+      "collector_fleet_admin_version_is_monotonic",
+      "collector_fleet_identity_is_immutable"
+    ]
+  },
+  {
+    "table": "collector_runtime",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0010_collectors_apps_search_1_triggers.sql",
+    "postgres_order": [
+      "collector_runtime_identity_is_immutable",
+      "collector_runtime_revisions_are_monotonic"
+    ],
+    "sqlite_order": [
+      "collector_runtime_revisions_are_monotonic",
+      "collector_runtime_identity_is_immutable"
+    ]
+  },
+  {
+    "table": "dashboards",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0010_collectors_apps_search_1_triggers.sql",
+    "postgres_order": [
+      "canonical_dashboard_app_exists_insert",
+      "dashboards_owner_capacity_insert"
+    ],
+    "sqlite_order": [
+      "canonical_dashboard_app_exists_insert",
+      "dashboards_owner_capacity_insert"
+    ]
+  },
+  {
+    "table": "index_catalog_state",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0008_core_ingest_2_triggers.sql",
+    "postgres_order": [
+      "index_catalog_state_identity_is_immutable",
+      "index_catalog_state_transition_is_valid"
+    ],
+    "sqlite_order": [
+      "index_catalog_state_transition_is_valid",
+      "index_catalog_state_identity_is_immutable"
+    ]
+  },
+  {
+    "table": "index_data_deletion_completions",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0008_core_ingest_2_triggers.sql",
+    "postgres_order": [
+      "index_data_deletion_completion_identity_collision_is_forbidden",
+      "index_data_deletion_completion_insert_is_valid"
+    ],
+    "sqlite_order": [
+      "index_data_deletion_completion_insert_is_valid",
+      "index_data_deletion_completion_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "index_deletion_mutation_attempts",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0008_core_ingest_2_triggers.sql",
+    "postgres_order": [
+      "index_deletion_mutation_attempt_identity_collision_is_forbidden",
+      "index_deletion_mutation_attempt_insert_is_valid",
+      "index_deletion_mutation_completed_identity_is_forbidden"
+    ],
+    "sqlite_order": [
+      "index_deletion_mutation_completed_identity_is_forbidden",
+      "index_deletion_mutation_attempt_insert_is_valid",
+      "index_deletion_mutation_attempt_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "index_deletion_operations",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0009_core_ingest_3_triggers.sql",
+    "postgres_order": [
+      "index_deletion_operation_completed_identity_is_forbidden",
+      "index_deletion_operation_identity_collision_is_forbidden",
+      "index_deletion_operation_insert_is_valid"
+    ],
+    "sqlite_order": [
+      "index_deletion_operation_completed_identity_is_forbidden",
+      "index_deletion_operation_identity_collision_is_forbidden",
+      "index_deletion_operation_insert_is_valid"
+    ]
+  },
+  {
+    "table": "index_deletion_tombstones",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0009_core_ingest_3_triggers.sql",
+    "postgres_order": [
+      "index_catalog_before_tombstone_insert",
+      "index_deletion_tombstone_identity_collision_is_forbidden",
+      "index_deletion_tombstone_insert_is_valid"
+    ],
+    "sqlite_order": [
+      "index_catalog_before_tombstone_insert",
+      "index_deletion_tombstone_insert_is_valid",
+      "index_deletion_tombstone_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "indexes",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "DELETE",
+    "migration": "0007_core_ingest_1_triggers.sql",
+    "postgres_order": [
+      "deleting_index_with_operation_delete_is_forbidden",
+      "index_catalog_index_delete_is_forbidden",
+      "tombstoned_index_delete_is_forbidden"
+    ],
+    "sqlite_order": [
+      "index_catalog_index_delete_is_forbidden",
+      "deleting_index_with_operation_delete_is_forbidden",
+      "tombstoned_index_delete_is_forbidden"
+    ]
+  },
+  {
+    "table": "indexes",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0007_core_ingest_1_triggers.sql",
+    "postgres_order": [
+      "deleting_index_insert_is_forbidden",
+      "index_catalog_before_index_insert",
+      "index_catalog_identity_collision_is_forbidden",
+      "index_catalog_record_insert_is_bounded",
+      "indexes_retention_is_millisecond_aligned_on_insert"
+    ],
+    "sqlite_order": [
+      "index_catalog_identity_collision_is_forbidden",
+      "index_catalog_before_index_insert",
+      "index_catalog_record_insert_is_bounded",
+      "deleting_index_insert_is_forbidden",
+      "indexes_retention_is_millisecond_aligned_on_insert"
+    ]
+  },
+  {
+    "table": "indexes",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0007_core_ingest_1_triggers.sql",
+    "postgres_order": [
+      "active_app_default_indexes_remain_searchable",
+      "deleting_index_with_operation_update_is_forbidden",
+      "index_catalog_before_index_update",
+      "index_catalog_record_update_is_bounded",
+      "index_deleting_transition_requires_operation",
+      "indexes_id_is_immutable",
+      "indexes_name_is_immutable",
+      "indexes_retention_is_millisecond_aligned_on_update",
+      "tombstoned_index_update_is_forbidden"
+    ],
+    "sqlite_order": [
+      "index_catalog_before_index_update",
+      "indexes_id_is_immutable",
+      "index_catalog_record_update_is_bounded",
+      "deleting_index_with_operation_update_is_forbidden",
+      "index_deleting_transition_requires_operation",
+      "tombstoned_index_update_is_forbidden",
+      "active_app_default_indexes_remain_searchable",
+      "indexes_retention_is_millisecond_aligned_on_update",
+      "indexes_name_is_immutable"
+    ]
+  },
+  {
+    "table": "ingest_visibility_reservations",
+    "timing": "AFTER",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0009_core_ingest_3_triggers.sql",
+    "postgres_order": [
+      "hec_request_visibility_committed",
+      "hec_request_visibility_failed"
+    ],
+    "sqlite_order": [
+      "hec_request_visibility_failed",
+      "hec_request_visibility_committed"
+    ]
+  },
+  {
+    "table": "ingest_visibility_reservations",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0009_core_ingest_3_triggers.sql",
+    "postgres_order": [
+      "ingest_visibility_principal_is_immutable",
+      "ingest_visibility_reservation_accounting_update_is_valid"
+    ],
+    "sqlite_order": [
+      "ingest_visibility_principal_is_immutable",
+      "ingest_visibility_reservation_accounting_update_is_valid"
+    ]
+  },
+  {
+    "table": "ingest_write_group_members",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0008_core_ingest_2_triggers.sql",
+    "postgres_order": [
+      "ingest_write_group_member_insert_is_contiguous",
+      "ingest_write_group_member_insert_is_ordered",
+      "ingest_write_group_member_insert_is_valid"
+    ],
+    "sqlite_order": [
+      "ingest_write_group_member_insert_is_ordered",
+      "ingest_write_group_member_insert_is_contiguous",
+      "ingest_write_group_member_insert_is_valid"
+    ]
+  },
+  {
+    "table": "ingest_write_groups",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0009_core_ingest_3_triggers.sql",
+    "postgres_order": [
+      "ingest_write_group_identity_is_immutable",
+      "ingest_write_group_seal_is_valid",
+      "ingest_write_group_state_transition_is_valid"
+    ],
+    "sqlite_order": [
+      "ingest_write_group_seal_is_valid",
+      "ingest_write_group_identity_is_immutable",
+      "ingest_write_group_state_transition_is_valid"
+    ]
+  },
+  {
+    "table": "ingestion_token_hec_profiles",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0007_core_ingest_1_triggers.sql",
+    "postgres_order": [
+      "ingestion_token_hec_acknowledgment_is_immutable",
+      "ingestion_token_hec_profile_owner_is_immutable"
+    ],
+    "sqlite_order": [
+      "ingestion_token_hec_acknowledgment_is_immutable",
+      "ingestion_token_hec_profile_owner_is_immutable"
+    ]
+  },
+  {
+    "table": "ingestion_tokens",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0007_core_ingest_1_triggers.sql",
+    "postgres_order": [
+      "ingestion_token_collector_binding_is_required",
+      "ingestion_token_hec_collector_binding_is_forbidden"
+    ],
+    "sqlite_order": [
+      "ingestion_token_hec_collector_binding_is_forbidden",
+      "ingestion_token_collector_binding_is_required"
+    ]
+  },
+  {
+    "table": "ingestion_tokens",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0007_core_ingest_1_triggers.sql",
+    "postgres_order": [
+      "ingestion_token_collector_binding_is_immutable",
+      "ingestion_token_digest_is_immutable",
+      "ingestion_token_hec_collector_binding_update_is_forbidden",
+      "ingestion_token_purpose_is_immutable",
+      "revoked_ingestion_token_is_irreversible"
+    ],
+    "sqlite_order": [
+      "ingestion_token_purpose_is_immutable",
+      "ingestion_token_hec_collector_binding_update_is_forbidden",
+      "ingestion_token_collector_binding_is_immutable",
+      "revoked_ingestion_token_is_irreversible",
+      "ingestion_token_digest_is_immutable"
+    ]
+  },
+  {
+    "table": "knowledge_attempt_audit_events",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0018_audit_2_triggers.sql",
+    "postgres_order": [
+      "knowledge_attempt_audit_event_identity_collision_is_forbidden",
+      "knowledge_attempt_audit_event_insert_requires_current_state"
+    ],
+    "sqlite_order": [
+      "knowledge_attempt_audit_event_insert_requires_current_state",
+      "knowledge_attempt_audit_event_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "knowledge_attempt_audit_tenant_state",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0017_audit_1_triggers.sql",
+    "postgres_order": [
+      "knowledge_attempt_audit_state_identity_collision_is_forbidden",
+      "knowledge_attempt_audit_state_initial_shape_is_valid"
+    ],
+    "sqlite_order": [
+      "knowledge_attempt_audit_state_initial_shape_is_valid",
+      "knowledge_attempt_audit_state_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "knowledge_catalog_revision_heads",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0015_knowledge_catalog_2_triggers.sql",
+    "postgres_order": [
+      "knowledge_catalog_revision_head_identity_collision_is_forbidden",
+      "knowledge_catalog_revision_head_insert_agrees_with_tenant"
+    ],
+    "sqlite_order": [
+      "knowledge_catalog_revision_head_insert_agrees_with_tenant",
+      "knowledge_catalog_revision_head_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "knowledge_catalog_tenants",
+    "timing": "AFTER",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0015_knowledge_catalog_2_triggers.sql",
+    "postgres_order": [
+      "knowledge_catalog_tenant_creates_revision_head",
+      "knowledge_catalog_tenant_provisions_lookup_asset_ledger"
+    ],
+    "sqlite_order": [
+      "knowledge_catalog_tenant_provisions_lookup_asset_ledger",
+      "knowledge_catalog_tenant_creates_revision_head"
+    ]
+  },
+  {
+    "table": "knowledge_catalog_tenants",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0015_knowledge_catalog_2_triggers.sql",
+    "postgres_order": [
+      "knowledge_catalog_tenant_identity_collision_is_forbidden",
+      "knowledge_catalog_tenant_initial_shape_is_valid"
+    ],
+    "sqlite_order": [
+      "knowledge_catalog_tenant_initial_shape_is_valid",
+      "knowledge_catalog_tenant_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "knowledge_catalog_tenants",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0015_knowledge_catalog_2_triggers.sql",
+    "postgres_order": [
+      "knowledge_catalog_revision_requires_exact_head",
+      "knowledge_catalog_revision_transition_is_valid",
+      "knowledge_catalog_tenant_identity_is_immutable"
+    ],
+    "sqlite_order": [
+      "knowledge_catalog_revision_requires_exact_head",
+      "knowledge_catalog_tenant_identity_is_immutable",
+      "knowledge_catalog_revision_transition_is_valid"
+    ]
+  },
+  {
+    "table": "knowledge_definition_blobs",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0014_knowledge_catalog_1_triggers.sql",
+    "postgres_order": [
+      "knowledge_definition_blob_capacity_is_available",
+      "knowledge_definition_blob_identity_collision_is_forbidden"
+    ],
+    "sqlite_order": [
+      "knowledge_definition_blob_identity_collision_is_forbidden",
+      "knowledge_definition_blob_capacity_is_available"
+    ]
+  },
+  {
+    "table": "knowledge_lookup_asset_stages",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0016_lookups_triggers.sql",
+    "postgres_order": [
+      "knowledge_lookup_asset_stage_capacity_is_available",
+      "knowledge_lookup_asset_stage_requires_tenant_ledger"
+    ],
+    "sqlite_order": [
+      "knowledge_lookup_asset_stage_requires_tenant_ledger",
+      "knowledge_lookup_asset_stage_capacity_is_available"
+    ]
+  },
+  {
+    "table": "knowledge_lookup_asset_tenant_ledgers",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0016_lookups_triggers.sql",
+    "postgres_order": [
+      "knowledge_lookup_asset_ledger_identity_collision_is_forbidden",
+      "knowledge_lookup_asset_ledger_initial_shape_is_exact"
+    ],
+    "sqlite_order": [
+      "knowledge_lookup_asset_ledger_initial_shape_is_exact",
+      "knowledge_lookup_asset_ledger_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "knowledge_lookup_asset_versions",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0016_lookups_triggers.sql",
+    "postgres_order": [
+      "knowledge_lookup_asset_version_capacity_is_available",
+      "knowledge_lookup_asset_version_requires_tenant_ledger",
+      "knowledge_lookup_asset_version_sequence_is_exact"
+    ],
+    "sqlite_order": [
+      "knowledge_lookup_asset_version_sequence_is_exact",
+      "knowledge_lookup_asset_version_requires_tenant_ledger",
+      "knowledge_lookup_asset_version_capacity_is_available"
+    ]
+  },
+  {
+    "table": "knowledge_lookup_assets",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0016_lookups_triggers.sql",
+    "postgres_order": [
+      "knowledge_lookup_asset_identity_capacity_is_available",
+      "knowledge_lookup_asset_identity_requires_tenant_ledger"
+    ],
+    "sqlite_order": [
+      "knowledge_lookup_asset_identity_requires_tenant_ledger",
+      "knowledge_lookup_asset_identity_capacity_is_available"
+    ]
+  },
+  {
+    "table": "knowledge_lookup_definition_versions",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0016_lookups_triggers.sql",
+    "postgres_order": [
+      "knowledge_lookup_definition_ordinary_version_capacity_available",
+      "knowledge_lookup_definition_version_capacity_is_available",
+      "knowledge_lookup_definition_version_matches_current_registry"
+    ],
+    "sqlite_order": [
+      "knowledge_lookup_definition_version_matches_current_registry",
+      "knowledge_lookup_definition_ordinary_version_capacity_available",
+      "knowledge_lookup_definition_version_capacity_is_available"
+    ]
+  },
+  {
+    "table": "knowledge_lookup_definitions",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0016_lookups_triggers.sql",
+    "postgres_order": [
+      "knowledge_lookup_active_definition_requires_active_app_insert",
+      "knowledge_lookup_definition_initial_shape_is_exact",
+      "knowledge_lookup_definition_tenant_capacity_is_available"
+    ],
+    "sqlite_order": [
+      "knowledge_lookup_active_definition_requires_active_app_insert",
+      "knowledge_lookup_definition_initial_shape_is_exact",
+      "knowledge_lookup_definition_tenant_capacity_is_available"
+    ]
+  },
+  {
+    "table": "knowledge_lookup_definitions",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0016_lookups_triggers.sql",
+    "postgres_order": [
+      "knowledge_lookup_definition_transition_is_valid",
+      "knowledge_lookup_definition_update_requires_active_app"
+    ],
+    "sqlite_order": [
+      "knowledge_lookup_definition_update_requires_active_app",
+      "knowledge_lookup_definition_transition_is_valid"
+    ]
+  },
+  {
+    "table": "knowledge_mutation_commit_authorities",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0015_knowledge_catalog_2_triggers.sql",
+    "postgres_order": [
+      "knowledge_mutation_commit_authority_collision_is_forbidden",
+      "knowledge_mutation_commit_authority_is_exact"
+    ],
+    "sqlite_order": [
+      "knowledge_mutation_commit_authority_is_exact",
+      "knowledge_mutation_commit_authority_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "knowledge_mutation_idempotency",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0014_knowledge_catalog_1_triggers.sql",
+    "postgres_order": [
+      "knowledge_mutation_idempotency_capacity_is_available",
+      "knowledge_mutation_idempotency_identity_collision_is_forbidden",
+      "knowledge_mutation_idempotency_matches_audit_authority",
+      "knowledge_mutation_idempotency_matches_commit_authority"
+    ],
+    "sqlite_order": [
+      "knowledge_mutation_idempotency_matches_audit_authority",
+      "knowledge_mutation_idempotency_matches_commit_authority",
+      "knowledge_mutation_idempotency_identity_collision_is_forbidden",
+      "knowledge_mutation_idempotency_capacity_is_available"
+    ]
+  },
+  {
+    "table": "knowledge_object_dependencies",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0012_knowledge_objects_1_triggers.sql",
+    "postgres_order": [
+      "knowledge_dependency_identity_collision_is_forbidden",
+      "knowledge_dependency_ordinal_is_declared",
+      "knowledge_dependency_sealed_version_is_immutable"
+    ],
+    "sqlite_order": [
+      "knowledge_dependency_identity_collision_is_forbidden",
+      "knowledge_dependency_sealed_version_is_immutable",
+      "knowledge_dependency_ordinal_is_declared"
+    ]
+  },
+  {
+    "table": "knowledge_object_dependency_seals",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0013_knowledge_objects_2_triggers.sql",
+    "postgres_order": [
+      "knowledge_dependency_seal_identity_collision_is_forbidden",
+      "knowledge_dependency_seal_is_complete",
+      "knowledge_object_state_only_dependencies_are_exact"
+    ],
+    "sqlite_order": [
+      "knowledge_object_state_only_dependencies_are_exact",
+      "knowledge_dependency_seal_is_complete",
+      "knowledge_dependency_seal_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "knowledge_object_list_order_keys",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0015_knowledge_catalog_2_triggers.sql",
+    "postgres_order": [
+      "knowledge_list_order_key_agrees_with_authorities",
+      "knowledge_list_order_key_identity_collision_is_forbidden"
+    ],
+    "sqlite_order": [
+      "knowledge_list_order_key_agrees_with_authorities",
+      "knowledge_list_order_key_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "knowledge_object_list_projection_seals",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0015_knowledge_catalog_2_triggers.sql",
+    "postgres_order": [
+      "knowledge_list_projection_seal_identity_collision_is_forbidden",
+      "knowledge_list_projection_seal_is_complete",
+      "knowledge_list_projection_seal_requires_order_key"
+    ],
+    "sqlite_order": [
+      "knowledge_list_projection_seal_requires_order_key",
+      "knowledge_list_projection_seal_is_complete",
+      "knowledge_list_projection_seal_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "knowledge_object_list_projections",
+    "timing": "AFTER",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0014_knowledge_catalog_1_triggers.sql",
+    "postgres_order": [
+      "knowledge_list_projection_after_insert",
+      "knowledge_list_projection_creates_order_key"
+    ],
+    "sqlite_order": [
+      "knowledge_list_projection_creates_order_key",
+      "knowledge_list_projection_after_insert"
+    ]
+  },
+  {
+    "table": "knowledge_object_list_projections",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0014_knowledge_catalog_1_triggers.sql",
+    "postgres_order": [
+      "knowledge_list_projection_capacity_is_available",
+      "knowledge_list_projection_identity_collision_is_forbidden"
+    ],
+    "sqlite_order": [
+      "knowledge_list_projection_identity_collision_is_forbidden",
+      "knowledge_list_projection_capacity_is_available"
+    ]
+  },
+  {
+    "table": "knowledge_object_list_selector_patterns",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0014_knowledge_catalog_1_triggers.sql",
+    "postgres_order": [
+      "knowledge_list_selector_identity_collision_is_forbidden",
+      "knowledge_list_selector_ordinal_is_declared",
+      "knowledge_list_selector_sealed_projection_is_immutable_insert"
+    ],
+    "sqlite_order": [
+      "knowledge_list_selector_sealed_projection_is_immutable_insert",
+      "knowledge_list_selector_ordinal_is_declared",
+      "knowledge_list_selector_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "knowledge_object_version_lifecycle",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0013_knowledge_objects_2_triggers.sql",
+    "postgres_order": [
+      "knowledge_object_version_lifecycle_agrees_with_version",
+      "knowledge_object_version_lifecycle_identity_collision_is_forbid"
+    ],
+    "sqlite_order": [
+      "knowledge_object_version_lifecycle_agrees_with_version",
+      "knowledge_object_version_lifecycle_identity_collision_is_forbid"
+    ]
+  },
+  {
+    "table": "knowledge_object_versions",
+    "timing": "AFTER",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0013_knowledge_objects_2_triggers.sql",
+    "postgres_order": [
+      "knowledge_object_version_after_insert",
+      "knowledge_object_version_creates_lifecycle",
+      "knowledge_object_version_creates_staged_order_key"
+    ],
+    "sqlite_order": [
+      "knowledge_object_version_creates_staged_order_key",
+      "knowledge_object_version_creates_lifecycle",
+      "knowledge_object_version_after_insert"
+    ]
+  },
+  {
+    "table": "knowledge_object_versions",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0013_knowledge_objects_2_triggers.sql",
+    "postgres_order": [
+      "knowledge_object_version_capacity_is_available",
+      "knowledge_object_version_identity_collision_is_forbidden",
+      "knowledge_object_version_is_contiguous",
+      "knowledge_object_version_transition_is_exact",
+      "knowledge_object_version_writer_semantics_are_exact"
+    ],
+    "sqlite_order": [
+      "knowledge_object_version_writer_semantics_are_exact",
+      "knowledge_object_version_transition_is_exact",
+      "knowledge_object_version_is_contiguous",
+      "knowledge_object_version_identity_collision_is_forbidden",
+      "knowledge_object_version_capacity_is_available"
+    ]
+  },
+  {
+    "table": "knowledge_objects",
+    "timing": "AFTER",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0012_knowledge_objects_1_triggers.sql",
+    "postgres_order": [
+      "knowledge_object_active_counters_after_insert",
+      "knowledge_object_after_insert_count_identity"
+    ],
+    "sqlite_order": [
+      "knowledge_object_active_counters_after_insert",
+      "knowledge_object_after_insert_count_identity"
+    ]
+  },
+  {
+    "table": "knowledge_objects",
+    "timing": "AFTER",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0012_knowledge_objects_1_triggers.sql",
+    "postgres_order": [
+      "knowledge_object_active_counters_after_update",
+      "knowledge_object_update_removes_old_list_projection"
+    ],
+    "sqlite_order": [
+      "knowledge_object_update_removes_old_list_projection",
+      "knowledge_object_active_counters_after_update"
+    ]
+  },
+  {
+    "table": "knowledge_objects",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0012_knowledge_objects_1_triggers.sql",
+    "postgres_order": [
+      "knowledge_object_active_app_is_required_insert",
+      "knowledge_object_active_capacity_insert",
+      "knowledge_object_active_name_collision_is_forbidden",
+      "knowledge_object_identity_capacity_is_available",
+      "knowledge_object_identity_collision_is_forbidden",
+      "knowledge_object_insert_requires_sealed_list_projection"
+    ],
+    "sqlite_order": [
+      "knowledge_object_insert_requires_sealed_list_projection",
+      "knowledge_object_active_capacity_insert",
+      "knowledge_object_active_name_collision_is_forbidden",
+      "knowledge_object_identity_collision_is_forbidden",
+      "knowledge_object_active_app_is_required_insert",
+      "knowledge_object_identity_capacity_is_available"
+    ]
+  },
+  {
+    "table": "knowledge_objects",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0012_knowledge_objects_1_triggers.sql",
+    "postgres_order": [
+      "knowledge_active_dependency_target_transition_is_blocked",
+      "knowledge_active_dependency_target_version_advance_is_blocked",
+      "knowledge_object_active_app_is_required_update",
+      "knowledge_object_active_capacity_update",
+      "knowledge_object_active_counters_before_update",
+      "knowledge_object_active_name_update_collision_is_forbidden",
+      "knowledge_object_registry_transition_is_valid",
+      "knowledge_object_update_requires_sealed_list_projection"
+    ],
+    "sqlite_order": [
+      "knowledge_active_dependency_target_version_advance_is_blocked",
+      "knowledge_active_dependency_target_transition_is_blocked",
+      "knowledge_object_update_requires_sealed_list_projection",
+      "knowledge_object_active_counters_before_update",
+      "knowledge_object_active_capacity_update",
+      "knowledge_object_registry_transition_is_valid",
+      "knowledge_object_active_name_update_collision_is_forbidden",
+      "knowledge_object_active_app_is_required_update"
+    ]
+  },
+  {
+    "table": "knowledge_projection_tenant_ledgers",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0014_knowledge_catalog_1_triggers.sql",
+    "postgres_order": [
+      "knowledge_projection_ledger_identity_collision_is_forbidden",
+      "knowledge_projection_ledger_initial_shape_is_valid"
+    ],
+    "sqlite_order": [
+      "knowledge_projection_ledger_initial_shape_is_valid",
+      "knowledge_projection_ledger_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "knowledge_recovery_audit",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0014_knowledge_catalog_1_triggers.sql",
+    "postgres_order": [
+      "knowledge_recovery_audit_capacity_is_available",
+      "knowledge_recovery_audit_identity_collision_is_forbidden",
+      "knowledge_recovery_audit_matches_terminal_version"
+    ],
+    "sqlite_order": [
+      "knowledge_recovery_audit_matches_terminal_version",
+      "knowledge_recovery_audit_identity_collision_is_forbidden",
+      "knowledge_recovery_audit_capacity_is_available"
+    ]
+  },
+  {
+    "table": "search_attempt_audit_events",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0017_audit_1_triggers.sql",
+    "postgres_order": [
+      "search_attempt_audit_event_identity_collision_is_forbidden",
+      "search_attempt_audit_event_insert_requires_current_state",
+      "search_attempt_audit_event_job_identity_collision_is_forbidden",
+      "search_attempt_audit_event_knowledge_snapshot_is_complete"
+    ],
+    "sqlite_order": [
+      "search_attempt_audit_event_knowledge_snapshot_is_complete",
+      "search_attempt_audit_event_insert_requires_current_state",
+      "search_attempt_audit_event_job_identity_collision_is_forbidden",
+      "search_attempt_audit_event_identity_collision_is_forbidden"
+    ]
+  },
+  {
+    "table": "search_attempt_audit_tenant_state",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "INSERT",
+    "migration": "0018_audit_2_triggers.sql",
+    "postgres_order": [
+      "search_attempt_audit_state_identity_collision_is_forbidden",
+      "search_attempt_audit_state_initial_shape_is_valid"
+    ],
+    "sqlite_order": [
+      "search_attempt_audit_state_initial_shape_is_valid",
+      "search_attempt_audit_state_identity_collision_is_forbidden"
+    ]
+  }
+]
