@@ -54,8 +54,23 @@ export function safeReturnTo(raw: string | null | undefined, fallback: string = 
   // reads as another origin. Only the normalised path is ever returned, so it
   // is the one checked.
   if (url.pathname.startsWith("//") || url.pathname.includes("\\")) return fallback;
-  if (isNonReturnable(url.pathname) || isNonReturnable(decodedPath(url.pathname))) return fallback;
+  if ([url.pathname, decodedPath(url.pathname)].some((candidate) => isNonReturnable(servedPath(candidate)))) return fallback;
   return `${url.pathname}${url.search}${url.hash}`;
+}
+
+/**
+ * The page the server answers `pathname` with. It cleans the decoded request
+ * path as Go's `path.Clean` does -- empty and `.` segments dropped, `..`
+ * resolved -- so `/auth//oauth/callback/` and `/x/..%2fsignin/` (which
+ * decodes to `/x/../signin/`) are the auth pages they reach.
+ */
+function servedPath(pathname: string): string {
+  const segments: string[] = [];
+  for (const segment of pathname.split("/")) {
+    if (segment === "..") segments.pop();
+    else if (segment !== "" && segment !== ".") segments.push(segment);
+  }
+  return `/${segments.join("/")}`;
 }
 
 /** The path with its percent escapes decoded, so `/%73ignin` is recognised as `/signin`; the raw path if it does not decode. */

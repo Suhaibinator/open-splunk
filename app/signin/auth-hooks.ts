@@ -7,7 +7,16 @@ import { usePathname } from "next/navigation";
  * Moves the browser. A flow component receives it as a prop so a test can
  * watch where it goes; the route wrappers bind it to the router.
  */
-export type AuthNavigate = (url: string) => void;
+export type AuthNavigate = (url: string, options?: AuthNavigateOptions) => void;
+
+export interface AuthNavigateOptions {
+  /**
+   * Replace the current history entry instead of adding one: the page being
+   * left is spent -- a sign-in already completed, a callback whose one-time
+   * code was exchanged -- and Back must not reopen it.
+   */
+  readonly replace?: boolean;
+}
 
 function subscribeToNothing(): () => void {
   return () => undefined;

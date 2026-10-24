@@ -63,7 +63,8 @@ export function IdentitySignIn({ navigate, returnTo, initialEmail = "", demo = f
     identity.adoptPrincipal(principal);
     if (principalCanEnter(principal, returnTo)) {
       setStep({ kind: "redirecting", principal });
-      navigate(returnTo);
+      // Back from the destination skips the sign-in card that sent it there.
+      navigate(returnTo, { replace: true });
     } else {
       setStep({ kind: "no_organization", principal });
     }
@@ -299,6 +300,17 @@ function OAuthProviders({ navigate, returnTo }: { readonly navigate: AuthNavigat
   const { resource: state, retry } = useResource<readonly OAuthProvider[]>(load);
   const [starting, setStarting] = useState<string | null>(null);
   const [failure, setFailure] = useState<AuthErrorCopy | null>(null);
+
+  useEffect(() => {
+    if (starting === null) return undefined;
+    // Back from the provider restores this page from the back-forward cache
+    // exactly as it was left: with every provider button still pending.
+    const restored = (event: PageTransitionEvent) => {
+      if (event.persisted) setStarting(null);
+    };
+    window.addEventListener("pageshow", restored);
+    return () => window.removeEventListener("pageshow", restored);
+  }, [starting]);
 
   async function begin(provider: OAuthProvider): Promise<void> {
     if (starting !== null || client === null) return;

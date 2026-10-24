@@ -9,8 +9,8 @@ import { useIdentity } from "../_components/identity-provider";
 import { AuthAlert, AuthCardHeader, AuthLoading, AuthNotice } from "./auth-frame";
 import { describeAuthError } from "./auth-error-copy";
 import { useOnce, type AuthNavigate } from "./auth-hooks";
-import { safeReturnTo, signInHref } from "./return-to";
-import { NoOrganizationCard, RedirectingCard, principalCanEnter } from "./sign-in-completion";
+import { DEFAULT_RETURN_TO, safeReturnTo, signInHref } from "./return-to";
+import { NoOrganizationCard, PrincipalSummary, RedirectingCard, principalCanEnter } from "./sign-in-completion";
 
 export interface OAuthCallbackProps {
   readonly params: OAuthCallbackParams;
@@ -50,7 +50,8 @@ export function OAuthCallback({ params, navigate }: OAuthCallbackProps) {
     if (result === null || handled.current === result) return;
     handled.current = result;
     adoptPrincipal(result.principal);
-    if (canEnter) navigate(target);
+    // The callback's code is spent: Back must not land on it and replay it.
+    if (canEnter) navigate(target, { replace: true });
   }, [adoptPrincipal, canEnter, navigate, result, target]);
 
   if (client === null) {
@@ -74,6 +75,22 @@ export function OAuthCallback({ params, navigate }: OAuthCallbackProps) {
 
   if (result === null) {
     const copy = describeAuthError(exchange.error, "oauth_callback");
+    if (copy.deadLink && identity.status === "signed_in" && identity.principal !== null) {
+      // A spent callback reopened -- Back, a reload, a second tab -- usually
+      // after it already signed this browser in: only the link failed, and
+      // the session it left is still there to continue with.
+      return (
+        <>
+          <AuthCardHeader icon="warning" title="Sign-in did not finish" intro="Nothing was changed. You are still signed in." focusOnMount />
+          <AuthAlert copy={copy} />
+          <PrincipalSummary principal={identity.principal} />
+          <div className="signin-actions">
+            <Link className="button button--primary button--block" href={DEFAULT_RETURN_TO}>Continue to Open Splunk</Link>
+            <Link className="button button--ghost button--block" href={signInHref()}>Back to sign in</Link>
+          </div>
+        </>
+      );
+    }
     return (
       <>
         <AuthCardHeader icon="warning" title="Sign-in did not finish" intro="Nothing was changed. You can start again." focusOnMount />
@@ -88,7 +105,7 @@ export function OAuthCallback({ params, navigate }: OAuthCallbackProps) {
       <NoOrganizationCard
         principal={result.principal}
         navigate={navigate}
-        onSignOut={() => { void identity.signOut().then(() => navigate(signInHref())).catch(() => undefined); }}
+        onSignOut={() => { void identity.signOut().then(() => navigate(signInHref(), { replace: true })).catch(() => undefined); }}
       />
     );
   }
