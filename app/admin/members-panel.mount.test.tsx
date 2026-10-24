@@ -434,6 +434,110 @@ test("an owner hands over ownership: promote another owner, then lower its own r
   }
 });
 
+test("an owner without site admin hands over ownership by promoting another owner and leaving", async () => {
+  const client = fake("owen@open-splunk.test");
+  await client.setActiveOrganization("2");
+  const view = await mountPanel(client);
+  try {
+    const owenRow = () => {
+      const row = memberRow(view.container, "2");
+      assert.ok(row);
+      return row;
+    };
+    assert.match(cell(owenRow(), "Actions"), /last owner cannot be demoted or removed/u);
+    assert.equal(buttonNamed(owenRow(), "Leave organization").getAttribute("aria-disabled"), "true");
+
+    await click(buttonNamed(view.container, "Change role for Mark Mendez"));
+    const roleDialog = dialog(view.container, "Change role for Mark Mendez");
+    await choose(roleDialog, "members-role", "owner");
+    assert.match(roleDialog.textContent, /then leave the organization or ask a site admin/u);
+    await submit(roleDialog, "members-role-form");
+    const mark = memberRow(view.container, "5");
+    assert.ok(mark);
+    assert.match(cell(mark, "Explicit role"), /Owner/u);
+
+    // go-common never lets an owner outrank itself, so its own role stays locked; leaving is open.
+    assert.equal(buttonNamed(owenRow(), "Change role for Owen Ortiz").getAttribute("aria-disabled"), "true");
+    assert.match(cell(owenRow(), "Actions"), /Owners cannot change their own role/u);
+    const leave = buttonNamed(owenRow(), "Leave organization");
+    assert.equal(leave.getAttribute("aria-disabled"), null);
+    await click(leave);
+    const confirm = dialog(view.container, "Leave Globex Security?");
+    assert.match(confirm.textContent, /You lose your owner role in Globex Security immediately/u);
+    await click(buttonNamed(confirm, "Leave organization"));
+    assert.equal(view.container.querySelector('[data-dialog="Leave Globex Security?"]'), null);
+    // The session is re-read: without a role in Globex the panel closes to them.
+    assert.notEqual(state(view.container), "ready");
+    assert.equal(hasButton(view.container, "Invite member"), false);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test("an admin may leave, and loses the panel once it has", async () => {
+  const view = await mountPanel(fake("alice@open-splunk.test"));
+  try {
+    const self = memberRow(view.container, "3");
+    assert.ok(self);
+    await click(buttonNamed(self, "Leave organization"));
+    const confirm = dialog(view.container, "Leave Acme Operations?");
+    assert.match(confirm.textContent, /Only an admin can add you back/u);
+    await click(buttonNamed(confirm, "Leave organization"));
+    assert.notEqual(state(view.container), "ready");
+  } finally {
+    await view.unmount();
+  }
+});
+
+test("a change the server refuses explains it in the dialog and re-reads the session", async () => {
+  const client = fake();
+  const view = await mountPanel(client);
+  try {
+    let reads = 0;
+    const getPrincipal = client.getPrincipal.bind(client);
+    client.getPrincipal = () => {
+      reads += 1;
+      return getPrincipal();
+    };
+    await click(buttonNamed(view.container, "Change role for Mark Mendez"));
+    const roleDialog = dialog(view.container, "Change role for Mark Mendez");
+    await choose(roleDialog, "members-role", "moderator");
+    client.failNext("changeMemberRole", new IdentityError("forbidden", "Cannot manage a user with a higher or equal role"));
+    await submit(roleDialog, "members-role-form");
+    const alert = roleDialog.querySelector('[role="alert"]');
+    assert.ok(alert, "the refusal is announced");
+    assert.match(alert.textContent, /Could not change the role\..*higher or equal role/u);
+    assert.equal(reads, 1, "a refusal may mean the actor's own role changed");
+    assert.equal(buttonNamed(roleDialog, "Save role").hasAttribute("disabled"), false, "the dialog stays usable");
+
+    client.failNext("changeMemberRole", new IdentityError("invalid", "Invalid organization role"));
+    await submit(roleDialog, "members-role-form");
+    assert.match(roleDialog.querySelector('[role="alert"]')?.textContent ?? "", /Invalid organization role/u);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test("a child organization locks inherited-only members and shows where the role comes from", async () => {
+  const client = fake();
+  await client.setActiveOrganization("3");
+  const view = await mountPanel(client);
+  try {
+    const owen = memberRow(view.container, "2");
+    assert.ok(owen);
+    assert.equal(buttonNamed(owen, "Change role for Owen Ortiz").getAttribute("aria-disabled"), "true");
+    assert.match(cell(owen, "Actions"), /Inherited from Acme Operations; change it there\./u);
+    const mona = memberRow(view.container, "4");
+    assert.ok(mona);
+    assert.match(cell(mona, "Explicit role"), /Admin/u);
+    assert.equal(buttonNamed(mona, "Change role for Mona Moreau").getAttribute("aria-disabled"), null);
+    await click(buttonNamed(mona, "Remove Mona Moreau"));
+    assert.match(dialog(view.container, "Remove Mona Moreau?").textContent, /organizations under it/u);
+  } finally {
+    await view.unmount();
+  }
+});
+
 test("the server's last-owner guard is shown when the page could not count owners", async () => {
   const client = fake();
   await client.changeMemberRole("1", "2", "owner");

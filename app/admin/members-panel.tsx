@@ -670,9 +670,8 @@ function Pager<T>({ label, loaded, onPage }: { label: string; loaded: Loaded<Pag
 function DialogFailure({ failure }: { failure: FailureDescription | null }) {
   if (failure === null) return null;
   return (
-    <div className="members-dialog-alert" role="alert">
-      <AppIcon name="warning" size="sm" />
-      <div><strong>{failure.title}</strong><p>{failure.message}</p></div>
+    <div className="backend-inline-error" role="alert">
+      <span><strong>{failure.title}.</strong> {failure.message}</span>
     </div>
   );
 }
@@ -864,9 +863,9 @@ function RoleDialog({ actor, client, member, organization, organizationName, pol
       )}
       initialFocus={'input[name="members-role"]:checked'}
       onClose={onClose}
-      subtitle={member.explicitRole === null
-        ? `${name} has no explicit role here; they are ${ROLE_LABELS[member.effectiveRole].toLowerCase()} through ${organizationName(member.inheritedFromOrganizationId)}.`
-        : `Explicit role ${ROLE_LABELS[member.explicitRole].toLowerCase()}; effective role ${ROLE_LABELS[member.effectiveRole].toLowerCase()}.`}
+      subtitle={member.inheritedFromOrganizationId === undefined
+        ? `Explicit role ${ROLE_LABELS[current].toLowerCase()}.`
+        : `Explicit role ${ROLE_LABELS[current].toLowerCase()}; effective role ${ROLE_LABELS[member.effectiveRole].toLowerCase()} through ${organizationName(member.inheritedFromOrganizationId)}.`}
       title={policy.self ? "Change your role" : `Change role for ${name}`}
     >
       <form className="admin-form" id="members-role-form" onSubmit={(event) => { void submit(event); }}>
@@ -877,7 +876,7 @@ function RoleDialog({ actor, client, member, organization, organizationName, pol
             case "owner_grant":
               return (
                 <Notice key={notice.kind} title="Owners can manage everything">
-                  An owner holds every capability, including changing and removing other owners. To hand over ownership, make {policy.self ? "the new owner" : name} an owner first, then change your own role.
+                  An owner holds every capability, including changing and removing the owners it outranks. To hand over ownership, make {name} an owner first, then leave the organization or ask a site admin to change your role.
                 </Notice>
               );
             case "self_demotion":
@@ -959,8 +958,8 @@ function RemoveDialog({ client, member, organization, organizationName, policy, 
         <DialogFailure failure={failure} />
         <p className="members-dialog-copy">
           {policy.self
-            ? `You lose your ${ROLE_LABELS[member.explicitRole ?? member.effectiveRole].toLowerCase()} role in ${organization.name} immediately.`
-            : `${name}${member.user.displaySecondary === undefined ? "" : ` (${member.user.displaySecondary})`} loses their ${ROLE_LABELS[member.explicitRole ?? member.effectiveRole].toLowerCase()} role in ${organization.name} immediately. Their saved searches and dashboards stay where they are.`}
+            ? `You lose your ${ROLE_LABELS[displayedRole(member)].toLowerCase()} role in ${organization.name} immediately, along with any membership in organizations under it. Only an admin can add you back.`
+            : `${name}${member.user.displaySecondary === undefined ? "" : ` (${member.user.displaySecondary})`} loses their ${ROLE_LABELS[displayedRole(member)].toLowerCase()} role in ${organization.name} immediately, along with any membership in organizations under it. Their saved searches and dashboards stay where they are.`}
         </p>
         {removal.allowed && removal.keepsInheritedRole !== undefined ? (
           <Notice title="An inherited role remains">

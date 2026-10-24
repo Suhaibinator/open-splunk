@@ -4,23 +4,30 @@
  *
  * go-common is the authority: every rule here is one it enforces, so the panel
  * only avoids offering a change the server would refuse and explains why. The
- * rules come from `OrganizationHandler.UpdateMemberRole` / `RemoveMember` and
- * `CanPromoteToRole` in go-common:
+ * rules come from `OrganizationHandler.UpdateMemberRole` / `RemoveMember`,
+ * `CanPromoteToRole` / `CanManageRole` and the persistence last-owner guards:
  *
- * - a manager may grant, and may change the role of a member holding, only a
- *   role strictly below its own; the owner band (and a site admin, through the
- *   `PermissionAdminManageOrganizationMembers` shortcut) may grant any role;
+ * - a manager may grant, and may change or remove a member holding, only a
+ *   role strictly below its own effective role; a site admin (the
+ *   `PermissionAdminManageOrganizationMembers` shortcut) may do anything;
+ * - a role change also checks the target's current role against the actor's,
+ *   so nobody but a site admin changes their own role; an owner hands over
+ *   ownership by making someone else an owner and then leaving;
+ * - anyone who may remove members may remove themselves (leave), whatever
+ *   their role, and removal also drops their memberships in descendant
+ *   organizations;
  * - the last explicit owner can be neither demoted nor removed
- *   (`ErrOrganizationLastOwner`), so ownership is transferred by making
- *   someone else an owner first and only then changing one's own role;
+ *   (`ErrOrganizationLastOwner`);
  * - an inherited role belongs to the ancestor organization that grants it:
- *   there is no membership row here to remove, and an explicit role at or below
- *   the inherited one changes nothing.
+ *   with no membership row here there is nothing to change or remove.
  *
  * The browser sees only the role band, not go-common's tier inside it, so
- * "strictly below" is read band against band. That is the conservative
- * reading: two admins in different tiers may be allowed more by the server
- * than the panel offers, never less.
+ * "strictly below" is read band against band. Below the owner band that is the
+ * conservative reading (two admins in different tiers may be allowed more by
+ * the server than the panel offers, never less). The owner band is read
+ * optimistically: owners are granted at the band's lowest tier while creators
+ * hold a higher one, so an owner usually outranks the owners it made; when it
+ * does not, the server answers `forbidden` and the panel says so.
  */
 
 import {
@@ -170,47 +177,41 @@ export function memberPolicy(actor: MembersActor, member: OrganizationMember, co
   const held = ROLE_LABELS[member.effectiveRole].toLowerCase();
   const outranked = (verb: string) => `Only a role above ${held} can ${verb} ${article(member.effectiveRole)} ${held}.`;
   const lastOwnerReason = "The last owner cannot be demoted or removed. Make another member an owner first.";
+  const ownRoleReason = actor.role === "owner"
+    ? "Owners cannot change their own role. Make another member an owner, then leave, or ask a site admin."
+    : "Ask an owner to change your own role.";
 
   let roleChange: RoleChangePolicy;
-  if (!manageable) {
-    roleChange = { allowed: false, reason: self ? "Ask an owner to change your own role." : outranked("change") };
+  if (member.explicitRole === null) {
+    roleChange = { allowed: false, reason: `Inherited from ${inheritedName}; change it there.` };
+  } else if (self && !actor.siteAdmin) {
+    roleChange = { allowed: false, reason: lastOwner ? lastOwnerReason : ownRoleReason };
+  } else if (!manageable) {
+    roleChange = { allowed: false, reason: outranked("change") };
   } else if (lastOwner) {
     roleChange = { allowed: false, reason: lastOwnerReason };
   } else {
     const grantable = grantableRoles(actor);
-    const current = displayedRole(member);
+    const current = member.explicitRole;
     const options = ORG_ROLES.map((role): RoleOption => {
       if (role === current) return { role, current: true, disabled: false };
       if (!grantable.includes(role)) {
         return { role, current: false, disabled: true, reason: "Above what your role can grant." };
       }
-      if (inheritedFrom !== undefined && compareOrgRoles(role, member.effectiveRole) <= 0) {
-        return {
-          role,
-          current: false,
-          disabled: true,
-          reason: `They already hold ${ROLE_LABELS[member.effectiveRole].toLowerCase()} through ${inheritedName}.`,
-        };
-      }
       return { role, current: false, disabled: false };
     });
     roleChange = options.some((option) => !option.current && !option.disabled)
       ? { allowed: true, current, options }
-      : {
-        allowed: false,
-        reason: inheritedFrom === undefined
-          ? "Your role cannot grant any other role to this member."
-          : `Inherited from ${inheritedName}; change it there.`,
-      };
+      : { allowed: false, reason: "Your role cannot grant any other role to this member." };
   }
 
   let removal: RemovalPolicy;
   if (member.explicitRole === null) {
     removal = { allowed: false, reason: `Inherited from ${inheritedName}; remove them there.` };
-  } else if (!manageable) {
-    removal = { allowed: false, reason: self ? "Ask an owner to remove you." : outranked("remove") };
   } else if (lastOwner) {
     removal = { allowed: false, reason: lastOwnerReason };
+  } else if (!self && !manageable) {
+    removal = { allowed: false, reason: outranked("remove") };
   } else {
     removal = {
       allowed: true,

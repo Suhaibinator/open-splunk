@@ -93,12 +93,46 @@ test("the last explicit owner can be neither demoted nor removed, even by itself
   assert.match(policy.removal.allowed ? "" : policy.removal.reason, /last owner/u);
 });
 
-test("with a second owner, an owner may demote or remove itself", async () => {
+test("with a second owner, a site-admin owner may demote or remove itself", async () => {
   const page = await membersOf(ACME);
   const policy = memberPolicy(ada, find(page, "1"), { ...context(page), explicitOwners: 2 });
   assert.equal(policy.lastOwner, false);
   assert.equal(policy.roleChange.allowed, true);
   assert.deepEqual(policy.removal, { allowed: true, self: true });
+});
+
+test("an owner without site admin cannot change its own role, but may leave once another owner exists", async () => {
+  // go-common checks the target's current role against the actor's, so an owner never outranks itself.
+  const page = await membersOf("2");
+  const self = find(page, "2");
+  const alone = memberPolicy(owen, self, context(page));
+  assert.equal(alone.lastOwner, true);
+  assert.deepEqual(alone.roleChange, { allowed: false, reason: "The last owner cannot be demoted or removed. Make another member an owner first." });
+  assert.equal(alone.removal.allowed, false);
+
+  const withPeer = memberPolicy(owen, self, { ...context(page), explicitOwners: 2 });
+  assert.deepEqual(withPeer.roleChange, {
+    allowed: false,
+    reason: "Owners cannot change their own role. Make another member an owner, then leave, or ask a site admin.",
+  });
+  assert.deepEqual(withPeer.removal, { allowed: true, self: true });
+});
+
+test("an owner is offered another owner's role and removal, leaving a tier refusal to the server", async () => {
+  const page = await membersOf(ACME);
+  const otherOwner: OrganizationMember = { ...find(page, "1"), explicitRole: "owner", effectiveRole: "owner" };
+  const policy = memberPolicy(owen, otherOwner, { ...context(page), explicitOwners: 2 });
+  assert.equal(policy.roleChange.allowed, true);
+  assert.deepEqual(policy.removal, { allowed: true, self: false });
+});
+
+test("a site admin with no role in the organization manages every member", async () => {
+  const page = await membersOf(ACME);
+  const visitor: MembersActor = { userId: "99", role: null, siteAdmin: true };
+  const policy = memberPolicy(visitor, find(page, "3"), context(page));
+  assert.ok(policy.roleChange.allowed);
+  assert.deepEqual(policy.roleChange.options.filter((option) => option.disabled), []);
+  assert.deepEqual(policy.removal, { allowed: true, self: false });
 });
 
 test("an unknown owner count leaves the last-owner guard to the server", async () => {
@@ -123,14 +157,19 @@ test("an admin can change a moderator only to roles below admin", async () => {
   assert.deepEqual(policy.removal, { allowed: true, self: false });
 });
 
-test("an admin cannot touch an owner, another admin, or itself", async () => {
+test("an admin cannot touch an owner or another admin, nor change its own role, but may leave", async () => {
   const page = await membersOf(ACME);
   const onOwner = memberPolicy(alice, find(page, "1"), context(page));
   assert.deepEqual(onOwner.roleChange, { allowed: false, reason: "Only a role above owner can change an owner." });
   assert.deepEqual(onOwner.removal, { allowed: false, reason: "Only a role above owner can remove an owner." });
+  const peer: OrganizationMember = { ...find(page, "4"), explicitRole: "admin", effectiveRole: "admin" };
+  const onPeer = memberPolicy(alice, peer, context(page));
+  assert.deepEqual(onPeer.roleChange, { allowed: false, reason: "Only a role above admin can change an admin." });
+  assert.deepEqual(onPeer.removal, { allowed: false, reason: "Only a role above admin can remove an admin." });
   const onSelf = memberPolicy(alice, find(page, "3"), context(page));
   assert.deepEqual(onSelf.roleChange, { allowed: false, reason: "Ask an owner to change your own role." });
-  assert.deepEqual(onSelf.removal, { allowed: false, reason: "Ask an owner to remove you." });
+  // go-common lets anyone who may remove members remove themselves.
+  assert.deepEqual(onSelf.removal, { allowed: true, self: true });
 });
 
 test("an owner may grant the owner role", async () => {
@@ -140,7 +179,8 @@ test("an owner may grant the owner role", async () => {
   assert.deepEqual(policy.roleChange.options.filter((option) => option.disabled), []);
 });
 
-test("an inherited-only member has nothing to remove here and can only be raised above the inherited role", async () => {
+test("an inherited-only member has no membership row here to change or remove", async () => {
+  // go-common updates and deletes the membership row; with none here the request would fail.
   const page = await membersOf(PLATFORM);
   const inherited = find(page, "3");
   assert.equal(inherited.explicitRole, null);
@@ -148,15 +188,7 @@ test("an inherited-only member has nothing to remove here and can only be raised
   assert.equal(inherited.inheritedFromOrganizationId, ACME);
   const policy = memberPolicy(ada, inherited, context(page));
   assert.deepEqual(policy.removal, { allowed: false, reason: "Inherited from Acme Operations; remove them there." });
-  assert.ok(policy.roleChange.allowed);
-  assert.deepEqual(policy.roleChange.options.map((option) => [option.role, option.disabled]), [
-    ["member", true],
-    ["moderator", true],
-    ["admin", false],
-    ["owner", false],
-  ]);
-  assert.equal(policy.roleChange.current, "admin");
-  assert.equal(policy.roleChange.options[0]?.reason, "They already hold admin through Acme Operations.");
+  assert.deepEqual(policy.roleChange, { allowed: false, reason: "Inherited from Acme Operations; change it there." });
 });
 
 test("an inherited role nobody here can outrank is locked with a pointer to its organization", async () => {
@@ -178,6 +210,8 @@ test("removing an explicit role below an inherited one keeps the inherited role"
   assert.deepEqual(policy.removal, { allowed: true, self: false, keepsInheritedRole: "admin", inheritedFromOrganizationId: ACME });
   assert.ok(policy.roleChange.allowed);
   assert.equal(policy.roleChange.current, "member");
+  // The explicit row may still change below the inherited role; the dialog warns that it outranks.
+  assert.deepEqual(policy.roleChange.options.filter((option) => option.disabled), []);
   assert.deepEqual(roleChangeNotices(ada, member, "moderator"), [{ kind: "inherited_floor", role: "admin", organizationId: ACME }]);
 });
 
