@@ -2316,5 +2316,41 @@
     "statement": "INSERT INTO knowledge_object_acl (tenant_id, knowledge_object_id, role_id, can_read, can_write) VALUES ('t1', 'ko1', 'role_a', 1, 1)",
     "expect": "accept",
     "message": ""
+  },
+  {
+    "name": "after_insert_multi_row_reaches_capacity",
+    "trigger": "knowledge_object_version_after_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'Search', 0, 'active', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('app_BBBBBBBBBBBBBBBBBBBBBA', 't1', 1, 'other', 'Other', 0, 'active', 1, 1)",
+      "INSERT INTO knowledge_definition_blobs (tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro) VALUES ('t1', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, '\\x01'::bytea, 1, 1)",
+      "INSERT INTO knowledge_definition_blobs (tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro) VALUES ('t1', '\\x2222222222222222222222222222222222222222222222222222222222222222'::bytea, '\\x01'::bytea, 1, 1)",
+      "INSERT INTO knowledge_definition_blobs (tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro) VALUES ('t1', '\\x3333333333333333333333333333333333333333333333333333333333333333'::bytea, '\\x01'::bytea, 1, 1)",
+      "UPDATE knowledge_catalog_tenants SET version_count = 61438 WHERE tenant_id = 't1'"
+    ],
+    "statement": "INSERT INTO knowledge_object_versions (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, dependency_count, mutation_kind, quarantine_reason, created_at_unix_micro) VALUES ('t1', 'ko1', 1, 'app_AAAAAAAAAAAAAAAAAAAAAA', 'u1', 'field_alias', 'n1', 'app', 'active', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 0, 'create', NULL, 100), ('t1', 'ko2', 1, 'app_AAAAAAAAAAAAAAAAAAAAAA', 'u1', 'field_alias', 'n2', 'app', 'active', '\\x2222222222222222222222222222222222222222222222222222222222222222'::bytea, 0, 'create', NULL, 100)",
+    "expect": "accept",
+    "message": "",
+    "check_sql": "SELECT version_count::text FROM knowledge_catalog_tenants WHERE tenant_id = 't1'",
+    "check_result": "61440"
+  },
+  {
+    "name": "after_insert_multi_row_past_capacity_rejected",
+    "trigger": "knowledge_object_version_after_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 't1', 1, 'search', 'Search', 0, 'active', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('app_BBBBBBBBBBBBBBBBBBBBBA', 't1', 1, 'other', 'Other', 0, 'active', 1, 1)",
+      "INSERT INTO knowledge_definition_blobs (tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro) VALUES ('t1', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, '\\x01'::bytea, 1, 1)",
+      "INSERT INTO knowledge_definition_blobs (tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro) VALUES ('t1', '\\x2222222222222222222222222222222222222222222222222222222222222222'::bytea, '\\x01'::bytea, 1, 1)",
+      "INSERT INTO knowledge_definition_blobs (tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro) VALUES ('t1', '\\x3333333333333333333333333333333333333333333333333333333333333333'::bytea, '\\x01'::bytea, 1, 1)",
+      "UPDATE knowledge_catalog_tenants SET version_count = 61439 WHERE tenant_id = 't1'"
+    ],
+    "statement": "INSERT INTO knowledge_object_versions (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, dependency_count, mutation_kind, quarantine_reason, created_at_unix_micro) VALUES ('t1', 'ko1', 1, 'app_AAAAAAAAAAAAAAAAAAAAAA', 'u1', 'field_alias', 'n1', 'app', 'active', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 0, 'create', NULL, 100), ('t1', 'ko2', 1, 'app_AAAAAAAAAAAAAAAAAAAAAA', 'u1', 'field_alias', 'n2', 'app', 'active', '\\x2222222222222222222222222222222222222222222222222222222222222222'::bytea, 0, 'create', NULL, 100)",
+    "expect": "reject",
+    "message": "knowledge object version capacity exhausted"
   }
 ]
