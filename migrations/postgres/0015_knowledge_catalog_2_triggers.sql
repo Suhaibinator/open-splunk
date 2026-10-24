@@ -22,6 +22,13 @@
 --     spread over 32 bytes; the token is only ever compared for equality and
 --     checked for a width of 32 bytes.
 --
+-- Name resolution. Objects are created unqualified under the runner's
+-- search_path (open_splunk), and every function here carries SET search_path
+-- FROM CURRENT, so its body resolves tables in open_splunk whatever the
+-- calling session's search_path is. A session that qualifies table names
+-- under another search_path, such as an operator's psql, still fires working
+-- triggers, and no same-named object elsewhere can be picked up instead.
+--
 -- Firing order. SQLite fires same-event triggers newest-first; PostgreSQL
 -- fires them in name order. Where two triggers on one event can both reject a
 -- row, the trigger PostgreSQL reaches first also requires that the triggers
@@ -78,7 +85,9 @@
 -- ---------------------------------------------------------------------------
 
 CREATE FUNCTION knowledge_catalog_tenant_identity_collision_is_forbidden()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     -- SQLite checks knowledge_catalog_tenant_initial_shape_is_valid first,
     -- so a non-empty duplicate is reported as not empty.
@@ -104,7 +113,9 @@ FOR EACH ROW
 EXECUTE FUNCTION knowledge_catalog_tenant_identity_collision_is_forbidden();
 
 CREATE FUNCTION knowledge_catalog_tenant_initial_shape_is_valid()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge catalog tenant must begin empty';
 END;
@@ -125,7 +136,9 @@ WHEN (
 EXECUTE FUNCTION knowledge_catalog_tenant_initial_shape_is_valid();
 
 CREATE FUNCTION knowledge_catalog_revision_transition_is_valid()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge catalog revision must advance by one';
 END;
@@ -146,7 +159,9 @@ WHEN (
 EXECUTE FUNCTION knowledge_catalog_revision_transition_is_valid();
 
 CREATE FUNCTION knowledge_catalog_tenant_identity_is_immutable()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge catalog tenant identity is immutable';
 END;
@@ -159,7 +174,9 @@ WHEN (NEW.tenant_id <> OLD.tenant_id)
 EXECUTE FUNCTION knowledge_catalog_tenant_identity_is_immutable();
 
 CREATE FUNCTION knowledge_catalog_tenant_delete_is_forbidden()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge catalog tenant cannot be deleted';
 END;
@@ -171,7 +188,9 @@ FOR EACH ROW
 EXECUTE FUNCTION knowledge_catalog_tenant_delete_is_forbidden();
 
 CREATE FUNCTION knowledge_catalog_tenant_creates_revision_head()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     INSERT INTO knowledge_catalog_revision_heads (
         tenant_id, catalog_revision, state_token
@@ -190,7 +209,9 @@ FOR EACH ROW
 EXECUTE FUNCTION knowledge_catalog_tenant_creates_revision_head();
 
 CREATE FUNCTION knowledge_catalog_revision_requires_exact_head()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM knowledge_catalog_revision_heads
@@ -211,7 +232,9 @@ WHEN (NEW.catalog_revision <> OLD.catalog_revision)
 EXECUTE FUNCTION knowledge_catalog_revision_requires_exact_head();
 
 CREATE FUNCTION knowledge_catalog_revision_rotates_state_token()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     UPDATE knowledge_catalog_revision_heads
     SET catalog_revision = NEW.catalog_revision,
@@ -240,7 +263,9 @@ WHEN (NEW.catalog_revision <> OLD.catalog_revision)
 EXECUTE FUNCTION knowledge_catalog_revision_rotates_state_token();
 
 CREATE FUNCTION knowledge_catalog_tenant_provisions_lookup_asset_ledger()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     INSERT INTO knowledge_lookup_asset_tenant_ledgers (tenant_id)
     VALUES (NEW.tenant_id);
@@ -258,7 +283,9 @@ EXECUTE FUNCTION knowledge_catalog_tenant_provisions_lookup_asset_ledger();
 -- ---------------------------------------------------------------------------
 
 CREATE FUNCTION knowledge_catalog_revision_head_identity_collision_is_forbidden()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     -- SQLite checks knowledge_catalog_revision_head_insert_agrees_with_tenant
     -- first, so a duplicate that disagrees with its tenant is reported as
@@ -283,7 +310,9 @@ FOR EACH ROW
 EXECUTE FUNCTION knowledge_catalog_revision_head_identity_collision_is_forbidden();
 
 CREATE FUNCTION knowledge_catalog_revision_head_insert_agrees_with_tenant()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM knowledge_catalog_tenants
@@ -302,7 +331,9 @@ FOR EACH ROW
 EXECUTE FUNCTION knowledge_catalog_revision_head_insert_agrees_with_tenant();
 
 CREATE FUNCTION knowledge_catalog_revision_head_transition_is_exact()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF NEW.tenant_id <> OLD.tenant_id
        OR NEW.catalog_revision <> OLD.catalog_revision + 1
@@ -325,7 +356,9 @@ FOR EACH ROW
 EXECUTE FUNCTION knowledge_catalog_revision_head_transition_is_exact();
 
 CREATE FUNCTION knowledge_catalog_revision_head_delete_is_forbidden()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge catalog revision head cannot be deleted';
 END;
@@ -346,7 +379,9 @@ EXECUTE FUNCTION knowledge_catalog_revision_head_delete_is_forbidden();
 -- row all agree with it.
 CREATE FUNCTION knowledge_mutation_commit_authority_exact_holds(
     candidate knowledge_mutation_commit_authorities
-) RETURNS boolean LANGUAGE sql STABLE AS $$
+) RETURNS boolean LANGUAGE sql STABLE
+SET search_path FROM CURRENT
+AS $$
     SELECT EXISTS (
         SELECT 1
         FROM knowledge_catalog_tenants AS tenant
@@ -438,7 +473,9 @@ CREATE FUNCTION knowledge_mutation_commit_authority_exact_holds(
 $$;
 
 CREATE FUNCTION knowledge_mutation_commit_authority_collision_is_forbidden()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     -- SQLite checks knowledge_mutation_commit_authority_is_exact first, so a
     -- colliding authority that is also not exact is reported as invalid.
@@ -463,7 +500,9 @@ FOR EACH ROW
 EXECUTE FUNCTION knowledge_mutation_commit_authority_collision_is_forbidden();
 
 CREATE FUNCTION knowledge_mutation_commit_authority_is_exact()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF NOT knowledge_mutation_commit_authority_exact_holds(NEW) THEN
         RAISE EXCEPTION 'knowledge mutation commit authority is invalid';
@@ -478,7 +517,9 @@ FOR EACH ROW
 EXECUTE FUNCTION knowledge_mutation_commit_authority_is_exact();
 
 CREATE FUNCTION knowledge_mutation_commit_authority_update_is_forbidden()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge mutation commit authority is immutable';
 END;
@@ -490,7 +531,9 @@ FOR EACH ROW
 EXECUTE FUNCTION knowledge_mutation_commit_authority_update_is_forbidden();
 
 CREATE FUNCTION knowledge_mutation_commit_authority_delete_is_forbidden()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge mutation commit authority is retained';
 END;
@@ -506,7 +549,9 @@ EXECUTE FUNCTION knowledge_mutation_commit_authority_delete_is_forbidden();
 -- ---------------------------------------------------------------------------
 
 CREATE FUNCTION knowledge_list_order_key_agrees_with_authorities()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1
@@ -539,7 +584,9 @@ EXECUTE FUNCTION knowledge_list_order_key_agrees_with_authorities();
 -- SQLite also checks knowledge_list_order_key_agrees_with_authorities before
 -- this trigger, and PostgreSQL's name order agrees, so no yield is needed.
 CREATE FUNCTION knowledge_list_order_key_identity_collision_is_forbidden()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM knowledge_object_list_order_keys
@@ -559,7 +606,9 @@ FOR EACH ROW
 EXECUTE FUNCTION knowledge_list_order_key_identity_collision_is_forbidden();
 
 CREATE FUNCTION knowledge_list_order_key_update_is_forbidden()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge list order key is immutable';
 END;
@@ -572,7 +621,9 @@ EXECUTE FUNCTION knowledge_list_order_key_update_is_forbidden();
 
 -- Also fires for the ON DELETE CASCADE from knowledge_object_list_projections.
 CREATE FUNCTION knowledge_list_order_key_sealed_delete_is_forbidden()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM knowledge_object_list_projection_seals
@@ -601,7 +652,9 @@ EXECUTE FUNCTION knowledge_list_order_key_sealed_delete_is_forbidden();
 -- dimension's values are strictly increasing by byte order.
 CREATE FUNCTION knowledge_list_projection_seal_complete_holds(
     candidate knowledge_object_list_projection_seals
-) RETURNS boolean LANGUAGE sql STABLE AS $$
+) RETURNS boolean LANGUAGE sql STABLE
+SET search_path FROM CURRENT
+AS $$
     SELECT EXISTS (
         SELECT 1
         FROM knowledge_object_list_projections AS projection
@@ -664,7 +717,9 @@ CREATE FUNCTION knowledge_list_projection_seal_complete_holds(
 $$;
 
 CREATE FUNCTION knowledge_list_projection_seal_identity_collision_is_forbidden()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     -- SQLite checks knowledge_list_projection_seal_requires_order_key and
     -- then knowledge_list_projection_seal_is_complete first, so a duplicate
@@ -693,7 +748,9 @@ FOR EACH ROW
 EXECUTE FUNCTION knowledge_list_projection_seal_identity_collision_is_forbidden();
 
 CREATE FUNCTION knowledge_list_projection_seal_is_complete()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     -- SQLite checks knowledge_list_projection_seal_requires_order_key first,
     -- so a seal without an order key is reported as lacking one.
@@ -715,7 +772,9 @@ FOR EACH ROW
 EXECUTE FUNCTION knowledge_list_projection_seal_is_complete();
 
 CREATE FUNCTION knowledge_list_projection_seal_requires_order_key()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM knowledge_object_list_order_keys
@@ -735,7 +794,9 @@ FOR EACH ROW
 EXECUTE FUNCTION knowledge_list_projection_seal_requires_order_key();
 
 CREATE FUNCTION knowledge_list_projection_seal_update_is_forbidden()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge list projection seal is immutable';
 END;
@@ -747,7 +808,9 @@ FOR EACH ROW
 EXECUTE FUNCTION knowledge_list_projection_seal_update_is_forbidden();
 
 CREATE FUNCTION knowledge_list_projection_current_seal_delete_is_forbidden()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF EXISTS (
         SELECT 1
