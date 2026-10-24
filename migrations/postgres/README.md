@@ -77,6 +77,7 @@ sends.
 | `x NOT LIKE '%\%'` | `strpos(x, '\') = 0`, because SQLite LIKE has no escape character and PostgreSQL's default is backslash |
 | `x = x` NaN guard on `REAL` | `x <> 'NaN'::double precision`, because PostgreSQL treats NaN as equal to itself |
 | `X''` | `'\x'::bytea` |
+| `OLD.x + 1` in a trigger condition, where `x` may hold 9223372036854775807 | `OLD.x::numeric + 1`, because SQLite widens to REAL and still reports the trigger's message, while bigint arithmetic raises 22003 first |
 | `STRICT`, `WITHOUT ROWID` | dropped |
 
 Kept as-is: constraint names, unnamed-constraint order, `ON UPDATE` and

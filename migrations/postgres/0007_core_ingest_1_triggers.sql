@@ -364,7 +364,9 @@ BEGIN
         WHERE index_deletion_operations.index_id = OLD.index_id
           AND index_deletion_operations.index_name = OLD.name
           AND index_deletion_operations.archived_index_version = OLD.version
-          AND NEW.version = OLD.version + 1
+          -- numeric: OLD.version may be 9223372036854775807, and bigint + 1
+          -- would raise 22003 instead of the message below.
+          AND NEW.version = OLD.version::numeric + 1
           AND NEW.updated_at_unix_micro =
               index_deletion_operations.created_at_unix_micro
     ) THEN

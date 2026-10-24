@@ -635,7 +635,7 @@ BEGIN
         OR NEW.physical_count <> OLD.physical_count
     )
     AND NOT (
-        NEW.revision = OLD.revision + 1
+        NEW.revision = OLD.revision::numeric + 1
         AND (
             NEW.physical_count = OLD.physical_count
             OR NEW.physical_count = OLD.physical_count + 1
@@ -666,8 +666,10 @@ $$;
 CREATE TRIGGER index_catalog_state_transition_is_valid
 BEFORE UPDATE OF revision, physical_count ON index_catalog_state
 FOR EACH ROW
+-- numeric: OLD.revision may be 9223372036854775807, and bigint + 1 would
+-- raise 22003 instead of this trigger's message.
 WHEN (NOT (
-    NEW.revision = OLD.revision + 1
+    NEW.revision = OLD.revision::numeric + 1
     AND (
         NEW.physical_count = OLD.physical_count
         OR NEW.physical_count = OLD.physical_count + 1

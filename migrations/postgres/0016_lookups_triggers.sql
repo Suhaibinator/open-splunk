@@ -430,6 +430,8 @@ BEGIN
 END;
 $$;
 
+-- numeric: OLD.current_version may be 9223372036854775807, and bigint + 1
+-- would raise 22003 instead of this trigger's message.
 CREATE TRIGGER knowledge_lookup_definition_transition_is_valid
 BEFORE UPDATE ON knowledge_lookup_definitions
 FOR EACH ROW
@@ -438,7 +440,7 @@ WHEN (NOT (
     AND NEW.lookup_id = OLD.lookup_id
     AND NEW.owner_id = OLD.owner_id
     AND NEW.created_at_unix_micro = OLD.created_at_unix_micro
-    AND NEW.current_version = OLD.current_version + 1
+    AND NEW.current_version = OLD.current_version::numeric + 1
     AND NEW.updated_at_unix_micro > OLD.updated_at_unix_micro
     AND (
         (
@@ -830,6 +832,8 @@ BEGIN
 END;
 $$;
 
+-- numeric: OLD.current_version may be 9223372036854775807, and bigint + 1
+-- would raise 22003 instead of this trigger's message.
 CREATE TRIGGER knowledge_lookup_asset_identity_transition_is_exact
 BEFORE UPDATE ON knowledge_lookup_assets
 FOR EACH ROW
@@ -837,7 +841,7 @@ WHEN (
     NEW.tenant_id <> OLD.tenant_id
     OR NEW.lookup_asset_id <> OLD.lookup_asset_id
     OR NEW.created_at_unix_micro <> OLD.created_at_unix_micro
-    OR NEW.current_version <> OLD.current_version + 1
+    OR NEW.current_version <> OLD.current_version::numeric + 1
     OR NEW.updated_at_unix_micro < OLD.updated_at_unix_micro
 )
 EXECUTE FUNCTION knowledge_lookup_asset_identity_transition_is_exact();
