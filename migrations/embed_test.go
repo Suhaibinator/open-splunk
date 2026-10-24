@@ -48,8 +48,8 @@ var embeddedMigrationSHA256 = map[string]map[string]string{
 		"0014_knowledge_catalog_1_triggers.sql":      "01ab424c305e380d17791171af43cb8f139b0a5ccef6687177c1371bfe96d955",
 		"0015_knowledge_catalog_2_triggers.sql":      "acbd9b57924b6f20e5185b7f07809d74dd6ce136cc826da4f14582b25704c87e",
 		"0016_lookups_triggers.sql":                  "6860a46e6f946cbc7f38d0825d9b04bcc220282086f0b6c6f517f94a27f176df",
-		"0017_audit_1_triggers.sql":                  "f0f89013fe8b7c160ccca9a7bc86227332f6c529ef003c542c545282e91c75cc",
-		"0018_audit_2_triggers.sql":                  "58daf74ec5928c7330e177efb8ac0ecba741e5ae9abf6601c41f8e198569b7d2",
+		"0017_audit_1_triggers.sql":                  "7af04c89267ff8d75e86a10adcd3382625e12651718e9cebd1bf484b54ddbb4a",
+		"0018_audit_2_triggers.sql":                  "5c3f08aef705c7ee98ffcf4ef8178ec174dfd65e1601ed9f6d058c5ec7b2dc13",
 	},
 }
 
