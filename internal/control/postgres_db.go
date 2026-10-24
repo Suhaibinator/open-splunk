@@ -65,7 +65,9 @@ type PostgresDB struct {
 
 // OpenPostgres connects to the PostgreSQL control plane named by dsn, pins
 // every pooled connection to the open_splunk schema, and applies the embedded
-// PostgreSQL migrations before returning.
+// PostgreSQL migrations before returning. It takes no server lock: the
+// server process uses OpenPostgresServer, which fences migrations with the
+// single-active-server lock.
 func OpenPostgres(ctx context.Context, dsn string) (*PostgresDB, error) {
 	return OpenPostgresWithMigrations(ctx, dsn, migrations.Postgres())
 }
@@ -87,7 +89,12 @@ func OpenPostgresWithMigrations(
 	if err != nil {
 		return nil, err
 	}
+	return openPostgres(ctx, connConfig, migrationFS)
+}
 
+// openPostgres opens the shared pool for connConfig, applies migrationFS,
+// and returns the handle. Callers have validated their arguments.
+func openPostgres(ctx context.Context, connConfig *pgx.ConnConfig, migrationFS fs.FS) (*PostgresDB, error) {
 	raw := stdlib.OpenDB(*connConfig.Copy(), stdlib.OptionResetSession(resetPostgresSession))
 	raw.SetMaxOpenConns(defaultPostgresMaxOpenConns)
 	raw.SetMaxIdleConns(defaultPostgresMaxOpenConns)
