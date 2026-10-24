@@ -18,7 +18,9 @@ const (
 	// postgresMigrationAdvisoryLockKey serializes every migration runner on
 	// one database. Advisory locks are scoped per database, and the 0x6f73
 	// ("os") prefix keeps open-splunk keys apart from other tenants of the
-	// shared database, which use hashtext-derived two-key locks.
+	// shared database, which use hashtext-derived two-key locks. Key 0002 is
+	// the server singleton (postgres_singleton.go), and key 0003 orders
+	// durable_search_jobs inserts (migration 0020).
 	postgresMigrationAdvisoryLockKey = int64(0x6f73_0000_0000_0001)
 
 	postgresMigrationIdentityFormat = "open-splunk/postgres-migrations/format-1\x00"
@@ -246,7 +248,7 @@ func VerifyCurrentPostgresMigrations(
 	if err != nil {
 		return MigrationIdentity{}, err
 	}
-	tx, err := db.BeginTx(ctx, postgresReadTxOptions)
+	tx, err := db.BeginTx(ctx, postgresSnapshotReadOptions)
 	if err != nil {
 		return MigrationIdentity{}, fmt.Errorf("begin PostgreSQL migration verification: %w", err)
 	}

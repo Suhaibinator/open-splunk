@@ -510,13 +510,17 @@ var semNumRenamedTriggers = map[string]string{
 
 // semNumPostgresOnlyTrigger is a trigger SQLite never had: the tenant guards
 // of 0007 and 0011, which keep rows from referencing or moving into another
-// tenant where SQLite had no tenant to compare.
+// tenant where SQLite had no tenant to compare, and the statement-level lock
+// of 0020, which draws durable_search_jobs.row_cursor in commit order as
+// SQLite's single writer drew rowid.
 type semNumPostgresOnlyTrigger struct {
 	table, event string
 	updateOf     []string
+	statement    bool
 }
 
 var semNumPostgresOnlyTriggers = map[string]semNumPostgresOnlyTrigger{
+	"durable_search_job_cursor_is_commit_ordered":       {table: "durable_search_jobs", event: "INSERT", statement: true},
 	"indexes_tenant_is_immutable":                       {table: "indexes", event: "UPDATE", updateOf: []string{"tenant_id"}},
 	"ingestion_token_index_requires_same_tenant_insert": {table: "ingestion_token_indexes", event: "INSERT"},
 	"ingestion_token_index_requires_same_tenant_update": {table: "ingestion_token_indexes", event: "UPDATE", updateOf: []string{"index_id", "ingestion_token_id"}},
@@ -562,9 +566,14 @@ func TestPostgresBreakTriggerSignaturesMatchSQLite(t *testing.T) {
 		case got.update:
 			event = "UPDATE"
 		}
-		if got.table != want.table || !got.before || !got.row || event != want.event ||
+		granularity := "ROW"
+		if want.statement {
+			granularity = "STATEMENT"
+		}
+		if got.table != want.table || !got.before || got.row == want.statement || event != want.event ||
 			!slices.Equal(got.updateOf, want.updateOf) {
-			t.Errorf("%s is not BEFORE %s OF %v ON %s FOR EACH ROW", name, want.event, want.updateOf, want.table)
+			t.Errorf("%s is not BEFORE %s OF %v ON %s FOR EACH %s",
+				name, want.event, want.updateOf, want.table, granularity)
 		}
 	}
 	withUpdateOf := 0

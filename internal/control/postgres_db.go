@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Suhaibinator/open-splunk/migrations"
 	"github.com/jackc/pgx/v5"
@@ -58,9 +59,19 @@ type PostgresDB struct {
 	// writeQueue serializes write transactions while any is being retried.
 	writeQueue *postgresWriteQueue
 
+	// writeFence is the server singleton every write transaction confirms
+	// before COMMIT, or nil when this handle holds none.
+	writeFence atomic.Pointer[serverSingleton]
+	// singletonLost closes when this handle loses a server singleton; see
+	// ServerSingletonLost.
+	singletonLost chan struct{}
+
 	mu         sync.Mutex
 	closed     bool
 	singletons map[*serverSingleton]struct{}
+	// singletonLostErr is the sticky ErrServerSingletonLost, set once
+	// together with closing singletonLost.
+	singletonLostErr error
 }
 
 // OpenPostgres connects to the PostgreSQL control plane named by dsn, pins
@@ -115,11 +126,12 @@ func openPostgres(ctx context.Context, connConfig *pgx.ConnConfig, migrationFS f
 		return closeOnError(fmt.Errorf("configure GORM PostgreSQL control plane: %w", err))
 	}
 	return &PostgresDB{
-		sql:        raw,
-		orm:        orm,
-		connConfig: connConfig,
-		writeQueue: newPostgresWriteQueue(),
-		singletons: make(map[*serverSingleton]struct{}),
+		sql:           raw,
+		orm:           orm,
+		connConfig:    connConfig,
+		writeQueue:    newPostgresWriteQueue(),
+		singletonLost: make(chan struct{}),
+		singletons:    make(map[*serverSingleton]struct{}),
 	}, nil
 }
 
