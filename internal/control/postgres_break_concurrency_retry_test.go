@@ -1064,8 +1064,8 @@ func TestBreakRetrySessionSettingsDoNotLeakIntoThePool(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("inspect connection: %v", err)
 		}
-		if searchPath != control.PostgresSchema || timeZone != "UTC" {
-			t.Fatalf("reported search_path=%q TimeZone=%q, want %q and UTC", searchPath, timeZone, control.PostgresSchema)
+		if searchPath != control.PostgresSearchPath || timeZone != "UTC" {
+			t.Fatalf("reported search_path=%q TimeZone=%q, want %q and UTC", searchPath, timeZone, control.PostgresSearchPath)
 		}
 	})
 
@@ -1110,9 +1110,9 @@ func TestBreakRetrySessionSettingsDoNotLeakIntoThePool(t *testing.T) {
 				`SELECT current_setting('search_path'), current_setting('TimeZone')`).Scan(&searchPath, &timeZone); err != nil {
 				t.Fatalf("read session settings: %v", err)
 			}
-			if searchPath != control.PostgresSchema || timeZone != "UTC" {
+			if searchPath != control.PostgresSearchPath || timeZone != "UTC" {
 				t.Fatalf("pooled session search_path=%q TimeZone=%q, want %q and UTC",
-					searchPath, timeZone, control.PostgresSchema)
+					searchPath, timeZone, control.PostgresSearchPath)
 			}
 			// Unqualified control-plane names still resolve.
 			if err := db.ReadTx(ctx, func(tx *sql.Tx) error {

@@ -15,11 +15,22 @@ import (
 )
 
 const (
-	// postgresMigrationAdvisoryLockKey serializes every migration runner on
-	// one database. Advisory locks are scoped per database, and the 0x6f73
-	// ("os") prefix keeps open-splunk keys apart from other tenants of the
-	// shared database, which use hashtext-derived two-key locks.
-	postgresMigrationAdvisoryLockKey = int64(0x6f73_0000_0000_0001)
+	// postgresAdvisoryLockClass is the first key of every open-splunk
+	// advisory lock. Advisory locks are scoped per database, and a single
+	// bigint key and a pair of int4 keys live in separate keyspaces
+	// (pg_locks.objsubid 1 and 2). go-common, which shares the database,
+	// takes its row-level locks with single bigint keys, many of them
+	// hashtextextended over strings that include client input, so any fixed
+	// bigint of ours could be hit by a crafted string. open-splunk therefore
+	// uses only the two-key form. go-common's one two-key lock,
+	// (hashtext(current_database()), hashtext('go-common:persistence-bootstrap')),
+	// has a second key of -1802013976, so it never meets ours whatever the
+	// database is called. 0x6f730000 spells "os".
+	postgresAdvisoryLockClass = int32(0x6f73_0000)
+
+	// postgresMigrationAdvisoryLockID serializes every migration runner on
+	// one database.
+	postgresMigrationAdvisoryLockID = int32(1)
 
 	postgresMigrationIdentityFormat = "open-splunk/postgres-migrations/format-1\x00"
 )
@@ -35,8 +46,9 @@ const (
 //
 // The run uses one pooled session and discards it afterwards, so session
 // state a migration sets (a plain SET, say) never reaches later users of the
-// pool. A session holding temporary relations is refused, because they would
-// shadow the control tables that migration bodies name unqualified, and a
+// pool. Temporary relations can never shadow the control tables that
+// migration bodies name unqualified: the runner pins pg_temp last on its
+// search_path, and as a second line it refuses a session that holds any. A
 // migration that ends the runner's transaction (COMMIT, ROLLBACK and their
 // synonyms) is refused before its ledger row is written.
 //
@@ -101,7 +113,9 @@ func ApplyPostgresMigrations(ctx context.Context, db *sql.DB, migrationFS fs.FS)
 	}
 
 	lockContext, cancelLock := context.WithTimeout(ctx, migrationLockRetryWindow)
-	_, lockErr := tx.ExecContext(lockContext, `SELECT pg_catalog.pg_advisory_xact_lock($1)`, postgresMigrationAdvisoryLockKey)
+	_, lockErr := tx.ExecContext(lockContext,
+		`SELECT pg_catalog.pg_advisory_xact_lock($1, $2)`,
+		postgresAdvisoryLockClass, postgresMigrationAdvisoryLockID)
 	cancelLock()
 	if lockErr != nil {
 		return fmt.Errorf("acquire PostgreSQL migration lock: %w", lockErr)
@@ -196,13 +210,15 @@ func ApplyPostgresMigrations(ctx context.Context, db *sql.DB, migrationFS fs.FS)
 
 // pinPostgresMigrationSession pins, for the runner's transaction, the session
 // settings the migration files are written against. Unqualified names resolve
-// in the control schema. The files also spell bytea and regex literals with
+// in the control schema, with pg_temp searched only after it, and each
+// SET search_path FROM CURRENT in a migration records that PostgresSearchPath
+// on its routine. The files also spell bytea and regex literals with
 // backslashes ('\x', '[\u0001-\u001f]', strpos(x, '\')), which mean what
 // they say only with standard_conforming_strings on: a database or role
 // default of off would parse '\x'::bytea as the byte 'x'. The caller's pool
 // may not pin these, nor the encoding pgx speaks, so pin all of them.
 func pinPostgresMigrationSession(ctx context.Context, tx *sql.Tx) error {
-	if _, err := tx.ExecContext(ctx, `SET LOCAL search_path TO `+PostgresSchema); err != nil {
+	if _, err := tx.ExecContext(ctx, `SET LOCAL search_path TO `+PostgresSearchPath); err != nil {
 		return fmt.Errorf("pin PostgreSQL migration search_path: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,

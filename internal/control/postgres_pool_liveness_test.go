@@ -96,7 +96,7 @@ func terminateSingletonHolder(t *testing.T, dsn string) {
 		FROM pg_locks
 		WHERE locktype = 'advisory'
 			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-			AND classid = x'6f730000'::int::oid AND objid = 2 AND objsubid = 1 AND granted`).Scan(&terminated); err != nil {
+			AND classid = x'6f730000'::int::oid AND objid = 2 AND objsubid = 2 AND granted`).Scan(&terminated); err != nil {
 		t.Fatalf("terminate singleton holder: %v", err)
 	}
 	if terminated != 1 {

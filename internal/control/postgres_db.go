@@ -26,6 +26,15 @@ const (
 	// as the identity service's tables.
 	PostgresSchema = "open_splunk"
 
+	// PostgresSearchPath is the search_path of every control-plane session,
+	// of the migration runner, and of every open_splunk routine. PostgreSQL
+	// searches the session's temporary schema first for relations unless
+	// search_path names pg_temp explicitly, so without the trailing pg_temp a
+	// temporary table named like a control table would shadow it in store
+	// queries and inside triggers fired from any session. Listed last,
+	// pg_temp is searched only after open_splunk.
+	PostgresSearchPath = PostgresSchema + ", pg_temp"
+
 	defaultPostgresMaxOpenConns = 16
 	postgresApplicationName     = "open-splunk-server"
 )
@@ -42,7 +51,7 @@ const (
 //     literal is an escape, so '\x'::bytea is the byte 'x' and strpos(x, '\')
 //     no longer parses.
 var postgresPinnedSessionParameters = []struct{ name, value string }{
-	{name: "search_path", value: PostgresSchema},
+	{name: "search_path", value: PostgresSearchPath},
 	{name: "timezone", value: "UTC"},
 	{name: "client_encoding", value: "UTF8"},
 	{name: "standard_conforming_strings", value: "on"},
@@ -275,7 +284,7 @@ func resetPostgresSession(_ context.Context, conn *pgx.Conn) error {
 // postgresSessionInvariants are the reported settings every pooled session
 // must keep, keyed by the server's ParameterStatus names.
 var postgresSessionInvariants = map[string]string{
-	"search_path": PostgresSchema,
+	"search_path": PostgresSearchPath,
 	"TimeZone":    "UTC",
 }
 

@@ -14,11 +14,11 @@ import (
 	"github.com/Suhaibinator/open-splunk/migrations"
 )
 
-// postgresServerSingletonAdvisoryLockKey identifies the single active server
-// on one control-plane database. It shares the "os" prefix with the
-// migration lock but is a distinct key, so a running server never blocks a
-// migration transaction and vice versa.
-const postgresServerSingletonAdvisoryLockKey = int64(0x6f73_0000_0000_0002)
+// postgresServerSingletonAdvisoryLockID identifies the single active server
+// on one control-plane database, as the second key under
+// postgresAdvisoryLockClass. It is distinct from the migration lock's, so a
+// running server never blocks a migration transaction and vice versa.
+const postgresServerSingletonAdvisoryLockID = int32(2)
 
 const (
 	serverSingletonReleaseTimeout = 5 * time.Second
@@ -33,8 +33,8 @@ const (
 )
 
 // serverSingletonHeldSQL reports whether the probing session itself still
-// holds the singleton lock. A bigint advisory lock appears in pg_locks as
-// classid (high 32 bits), objid (low 32 bits) and objsubid 1.
+// holds the singleton lock. A two-key advisory lock appears in pg_locks as
+// classid (first key), objid (second key) and objsubid 2.
 var serverSingletonHeldSQL = fmt.Sprintf(`
 	SELECT EXISTS (
 		SELECT 1 FROM pg_catalog.pg_locks
@@ -43,10 +43,10 @@ var serverSingletonHeldSQL = fmt.Sprintf(`
 			AND database = (
 				SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database()
 			)
-			AND classid = %d AND objid = %d AND objsubid = 1 AND granted
+			AND classid = %d AND objid = %d AND objsubid = 2 AND granted
 	)`,
-	uint32(postgresServerSingletonAdvisoryLockKey>>32),
-	uint32(postgresServerSingletonAdvisoryLockKey&0xffff_ffff),
+	uint32(postgresAdvisoryLockClass),
+	uint32(postgresServerSingletonAdvisoryLockID),
 )
 
 // ErrServerAlreadyRunning means another session, normally another server
@@ -220,8 +220,9 @@ func lockServerSingletonSession(ctx context.Context, connConfig *pgx.ConnConfig)
 	var acquired bool
 	if err := conn.QueryRow(
 		ctx,
-		`SELECT pg_catalog.pg_try_advisory_lock($1)`,
-		postgresServerSingletonAdvisoryLockKey,
+		`SELECT pg_catalog.pg_try_advisory_lock($1, $2)`,
+		postgresAdvisoryLockClass,
+		postgresServerSingletonAdvisoryLockID,
 	).Scan(&acquired); err != nil {
 		return nil, errors.Join(
 			fmt.Errorf("acquire PostgreSQL server singleton lock: %w", err),
@@ -304,8 +305,9 @@ func (singleton *serverSingleton) release() error {
 		var released bool
 		unlockErr := singleton.conn.QueryRow(
 			ctx,
-			`SELECT pg_catalog.pg_advisory_unlock($1)`,
-			postgresServerSingletonAdvisoryLockKey,
+			`SELECT pg_catalog.pg_advisory_unlock($1, $2)`,
+			postgresAdvisoryLockClass,
+			postgresServerSingletonAdvisoryLockID,
 		).Scan(&released)
 		if unlockErr != nil {
 			unlockErr = fmt.Errorf("release PostgreSQL server singleton lock: %w", unlockErr)

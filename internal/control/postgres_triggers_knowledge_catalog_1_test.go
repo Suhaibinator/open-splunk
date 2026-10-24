@@ -433,8 +433,8 @@ func TestPostgresKnowledgeCatalog1TriggerCatalogMatchesFixture(t *testing.T) {
 		if function != name || functionSchema != control.PostgresSchema {
 			t.Errorf("trigger %s runs %s.%s, want %s.%s", name, functionSchema, function, control.PostgresSchema, name)
 		}
-		if config != "search_path="+control.PostgresSchema {
-			t.Errorf("trigger %s function config = %q, want search_path=%s", name, config, control.PostgresSchema)
+		if config != "search_path="+control.PostgresSearchPath {
+			t.Errorf("trigger %s function config = %q, want search_path=%s", name, config, control.PostgresSearchPath)
 		}
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {

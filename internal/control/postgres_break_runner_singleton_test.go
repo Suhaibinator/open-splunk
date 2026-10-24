@@ -211,10 +211,15 @@ func TestBreakRunnerRacingReleasesConvergeOnTheNewestLedger(t *testing.T) {
 func TestBreakRunnerLockCannotBeShadowedThroughTheCallerSearchPath(t *testing.T) {
 	t.Parallel()
 	dsn := newEmptyPostgresDatabase(t)
-	if _, err := openRawPostgres(t, dsn).ExecContext(t.Context(), `
-		CREATE FUNCTION public.pg_advisory_xact_lock(bigint) RETURNS void
-		LANGUAGE sql AS 'SELECT NULL::void'`); err != nil {
-		t.Fatalf("plant decoy lock function: %v", err)
+	for _, decoy := range []string{
+		`CREATE FUNCTION public.pg_advisory_xact_lock(bigint) RETURNS void
+		LANGUAGE sql AS 'SELECT NULL::void'`,
+		`CREATE FUNCTION public.pg_advisory_xact_lock(integer, integer) RETURNS void
+		LANGUAGE sql AS 'SELECT NULL::void'`,
+	} {
+		if _, err := openRawPostgres(t, dsn).ExecContext(t.Context(), decoy); err != nil {
+			t.Fatalf("plant decoy lock function: %v", err)
+		}
 	}
 	const runners = 4
 	pools := make([]*sql.DB, runners)
@@ -337,8 +342,8 @@ func TestBreakRunnerMigrationSessionStateStaysInsideTheRun(t *testing.T) {
 		if err := db.SQLDB().QueryRowContext(t.Context(), `SHOW search_path`).Scan(&searchPath); err != nil {
 			t.Fatalf("SHOW search_path: %v", err)
 		}
-		if searchPath != control.PostgresSchema {
-			t.Fatalf("pooled session search_path = %q after migrations, want %s", searchPath, control.PostgresSchema)
+		if searchPath != control.PostgresSearchPath {
+			t.Fatalf("pooled session search_path = %q after migrations, want %s", searchPath, control.PostgresSearchPath)
 		}
 	}
 }
@@ -539,7 +544,7 @@ func TestBreakShippedRoutinesPinTheControlSearchPath(t *testing.T) {
 			t.Fatalf("scan routine: %v", err)
 		}
 		routines++
-		if config != "search_path="+control.PostgresSchema {
+		if config != "search_path="+control.PostgresSearchPath {
 			unpinned = append(unpinned, fmt.Sprintf("%s [%s]", name, config))
 		}
 	}
@@ -551,15 +556,102 @@ func TestBreakShippedRoutinesPinTheControlSearchPath(t *testing.T) {
 	}
 	if len(unpinned) > 0 {
 		t.Fatalf("%d of %d routines do not pin search_path=%s, for example %s",
-			len(unpinned), routines, control.PostgresSchema, strings.Join(unpinned[:min(len(unpinned), 5)], "; "))
+			len(unpinned), routines, control.PostgresSearchPath, strings.Join(unpinned[:min(len(unpinned), 5)], "; "))
 	}
 }
 
-// The behavior behind the invariant: ingest_write_group_active_member_delete_is_forbidden
-// reads ingest_write_groups unqualified. From a session on search_path=public
-// holding a decoy ingest_write_groups that calls the group committed, the
-// active member must still be protected.
+// deleteActiveMemberUnderDecoy seeds an active ingest write group with one
+// member, runs decoy in the same transaction, and returns the error of
+// deleting that member. ingest_write_group_active_member_delete_is_forbidden
+// reads ingest_write_groups unqualified, so a decoy that the trigger resolves
+// instead of the control table, calling the group committed, lets the delete
+// through.
+func deleteActiveMemberUnderDecoy(t *testing.T, decoy ...string) error {
+	t.Helper()
+	db := testsupport.NewPostgresControlDB(t)
+	ctx := t.Context()
+	conn, err := db.SQLDB().Conn(ctx)
+	if err != nil {
+		t.Fatalf("reserve session: %v", err)
+	}
+	defer func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("release session: %v", err)
+		}
+	}()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	seed := []string{
+		// Seed an active group without its full ingest history: replica
+		// mode skips triggers and foreign keys, CHECKs still apply.
+		`SET LOCAL session_replication_role = replica`,
+		`INSERT INTO open_splunk.ingest_write_groups (
+			write_group_id, state, member_count, row_count, decoded_bytes, membership_sha256,
+			first_sequence, last_sequence, created_at_unix_micro)
+		VALUES ('break-group', 'ready', 1, 1, 1, decode(repeat('ab', 32), 'hex'), 1, 1, 1)`,
+		`INSERT INTO open_splunk.ingest_write_group_members (
+			write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256)
+		VALUES ('break-group', 0, 1, 1, 1, decode(repeat('cd', 32), 'hex'))`,
+		`SET LOCAL session_replication_role = origin`,
+	}
+	for _, statement := range append(seed, decoy...) {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("prepare scenario: %v", err)
+		}
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM open_splunk.ingest_write_group_members WHERE write_group_id = 'break-group'`)
+	return err
+}
+
+const activeMemberDeleteRaise = "active ingest write group membership cannot be deleted"
+
+// The behavior behind the invariant: from a session on search_path=public
+// holding a decoy public.ingest_write_groups, the active member must still
+// be protected.
 func TestBreakShippedTriggerIgnoresAPublicDecoyTable(t *testing.T) {
+	t.Parallel()
+	err := deleteActiveMemberUnderDecoy(t,
+		`CREATE TABLE public.ingest_write_groups (write_group_id text, state text)`,
+		`INSERT INTO public.ingest_write_groups VALUES ('break-group', 'committed')`,
+		`SET LOCAL search_path TO public`,
+	)
+	if message, raised := control.RaiseMessage(err); !raised || message != activeMemberDeleteRaise {
+		t.Fatalf("delete of an active member under a public decoy = %v, want the trigger's RAISE", err)
+	}
+}
+
+// Defect: routines pinned search_path = open_splunk without pg_temp.
+// PostgreSQL then searches the firing session's temporary schema before
+// open_splunk for relations, so a temporary ingest_write_groups calling the
+// group committed shadowed the control table inside the trigger and the
+// active member was deleted. The firing session's own search_path must not
+// matter: an operator's psql leaves pg_temp out, the server's pool names it.
+func TestBreakShippedTriggerIgnoresATemporaryDecoyTable(t *testing.T) {
+	t.Parallel()
+	for _, searchPath := range []string{control.PostgresSchema, "public", control.PostgresSearchPath} {
+		t.Run(searchPath, func(t *testing.T) {
+			t.Parallel()
+			err := deleteActiveMemberUnderDecoy(t,
+				`CREATE TEMPORARY TABLE ingest_write_groups (write_group_id text, state text) ON COMMIT DROP`,
+				`INSERT INTO pg_temp.ingest_write_groups VALUES ('break-group', 'committed')`,
+				`SELECT pg_catalog.set_config('search_path', '`+searchPath+`', true)`,
+			)
+			if message, raised := control.RaiseMessage(err); !raised || message != activeMemberDeleteRaise {
+				t.Fatalf("delete of an active member under a temporary decoy, search_path=%s: %v, want the trigger's RAISE",
+					searchPath, err)
+			}
+		})
+	}
+}
+
+// Defect: pooled control-plane sessions started with search_path =
+// open_splunk, so a temporary table named like a control table, left on a
+// pooled session, shadowed it for every unqualified store query on that
+// session. The pinned search_path lists pg_temp last.
+func TestBreakPooledSessionIgnoresATemporaryDecoyTable(t *testing.T) {
 	t.Parallel()
 	db := testsupport.NewPostgresControlDB(t)
 	ctx := t.Context()
@@ -578,28 +670,91 @@ func TestBreakShippedTriggerIgnoresAPublicDecoyTable(t *testing.T) {
 	}
 	defer func() { _ = tx.Rollback() }()
 	for _, statement := range []string{
-		// Seed an active group without its full ingest history: replica
-		// mode skips triggers and foreign keys, CHECKs still apply.
-		`SET LOCAL session_replication_role = replica`,
-		`INSERT INTO open_splunk.ingest_write_groups (
-			write_group_id, state, member_count, row_count, decoded_bytes, membership_sha256,
-			first_sequence, last_sequence, created_at_unix_micro)
-		VALUES ('break-group', 'ready', 1, 1, 1, decode(repeat('ab', 32), 'hex'), 1, 1, 1)`,
-		`INSERT INTO open_splunk.ingest_write_group_members (
-			write_group_id, ordinal, visibility_sequence, row_count, decoded_bytes, outbox_sha256)
-		VALUES ('break-group', 0, 1, 1, 1, decode(repeat('cd', 32), 'hex'))`,
-		`SET LOCAL session_replication_role = origin`,
-		`CREATE TABLE public.ingest_write_groups (write_group_id text, state text)`,
-		`INSERT INTO public.ingest_write_groups VALUES ('break-group', 'committed')`,
-		`SET LOCAL search_path TO public`,
+		`CREATE TEMPORARY TABLE ingest_write_groups (write_group_id text) ON COMMIT DROP`,
+		`INSERT INTO pg_temp.ingest_write_groups VALUES ('decoy-group')`,
 	} {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			t.Fatalf("prepare scenario: %v", err)
+			t.Fatalf("plant temporary decoy: %v", err)
 		}
 	}
-	_, err = tx.ExecContext(ctx, `DELETE FROM open_splunk.ingest_write_group_members WHERE write_group_id = 'break-group'`)
-	if message, raised := control.RaiseMessage(err); !raised || message != "active ingest write group membership cannot be deleted" {
-		t.Fatalf("delete of an active member under a public decoy = %v, want the trigger's RAISE", err)
+	var decoyRows int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT count(*) FROM ingest_write_groups WHERE write_group_id = 'decoy-group'`,
+	).Scan(&decoyRows); err != nil {
+		t.Fatalf("query ingest_write_groups unqualified: %v", err)
+	}
+	if decoyRows != 0 {
+		t.Fatalf("unqualified ingest_write_groups returned %d decoy rows; the temporary table shadowed the control table", decoyRows)
+	}
+}
+
+// Defect: the migration and singleton locks were single bigint keys
+// (0x6f73000000000001 and ...02). go-common shares the database and takes
+// single bigint locks on hashtextextended(<string with client input>, 0),
+// the same keyspace, so a string that hashed to one of those keys stalled
+// every migration or made a server start fail with ErrServerAlreadyRunning,
+// and a go-common transaction on it waited forever behind the running
+// server. A foreign session holding those bigint keys must affect neither
+// lock, and a running server must hold nothing in that keyspace.
+func TestBreakAdvisoryLocksStayOutOfTheSingleKeyKeyspace(t *testing.T) {
+	t.Parallel()
+	dsn := newEmptyPostgresDatabase(t)
+	ctx := t.Context()
+	foreign, err := openRawPostgres(t, dsn).Conn(ctx)
+	if err != nil {
+		t.Fatalf("reserve foreign session: %v", err)
+	}
+	defer func() {
+		if err := foreign.Close(); err != nil {
+			t.Errorf("release foreign session: %v", err)
+		}
+	}()
+	var migrationKeyTaken, singletonKeyTaken bool
+	if err := foreign.QueryRowContext(ctx, `
+		SELECT pg_catalog.pg_try_advisory_lock(x'6f73000000000001'::bigint),
+			pg_catalog.pg_try_advisory_lock(x'6f73000000000002'::bigint)`,
+	).Scan(&migrationKeyTaken, &singletonKeyTaken); err != nil {
+		t.Fatalf("take foreign single-key locks: %v", err)
+	}
+	if !migrationKeyTaken || !singletonKeyTaken {
+		t.Fatalf("foreign single-key locks taken = %v, %v; want both", migrationKeyTaken, singletonKeyTaken)
+	}
+
+	// The runner waits up to its retry window for the migration lock; a
+	// short deadline turns a shared key into a failure instead of a stall.
+	applyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	err = control.ApplyPostgresMigrations(applyCtx, openRawPostgres(t, dsn), runnerMigrations(1))
+	cancel()
+	if err != nil {
+		t.Fatalf("ApplyPostgresMigrations() beside a foreign bigint lock = %v", err)
+	}
+	if _, release, err := openServer(t, dsn, runnerMigrations(2)); err != nil {
+		t.Fatalf("server start beside a foreign bigint lock = %v", err)
+	} else {
+		defer func() {
+			if err := release(); err != nil {
+				t.Errorf("release() = %v", err)
+			}
+		}()
+	}
+	if holders := singletonLockHolders(t, dsn); holders != 1 {
+		t.Fatalf("singleton holders = %d, want 1", holders)
+	}
+
+	if _, err := foreign.ExecContext(ctx, `SELECT pg_catalog.pg_advisory_unlock_all()`); err != nil {
+		t.Fatalf("release foreign single-key locks: %v", err)
+	}
+	var singleKeyLocks int
+	if err := openRawPostgres(t, dsn).QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM pg_locks
+		WHERE locktype = 'advisory'
+			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+			AND objsubid = 1`).Scan(&singleKeyLocks); err != nil {
+		t.Fatalf("count single-key advisory locks: %v", err)
+	}
+	if singleKeyLocks != 0 {
+		t.Fatalf("a running server holds %d single bigint advisory locks, want none", singleKeyLocks)
 	}
 }
 
@@ -613,7 +768,7 @@ func singletonLockHolders(t *testing.T, dsn string) int {
 			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
 			AND classid = x'6f730000'::int::oid
 			AND objid = 2
-			AND objsubid = 1
+			AND objsubid = 2
 			AND granted`).Scan(&holders); err != nil {
 		t.Fatalf("count singleton holders: %v", err)
 	}
@@ -658,7 +813,7 @@ func TestBreakSingletonSurvivesBackendCancel(t *testing.T) {
 		FROM pg_locks
 		WHERE locktype = 'advisory'
 			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-			AND classid = x'6f730000'::int::oid AND objid = 2 AND objsubid = 1 AND granted`).Scan(&canceled); err != nil {
+			AND classid = x'6f730000'::int::oid AND objid = 2 AND objsubid = 2 AND granted`).Scan(&canceled); err != nil {
 		t.Fatalf("cancel holder: %v", err)
 	}
 	if canceled != 1 {
@@ -909,7 +1064,7 @@ func TestBreakSingletonTakeoverAfterTheHolderBackendIsTerminated(t *testing.T) {
 		FROM pg_locks
 		WHERE locktype = 'advisory'
 			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-			AND classid = x'6f730000'::int::oid AND objid = 2 AND objsubid = 1 AND granted`).Scan(&terminated); err != nil {
+			AND classid = x'6f730000'::int::oid AND objid = 2 AND objsubid = 2 AND granted`).Scan(&terminated); err != nil {
 		t.Fatalf("terminate holder: %v", err)
 	}
 	if terminated != 1 {

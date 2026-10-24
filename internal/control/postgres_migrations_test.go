@@ -434,7 +434,7 @@ func TestOpenPostgresPinsSessionInvariants(t *testing.T) {
 		).Scan(&searchPath, &timeZone, &applicationName); err != nil {
 			t.Fatalf("read session settings: %v", err)
 		}
-		if searchPath != control.PostgresSchema || timeZone != "UTC" || applicationName != "open-splunk-server" {
+		if searchPath != control.PostgresSearchPath || timeZone != "UTC" || applicationName != "open-splunk-server" {
 			t.Fatalf("session search_path=%q TimeZone=%q application_name=%q", searchPath, timeZone, applicationName)
 		}
 		if err := conn.Close(); err != nil {

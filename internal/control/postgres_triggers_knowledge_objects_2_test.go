@@ -368,8 +368,8 @@ func TestPostgresKnowledgeObjects2TriggerCatalogMatchesFixture(t *testing.T) {
 		if enabled != "O" {
 			t.Errorf("trigger %s is enabled as %q, want O (origin and local)", name, enabled)
 		}
-		if config != "search_path="+control.PostgresSchema {
-			t.Errorf("trigger %s function config = %q, want search_path=%s", name, config, control.PostgresSchema)
+		if config != "search_path="+control.PostgresSearchPath {
+			t.Errorf("trigger %s function config = %q, want search_path=%s", name, config, control.PostgresSearchPath)
 		}
 		installed = append(installed, name)
 	}
