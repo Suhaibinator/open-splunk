@@ -158,7 +158,7 @@ test("switching organization announces the change and remounts the page in the n
     await click(platform);
     await settle();
     assert.match(organizationTrigger(view.container)?.textContent ?? "", /Acme Platform/u);
-    assert.equal(view.container.querySelector('[data-suite-menu="org"]'), null, "a successful choice closes the menu");
+    assert.equal(view.container.querySelector('[data-suite-menu="org"]') === null, true, "a successful choice closes the menu");
     assert.ok(view.container.querySelectorAll("span").some((span) => span.getAttribute("aria-live") === "polite" && span.textContent === "Switched to Acme Platform."));
     assert.equal(contentMounts, before + 1, "nothing from the previous organization stays mounted");
     assert.equal((await client.getPrincipal())?.activeOrganization?.id, "3");
@@ -205,7 +205,7 @@ test("a member is offered no administration and sees a forbidden state on the ad
     assert.ok(!links(view.container).includes("Settings"));
     assert.ok(!links(view.container).includes("Administration"));
     assert.ok(links(view.container).includes("Search"), "searching is still offered");
-    assert.equal(view.container.querySelector("[data-page-content]"), null, "the admin page does not render");
+    assert.equal(view.container.querySelector("[data-page-content]") === null, true, "the admin page does not render");
     const heading = view.container.querySelector("h1");
     assert.equal(heading?.textContent, "You do not have access to Administration");
     assert.match(text(view.container), /Your role in Acme Operations is Member\. Ask an owner or admin of Acme Operations for the Moderator role or higher\./u);
@@ -248,8 +248,8 @@ test("a signed-out principal is sent to sign in with the page to return to; Help
     await settle();
     assert.deepEqual(navigations, [["replace", "/signin/?returnTo=%2Freports%2Fsaved-searches%2F%3Fview%3Dmine"]]);
     assert.equal(view.container.querySelector("h1")?.textContent, "Sign in to continue");
-    assert.equal(view.container.querySelector("[data-page-content]"), null);
-    assert.equal(organizationTrigger(view.container), undefined, "there is no organization to switch");
+    assert.equal(view.container.querySelector("[data-page-content]") === null, true);
+    assert.equal(organizationTrigger(view.container) === undefined, true, "there is no organization to switch");
   } finally {
     await view.unmount();
   }
@@ -276,11 +276,11 @@ test("the page waits, without showing content, while the principal is read", asy
   };
   const view = await mount(shell(client, "datasets"));
   try {
-    assert.equal(view.container.querySelector("[data-page-content]"), null);
+    assert.equal(view.container.querySelector("[data-page-content]") === null, true);
     assert.ok(view.container.querySelectorAll("div").some((element) => element.getAttribute("aria-busy") === "true"), "the main region is busy");
     assert.match(text(view.container), /Checking your access…/u);
     assert.match(text(view.container), /Loading organizations/u);
-    assert.equal(organizationTrigger(view.container), undefined, "the switcher is a placeholder until the principal is known");
+    assert.equal(organizationTrigger(view.container) === undefined, true, "the switcher is a placeholder until the principal is known");
     release();
     await settle();
     assert.ok(view.container.querySelector("[data-page-content]"));
@@ -346,7 +346,7 @@ test("a page without identity keeps the legacy session and every surface", async
   const view = await mount(shell(null, "datasets", <PageContent />, "backend"));
   try {
     await settle();
-    assert.equal(organizationTrigger(view.container), undefined);
+    assert.equal(organizationTrigger(view.container) === undefined, true);
     assert.ok(view.container.querySelectorAll("button").some((button) => button.getAttribute("aria-label") === "Local session menu"));
     assert.ok(links(view.container).includes("Settings"));
     assert.ok(view.container.querySelector("[data-page-content]"));
@@ -357,18 +357,20 @@ test("a page without identity keeps the legacy session and every surface", async
 
 test("the demo shell mounts its own provider and starts later pages from the principal it already read", async () => {
   at("/datasets/");
+  // A synchronous server render shows the state before any read resolves; an
+  // `act` mount would already have flushed the demo client's read.
+  assert.doesNotMatch(renderToStaticMarkup(shell(null, "datasets")), /data-page-content/u, "the first page reads the principal");
   const first = await mount(shell(null, "datasets"));
   try {
-    assert.equal(first.container.querySelector("[data-page-content]"), null, "the first page reads the principal");
     await settle();
     assert.ok(first.container.querySelector("[data-page-content]"));
     assert.match(organizationTrigger(first.container)?.textContent ?? "", /Acme Operations/u);
   } finally {
     await first.unmount();
   }
+  assert.match(renderToStaticMarkup(shell(null, "analytics")), /data-page-content/u, "a later page renders at once");
   const second = await mount(shell(null, "analytics"));
   try {
-    assert.ok(second.container.querySelector("[data-page-content]"), "a later page renders at once");
     await settle();
     assert.ok(second.container.querySelector("[data-page-content]"));
   } finally {
@@ -382,7 +384,7 @@ test("the administration console offers only the sections a moderator holds and 
   try {
     await settle();
     const sidebar = view.container.querySelectorAll("aside").find((aside) => aside.getAttribute("aria-label") === "Administration navigation");
-    assert.deepEqual(sidebar?.querySelectorAll("strong").map((label) => label.textContent), ["System overview"]);
+    assert.deepEqual(sidebar?.querySelectorAll("button").map((item) => item.querySelector("strong")?.textContent), ["System overview"]);
     const heading = view.container.querySelectorAll("h2").find((element) => element.getAttribute("id") === "suite-access-forbidden-title");
     assert.equal(heading?.textContent, "You do not have access to Server settings");
     assert.match(text(view.container), /Only a site administrator can open it\./u);
@@ -397,7 +399,7 @@ test("the administration console offers only the sections a moderator holds and 
     await settle();
     const sidebar = admin.container.querySelectorAll("aside").find((aside) => aside.getAttribute("aria-label") === "Administration navigation");
     assert.deepEqual(
-      sidebar?.querySelectorAll("strong").map((label) => label.textContent),
+      sidebar?.querySelectorAll("button").map((item) => item.querySelector("strong")?.textContent),
       ["System overview", "Indexes", "Data inputs", "Users & access"],
       "an organization admin manages its data and members, not the server",
     );

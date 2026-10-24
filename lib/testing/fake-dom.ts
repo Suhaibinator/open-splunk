@@ -302,6 +302,16 @@ export class FakeElement extends FakeNode {
     return selector === ":popover-open" ? this.popoverOpen : compileSelector(selector)(this);
   }
 
+  /** The shared Select looks up its wrapping label with `closest`. */
+  public closest(selector: string): FakeElement | null {
+    const matches = compileSelector(selector);
+    if (matches(this)) return this;
+    for (let current = this.parentNode; current !== null; current = current.parentNode) {
+      if (current instanceof FakeElement && matches(current)) return current;
+    }
+    return null;
+  }
+
   public showPopover(): void {
     this.popoverOpen = true;
   }
