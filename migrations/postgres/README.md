@@ -24,11 +24,18 @@ Files apply in filename order, and each file depends only on earlier ones:
 | `0004_audit.sql` | audit journals and API mutation receipts |
 | `0005_knowledge.sql` | knowledge objects, versions, projections, idempotency, recovery audit |
 | `0006_lookups.sql` | lookup assets and lookup definitions |
-<<<<<<< HEAD
-| `0010_collectors_apps_search_1_triggers.sql` | triggers on `app_workspaces`, `collector_runtime`, `dashboards` and `search_history` |
-=======
-| `0015_knowledge_catalog_2_triggers.sql` | triggers on the knowledge catalog tenants, revision heads, mutation commit authorities, list order keys and list projection seals; every function pins `search_path` |
->>>>>>> feat/pg-triggers-knowledge-catalog-2
+| `0007_core_ingest_1_triggers.sql` | triggers on `indexes`, `ingestion_tokens`, `ingestion_token_hec_profiles` |
+| `0008_core_ingest_2_triggers.sql` | triggers on `index_catalog_state`, `index_data_deletion_completions`, `index_deletion_mutation_attempts`, `ingest_write_group_members` |
+| `0009_core_ingest_3_triggers.sql` | triggers on `index_deletion_operations`, `index_deletion_tombstones`, `ingest_visibility_reservations`, `ingest_write_groups` |
+| `0010_collectors_apps_search_1_triggers.sql` | triggers on `app_workspaces`, `collector_runtime`, `dashboards`, `search_history` |
+| `0011_collectors_apps_search_2_triggers.sql` | triggers on `app_catalog_revisions`, `app_default_indexes`, `collector_catalog_revisions`, `collector_fleet`, `saved_searches` |
+| `0012_knowledge_objects_1_triggers.sql` | triggers on `knowledge_objects`, `knowledge_object_dependencies`, the app and type active counters |
+| `0013_knowledge_objects_2_triggers.sql` | triggers on knowledge object versions, lifecycle, ACL, dependency seals, the owner and app-type active counters |
+| `0014_knowledge_catalog_1_triggers.sql` | triggers on definition blobs, mutation idempotency, list projections and selector patterns, projection tenant ledgers, recovery audit |
+| `0015_knowledge_catalog_2_triggers.sql` | triggers on knowledge catalog tenants, revision heads, mutation commit authorities, list order keys, list projection seals |
+| `0016_lookups_triggers.sql` | triggers on lookup assets, asset versions and stages, asset tenant ledgers, lookup definitions and their versions |
+| `0017_audit_1_triggers.sql` | triggers on `audit_events`, feature-operation and search-attempt audit events, receipt and knowledge-attempt tenant state |
+| `0018_audit_2_triggers.sql` | triggers on `api_mutation_receipts`, `knowledge_attempt_audit_events`, the audit, feature-operation and search-attempt tenant state |
 
 `0004_audit.sql` comes before knowledge because the knowledge mutation
 authorities reference `audit_events`. Inside a file, tables are ordered by

@@ -46,7 +46,7 @@ var audit1LaneMigrations = map[string]string{
 // lanes must be absent, and TestPostgresAudit1TriggerScenariosAcrossLanes
 // fails as soon as one of them is merged, so the integrator that merges the
 // lane has to set it to true and make the scenarios pass. It is never a skip.
-const audit1CrossLaneScenariosEnabled = false
+const audit1CrossLaneScenariosEnabled = true
 
 type audit1TriggerScenario struct {
 	Name            string   `json:"name"`

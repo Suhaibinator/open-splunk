@@ -44,7 +44,7 @@ const (
 // until then TestPostgresAudit2TriggerScenariosAcrossLanes fails as soon as
 // the lane's migration is present, so the scenarios are never left off by
 // accident.
-const audit2CrossLaneScenariosEnabled = false
+const audit2CrossLaneScenariosEnabled = true
 
 // audit2LaneMigrations names the trigger lanes that fixture scenarios may
 // depend on, by the fixed migration file each lane ships.

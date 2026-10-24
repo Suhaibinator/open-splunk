@@ -51,7 +51,7 @@ var coreIngest3LaneMarkers = map[string]string{
 // branch does not ship yet; the scenarios needing them wait. When a lane's
 // migration is merged, TestPostgresCoreIngest3CrossLaneTriggerScenarios
 // fails until the lane is removed here, which enables its scenarios.
-var coreIngest3PendingLanes = []string{"core_ingest_1", "core_ingest_2"}
+var coreIngest3PendingLanes = []string{}
 
 var (
 	coreIngest3CreateTrigger = regexp.MustCompile(`(?s)CREATE TRIGGER ([a-z_][a-z0-9_]*)\s+(?:BEFORE|AFTER)\b.*?\bON\s+([a-z_][a-z0-9_]*)`)
