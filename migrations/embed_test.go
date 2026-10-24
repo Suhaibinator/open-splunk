@@ -32,12 +32,17 @@ var embeddedMigrationSHA256 = map[string]map[string]string{
 		"0002_normalized_id_indexes.sql": "e8c5ae6e7887d2b2ae9917feb6b2bf3d93e2c4d81567fc9891b40f3469278b7d",
 	},
 	"PostgreSQL": {
-		"0001_tenants_core_ingest.sql": "213fc0fd309f24a453bcd87382ccb8c5a8e1d16b4f1bc9f1fea3ba18026be361",
-		"0002_collectors_apps.sql":     "034e45d058053b410bd4a573218e54d43ad37c599561bcfc0600a1451a35f3ff",
-		"0003_search.sql":              "88332c4141a3be8a3e62a21bd68775741eb2d02214564fb01dc4236fe57dec16",
-		"0004_audit.sql":               "269b02434caee6843189b6a4992588004944192698ddbe8986f9ab09bc428f87",
-		"0005_knowledge.sql":           "6b26e119ceb0f3ad8e149abb70fa58973be9ca98c3a7812b0514341931109385",
-		"0006_lookups.sql":             "b186d69c8dcbe1745426839443d51e6a210a926405f82ee05eae7be331aa322c",
+		"0001_tenants_core_ingest.sql":               "213fc0fd309f24a453bcd87382ccb8c5a8e1d16b4f1bc9f1fea3ba18026be361",
+		"0002_collectors_apps.sql":                   "034e45d058053b410bd4a573218e54d43ad37c599561bcfc0600a1451a35f3ff",
+		"0003_search.sql":                            "88332c4141a3be8a3e62a21bd68775741eb2d02214564fb01dc4236fe57dec16",
+		"0004_audit.sql":                             "269b02434caee6843189b6a4992588004944192698ddbe8986f9ab09bc428f87",
+		"0005_knowledge.sql":                         "6b26e119ceb0f3ad8e149abb70fa58973be9ca98c3a7812b0514341931109385",
+		"0006_lookups.sql":                           "b186d69c8dcbe1745426839443d51e6a210a926405f82ee05eae7be331aa322c",
+		"0007_placeholder.sql":                       "b4e0497804e46e0a0b0b8c31975b062152d551bac49c3c2e80932567b4085dcd",
+		"0008_placeholder.sql":                       "b4e0497804e46e0a0b0b8c31975b062152d551bac49c3c2e80932567b4085dcd",
+		"0009_placeholder.sql":                       "b4e0497804e46e0a0b0b8c31975b062152d551bac49c3c2e80932567b4085dcd",
+		"0010_placeholder.sql":                       "b4e0497804e46e0a0b0b8c31975b062152d551bac49c3c2e80932567b4085dcd",
+		"0011_collectors_apps_search_2_triggers.sql": "1671f3ce9de8924fd1f42f2f2086c382872c88fb143269ce1488d9b53e3124b5",
 	},
 }
 

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -63,9 +65,14 @@ var cas2TriggerTables = map[string]string{
 type cas2TriggerScenario struct {
 	Name string `json:"name"`
 	// DependsOnLanes names other trigger lanes whose triggers the setup or
-	// the expected outcome relies on. Such a scenario runs in
-	// TestPostgresTriggersCollectorsAppsSearch2CrossLane once every named
+	// the expected outcome relies on. Such a scenario runs with every
+	// embedded trigger enabled, in
+	// TestPostgresTriggersCollectorsAppsSearch2CrossLane, once every named
 	// lane's migration is embedded, and must then behave exactly as written.
+	// A scenario without it is lane-local: it runs with every trigger outside
+	// this lane disabled, so its setup can plant states that other lanes'
+	// triggers would refuse or rewrite, exactly as the SQLite differential
+	// run that produced it did.
 	DependsOnLanes []string `json:"depends_on_lanes,omitempty"`
 	SetupSQL       []string `json:"setup_sql"`
 	Statement      string   `json:"statement"`
@@ -127,9 +134,10 @@ func loadCAS2TriggerScenarios(t *testing.T) []cas2TriggerScenario {
 		default:
 			t.Fatalf("scenario %q has expect %q, want reject or accept", scenario.Name, scenario.Expect)
 		}
-		for _, lane := range scenario.DependsOnLanes {
-			if lane == cas2Lane || !cas2LaneName.MatchString(lane) {
-				t.Fatalf("scenario %q depends on invalid lane %q", scenario.Name, lane)
+		for index, lane := range scenario.DependsOnLanes {
+			if lane == cas2Lane || !cas2LaneName.MatchString(lane) ||
+				slices.Contains(scenario.DependsOnLanes[:index], lane) {
+				t.Fatalf("scenario %q depends on invalid or repeated lane %q", scenario.Name, lane)
 			}
 		}
 	}
@@ -160,6 +168,9 @@ func cas2EmbeddedLanes(t *testing.T) map[string]bool {
 	return lanes
 }
 
+// TestPostgresTriggersCollectorsAppsSearch2 runs every lane-local fixture
+// scenario against the shipped migrations with only this lane's triggers
+// enabled.
 func TestPostgresTriggersCollectorsAppsSearch2(t *testing.T) {
 	t.Parallel()
 
@@ -181,43 +192,48 @@ func TestPostgresTriggersCollectorsAppsSearch2(t *testing.T) {
 }
 
 // TestPostgresTriggersCollectorsAppsSearch2CrossLane runs the scenarios whose
-// setup or outcome needs another lane's triggers. A scenario whose lanes are
-// not all embedded yet is skipped by name with the lanes it is waiting for;
-// once they are embedded it must pass exactly, so a lane that is merged but
-// behaves differently fails here instead of being skipped.
+// setup or outcome needs another lane's triggers, with every embedded trigger
+// enabled. A scenario runs as soon as all of its lanes are embedded and must
+// then pass exactly; there is no skip, so a lane that is merged but behaves
+// differently fails here. Scenarios still waiting for a lane are listed in
+// the test log by name.
 func TestPostgresTriggersCollectorsAppsSearch2CrossLane(t *testing.T) {
 	t.Parallel()
 
 	scenarios := loadCAS2TriggerScenarios(t)
 	embedded := cas2EmbeddedLanes(t)
-	missing := make(map[string][]string)
-	runnable := 0
+	var runnable, waiting []cas2TriggerScenario
+	waitingFor := make(map[string][]string)
 	for _, scenario := range scenarios {
 		if len(scenario.DependsOnLanes) == 0 {
 			continue
 		}
+		var missing []string
 		for _, lane := range scenario.DependsOnLanes {
 			if !embedded[lane] {
-				missing[scenario.Name] = append(missing[scenario.Name], lane)
+				missing = append(missing, lane)
 			}
 		}
-		if len(missing[scenario.Name]) == 0 {
-			runnable++
-		}
-	}
-	var db *control.PostgresDB
-	if runnable > 0 {
-		db = testsupport.NewPostgresControlDB(t)
-	}
-	for _, scenario := range scenarios {
-		if len(scenario.DependsOnLanes) == 0 {
+		if len(missing) > 0 {
+			waiting = append(waiting, scenario)
+			waitingFor[scenario.Name] = missing
 			continue
 		}
+		runnable = append(runnable, scenario)
+	}
+	if len(runnable)+len(waiting) == 0 {
+		t.Fatal("trigger fixture has no cross-lane scenarios")
+	}
+	for _, scenario := range waiting {
+		t.Logf("not yet runnable, waiting for lane(s) %s: %s",
+			strings.Join(waitingFor[scenario.Name], ", "), scenario.Name)
+	}
+	if len(runnable) == 0 {
+		return
+	}
+	db := testsupport.NewPostgresControlDB(t)
+	for _, scenario := range runnable {
 		t.Run(scenario.Name, func(t *testing.T) {
-			if lanes := missing[scenario.Name]; len(lanes) > 0 {
-				t.Skipf("needs the triggers of lane(s) %s, which are not embedded yet",
-					strings.Join(lanes, ", "))
-			}
 			runCAS2TriggerScenario(t, db, scenario)
 		})
 	}
@@ -238,6 +254,9 @@ func runCAS2TriggerScenario(t *testing.T, db *control.PostgresDB, scenario cas2T
 	}()
 	if _, err := tx.ExecContext(ctx, `SET LOCAL search_path = open_splunk`); err != nil {
 		t.Fatalf("set search_path: %v", err)
+	}
+	if len(scenario.DependsOnLanes) == 0 {
+		isolateCAS2Triggers(ctx, t, tx)
 	}
 	for index, statement := range scenario.SetupSQL {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
@@ -264,6 +283,43 @@ func runCAS2TriggerScenario(t *testing.T, db *control.PostgresDB, scenario cas2T
 	}
 }
 
+// isolateCAS2Triggers disables, for the rest of tx only, every user trigger
+// in open_splunk that this lane does not own. Foreign keys are internal
+// triggers and stay enforced. The ALTERs roll back with tx, and they lock
+// only the scenario's own database.
+func isolateCAS2Triggers(ctx context.Context, t *testing.T, tx *sql.Tx) {
+	t.Helper()
+	names := slices.Sorted(maps.Keys(cas2TriggerTables))
+	if _, err := tx.ExecContext(ctx,
+		`SELECT set_config('open_splunk_test.cas2_lane_triggers', $1, true)`,
+		strings.Join(names, ","),
+	); err != nil {
+		t.Fatalf("record lane triggers: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DO $$
+		DECLARE
+			target record;
+		BEGIN
+			FOR target IN
+				SELECT relation.relname, trigger.tgname
+				FROM pg_catalog.pg_trigger AS trigger
+				JOIN pg_catalog.pg_class AS relation ON relation.oid = trigger.tgrelid
+				JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+				WHERE namespace.nspname = 'open_splunk'
+				  AND NOT trigger.tgisinternal
+				  AND trigger.tgname <> ALL (string_to_array(
+				      current_setting('open_splunk_test.cas2_lane_triggers'), ','))
+			LOOP
+				EXECUTE format('ALTER TABLE open_splunk.%I DISABLE TRIGGER %I',
+					target.relname, target.tgname);
+			END LOOP;
+		END
+		$$`); err != nil {
+		t.Fatalf("disable other lanes' triggers: %v", err)
+	}
+}
+
 // assertCAS2Raise requires a PL/pgSQL RAISE (P0001) carrying exactly message,
 // because Go callers match these texts.
 func assertCAS2Raise(t *testing.T, err error, message string) {
@@ -278,8 +334,8 @@ func assertCAS2Raise(t *testing.T, err error, message string) {
 	if pgErr.Code != "P0001" || pgErr.Message != message {
 		t.Fatalf("rejection = %s %q, want P0001 %q", pgErr.Code, pgErr.Message, message)
 	}
-	if !control.IsRaise(err) {
-		t.Fatalf("control.IsRaise(%v) = false", err)
+	if got, ok := control.RaiseMessage(err); !ok || got != message || !control.IsRaise(err) {
+		t.Fatalf("control.RaiseMessage(%v) = %q, %t", err, got, ok)
 	}
 }
 
@@ -293,6 +349,9 @@ func TestPostgresTriggersCollectorsAppsSearch2Catalog(t *testing.T) {
 	rejects := make(map[string]int)
 	accepts := make(map[string]int)
 	for _, scenario := range scenarios {
+		if len(scenario.DependsOnLanes) > 0 {
+			continue
+		}
 		if scenario.Expect == "reject" {
 			rejects[scenario.trigger()]++
 		} else {
@@ -301,7 +360,7 @@ func TestPostgresTriggersCollectorsAppsSearch2Catalog(t *testing.T) {
 	}
 	for trigger := range cas2TriggerTables {
 		if rejects[trigger] == 0 || accepts[trigger] == 0 {
-			t.Errorf("trigger %s has %d rejected and %d accepted scenarios, want at least one of each",
+			t.Errorf("trigger %s has %d rejected and %d accepted lane-local scenarios, want at least one of each",
 				trigger, rejects[trigger], accepts[trigger])
 		}
 	}
@@ -309,11 +368,7 @@ func TestPostgresTriggersCollectorsAppsSearch2Catalog(t *testing.T) {
 	db := testsupport.NewPostgresControlDB(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	names := make([]string, 0, len(cas2TriggerTables))
-	for trigger := range cas2TriggerTables {
-		names = append(names, trigger)
-	}
-	slices.Sort(names)
+	names := slices.Sorted(maps.Keys(cas2TriggerTables))
 	rows, err := db.SQLDB().QueryContext(ctx, `
 		SELECT trigger.tgname, relation.relname, trigger.tgenabled
 		FROM pg_catalog.pg_trigger AS trigger
@@ -351,5 +406,395 @@ func TestPostgresTriggersCollectorsAppsSearch2Catalog(t *testing.T) {
 		if !found[name] {
 			t.Errorf("trigger %s is not installed", name)
 		}
+	}
+}
+
+// The tests below port the SQLite collector fleet trigger tests in
+// internal/collectorfleet/migration_test.go that assert this lane's messages
+// together with the rows a rejected statement must leave unchanged. They
+// commit their setup, like those tests, so every check reads what a later
+// transaction would see. The collector_fleet and collector_catalog_revisions
+// tables belong to this lane only, so the tests run with every embedded
+// trigger enabled.
+
+const cas2CollectorInsert = `
+	INSERT INTO collector_fleet (
+		tenant_id, collector_id, admin_version, display_name,
+		administrative_state, first_seen_at_unix_micro, updated_at_unix_micro
+	) VALUES ($1, $2, 1, NULL, 'enabled', 1, 1)`
+
+// cas2CollectorCapacity is the per-tenant fleet bound the triggers enforce
+// (collectorfleet.MaximumDurableCollectorsPerTenant).
+const cas2CollectorCapacity = 256
+
+type cas2Marker struct {
+	revision, fleetCount, runtimeCount int64
+}
+
+func newCAS2CollectorTenant(ctx context.Context, t *testing.T, db *sql.DB, tenantID string) {
+	t.Helper()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro)
+		VALUES ($1, 1, 1)`, tenantID); err != nil {
+		t.Fatalf("insert tenant %s: %v", tenantID, err)
+	}
+}
+
+func readCAS2Marker(ctx context.Context, t *testing.T, db *sql.DB, tenantID string) (cas2Marker, bool) {
+	t.Helper()
+	var marker cas2Marker
+	err := db.QueryRowContext(ctx, `
+		SELECT revision, fleet_count, runtime_count
+		FROM collector_catalog_revisions
+		WHERE tenant_id = $1`, tenantID).Scan(&marker.revision, &marker.fleetCount, &marker.runtimeCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return cas2Marker{}, false
+	}
+	if err != nil {
+		t.Fatalf("read collector catalog revision of %s: %v", tenantID, err)
+	}
+	return marker, true
+}
+
+func assertCAS2Marker(ctx context.Context, t *testing.T, db *sql.DB, tenantID string, want cas2Marker) {
+	t.Helper()
+	got, ok := readCAS2Marker(ctx, t, db, tenantID)
+	if !ok {
+		t.Fatalf("collector catalog revision of %s is missing, want %+v", tenantID, want)
+	}
+	if got != want {
+		t.Fatalf("collector catalog revision of %s = %+v, want %+v", tenantID, got, want)
+	}
+}
+
+func countCAS2Collectors(ctx context.Context, t *testing.T, db *sql.DB, tenantID string) int64 {
+	t.Helper()
+	var count int64
+	if err := db.QueryRowContext(ctx,
+		`SELECT count(*) FROM collector_fleet WHERE tenant_id = $1`, tenantID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count collectors of %s: %v", tenantID, err)
+	}
+	return count
+}
+
+// TestPostgresTriggersCollectorsAppsSearch2CollectorCapacity ports
+// TestCollectorFleetMigrationDefendsDurableCollectorCapacity: a tenant holding
+// the maximum number of collectors rejects one more, and the rejected insert
+// leaves the marker and the fleet as they were. The fleet is filled by one
+// multi-row INSERT, whose AFTER ROW events PostgreSQL queues to the end of
+// the statement, so the counter must still come out exact.
+func TestPostgresTriggersCollectorsAppsSearch2CollectorCapacity(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	db := testsupport.NewPostgresControlDB(t).SQLDB()
+	const tenantID = "tenant-capacity"
+	newCAS2CollectorTenant(ctx, t, db, tenantID)
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO collector_fleet (
+			tenant_id, collector_id, admin_version, display_name,
+			administrative_state, first_seen_at_unix_micro, updated_at_unix_micro
+		)
+		SELECT $1, 'collector-' || ordinal, 1, NULL, 'enabled', 1, 1
+		FROM generate_series(1, $2::bigint) AS ordinal`,
+		tenantID, cas2CollectorCapacity,
+	); err != nil {
+		t.Fatalf("fill the fleet to capacity in one statement: %v", err)
+	}
+	full := cas2Marker{revision: cas2CollectorCapacity, fleetCount: cas2CollectorCapacity}
+	assertCAS2Marker(ctx, t, db, tenantID, full)
+
+	_, err := db.ExecContext(ctx, cas2CollectorInsert, tenantID, "collector-over-capacity")
+	assertCAS2Raise(t, err, "collector fleet capacity exhausted")
+	assertCAS2Marker(ctx, t, db, tenantID, full)
+	if got := countCAS2Collectors(ctx, t, db, tenantID); got != cas2CollectorCapacity {
+		t.Fatalf("collectors after the rejected insert = %d, want %d", got, cas2CollectorCapacity)
+	}
+
+	// Removing one collector frees exactly one slot.
+	if _, err := db.ExecContext(ctx,
+		`DELETE FROM collector_fleet WHERE tenant_id = $1 AND collector_id = 'collector-1'`, tenantID,
+	); err != nil {
+		t.Fatalf("delete one collector: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, cas2CollectorInsert, tenantID, "collector-over-capacity"); err != nil {
+		t.Fatalf("insert into the freed slot: %v", err)
+	}
+	assertCAS2Marker(ctx, t, db, tenantID, cas2Marker{
+		revision:   cas2CollectorCapacity + 2,
+		fleetCount: cas2CollectorCapacity,
+	})
+}
+
+// TestPostgresTriggersCollectorsAppsSearch2RejectedFleetMutationsAreAtomic
+// ports the fleet halves of the SQLite tests for the revision marker guard,
+// revision overflow, count underflow, a missing marker, and the identity and
+// administrator-version guards: each rejected statement raises its exact
+// message and leaves both the marker and the collector row unchanged.
+func TestPostgresTriggersCollectorsAppsSearch2RejectedFleetMutationsAreAtomic(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	db := testsupport.NewPostgresControlDB(t).SQLDB()
+	const tenantID = "tenant-atomic"
+	newCAS2CollectorTenant(ctx, t, db, tenantID)
+	if _, err := db.ExecContext(ctx, cas2CollectorInsert, tenantID, "collector-a"); err != nil {
+		t.Fatalf("insert collector: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE collector_fleet SET admin_version = 3
+		WHERE tenant_id = $1 AND collector_id = 'collector-a'`, tenantID); err != nil {
+		t.Fatalf("advance administrator version: %v", err)
+	}
+	assertCAS2Marker(ctx, t, db, tenantID, cas2Marker{revision: 2, fleetCount: 1})
+
+	type collectorRow struct {
+		adminVersion int64
+		displayName  sql.NullString
+	}
+	readCollector := func() collectorRow {
+		t.Helper()
+		var row collectorRow
+		if err := db.QueryRowContext(ctx, `
+			SELECT admin_version, display_name FROM collector_fleet
+			WHERE tenant_id = $1 AND collector_id = 'collector-a'`, tenantID,
+		).Scan(&row.adminVersion, &row.displayName); err != nil {
+			t.Fatalf("read collector-a: %v", err)
+		}
+		return row
+	}
+	exec := func(statement string, args ...any) error {
+		t.Helper()
+		_, err := db.ExecContext(ctx, statement, args...)
+		return err
+	}
+	mustExec := func(statement string, args ...any) {
+		t.Helper()
+		if err := exec(statement, args...); err != nil {
+			t.Fatalf("%v\n%s", err, statement)
+		}
+	}
+	unchanged := collectorRow{adminVersion: 3}
+	assertUnchanged := func(want cas2Marker) {
+		t.Helper()
+		assertCAS2Marker(ctx, t, db, tenantID, want)
+		if got := readCollector(); got != unchanged {
+			t.Fatalf("collector-a after a rejected statement = %+v, want %+v", got, unchanged)
+		}
+	}
+	healthy := cas2Marker{revision: 2, fleetCount: 1}
+
+	t.Run("marker delete", func(t *testing.T) {
+		assertCAS2Raise(t, exec(`DELETE FROM collector_catalog_revisions WHERE tenant_id = $1`, tenantID),
+			"collector catalog fleet/runtime revision marker cannot be deleted")
+		assertUnchanged(healthy)
+	})
+	t.Run("identity change", func(t *testing.T) {
+		assertCAS2Raise(t, exec(`
+			UPDATE collector_fleet SET collector_id = 'collector-b'
+			WHERE tenant_id = $1 AND collector_id = 'collector-a'`, tenantID),
+			"collector fleet identity is immutable")
+		assertUnchanged(healthy)
+	})
+	t.Run("administrator version rollback", func(t *testing.T) {
+		assertCAS2Raise(t, exec(`
+			UPDATE collector_fleet SET admin_version = 2, display_name = 'must-roll-back'
+			WHERE tenant_id = $1 AND collector_id = 'collector-a'`, tenantID),
+			"collector administrator version cannot move backward")
+		assertUnchanged(healthy)
+	})
+	t.Run("revision overflow", func(t *testing.T) {
+		mustExec(`UPDATE collector_catalog_revisions SET revision = $2 WHERE tenant_id = $1`,
+			tenantID, int64(math.MaxInt64))
+		exhausted := cas2Marker{revision: math.MaxInt64, fleetCount: 1}
+		assertCAS2Raise(t, exec(`
+			UPDATE collector_fleet SET display_name = 'must-roll-back'
+			WHERE tenant_id = $1 AND collector_id = 'collector-a'`, tenantID),
+			"collector catalog revision exhausted")
+		assertUnchanged(exhausted)
+		assertCAS2Raise(t, exec(cas2CollectorInsert, tenantID, "collector-b"),
+			"collector catalog revision exhausted")
+		assertUnchanged(exhausted)
+		if got := countCAS2Collectors(ctx, t, db, tenantID); got != 1 {
+			t.Fatalf("collectors after the rejected insert = %d, want 1", got)
+		}
+		mustExec(`UPDATE collector_catalog_revisions SET revision = 2 WHERE tenant_id = $1`, tenantID)
+	})
+	t.Run("fleet count underflow", func(t *testing.T) {
+		mustExec(`UPDATE collector_catalog_revisions SET fleet_count = 0 WHERE tenant_id = $1`, tenantID)
+		assertCAS2Raise(t, exec(`
+			DELETE FROM collector_fleet WHERE tenant_id = $1 AND collector_id = 'collector-a'`, tenantID),
+			"collector catalog fleet count underflow")
+		assertUnchanged(cas2Marker{revision: 2})
+		mustExec(`UPDATE collector_catalog_revisions SET fleet_count = 1 WHERE tenant_id = $1`, tenantID)
+	})
+	t.Run("missing marker", func(t *testing.T) {
+		// Only a writer that bypasses the delete guard can lose the marker;
+		// reproduce that the way the SQLite test drops its trigger.
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		for _, statement := range []string{
+			`ALTER TABLE collector_catalog_revisions DISABLE TRIGGER collector_catalog_revision_marker_is_undeletable`,
+			`DELETE FROM collector_catalog_revisions WHERE tenant_id = 'tenant-atomic'`,
+			`ALTER TABLE collector_catalog_revisions ENABLE TRIGGER collector_catalog_revision_marker_is_undeletable`,
+		} {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				_ = tx.Rollback()
+				t.Fatalf("force marker loss: %v\n%s", err, statement)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit marker loss: %v", err)
+		}
+		const missing = "collector catalog fleet/runtime revision is missing"
+		for _, statement := range []string{
+			`UPDATE collector_fleet SET display_name = 'must-roll-back'
+			 WHERE tenant_id = $1 AND collector_id = 'collector-a'`,
+			`DELETE FROM collector_fleet WHERE tenant_id = $1 AND collector_id = 'collector-a'`,
+		} {
+			assertCAS2Raise(t, exec(statement, tenantID), missing)
+			if got := readCollector(); got != unchanged {
+				t.Fatalf("collector-a after a rejected statement = %+v, want %+v", got, unchanged)
+			}
+		}
+		assertCAS2Raise(t, exec(cas2CollectorInsert, tenantID, "collector-b"), missing)
+		if _, ok := readCAS2Marker(ctx, t, db, tenantID); ok {
+			t.Fatal("a rejected statement recreated the lost marker")
+		}
+		if got := countCAS2Collectors(ctx, t, db, tenantID); got != 1 {
+			t.Fatalf("collectors after the rejected insert = %d, want 1", got)
+		}
+	})
+}
+
+// TestPostgresTriggersCollectorsAppsSearch2ConcurrentFleetInserts checks the
+// concurrency contract in the migration header: two transactions inserting
+// collectors for one tenant serialize on its marker row. Under READ
+// COMMITTED the second waits and then counts the first; under SERIALIZABLE,
+// which WriteTx uses, it fails with a retryable 40001 and its retry counts
+// exactly. Both the first collector of a tenant (which creates the marker
+// through the unique index) and a later one (which locks the existing marker)
+// are covered.
+func TestPostgresTriggersCollectorsAppsSearch2ConcurrentFleetInserts(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	db := testsupport.NewPostgresControlDB(t).SQLDB()
+	for _, test := range []struct {
+		name      string
+		tenantID  string
+		isolation sql.IsolationLevel
+		existing  bool
+	}{
+		{name: "read committed first collector", tenantID: "race-rc-first", isolation: sql.LevelReadCommitted},
+		{name: "read committed existing marker", tenantID: "race-rc-existing", isolation: sql.LevelReadCommitted, existing: true},
+		{name: "serializable first collector", tenantID: "race-ser-first", isolation: sql.LevelSerializable},
+		{name: "serializable existing marker", tenantID: "race-ser-existing", isolation: sql.LevelSerializable, existing: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			newCAS2CollectorTenant(ctx, t, db, test.tenantID)
+			var before cas2Marker
+			if test.existing {
+				if _, err := db.ExecContext(ctx, cas2CollectorInsert, test.tenantID, "collector-0"); err != nil {
+					t.Fatalf("insert the existing collector: %v", err)
+				}
+				before = cas2Marker{revision: 1, fleetCount: 1}
+			}
+			options := &sql.TxOptions{Isolation: test.isolation}
+			first, err := db.BeginTx(ctx, options)
+			if err != nil {
+				t.Fatalf("begin first: %v", err)
+			}
+			defer func() { _ = first.Rollback() }()
+			second, err := db.BeginTx(ctx, options)
+			if err != nil {
+				t.Fatalf("begin second: %v", err)
+			}
+			defer func() { _ = second.Rollback() }()
+			// The second transaction's first statement takes its snapshot
+			// before the first commits.
+			var secondPID int64
+			if err := second.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&secondPID); err != nil {
+				t.Fatalf("read second backend: %v", err)
+			}
+			if _, err := first.ExecContext(ctx, cas2CollectorInsert, test.tenantID, "collector-a"); err != nil {
+				t.Fatalf("first insert: %v", err)
+			}
+			secondDone := make(chan error, 1)
+			go func() {
+				_, err := second.ExecContext(ctx, cas2CollectorInsert, test.tenantID, "collector-b")
+				secondDone <- err
+			}()
+			waitForCAS2LockWait(ctx, t, db, secondPID, secondDone)
+			if err := first.Commit(); err != nil {
+				t.Fatalf("commit first: %v", err)
+			}
+			want := cas2Marker{revision: before.revision + 2, fleetCount: before.fleetCount + 2}
+			secondErr := <-secondDone
+			if test.isolation == sql.LevelReadCommitted {
+				if secondErr != nil {
+					t.Fatalf("second insert under READ COMMITTED: %v", secondErr)
+				}
+				if err := second.Commit(); err != nil {
+					t.Fatalf("commit second: %v", err)
+				}
+				assertCAS2Marker(ctx, t, db, test.tenantID, want)
+				return
+			}
+			if !control.IsRetryable(secondErr) {
+				t.Fatalf("second insert under SERIALIZABLE = %v, want a retryable serialization failure", secondErr)
+			}
+			if code, _ := control.PostgresErrorCode(secondErr); code != "40001" {
+				t.Fatalf("second insert SQLSTATE = %q, want 40001", code)
+			}
+			_ = second.Rollback()
+			assertCAS2Marker(ctx, t, db, test.tenantID,
+				cas2Marker{revision: before.revision + 1, fleetCount: before.fleetCount + 1})
+			retry, err := db.BeginTx(ctx, options)
+			if err != nil {
+				t.Fatalf("begin retry: %v", err)
+			}
+			defer func() { _ = retry.Rollback() }()
+			if _, err := retry.ExecContext(ctx, cas2CollectorInsert, test.tenantID, "collector-b"); err != nil {
+				t.Fatalf("retried insert: %v", err)
+			}
+			if err := retry.Commit(); err != nil {
+				t.Fatalf("commit retry: %v", err)
+			}
+			assertCAS2Marker(ctx, t, db, test.tenantID, want)
+		})
+	}
+}
+
+// waitForCAS2LockWait returns once backend pid is blocked on a lock, which
+// proves the second writer reached the marker before the first committed.
+func waitForCAS2LockWait(ctx context.Context, t *testing.T, db *sql.DB, pid int64, done <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		var waitEventType sql.NullString
+		if err := db.QueryRowContext(ctx,
+			`SELECT wait_event_type FROM pg_catalog.pg_stat_activity WHERE pid = $1`, pid,
+		).Scan(&waitEventType); err != nil {
+			t.Fatalf("read backend %d state: %v", pid, err)
+		}
+		if waitEventType.String == "Lock" {
+			return
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("second insert finished before the first committed (err = %v), want it to wait", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("backend %d never waited on a lock (wait_event_type %q)", pid, waitEventType.String)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
