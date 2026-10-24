@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -66,7 +67,7 @@ func OpenPostgresWithMigrations(
 		return nil, err
 	}
 
-	raw := stdlib.OpenDB(*connConfig.Copy())
+	raw := stdlib.OpenDB(*connConfig.Copy(), stdlib.OptionResetSession(resetPostgresSession))
 	raw.SetMaxOpenConns(defaultPostgresMaxOpenConns)
 	raw.SetMaxIdleConns(defaultPostgresMaxOpenConns)
 	closeOnError := func(openErr error) (*PostgresDB, error) {
@@ -122,6 +123,31 @@ func parsePostgresConfig(dsn string) (*pgx.ConnConfig, error) {
 		connConfig.RuntimeParams["application_name"] = postgresApplicationName
 	}
 	return connConfig, nil
+}
+
+// resetPostgresSession runs before the pool hands out a reused connection.
+// Startup parameters pin search_path and TimeZone, but a plain SET (or
+// set_config with is_local false) in a committed transaction, or through the
+// pool outside one, outlives the statement and would leak into every later
+// borrower of that session. The server reports both settings on every change,
+// so a drifted session is discarded without a round trip and the pool dials
+// a fresh one with the startup values. A server that does not report a
+// setting leaves it unchecked rather than discarding every connection.
+func resetPostgresSession(_ context.Context, conn *pgx.Conn) error {
+	pgConn := conn.PgConn()
+	for name, want := range postgresSessionInvariants {
+		if got := pgConn.ParameterStatus(name); got != "" && got != want {
+			return driver.ErrBadConn
+		}
+	}
+	return nil
+}
+
+// postgresSessionInvariants are the reported settings every pooled session
+// must keep, keyed by the server's ParameterStatus names.
+var postgresSessionInvariants = map[string]string{
+	"search_path": PostgresSchema,
+	"TimeZone":    "UTC",
 }
 
 func configurePostgresGORM(raw *sql.DB) (*gorm.DB, error) {
