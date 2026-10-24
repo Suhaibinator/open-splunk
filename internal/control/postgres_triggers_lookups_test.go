@@ -29,15 +29,15 @@ import (
 // port was written; these tests replay the PostgreSQL side against the
 // shipped migration set and add the checks SQLite cannot express.
 const (
-	lookupTriggerFixturePath = "testdata/postgres_triggers/lookups.json"
-	lookupTriggerMigration   = "0016_lookups_triggers.sql"
-	lookupTriggerLane        = "lookups"
-	postgresRaiseSQLState    = "P0001"
+	lookupTriggerFixturePath   = "testdata/postgres_triggers/lookups.json"
+	lookupTriggerMigration     = "0016_lookups_triggers.sql"
+	lookupTriggerLane          = "lookups"
+	lookupTriggerRaiseSQLState = "P0001"
 )
 
-// postgresTriggerLanes names every trigger lane. A lane is installed when the
+// lookupKnownTriggerLanes names every trigger lane. A lane is installed when the
 // embedded set holds NNNN_<lane>_triggers.sql.
-var postgresTriggerLanes = []string{
+var lookupKnownTriggerLanes = []string{
 	"audit_1",
 	"audit_2",
 	"collectors_apps_search_1",
@@ -105,7 +105,7 @@ func loadLookupTriggerScenarios(t *testing.T) []lookupTriggerScenario {
 			t.Fatalf("lookup trigger scenario %q expects %q, want accept or reject", scenario.Name, scenario.Expect)
 		}
 		for _, lane := range scenario.DependsOnLanes {
-			if lane == lookupTriggerLane || !slices.Contains(postgresTriggerLanes, lane) {
+			if lane == lookupTriggerLane || !slices.Contains(lookupKnownTriggerLanes, lane) {
 				t.Fatalf("lookup trigger scenario %q depends on unknown lane %q", scenario.Name, lane)
 			}
 		}
@@ -125,16 +125,16 @@ func lookupTriggerScenarioNamed(t *testing.T, scenarios []lookupTriggerScenario,
 	return lookupTriggerScenario{}
 }
 
-// installedPostgresTriggerLanes reports which trigger lanes the embedded
+// installedLookupTriggerLanes reports which trigger lanes the embedded
 // PostgreSQL migration set carries.
-func installedPostgresTriggerLanes(t *testing.T) map[string]bool {
+func installedLookupTriggerLanes(t *testing.T) map[string]bool {
 	t.Helper()
 	entries, err := fs.ReadDir(migrations.Postgres(), ".")
 	if err != nil {
 		t.Fatalf("read embedded PostgreSQL migrations: %v", err)
 	}
 	installed := make(map[string]bool)
-	for _, lane := range postgresTriggerLanes {
+	for _, lane := range lookupKnownTriggerLanes {
 		pattern := regexp.MustCompile(`^[0-9]{4}_` + regexp.QuoteMeta(lane) + `_triggers\.sql$`)
 		for _, entry := range entries {
 			if pattern.MatchString(entry.Name()) {
@@ -205,9 +205,9 @@ func requireLookupTriggerRejection(t *testing.T, err error, message string) {
 	if !errors.As(err, &pgErr) {
 		t.Fatalf("statement error = %v, want a PostgreSQL RAISE %q", err, message)
 	}
-	if pgErr.Code != postgresRaiseSQLState || pgErr.Message != message {
+	if pgErr.Code != lookupTriggerRaiseSQLState || pgErr.Message != message {
 		t.Fatalf("statement rejected with SQLSTATE %s %q, want SQLSTATE %s %q",
-			pgErr.Code, pgErr.Message, postgresRaiseSQLState, message)
+			pgErr.Code, pgErr.Message, lookupTriggerRaiseSQLState, message)
 	}
 	if got, ok := control.RaiseMessage(err); !ok || got != message {
 		t.Fatalf("control.RaiseMessage() = %q, %v; want %q, true", got, ok, message)
@@ -276,7 +276,7 @@ func requireLookupLedgersMatchRecount(ctx context.Context, t *testing.T, queryer
 func TestPostgresLookupTriggerScenarios(t *testing.T) {
 	t.Parallel()
 	scenarios := loadLookupTriggerScenarios(t)
-	installedPostgresTriggerLanes(t)
+	installedLookupTriggerLanes(t)
 	for _, scenario := range scenarios {
 		if len(scenario.DependsOnLanes) > 0 {
 			// Asserted by TestPostgresLookupTriggerCrossLaneScenarios.
@@ -290,28 +290,30 @@ func TestPostgresLookupTriggerScenarios(t *testing.T) {
 }
 
 // TestPostgresLookupTriggerCrossLaneScenarios replays the scenarios that need
-// another lane's triggers. It runs each one as soon as every lane it names is
-// in the embedded migration set, and then fails on any difference; until then
-// it reports which lanes are missing.
+// another lane's triggers. A scenario runs, and fails on any difference, as
+// soon as every lane it names is in the embedded migration set. Until then it
+// is pending: it never skips, and it logs which lanes it is waiting for so the
+// integrator can see what merging those lanes will enable.
 func TestPostgresLookupTriggerCrossLaneScenarios(t *testing.T) {
 	t.Parallel()
 	scenarios := loadLookupTriggerScenarios(t)
-	installed := installedPostgresTriggerLanes(t)
+	installed := installedLookupTriggerLanes(t)
 	for _, scenario := range scenarios {
 		if len(scenario.DependsOnLanes) == 0 {
 			continue
 		}
+		var missing []string
+		for _, lane := range scenario.DependsOnLanes {
+			if !installed[lane] {
+				missing = append(missing, lane)
+			}
+		}
+		if len(missing) > 0 {
+			t.Logf("scenario %q is pending trigger lanes %v", scenario.Name, missing)
+			continue
+		}
 		t.Run(scenario.Name, func(t *testing.T) {
 			t.Parallel()
-			var missing []string
-			for _, lane := range scenario.DependsOnLanes {
-				if !installed[lane] {
-					missing = append(missing, lane)
-				}
-			}
-			if len(missing) > 0 {
-				t.Skipf("needs trigger lanes %v, which the embedded PostgreSQL migrations do not carry yet", missing)
-			}
 			runLookupTriggerScenario(t, testsupport.NewPostgresControlDB(t), scenario)
 		})
 	}
@@ -377,7 +379,7 @@ func TestPostgresLookupTriggerPlantedStates(t *testing.T) {
 			// rejection below comes from the planted state alone.
 			runLookupTriggerScenario(t, db, base)
 			inLookupTriggerTx(t, db, base.SetupSQL, func(ctx context.Context, tx *sql.Tx) {
-				plantWithoutTriggers(ctx, t, tx, planted.plant)
+				plantLookupStateWithoutTriggers(ctx, t, tx, planted.plant)
 				statement := planted.statement
 				if statement == "" {
 					statement = base.Statement
@@ -389,9 +391,9 @@ func TestPostgresLookupTriggerPlantedStates(t *testing.T) {
 	}
 }
 
-// plantWithoutTriggers runs statements with every trigger, including the
+// plantLookupStateWithoutTriggers runs statements with every trigger, including the
 // foreign-key triggers, disabled for the current transaction only.
-func plantWithoutTriggers(ctx context.Context, t *testing.T, tx *sql.Tx, statements []string) {
+func plantLookupStateWithoutTriggers(ctx context.Context, t *testing.T, tx *sql.Tx, statements []string) {
 	t.Helper()
 	if _, err := tx.ExecContext(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
 		t.Fatalf("disable triggers for planting: %v", err)
@@ -406,7 +408,7 @@ func plantWithoutTriggers(ctx context.Context, t *testing.T, tx *sql.Tx, stateme
 	}
 }
 
-var postgresRaiseMessagePattern = regexp.MustCompile(`RAISE EXCEPTION '((?:[^']|'')*)'`)
+var lookupRaiseMessagePattern = regexp.MustCompile(`RAISE EXCEPTION '((?:[^']|'')*)'`)
 
 // TestPostgresLookupTriggerMessagesAreAllAsserted ties the fixture to the
 // migration: every message the lane can raise is asserted by a rejection,
@@ -418,7 +420,7 @@ func TestPostgresLookupTriggerMessagesAreAllAsserted(t *testing.T) {
 		t.Fatalf("read %s: %v", lookupTriggerMigration, err)
 	}
 	raised := make(map[string]bool)
-	for _, match := range postgresRaiseMessagePattern.FindAllStringSubmatch(string(contents), -1) {
+	for _, match := range lookupRaiseMessagePattern.FindAllStringSubmatch(string(contents), -1) {
 		raised[strings.ReplaceAll(match[1], "''", "'")] = true
 	}
 	if len(raised) == 0 {
@@ -459,13 +461,13 @@ type lookupTriggerShape struct {
 	ofColumn string
 }
 
-var triggerHeaderPattern = regexp.MustCompile(
+var lookupTriggerHeaderPattern = regexp.MustCompile(
 	`(?is)^\s*CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?"?(\w+)"?\s+(BEFORE|AFTER)\s+` +
 		`(INSERT|DELETE|UPDATE)(?:\s+OF\s+(.+?))?\s+ON\s+(?:\w+\.)?"?(\w+)"?\s`)
 
-func parseTriggerHeader(t *testing.T, definition string) (string, lookupTriggerShape) {
+func parseLookupTriggerHeader(t *testing.T, definition string) (string, lookupTriggerShape) {
 	t.Helper()
-	match := triggerHeaderPattern.FindStringSubmatch(definition)
+	match := lookupTriggerHeaderPattern.FindStringSubmatch(definition)
 	if match == nil {
 		t.Fatalf("cannot parse trigger definition:\n%s", definition)
 	}
@@ -499,7 +501,7 @@ func TestPostgresLookupTriggersMatchTheSQLiteInventory(t *testing.T) {
 			t.Errorf("close SQLite control database: %v", err)
 		}
 	})
-	want := readTriggerInventory(ctx, t, sqliteDB.SQLDB(), `
+	want := readLookupTriggerInventory(ctx, t, sqliteDB.SQLDB(), `
 		SELECT name, sql FROM sqlite_schema
 		WHERE type = 'trigger' AND substr(tbl_name, 1, 17) = 'knowledge_lookup_'`)
 	for sqliteName, portedName := range lookupTriggerRenames {
@@ -512,7 +514,7 @@ func TestPostgresLookupTriggersMatchTheSQLiteInventory(t *testing.T) {
 	}
 
 	postgresDB := testsupport.NewPostgresControlDB(t)
-	got := readTriggerInventory(ctx, t, postgresDB.SQLDB(), `
+	got := readLookupTriggerInventory(ctx, t, postgresDB.SQLDB(), `
 		SELECT trigger.tgname, pg_get_triggerdef(trigger.oid)
 		FROM pg_trigger AS trigger
 		JOIN pg_class AS class ON class.oid = trigger.tgrelid
@@ -553,7 +555,7 @@ func TestPostgresLookupTriggersMatchTheSQLiteInventory(t *testing.T) {
 	}
 }
 
-func readTriggerInventory(ctx context.Context, t *testing.T, db *sql.DB, query string) map[string]lookupTriggerShape {
+func readLookupTriggerInventory(ctx context.Context, t *testing.T, db *sql.DB, query string) map[string]lookupTriggerShape {
 	t.Helper()
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
@@ -566,7 +568,7 @@ func readTriggerInventory(ctx context.Context, t *testing.T, db *sql.DB, query s
 		if err := rows.Scan(&name, &definition); err != nil {
 			t.Fatalf("scan trigger: %v", err)
 		}
-		parsedName, shape := parseTriggerHeader(t, definition)
+		parsedName, shape := parseLookupTriggerHeader(t, definition)
 		if parsedName != name {
 			t.Fatalf("trigger %q has definition naming %q", name, parsedName)
 		}
@@ -600,6 +602,80 @@ func TestPostgresLookupAssetPointerAdvanceNeedsItsVersion(t *testing.T) {
 	})
 }
 
+// TestPostgresLookupPublishReclaimsStageBeforeVersionCapacity is the
+// PostgreSQL counterpart of lookupasset's exact-final-quota publication
+// check. Publication deletes the stage and then inserts the version as two
+// statements of one transaction; the stage's AFTER DELETE accounting must
+// have released its bytes before the version's BEFORE INSERT triggers read
+// the ledger. A test-only trigger, rolled back with the transaction, models a
+// byte quota with room for exactly one retained copy.
+func TestPostgresLookupPublishReclaimsStageBeforeVersionCapacity(t *testing.T) {
+	t.Parallel()
+	base := lookupTriggerScenarioNamed(t, loadLookupTriggerScenarios(t),
+		"asset_version_sequence_accepts_first_version")
+	setup := append(slices.Clone(base.SetupSQL), lookupStageInsert("stage-1"))
+	db := testsupport.NewPostgresControlDB(t)
+	inLookupTriggerTx(t, db, setup, func(ctx context.Context, tx *sql.Tx) {
+		const quotaMessage = "test lookup asset exact byte quota exhausted"
+		for _, statement := range []string{
+			`CREATE FUNCTION test_lookup_asset_exact_byte_quota() RETURNS trigger
+			LANGUAGE plpgsql AS $$
+			BEGIN
+				IF EXISTS (
+					SELECT 1 FROM knowledge_lookup_asset_tenant_ledgers
+					WHERE tenant_id = NEW.tenant_id
+						AND stored_content_bytes > 1 - NEW.canonical_bytes
+				) THEN
+					RAISE EXCEPTION '` + quotaMessage + `';
+				END IF;
+				RETURN NEW;
+			END;
+			$$`,
+			`CREATE TRIGGER test_lookup_asset_exact_byte_quota
+			BEFORE INSERT ON knowledge_lookup_asset_versions
+			FOR EACH ROW EXECUTE FUNCTION test_lookup_asset_exact_byte_quota()`,
+		} {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				t.Fatalf("install exact byte quota: %v", err)
+			}
+		}
+
+		// The quota counts the stage, so the version cannot join it.
+		if _, err := tx.ExecContext(ctx, `SAVEPOINT before_unreclaimed_publish`); err != nil {
+			t.Fatalf("savepoint: %v", err)
+		}
+		_, err := tx.ExecContext(ctx, base.Statement)
+		requireLookupTriggerRejection(t, err, quotaMessage)
+		if _, err := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT before_unreclaimed_publish`); err != nil {
+			t.Fatalf("roll back to savepoint: %v", err)
+		}
+
+		result, err := tx.ExecContext(ctx, `
+			DELETE FROM knowledge_lookup_asset_stages
+			WHERE tenant_id = 'tenant-a' AND stage_id = 'stage-1' AND owner_id = 'owner-a'`)
+		if err != nil {
+			t.Fatalf("consume stage: %v", err)
+		}
+		if consumed, err := result.RowsAffected(); err != nil || consumed != 1 {
+			t.Fatalf("consumed %d stages (%v), want 1", consumed, err)
+		}
+		if _, err := tx.ExecContext(ctx, base.Statement); err != nil {
+			t.Fatalf("publish at exact final quota: %v", err)
+		}
+		var stages, versions, storedBytes int64
+		if err := tx.QueryRowContext(ctx, `
+			SELECT staged_asset_count, published_version_count, stored_content_bytes
+			FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id = 'tenant-a'`).Scan(
+			&stages, &versions, &storedBytes); err != nil {
+			t.Fatalf("read ledger: %v", err)
+		}
+		if stages != 0 || versions != 1 || storedBytes != 1 {
+			t.Fatalf("ledger stages/versions/bytes = %d/%d/%d, want 0/1/1", stages, versions, storedBytes)
+		}
+		requireLookupLedgersMatchRecount(ctx, t, tx)
+	})
+}
+
 // TestPostgresLookupMultiRowStageInsertOverCapacityHitsTheLedgerCheck pins a
 // documented difference from SQLite: inside one multi-row INSERT every row's
 // BEFORE capacity check reads the ledger before the statement's AFTER
@@ -614,20 +690,21 @@ func TestPostgresLookupMultiRowStageInsertOverCapacityHitsTheLedgerCheck(t *test
 			`DELETE FROM knowledge_lookup_asset_stages WHERE tenant_id = 'tenant-a' AND stage_id = 'bulk-64'`); err != nil {
 			t.Fatalf("free one stage slot: %v", err)
 		}
-		_, err := tx.ExecContext(ctx, lookupStageInsert("tenant-a", "pair-1", "pair-2"))
+		_, err := tx.ExecContext(ctx, lookupStageInsert("pair-1", "pair-2"))
 		if !control.IsCheckViolation(err) {
 			t.Fatalf("two-row insert into the last stage slot = %v, want the ledger check violation", err)
 		}
 	})
 }
 
-func lookupStageInsert(tenant string, stageIDs ...string) string {
+// lookupStageInsert stages one-byte assets for the fixture tenant, tenant-a.
+func lookupStageInsert(stageIDs ...string) string {
 	values := make([]string, 0, len(stageIDs))
 	for _, stageID := range stageIDs {
-		values = append(values, fmt.Sprintf(`('%s', '%s', 'owner-a',
+		values = append(values, fmt.Sprintf(`('tenant-a', '%s', 'owner-a',
 			'\x1111111111111111111111111111111111111111111111111111111111111111'::bytea,
 			'\x2222222222222222222222222222222222222222222222222222222222222222'::bytea,
-			1, '\x41'::bytea, 1, 0, 1, 10, 20)`, tenant, stageID))
+			1, '\x41'::bytea, 1, 0, 1, 10, 20)`, stageID))
 	}
 	return `INSERT INTO knowledge_lookup_asset_stages (
 		tenant_id, stage_id, owner_id, source_sha256, content_sha256, source_bytes,
@@ -668,7 +745,7 @@ func TestPostgresLookupLedgerStaysExactUnderConcurrentWriters(t *testing.T) {
 				t.Fatalf("begin first writer: %v", err)
 			}
 			defer func() { _ = first.Rollback() }()
-			if _, err := first.ExecContext(ctx, lookupStageInsert("tenant-a", "first")); err != nil {
+			if _, err := first.ExecContext(ctx, lookupStageInsert("first")); err != nil {
 				t.Fatalf("first writer stage: %v", err)
 			}
 
@@ -678,7 +755,7 @@ func TestPostgresLookupLedgerStaysExactUnderConcurrentWriters(t *testing.T) {
 				if isolation == sql.LevelSerializable {
 					second <- db.WriteTx(ctx, func(tx *sql.Tx) error {
 						attempts.Add(1)
-						_, err := tx.ExecContext(ctx, lookupStageInsert("tenant-a", "second"))
+						_, err := tx.ExecContext(ctx, lookupStageInsert("second"))
 						return err
 					})
 					return
@@ -689,7 +766,7 @@ func TestPostgresLookupLedgerStaysExactUnderConcurrentWriters(t *testing.T) {
 					if err != nil {
 						return err
 					}
-					if _, err := tx.ExecContext(ctx, lookupStageInsert("tenant-a", "second")); err != nil {
+					if _, err := tx.ExecContext(ctx, lookupStageInsert("second")); err != nil {
 						return errors.Join(err, tx.Rollback())
 					}
 					return tx.Commit()
