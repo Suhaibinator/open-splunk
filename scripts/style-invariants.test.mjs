@@ -2060,6 +2060,7 @@ const FEATURE_PREFIXES = [
   "operations-",
   "nearby-context",
   "reports-",
+  "site-directory-",
   "visualization-",
   "workspace-dialog-",
 ];

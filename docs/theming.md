@@ -48,20 +48,21 @@ is:
 | 19 | `app/search-workspace/search-fields.css` | fields rail and events |
 | 20 | `app/search-workspace/search-results.css` | patterns, statistics and result grids |
 | 21 | `app/admin/admin.css` | administration and knowledge surfaces |
-| 22 | `app/activity/activity.css` | activity console |
-| 23 | `app/datasets/datasets.css` | dataset cards and field catalog |
-| 24 | `app/signin/signin.css` | sign-in page |
-| 25 | `app/home.css` | landing page |
-| 26 | `app/_components/backend-resource-state.css` | connected-backend empty/error state |
-| 27 | `app/dashboards/dashboards.css` | dashboard page rules |
-| 28 | `app/analytics/analytics.css` | analytics console; `analytics-` namespace |
-| 29 | `app/dashboards/operations-dashboard.css` | operations dashboard; `operations-` namespace |
-| 30 | `app/reports/reports.css` | reports and saved searches; `reports-` namespace |
-| 31 | `app/reports/alerts.css` | alert management; `alerts-` namespace |
-| 32 | `app/search-workspace/components/workspace-dialogs.css` | workspace dialogs; `workspace-dialog-` namespace |
-| 33 | `app/search-workspace/panels/visualization-panel.css` | result visualizations; `visualization-` namespace |
-| 34 | `app/help/help.css` | Help documentation, navigation, and search; `help-` namespace |
-| 35 | `app/styles/interaction.css` | coarse-pointer and reduced-motion floors |
+| 22 | `app/admin/site-directory.css` | site-admin users and organizations panels; `site-directory-` namespace |
+| 23 | `app/activity/activity.css` | activity console |
+| 24 | `app/datasets/datasets.css` | dataset cards and field catalog |
+| 25 | `app/signin/signin.css` | sign-in page |
+| 26 | `app/home.css` | landing page |
+| 27 | `app/_components/backend-resource-state.css` | connected-backend empty/error state |
+| 28 | `app/dashboards/dashboards.css` | dashboard page rules |
+| 29 | `app/analytics/analytics.css` | analytics console; `analytics-` namespace |
+| 30 | `app/dashboards/operations-dashboard.css` | operations dashboard; `operations-` namespace |
+| 31 | `app/reports/reports.css` | reports and saved searches; `reports-` namespace |
+| 32 | `app/reports/alerts.css` | alert management; `alerts-` namespace |
+| 33 | `app/search-workspace/components/workspace-dialogs.css` | workspace dialogs; `workspace-dialog-` namespace |
+| 34 | `app/search-workspace/panels/visualization-panel.css` | result visualizations; `visualization-` namespace |
+| 35 | `app/help/help.css` | Help documentation, navigation, and search; `help-` namespace |
+| 36 | `app/styles/interaction.css` | coarse-pointer and reduced-motion floors |
 
 The five palette files must follow both base token files: a palette's light
 block is written as `:root:where([data-palette="…"])` so it keeps base light's
