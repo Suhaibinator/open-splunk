@@ -83,11 +83,15 @@
 --   knowledge_attempt_audit_event_prune_advances_state and both receipt
 --   accounting triggers read-modify-write the tenant's state row. The UPDATE
 --   row lock serialises writers to one tenant. Two appends of the same
---   knowledge-attempt sequence collide on the primary key first (23505, at
---   any isolation level). Two receipt inserts for one tenant: under
---   SERIALIZABLE the loser's accounting UPDATE gets 40001 and must retry;
---   under READ COMMITTED it waits and applies its delta to the committed
---   row. Counters stay exact in every case (checked with two concurrent
+--   knowledge-attempt sequence would collide on the primary key first
+--   (23505, at any isolation level, which WriteTx does not retry), so
+--   knowledge_attempt_audit_event_identity_collision_is_forbidden, the
+--   first BEFORE INSERT trigger, takes that row lock (FOR NO KEY UPDATE)
+--   before anything reads the journal: under SERIALIZABLE the loser waits
+--   and then fails with a retryable 40001. Two receipt inserts for one
+--   tenant: under SERIALIZABLE the loser's accounting UPDATE gets 40001 and
+--   must retry; under READ COMMITTED it waits and applies its delta to the
+--   committed row. Counters stay exact in every case (checked with two concurrent
 --   psql sessions against PostgreSQL 18.6).
 -- * The pre-checks (insert_requires_current_state, capacity_is_available,
 --   delete_requires_*, the identity_collision triggers and the
@@ -197,6 +201,13 @@ LANGUAGE plpgsql
 SET search_path FROM CURRENT
 AS $$
 BEGIN
+    -- Serialises appenders of one tenant on its state row, so a concurrent
+    -- append of the same sequence fails with a retryable 40001 instead of
+    -- 23505 on the primary key; see "Concurrency" in the header.
+    PERFORM 1
+    FROM knowledge_attempt_audit_tenant_state
+    WHERE tenant_id = NEW.tenant_id
+    FOR NO KEY UPDATE;
     IF EXISTS (
         SELECT 1
         FROM knowledge_attempt_audit_events

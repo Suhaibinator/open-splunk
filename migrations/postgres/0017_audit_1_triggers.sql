@@ -72,18 +72,26 @@
 -- * The journal appends are compare-and-set on the tenant state row:
 --   the BEFORE INSERT guard reads next_sequence, and the AFTER INSERT
 --   accounting UPDATE matches only next_sequence = NEW.sequence. Two
---   concurrent appenders of one tenant pick the same sequence. The second
---   reaches the primary key first, waits for the first to commit and then
---   fails with unique violation 23505 on the journal's primary key (observed
---   on PostgreSQL 18.6 under SERIALIZABLE; it is not reported as 40001). A
---   caller that retries only 40001/40P01 must therefore either also retry
---   that 23505 or serialise appends per tenant by locking the state row
---   (SELECT ... FOR UPDATE) before it reads next_sequence, which turns the
---   race into a lock wait followed by 40001. Either way no sequence is ever
---   skipped or reused, and the journal and state stay dense. Under READ
---   COMMITTED an accounting UPDATE that loses the race re-reads the newer
---   state, matches zero rows and aborts with the '... accounting failed'
---   message.
+--   concurrent appenders of one tenant pick the same sequence. Left alone,
+--   the second reaches the primary key first, waits for the first to commit
+--   and then fails with unique violation 23505 on the journal's primary key
+--   (observed on PostgreSQL 18.6 under SERIALIZABLE; it is not reported as
+--   40001), which WriteTx does not retry. The first BEFORE INSERT trigger of
+--   each journal (name order: audit_event_identity_collision_is_forbidden,
+--   feature_operation_audit_event_insert_requires_current_state,
+--   search_attempt_audit_event_identity_collision_is_forbidden, and
+--   knowledge_attempt_audit_event_identity_collision_is_forbidden in 0018)
+--   therefore locks the tenant's state row FOR NO KEY UPDATE before anything
+--   reads the journal. The loser then waits on that row lock, and once the
+--   winner commits its SERIALIZABLE snapshot is stale, so it fails with
+--   40001 and WriteTx retries it with the next sequence. The lock is the
+--   one the accounting UPDATE takes anyway, only earlier, and it is
+--   compatible with the journal's FOR KEY SHARE foreign-key check. No
+--   sequence is ever skipped or reused, and the journal and state stay
+--   dense (internal/control/postgres_break_concurrency_counters_test.go
+--   appends from sixteen writers at once). Under READ COMMITTED the loser
+--   waits, re-reads the newer state and aborts with the '... tenant state
+--   is invalid' message.
 -- * The rolling prune (DELETE of the oldest row inside the AFTER INSERT
 --   function) runs in the same transaction as the append and is keyed by
 --   first_sequence read from the row the function itself just updated and
@@ -227,6 +235,12 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    -- Serialises appenders of one tenant on its state row; see
+    -- "Concurrency" in the header.
+    PERFORM 1
+    FROM search_attempt_audit_tenant_state
+    WHERE tenant_id = NEW.tenant_id
+    FOR NO KEY UPDATE;
     IF search_attempt_audit_event_snapshot_is_partial(NEW) THEN
         RAISE EXCEPTION
             'search-attempt audit knowledge snapshot must be absent or exact';
@@ -437,6 +451,12 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    -- Serialises appenders of one tenant on its state row; see
+    -- "Concurrency" in the header.
+    PERFORM 1
+    FROM feature_operation_audit_tenant_state
+    WHERE tenant_id = NEW.tenant_id
+    FOR NO KEY UPDATE;
     IF NOT EXISTS (
         SELECT 1
         FROM feature_operation_audit_tenant_state
@@ -693,6 +713,12 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    -- Serialises appenders of one tenant on its state row; see
+    -- "Concurrency" in the header.
+    PERFORM 1
+    FROM audit_tenant_state
+    WHERE tenant_id = NEW.tenant_id
+    FOR NO KEY UPDATE;
     IF audit_event_tenant_state_is_not_current(NEW.tenant_id, NEW.sequence)
     THEN
         RAISE EXCEPTION
