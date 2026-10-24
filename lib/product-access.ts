@@ -207,23 +207,70 @@ export function isPersonalOrganization(organization: IdentityOrganization): bool
   return organization.personalOwnerUserId !== undefined && organization.personalOwnerUserId !== "";
 }
 
+/**
+ * The name to show for a user: first and last name, else the username, else
+ * the email. A name made only of invisible characters (a lone bidi mark, a
+ * zero-width space) counts as no name, or the row would show a blank.
+ */
 export function userDisplayName(user: IdentityUser): string {
   const name = `${user.firstName} ${user.lastName}`.trim();
-  if (name.length > 0) return name;
-  if (user.username.trim().length > 0) return user.username.trim();
+  if (leadingCharacter(name).length > 0) return name;
+  const username = user.username.trim();
+  if (leadingCharacter(username).length > 0) return username;
   return user.email;
 }
 
-/** Up to two letters for an avatar: first and last name, else the first of the display name. */
+/**
+ * What a name may lead with that draws nothing on its own: white space, the
+ * invisible format characters (bidi marks, zero-width spaces and joiners, the
+ * byte-order mark) and a combining mark with no letter to sit on. An avatar
+ * built from one of those would be blank, or a dotted circle.
+ */
+const INVISIBLE_LEAD = /^[\p{White_Space}\p{Cf}\p{M}]+/u;
+
+/** Splits text where a reader sees one character end and the next begin, where the runtime can. */
+const GRAPHEME_SEGMENTER = typeof Intl === "object" && typeof Intl.Segmenter === "function"
+  ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+  : null;
+
+/**
+ * The first character a reader would see in `text`, whole: an accented
+ * letter with its combining marks, an emoji with its modifiers and joiners,
+ * a flag's two regional indicators. `charAt(0)` hands back half of a
+ * surrogate pair for anything outside the Basic Multilingual Plane, which
+ * renders as a replacement glyph. Without a segmenter this falls back to the
+ * first code point, which is still never half of one.
+ */
+export function leadingCharacter(text: string): string {
+  const visible = text.replace(INVISIBLE_LEAD, "");
+  if (visible.length === 0) return "";
+  if (GRAPHEME_SEGMENTER !== null) {
+    for (const { segment } of GRAPHEME_SEGMENTER.segment(visible)) return segment;
+  }
+  return Array.from(visible)[0] ?? "";
+}
+
+/**
+ * `text`'s first visible character as a capital, or "" when it has none. A
+ * character whose capital is more than one character (`ß` is `SS`, `ﬁ` is
+ * `FI`) keeps its own form: an initial is one character.
+ */
+export function initialOf(text: string): string {
+  const character = leadingCharacter(text);
+  const capital = character.toUpperCase();
+  return leadingCharacter(capital) === capital ? capital : character;
+}
+
+/** Up to two characters for an avatar: first and last name, else the first of the display name. */
 export function userInitials(user: IdentityUser): string {
-  const first = user.firstName.trim().charAt(0);
-  const last = user.lastName.trim().charAt(0);
-  const initials = first.length > 0 || last.length > 0 ? `${first}${last}` : userDisplayName(user).trim().charAt(0);
-  return (initials || "?").toUpperCase();
+  const first = initialOf(user.firstName);
+  const last = initialOf(user.lastName);
+  const initials = first.length > 0 || last.length > 0 ? `${first}${last}` : initialOf(userDisplayName(user));
+  return initials || "?";
 }
 
 export function organizationInitial(organization: IdentityOrganization): string {
-  return (organization.name.trim().charAt(0) || organization.slug.trim().charAt(0) || "?").toUpperCase();
+  return initialOf(organization.name) || initialOf(organization.slug) || "?";
 }
 
 /** One row of the organization switcher. */

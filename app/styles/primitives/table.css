@@ -109,6 +109,11 @@
     gap: var(--space-1);
     height: auto;
     min-width: 0;
+
+    /* A card is as wide as the viewport, so a value with no break in it --
+       an address, a slug, a name in one long word -- breaks where it must
+       rather than running out of the card. */
+    overflow-wrap: anywhere;
     padding: 7px;
     white-space: normal;
     width: auto;

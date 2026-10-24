@@ -249,7 +249,10 @@ export function useShellSession(dataMode: SearchDataMode): ShellSession {
 export function ShellSessionText({ part, legacy }: { readonly part: "initial" | "label" | "detail"; readonly legacy: string }) {
   const shell = useShellIdentity();
   if (shell.mode === "legacy") return <>{legacy}</>;
-  return <>{shellSessionFor(shell, "demo")[part]}</>;
+  const value = shellSessionFor(shell, "demo")[part];
+  // A name or address is the user's own text, in whatever script it was
+  // typed: isolated, so a right-to-left value cannot reorder its neighbours.
+  return part === "initial" ? <>{value}</> : <bdi>{value}</bdi>;
 }
 
 /**
@@ -377,7 +380,7 @@ function OrganizationChoiceContents({ choice, pending }: { readonly choice: Orga
     <>
       <i className="suite-app-icon suite-org-icon" data-personal={choice.personal || undefined} aria-hidden="true">{choice.initial}</i>
       <span>
-        <strong>{choice.name}</strong>
+        <strong><bdi>{choice.name}</bdi></strong>
         <small>{pending ? "Switching…" : choice.detail}</small>
       </span>
       {choice.personal ? <span className="badge badge--info">Personal</span> : null}
@@ -436,7 +439,7 @@ export function OrganizationSwitcher({ open, popoverId, controlsId, onTriggerCli
         onKeyDown={onTriggerKeyDown}
       >
         <span className="suite-org-switcher-label">Org:</span>
-        <strong>{activeName}</strong>
+        <strong title={activeName}><bdi>{activeName}</bdi></strong>
         {active?.personal ? <span className="badge badge--info">Personal</span> : null}
         <AppIcon name="chevron-down" size="xs" />
       </button>
@@ -499,7 +502,7 @@ export function OrganizationDrawerSection({ onSwitched }: { readonly onSwitched:
           }}
         >
           <span aria-hidden="true">{choice.initial}</span>
-          <span><strong>{choice.name}</strong><small>{pending?.id === choice.id ? "Switching…" : choice.detail}</small></span>
+          <span><strong><bdi>{choice.name}</bdi></strong><small>{pending?.id === choice.id ? "Switching…" : choice.detail}</small></span>
           {choice.personal ? <b className="badge badge--info">Personal</b> : null}
         </button>
       ))}

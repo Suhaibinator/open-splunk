@@ -319,9 +319,9 @@ function SignedInInvitation({ invitationId, principal, navigate, now }: {
     <>
       <AuthCardHeader icon="users" title={`Join ${organization.name}`} intro="You've been invited to an organization." focusOnMount />
       <dl className="signin-invitation">
-        <div><dt>Organization</dt><dd>{organization.name}{organization.description === undefined ? null : <small>{organization.description}</small>}</dd></div>
+        <div><dt>Organization</dt><dd><bdi>{organization.name}</bdi>{organization.description === undefined ? null : <small><bdi>{organization.description}</bdi></small>}</dd></div>
         <div><dt>Role</dt><dd><span className="badge badge--info">{invitation.role}</span></dd></div>
-        <div><dt>Sent to</dt><dd>{invitation.email}</dd></div>
+        <div><dt>Sent to</dt><dd><bdi>{invitation.email}</bdi></dd></div>
         <div><dt>Expires</dt><dd><time dateTime={invitation.expiresAt}>{new Date(invitation.expiresAt).toLocaleDateString(undefined, { dateStyle: "medium" })}</time></dd></div>
       </dl>
       {failure === null ? null : <AuthAlert copy={failure} />}

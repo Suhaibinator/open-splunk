@@ -165,7 +165,7 @@ export function MembersPanel({ now = Date.now }: MembersPanelProps) {
   }
 
   return (
-    <div className="admin-section-stack members-panel" data-members-state={state}>
+    <div className="admin-section-stack" data-members-state={state}>
       <SectionHeader organization={activeOrganization} />
       {body}
     </div>
@@ -327,7 +327,7 @@ function MembersManager({ client, organization, principal, now, onSessionChanged
   }, [memberPage, principal.user.id]);
 
   return (
-    <div className="admin-section-stack members-panel" data-members-state="ready">
+    <div className="admin-section-stack" data-members-state="ready">
       <SectionHeader
         organization={organization}
         action={(
@@ -338,7 +338,7 @@ function MembersManager({ client, organization, principal, now, onSessionChanged
       />
       <p className="members-context">
         <AppIcon name="users" size="sm" />
-        <span><strong>{organization.name}</strong> {roleDescription}</span>
+        <span><strong><bdi>{organization.name}</bdi></strong> {roleDescription}</span>
       </p>
 
       <section className="suite-card resource-table-card members-card" aria-labelledby="members-heading" aria-busy={members.refreshing || members.loaded === null}>
@@ -488,7 +488,7 @@ function MembersTable({ actor, explicitOwners, loaded, organization, organizatio
   return (
     <div className="table-wrap">
       <table className="table table--cards members-table">
-        <caption className="sr-only">Members of {organization.name}</caption>
+        <caption className="sr-only">Members of <bdi>{organization.name}</bdi></caption>
         <thead>
           <tr>
             <th scope="col">Member</th>
@@ -538,8 +538,8 @@ function MemberRow({ member, policy, organizationName, onChangeRole, onRemove }:
     <tr data-member-id={member.userId}>
       <td data-label="Member">
         <span className="members-person">
-          <strong>{name}{policy.self ? <span className="members-self"> (you)</span> : null}</strong>
-          {member.user.displaySecondary === undefined ? null : <small>{member.user.displaySecondary}</small>}
+          <strong><bdi>{name}</bdi>{policy.self ? <span className="members-self"> (you)</span> : null}</strong>
+          {member.user.displaySecondary === undefined ? null : <small><bdi>{member.user.displaySecondary}</bdi></small>}
         </span>
       </td>
       <td data-label="Explicit role">
@@ -552,7 +552,7 @@ function MemberRow({ member, policy, organizationName, onChangeRole, onRemove }:
         <RoleBadge role={member.effectiveRole} />
         {member.inheritedFromOrganizationId === undefined
           ? null
-          : <small className="members-note">Inherited from {organizationName(member.inheritedFromOrganizationId)}</small>}
+          : <small className="members-note">Inherited from <bdi>{organizationName(member.inheritedFromOrganizationId)}</bdi></small>}
       </td>
       <td data-label="Status">
         {member.isActive ? <StatusLabel tone="success">Active</StatusLabel> : <StatusLabel tone="error">Banned</StatusLabel>}
@@ -623,9 +623,10 @@ function InvitationsTable({ loaded, memberNames, now, onRevoke, onRetry }: Invit
             const state = invitationState(invitation, at);
             return (
               <tr data-invitation-id={invitation.id} key={invitation.id}>
-                <td data-label="Email"><strong>{invitation.email}</strong></td>
+                {/* `dir="auto"` isolates the address as a <bdi> would, on the element the cell's label rule reads. */}
+                <td data-label="Email"><strong dir="auto">{invitation.email}</strong></td>
                 <td data-label="Role"><RoleBadge role={invitation.role} /></td>
-                <td data-label="Invited by">{memberNames.get(invitation.invitedByUserId) ?? `User ${invitation.invitedByUserId}`}</td>
+                <td data-label="Invited by"><bdi>{memberNames.get(invitation.invitedByUserId) ?? `User ${invitation.invitedByUserId}`}</bdi></td>
                 <td data-label="Sent">{formatMediumDateTime(new Date(invitation.createdAt), "Unknown")}</td>
                 <td data-label="Expires">
                   {state === "expired" ? <StatusLabel tone="warning">Expired</StatusLabel> : <StatusLabel tone="info">Pending</StatusLabel>}
@@ -1036,7 +1037,7 @@ function RevokeDialog({ client, invitation, organization, onClose, onFailed, onR
       <div className="admin-form">
         <DialogFailure failure={failure} />
         <p className="members-dialog-copy">
-          The {ROLE_LABELS[invitation.role].toLowerCase()} invitation for <strong>{invitation.email}</strong> stops working immediately. You can invite them to {organization.name} again later.
+          The {ROLE_LABELS[invitation.role].toLowerCase()} invitation for <strong><bdi>{invitation.email}</bdi></strong> stops working immediately. You can invite them to {organization.name} again later.
         </p>
       </div>
     </Modal>

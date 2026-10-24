@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import type { OAuthProvider, OtpChallenge, Principal } from "@/lib/api/identity";
 import { DEMO_IDENTITY_HINTS } from "@/lib/demo/identity-data";
+import { initialOf } from "@/lib/product-access";
 
 import { AppIcon } from "../_components/app-icon";
 import { useIdentity } from "../_components/identity-provider";
@@ -356,7 +357,7 @@ function OAuthProviders({ navigate, returnTo }: { readonly navigate: AuthNavigat
               unavailable={starting !== null && starting !== provider.slug}
               variant="secondary"
             >
-              <span className="signin-provider-mark" aria-hidden="true">{provider.displayName.slice(0, 1).toUpperCase()}</span>
+              <span className="signin-provider-mark" aria-hidden="true">{initialOf(provider.displayName) || "?"}</span>
               Continue with {provider.displayName}
             </SubmitButton>
           </li>

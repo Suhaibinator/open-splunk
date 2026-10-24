@@ -324,8 +324,8 @@ function UserRow({ admin, self, selfId, onAction }: {
   return (
     <tr data-user-id={user.id}>
       <td data-label="User">
-        <strong className="site-directory-name">{name}{self ? <span className="badge badge--outline">You</span> : null}</strong>
-        <small className="table-secondary">{user.email} · @{user.username}</small>
+        <strong className="site-directory-name"><bdi>{name}</bdi>{self ? <span className="badge badge--outline">You</span> : null}</strong>
+        <small className="table-secondary"><bdi>{user.email}</bdi> · @<bdi>{user.username}</bdi></small>
       </td>
       <td data-label="Status"><StatusLabel tone={status.tone}>{status.label}</StatusLabel></td>
       <td data-label="Access">

@@ -128,7 +128,7 @@ test("the members tables fold into cards without a horizontal scroll on a phone"
   await page.setViewportSize({ width: 390, height: 844 });
   await openMembers(page);
   await expect(page.getByRole("table", { name: "Members of Acme Operations" })).toBeVisible();
-  const overflow = await page.locator(".members-panel").evaluate((element) => element.scrollWidth - element.clientWidth);
+  const overflow = await page.locator("[data-members-state]").evaluate((element) => element.scrollWidth - element.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
   const display = await page.locator(".members-table").first().evaluate((element) => getComputedStyle(element).display);
   expect(display).toBe("block");

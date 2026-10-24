@@ -2057,6 +2057,7 @@ const FEATURE_PREFIXES = [
   "alerts-",
   "analytics-",
   "help-",
+  "members-",
   "operations-",
   "nearby-context",
   "reports-",
@@ -3580,4 +3581,342 @@ test("two foreground roles on one primitive collide in the shipped palette that 
     assert.ok(collisions.every((line) => line.startsWith(`${palette.name} `)), describeList(collisions));
     assert.deepEqual(mentioningOtherPalettes(collisions, palette.name, names), []);
   }
+});
+
+/* == The identity surfaces ====================================================== */
+
+// The organization switcher, the user summary and avatar, the access states,
+// the members panel, the site directory and the sign-in cards print text the
+// product does not write: names, addresses and descriptions in any script, of
+// any length. The checks below hold those surfaces to the layer's own rules
+// -- tokens only, primitives painted only where they are defined, every ink at
+// its floor in every palette and mode -- and hold the documentation that
+// describes the cascade to the cascade itself. What only a browser can see
+// (how a long name folds at each breakpoint and at 200% zoom) is the
+// "identity surface contracts" block of integration/style-contracts/css-contracts.spec.ts.
+
+/** Where the cascade order is documented for people; `index.css` is where it is stated for the browser. */
+const THEMING_DOC = "docs/theming.md";
+
+/** The "Where a rule lives" table, as `{ file, order, ownership }` rows in document order. */
+async function readCascadeTable() {
+  const source = await readFile(path.join(workspace, ...THEMING_DOC.split("/")), "utf8");
+  const section = /^## Where a rule lives\n([\s\S]*?)^## /mu.exec(source)?.[1] ?? "";
+  return [...section.matchAll(/^\|\s*(\d+)\s*\|\s*`([^`]+)`\s*\|\s*(.*?)\s*\|\s*$/gmu)]
+    .map((match) => ({ file: match[2], order: Number(match[1]), ownership: match[3] }));
+}
+
+test("docs/theming.md's cascade table lists exactly the stylesheets index.css imports, in that order", async () => {
+  // The table is what a contributor reads to decide where a rule goes and what
+  // it may override. Two identity stylesheets were added to index.css; had
+  // either been left out of the table, the reader would be told a cascade the
+  // browser does not run, and nothing would have said so.
+  const rows = await readCascadeTable();
+  assert.ok(rows.length > 30, `only ${rows.length} rows were read from ${THEMING_DOC}; the parser is not reading the table`);
+  const misnumbered = rows
+    .map((row, index) => ({ position: index + 1, row }))
+    .filter(({ position, row }) => row.order !== position)
+    .map(({ position, row }) => `${row.file} is numbered ${row.order} in position ${position}`);
+  assert.deepEqual(misnumbered, [], `The cascade table's order column skips or repeats a number:\n${describeList(misnumbered)}`);
+  const imported = (await listIndexImports(workspace)).map((entry) => entry.file);
+  assert.deepEqual(
+    rows.map((row) => row.file),
+    imported,
+    `${THEMING_DOC} documents a cascade that is not the one ${STYLESHEET_ENTRY_POINT} loads. Add, remove or reorder`
+      + " the table's rows so they read exactly as the @import list does.",
+  );
+});
+
+test("every namespace the cascade table promises is one the feature-class scan checks", async () => {
+  // A row that says "`members-` namespace" promises that a `members-…` class
+  // the markup writes is a class the stylesheet defines. The promise is kept
+  // only if FEATURE_PREFIXES names the prefix; the members panel shipped
+  // without it, so a misspelt members class would have rendered unstyled
+  // with every check green.
+  const promised = (await readCascadeTable()).flatMap((row) => (
+    [...row.ownership.matchAll(/`([a-z][a-z-]*-)` namespace/gu)].map((match) => ({ file: row.file, prefix: match[1] }))
+  ));
+  assert.ok(promised.length >= 9, `only ${promised.length} namespaces were read from ${THEMING_DOC}; the parser is not reading the ownership column`);
+  const unchecked = promised
+    .filter(({ prefix }) => !FEATURE_PREFIXES.includes(prefix))
+    .map(({ file, prefix }) => `${file} owns \`${prefix}\`, which FEATURE_PREFIXES does not list`);
+  assert.deepEqual(unchecked, [], `A documented namespace is not checked against its stylesheet:\n${describeList(unchecked)}`);
+});
+
+/** The stylesheets that hold nothing but identity surfaces. */
+const IDENTITY_STYLESHEETS = ["app/admin/members.css", "app/admin/site-directory.css"];
+
+/**
+ * The class families the identity surfaces added to shared stylesheets: the
+ * shell's switcher, summary, avatar, access states and drawer rows in
+ * layout.css, and the account flows' cards in signin.css. A rule that names
+ * one of them is an identity rule wherever it lives.
+ */
+const IDENTITY_CLASS_PREFIXES = [
+  "drawer-org",
+  "members-",
+  "signin-action",
+  "signin-demo",
+  "signin-form",
+  "signin-identity",
+  "signin-inline-link",
+  "signin-invitation",
+  "signin-loading",
+  "signin-message",
+  "signin-provider",
+  "signin-step-meta",
+  "site-directory-",
+  "suite-access-",
+  "suite-identity-",
+  "suite-org-",
+  "suite-user-",
+  "user-summary",
+];
+
+/** The shared surfaces only their own stylesheet may paint: the consolidated primitives, and the resource state. */
+const PAINT_OWNED_CLASSES = new Set([...Object.keys(CONSOLIDATED_PRIMITIVES), "backend-resource-state"]);
+
+/** Properties that change how a box looks rather than where it sits. */
+const PAINT_PROPERTY = /^(?:background(?:-color|-image)?|border(?:-(?:top|right|bottom|left|block|inline)(?:-(?:start|end))?)?(?:-(?:color|style|width))?|border(?:-[a-z]+){0,2}-radius|box-shadow|color|fill|font(?:-family|-size|-style|-weight)?|letter-spacing|opacity|outline(?:-(?:color|style|width))?|stroke|text-decoration(?:-(?:color|line))?|text-transform)$/u;
+
+/** A selector list split at its top-level commas: `:is(a, b)` and `:not(x, y)` stay whole. */
+function topLevelSelectors(prelude) {
+  const selectors = [];
+  let depth = 0;
+  let current = "";
+  for (const character of prelude) {
+    if (character === "(" || character === "[") depth += 1;
+    if (character === ")" || character === "]") depth -= 1;
+    if (character === "," && depth === 0) {
+      selectors.push(current.trim());
+      current = "";
+    } else current += character;
+  }
+  if (current.trim().length > 0) selectors.push(current.trim());
+  return selectors;
+}
+
+/** The compound a selector styles: its last one, after the final top-level combinator. */
+function subjectCompound(selector) {
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < selector.length; index += 1) {
+    const character = selector[index];
+    if (character === "(" || character === "[") depth += 1;
+    if (character === ")" || character === "]") depth -= 1;
+    if (depth === 0 && /[\s>+~]/u.test(character)) start = index + 1;
+  }
+  return selector.slice(start);
+}
+
+/** Class names a compound names outside its pseudo-class arguments and attribute values. */
+function compoundClasses(compound) {
+  const bare = compound.replaceAll(/\((?:[^()]|\([^()]*\))*\)|\[[^\]]*\]/gu, "");
+  return [...bare.matchAll(/\.(-?[_a-zA-Z][\w-]*)/gu)].map((match) => match[1]);
+}
+
+/** Whether a rule styles an identity surface: by its file, or by a class it names. */
+function isIdentityRule(block) {
+  if (IDENTITY_STYLESHEETS.includes(block.file)) return true;
+  const classes = [...block.prelude.matchAll(/\.(-?[_a-zA-Z][\w-]*)/gu)].map((match) => match[1]);
+  return classes.some((name) => IDENTITY_CLASS_PREFIXES.some((prefix) => name.startsWith(prefix)));
+}
+
+async function collectIdentityRules() {
+  return (await collectDeclarationBlocks(workspace, 1)).filter((block) => isIdentityRule(block));
+}
+
+test("subjectCompound and compoundClasses read the styled element, not its ancestors or arguments", () => {
+  assert.equal(subjectCompound(".members-card .backend-resource-state"), ".backend-resource-state");
+  assert.equal(subjectCompound(".drawer > .drawer-org[aria-pressed=\"true\"]"), ".drawer-org[aria-pressed=\"true\"]");
+  assert.equal(subjectCompound(".a:has(> .b) ~ .c:not(.d .e)"), ".c:not(.d .e)");
+  assert.deepEqual(compoundClasses(".button.is-danger:not(.badge)[data-x=\".table\"]"), ["button", "is-danger"]);
+  assert.deepEqual(topLevelSelectors(".a, .b:is(.c, .d), .e"), [".a", ".b:is(.c, .d)", ".e"]);
+});
+
+test("the identity surfaces exist where the checks below look for them", async () => {
+  const rules = await collectIdentityRules();
+  const files = new Set(rules.map((rule) => rule.file));
+  for (const file of [...IDENTITY_STYLESHEETS, "app/styles/primitives/layout.css", "app/signin/signin.css"]) {
+    assert.ok(files.has(file), `no identity rule was found in ${file}; the scan is not reading it`);
+  }
+  assert.ok(rules.length > 120, `only ${rules.length} identity rules were found; the scan is not reading the layer`);
+});
+
+test("no identity rule paints a shared primitive it does not own", async () => {
+  // A feature may lay a primitive out -- align it, give it a margin, let it
+  // grow -- but its colour, border, type and shape belong to the primitive's
+  // own stylesheet, so a palette or a modifier reaches every copy. The rule
+  // this caught, `.members-card .backend-resource-state { border: 0 }`, also
+  // outranked the state modifiers and took the error state's red stripe away.
+  const offenders = [];
+  for (const rule of await collectIdentityRules()) {
+    const painted = rule.declarations.filter((declaration) => PAINT_PROPERTY.test(declaration.property));
+    if (painted.length === 0) continue;
+    for (const selector of topLevelSelectors(rule.prelude)) {
+      const owned = compoundClasses(subjectCompound(selector)).filter((name) => PAINT_OWNED_CLASSES.has(name));
+      if (owned.length === 0) continue;
+      const paint = painted.map((declaration) => `${declaration.property}: ${declaration.value}`).join("; ");
+      offenders.push(`${describeRuleSite(rule)} paints .${owned.join(", .")}: ${paint}`);
+    }
+  }
+  assert.deepEqual(
+    offenders.toSorted(),
+    [],
+    "An identity rule restyles a primitive from outside it. Add a modifier to the primitive, or lay it out\n"
+      + `without painting it:\n${describeList(offenders.toSorted())}`,
+  );
+});
+
+/** Properties whose every measurement has a token family: type, faces, corners and stacking. */
+const IDENTITY_TOKENISED_PROPERTY = /^(?:font|font-size|font-family|z-index|border(?:-[a-z]+){0,2}-radius)$/u;
+
+test("no identity rule writes a colour, type, face, corner or stacking literal", async () => {
+  // The literal ledger is kept per file and property, so a new
+  // `border-radius: 50%` in layout.css passed it on an old row's back: the
+  // access-state icon and the three avatars stayed circles in the palette
+  // that squares every corner. An identity rule names a token, every time.
+  // (A shadow's inset geometry is on the ledger as a measurement the scale
+  // makes no claim about; its colour is still held here.)
+  const offenders = [];
+  for (const rule of await collectIdentityRules()) {
+    for (const { property, value } of rule.declarations) {
+      if (hasColourLiteral(value)) {
+        offenders.push(`${describeRuleSite(rule)} :: ${property}: ${value} (colour)`);
+        continue;
+      }
+      if (!IDENTITY_TOKENISED_PROPERTY.test(property)) continue;
+      const literals = valueComponents(withoutImportant(value)).filter((component) => (
+        property === "font-family" ? !component.startsWith("var(") && component !== "inherit" : isScaleLiteral(component)
+      ));
+      if (literals.length > 0) offenders.push(`${describeRuleSite(rule)} :: ${property}: ${value}`);
+    }
+  }
+  assert.deepEqual(offenders.toSorted(), [], `An identity rule spells a value a token owns:\n${describeList(offenders.toSorted())}`);
+});
+
+const LAYOUT_STYLESHEET = "app/styles/primitives/layout.css";
+const MEMBERS_STYLESHEET = "app/admin/members.css";
+const SITE_DIRECTORY_STYLESHEET = "app/admin/site-directory.css";
+const SIGN_IN_STYLESHEET = "app/signin/signin.css";
+
+/**
+ * Every ink an identity surface lays on a ground, with the rule that paints it.
+ *
+ * `declares` names the declarations the rule must still make, so the list
+ * cannot go on vouching for a pairing the stylesheet stopped painting. `kind`
+ * picks the floor: `text` is held to the palette's own (7:1 in graphite),
+ * `state` -- ink painted from the status ramp -- to AA in every palette, and
+ * `graphic` -- an icon, a check, a state stripe -- to the 3:1 WCAG asks of
+ * non-text contrast.
+ */
+const IDENTITY_PAINTED_PAIRS = [
+  // The organization switcher and its menu.
+  { file: LAYOUT_STYLESHEET, selector: ".suite-org-switcher-label", declares: { color: "--chrome-fg-muted" }, ink: "--chrome-fg-muted", ground: "--chrome-bar", kind: "text" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-org-popover > button[aria-checked=\"true\"]", declares: { background: "--accent-soft" }, ink: "--fg-text", ground: "--accent-soft", kind: "text" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-org-popover > button[aria-checked=\"true\"] small", declares: { color: "--fg-secondary" }, ink: "--fg-secondary", ground: "--accent-soft", kind: "text" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-org-check", declares: { color: "--accent" }, ink: "--accent", ground: "--accent-soft", kind: "graphic" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-app-icon", declares: { background: "--accent", color: "--fg-inverse" }, ink: "--fg-inverse", ground: "--accent", kind: "text" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-org-icon[data-personal]", declares: { background: "--status-info" }, ink: "--fg-inverse", ground: "--status-info", kind: "state" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-identity-error", declares: { background: "--status-error-soft", color: "--status-error-strong" }, ink: "--status-error-strong", ground: "--status-error-soft", kind: "state" },
+  // Who is signed in.
+  { file: LAYOUT_STYLESHEET, selector: ".suite-user-button > span", declares: { background: "--accent", color: "--fg-inverse" }, ink: "--fg-inverse", ground: "--accent", kind: "text" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-user-summary > span", declares: { background: "--accent", color: "--fg-inverse" }, ink: "--fg-inverse", ground: "--accent", kind: "text" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-user-summary small", declares: { color: "--fg-muted" }, ink: "--fg-muted", ground: "--bg-surface", kind: "text" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-user-avatar", declares: { background: "--accent", color: "--fg-inverse" }, ink: "--fg-inverse", ground: "--accent", kind: "text" },
+  { file: LAYOUT_STYLESHEET, selector: ".drawer > header small", declares: { color: "--chrome-fg-muted" }, ink: "--chrome-fg-muted", ground: "--chrome-bar", kind: "text" },
+  // The drawer's organization rows, on the drawer's raised ground and on the pressed row's wash.
+  { file: LAYOUT_STYLESHEET, selector: ".drawer > .drawer-org small", declares: { color: "--fg-secondary" }, ink: "--fg-secondary", ground: "--bg-raised", kind: "text" },
+  { file: LAYOUT_STYLESHEET, selector: ".drawer > .drawer-org small", declares: { color: "--fg-secondary" }, ink: "--fg-secondary", ground: "--accent-soft", kind: "text" },
+  { file: LAYOUT_STYLESHEET, selector: ".drawer > .drawer-org", declares: { color: "--fg-text" }, ink: "--fg-text", ground: "--accent-soft", kind: "text" },
+  { file: LAYOUT_STYLESHEET, selector: ".drawer > .drawer-org > span:first-child", declares: { background: "--accent", color: "--fg-inverse" }, ink: "--fg-inverse", ground: "--accent", kind: "text" },
+  // The page's own states.
+  { file: LAYOUT_STYLESHEET, selector: ".suite-access-body h1", declares: { color: "--fg-strong" }, ink: "--fg-strong", ground: "--bg-surface", kind: "text" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-access-body p", declares: { color: "--fg-muted" }, ink: "--fg-muted", ground: "--bg-surface", kind: "text" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-access-body > .suite-access-requirement-label", declares: { color: "--fg-secondary" }, ink: "--fg-secondary", ground: "--bg-surface", kind: "text" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-access-requirements code", declares: { background: "--bg-subtle" }, ink: "--fg-text", ground: "--bg-subtle", kind: "text" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-access-icon", declares: { background: "--status-neutral-soft", color: "--fg-secondary" }, ink: "--fg-secondary", ground: "--status-neutral-soft", kind: "graphic" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-access-state[data-state=\"signed-out\"] > .suite-access-icon", declares: { background: "--status-info-soft", color: "--status-info-strong" }, ink: "--status-info-strong", ground: "--status-info-soft", kind: "graphic" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-access-state[data-state=\"error\"] > .suite-access-icon", declares: { background: "--status-error-soft", color: "--status-error-strong" }, ink: "--status-error-strong", ground: "--status-error-soft", kind: "graphic" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-access-state[data-state=\"forbidden\"] > .suite-access-icon", declares: { background: "--status-warning-soft", color: "--status-warning-strong" }, ink: "--status-warning-strong", ground: "--status-warning-soft", kind: "graphic" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-access-state[data-state=\"signed-out\"]", declares: { "border-left-color": "--status-info" }, ink: "--status-info", ground: "--bg-surface", kind: "graphic" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-access-state[data-state=\"error\"]", declares: { "border-left-color": "--status-error" }, ink: "--status-error", ground: "--bg-surface", kind: "graphic" },
+  { file: LAYOUT_STYLESHEET, selector: ".suite-access-state[data-state=\"forbidden\"]", declares: { "border-left-color": "--status-warning" }, ink: "--status-warning", ground: "--bg-surface", kind: "graphic" },
+  // Members & invitations.
+  { file: MEMBERS_STYLESHEET, selector: ".members-context", declares: { color: "--fg-muted" }, ink: "--fg-muted", ground: "--bg-surface", kind: "text" },
+  { file: MEMBERS_STYLESHEET, selector: ".members-person small", declares: { color: "--fg-muted" }, ink: "--fg-muted", ground: "--bg-surface", kind: "text" },
+  { file: MEMBERS_STYLESHEET, selector: ".members-role-option:has(input:checked)", declares: { background: "--accent-soft" }, ink: "--fg-text", ground: "--accent-soft", kind: "text" },
+  { file: MEMBERS_STYLESHEET, selector: ".members-role-option:has(input:checked) small", declares: { color: "--fg-secondary" }, ink: "--fg-secondary", ground: "--accent-soft", kind: "text" },
+  { file: MEMBERS_STYLESHEET, selector: ".members-capability-change ul", declares: { color: "--fg-muted" }, ink: "--fg-muted", ground: "--bg-surface", kind: "text" },
+  // The site directory.
+  { file: SITE_DIRECTORY_STYLESHEET, selector: ".site-directory-muted", declares: { color: "--fg-muted" }, ink: "--fg-muted", ground: "--bg-surface", kind: "text" },
+  { file: SITE_DIRECTORY_STYLESHEET, selector: ".site-directory-header-action small", declares: { color: "--fg-muted" }, ink: "--fg-muted", ground: "--bg-surface", kind: "text" },
+  { file: SITE_DIRECTORY_STYLESHEET, selector: ".site-directory-menu-item.is-danger strong", declares: { color: "--status-error-strong" }, ink: "--status-error-strong", ground: "--bg-surface", kind: "state" },
+  { file: SITE_DIRECTORY_STYLESHEET, selector: ".site-directory-menu-item.is-danger strong", declares: { color: "--status-error-strong" }, ink: "--status-error-strong", ground: "--bg-subtle", kind: "state" },
+  { file: SITE_DIRECTORY_STYLESHEET, selector: ".site-directory-menu-item small", declares: { color: "--fg-muted" }, ink: "--fg-muted", ground: "--bg-subtle", kind: "text" },
+  { file: SITE_DIRECTORY_STYLESHEET, selector: ".site-directory-lineage li", declares: { color: "--fg-muted" }, ink: "--fg-muted", ground: "--bg-surface", kind: "text" },
+  // The account cards, on the sign-in page's canvas and the cards' surface.
+  { file: SIGN_IN_STYLESHEET, selector: ".signin-help-notice", declares: { background: "--status-info-soft", color: "--status-info-strong" }, ink: "--status-info-strong", ground: "--status-info-soft", kind: "state" },
+  { file: SIGN_IN_STYLESHEET, selector: ".signin-help-notice[data-tone=\"success\"]", declares: { background: "--status-success-soft", color: "--status-success-strong" }, ink: "--status-success-strong", ground: "--status-success-soft", kind: "state" },
+  { file: SIGN_IN_STYLESHEET, selector: ".signin-identity b", declares: { color: "--fg-strong" }, ink: "--fg-strong", ground: "--bg-surface", kind: "text" },
+  { file: SIGN_IN_STYLESHEET, selector: ".signin-identity small", declares: { color: "--fg-muted" }, ink: "--fg-muted", ground: "--bg-surface", kind: "text" },
+  { file: SIGN_IN_STYLESHEET, selector: ".signin-demo small", declares: { color: "--fg-muted" }, ink: "--fg-muted", ground: "--bg-canvas", kind: "text" },
+  { file: SIGN_IN_STYLESHEET, selector: ".signin-identity-mark", declares: { background: "--accent-soft", color: "--accent-hover" }, ink: "--accent-hover", ground: "--accent-soft", kind: "text" },
+  { file: SIGN_IN_STYLESHEET, selector: ".signin-provider-mark", declares: { background: "--bg-subtle", color: "--fg-strong" }, ink: "--fg-strong", ground: "--bg-subtle", kind: "text" },
+  { file: SIGN_IN_STYLESHEET, selector: ".signin-step-meta", declares: { color: "--fg-muted" }, ink: "--fg-muted", ground: "--bg-canvas", kind: "text" },
+  { file: SIGN_IN_STYLESHEET, selector: ".signin-invitation dd", declares: { color: "--fg-text" }, ink: "--fg-text", ground: "--bg-surface", kind: "text" },
+  { file: "app/styles/primitives/form.css", selector: ".signin-invitation dt", declares: { color: "--fg-muted" }, ink: "--fg-muted", ground: "--bg-surface", kind: "text" },
+  { file: SIGN_IN_STYLESHEET, selector: ".signin-demo summary", declares: { color: "--fg-secondary" }, ink: "--fg-secondary", ground: "--bg-canvas", kind: "text" },
+  { file: SIGN_IN_STYLESHEET, selector: ".signin-demo a", declares: { color: "--fg-link" }, ink: "--fg-link", ground: "--bg-canvas", kind: "text" },
+];
+
+/** WCAG 2.2 non-text contrast: icons, checks and state stripes. */
+const GRAPHIC_CONTRAST = 3;
+
+test("every pairing the identity surfaces list is still painted by the rule that names it", async () => {
+  const blocks = await collectDeclarationBlocks(workspace, 1);
+  const stale = [];
+  for (const pair of IDENTITY_PAINTED_PAIRS) {
+    const rules = blocks.filter((block) => block.file === pair.file && topLevelSelectors(block.prelude).includes(pair.selector));
+    if (rules.length === 0) {
+      stale.push(`${pair.file} has no rule for ${pair.selector}`);
+      continue;
+    }
+    for (const [property, token] of Object.entries(pair.declares)) {
+      const painted = rules.some((rule) => rule.declarations.some((declaration) => (
+        declaration.property === property && withoutImportant(declaration.value) === `var(${token})`
+      )));
+      if (!painted) stale.push(`${pair.file} :: ${pair.selector} no longer declares ${property}: var(${token})`);
+    }
+  }
+  assert.deepEqual(stale, [], `IDENTITY_PAINTED_PAIRS vouches for paint the stylesheets no longer make:\n${describeList(stale)}`);
+});
+
+test("every ink an identity surface paints clears its floor, in every palette and mode", async () => {
+  // This is what moved the avatars off --accent-bright (the bar's initials
+  // measured 1.00:1 in terminal dark), the chosen rows' second lines off
+  // --fg-muted (3.72:1 on --accent-soft in glass dark), the drawer header's
+  // context off --chrome-fg-faint, the site directory's "Root organization"
+  // off --fg-faint (3.1:1), and the sign-in notices onto their own -strong inks.
+  const layer = await readTokenLayer();
+  assert.equal(layer.scopes.length, 12, `${layer.scopes.length} scopes were indexed; the palette axis is not being read`);
+  const failures = [];
+  for (const scope of layer.scopes) {
+    for (const pair of IDENTITY_PAINTED_PAIRS) {
+      const ink = resolve(pair.ink, scope.values);
+      const ground = resolve(pair.ground, scope.values);
+      if (!/^#[0-9a-f]{6}$/iu.test(ink ?? "") || !/^#[0-9a-f]{6}$/iu.test(ground ?? "")) {
+        failures.push(`${scope.label}: ${pair.selector}: ${pair.ink} (${ink}) or ${pair.ground} (${ground}) is not a six-digit hex`);
+        continue;
+      }
+      const floor = pair.kind === "graphic"
+        ? GRAPHIC_CONTRAST
+        : pair.kind === "state" ? AA_CONTRAST : contrastFloorOf(scope.palette, layer.floors);
+      const ratio = contrastRatio(ink, ground);
+      if (ratio < floor) {
+        failures.push(`${scope.label}: ${pair.selector}: ${pair.ink} on ${pair.ground} is ${ratio.toFixed(2)}:1, below ${floor}:1`);
+      }
+    }
+  }
+  assert.deepEqual(failures, [], `An identity surface paints an ink below its floor:\n${describeList(failures)}`);
 });

@@ -7543,7 +7543,7 @@ export function SearchWorkspace({
         <button className="suite-user-button" type="button" aria-label="User menu" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={() => setMenu(menu === "user" ? null : "user")} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}><span><ShellSessionText part="initial" legacy="A" /></span><b><ShellSessionText part="label" legacy="Administrator" /></b><AppIcon name="chevron-down" size="xs" /></button>
         {menu === "user" ? (
           <div className="floating-menu utility-menu user-menu" role="menu">
-            <div className="user-summary"><span><ShellSessionText part="initial" legacy="A" /></span><strong><ShellSessionText part="label" legacy="Administrator" /></strong><small><ShellSessionText part="detail" legacy="admin@localhost" /></small></div>
+            <div className="user-summary"><span aria-hidden="true"><ShellSessionText part="initial" legacy="A" /></span><strong><ShellSessionText part="label" legacy="Administrator" /></strong><small><ShellSessionText part="detail" legacy="admin@localhost" /></small></div>
             <ShellOffer requirement={ADMIN_CONSOLE_ACCESS}><Link role="menuitem" href={productHref("/admin/")}>Account settings</Link></ShellOffer>
             <button role="menuitem" type="button" onClick={() => showToast("Open Splunk is running in trusted-network mode.")}>Session details</button>
             <ShellSignOutItems legacy={<Link role="menuitem" tabIndex={0} href="/signin/" onClick={clearAdministratorBearerToken}>Sign out</Link>} onSelect={() => setMenu(null)} />

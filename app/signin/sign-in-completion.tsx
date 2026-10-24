@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo } from "react";
 
 import type { OrganizationInvitation, Principal } from "@/lib/api/identity";
+import { userDisplayName, userInitials } from "@/lib/product-access";
 
 import { AppIcon } from "../_components/app-icon";
 import { AuthAlert, AuthCardHeader, AuthLoading, AuthNotice } from "./auth-frame";
@@ -24,27 +25,28 @@ export function principalCanEnter(principal: Principal, returnTo: string): boole
     || returnTo.startsWith(ORGANIZATION_INVITATION_PATH);
 }
 
+/**
+ * The name the card greets a principal by. The shell's own helper, so the
+ * card and the product bar never disagree about who is signed in.
+ */
 export function displayNameOf(principal: Principal): string {
-  const { firstName, lastName, username, email } = principal.user;
-  const name = `${firstName} ${lastName}`.trim();
-  return name.length > 0 ? name : username.length > 0 ? username : email;
+  return userDisplayName(principal.user);
 }
 
-function initialsOf(principal: Principal): string {
-  const words = displayNameOf(principal).split(/\s+/u).filter(Boolean);
-  return words.slice(0, 2).map((word) => word[0]?.toUpperCase() ?? "").join("") || "?";
-}
-
-/** Who is signed in, as the card shows it. */
+/**
+ * Who is signed in, as the card shows it. Each name and address is
+ * bidi-isolated: an Arabic or Hebrew value otherwise takes its neighbours'
+ * punctuation into its own run and reads back to front.
+ */
 export function PrincipalSummary({ principal }: { readonly principal: Principal }) {
   return (
     <div className="signin-identity">
-      <span className="signin-identity-mark" aria-hidden="true">{initialsOf(principal)}</span>
+      <span className="signin-identity-mark" aria-hidden="true">{userInitials(principal.user)}</span>
       <span>
-        <b>{displayNameOf(principal)}</b>
-        <small>{principal.user.email}</small>
+        <b><bdi>{displayNameOf(principal)}</bdi></b>
+        <small><bdi>{principal.user.email}</bdi></small>
         {principal.activeOrganization === null ? null : (
-          <small>{principal.activeOrganization.name}{principal.siteAdmin ? " · site administrator" : ""}</small>
+          <small><bdi>{principal.activeOrganization.name}</bdi>{principal.siteAdmin ? " · site administrator" : ""}</small>
         )}
       </span>
     </div>
@@ -116,7 +118,7 @@ export function NoOrganizationCard({ principal, navigate, onSignOut }: {
           {state.invitations.map((invitation) => (
             <li key={invitation.id}>
               <span>
-                <b>{invitation.organization.name}</b>
+                <b><bdi>{invitation.organization.name}</bdi></b>
                 <small>Invited as {invitation.role}</small>
               </span>
               <button
