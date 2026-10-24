@@ -1,0 +1,1237 @@
+{
+  "cases": [
+    {
+      "id": "atom/glob-not-control",
+      "kind": "atom",
+      "sqlite": "x NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')",
+      "pg": "x !~ '[\\u0001-\\u001f\\u007f-\\u009f]'",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "atom/glob-not-control-keep-tab-lf-cr",
+      "kind": "atom",
+      "sqlite": "x NOT GLOB ('*[' || char(1) || '-' || char(8) || char(11) || '-' || char(12) || char(14) || '-' || char(31) || char(127) || '-' || char(159) || ']*')",
+      "pg": "x !~ '[\\u0001-\\u0008\\u000b-\\u000c\\u000e-\\u001f\\u007f-\\u009f]'",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "atom/glob-not-printable-ascii",
+      "kind": "atom",
+      "sqlite": "x NOT GLOB '*[^ -~]*'",
+      "pg": "x !~ '[^ -~]'",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "atom/glob-not-visible-ascii",
+      "kind": "atom",
+      "sqlite": "x NOT GLOB '*[^!-~]*'",
+      "pg": "x !~ '[^!-~]'",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "atom/glob-not-lower-hex",
+      "kind": "atom",
+      "sqlite": "x NOT GLOB '*[^0-9a-f]*'",
+      "pg": "x !~ '[^0-9a-f]'",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "atom/glob-not-collector-id",
+      "kind": "atom",
+      "sqlite": "x NOT GLOB '*[^A-Za-z0-9._:-]*'",
+      "pg": "x !~ '[^A-Za-z0-9._:-]'",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "atom/glob-not-identifier",
+      "kind": "atom",
+      "sqlite": "x NOT GLOB '*[^A-Za-z0-9_]*'",
+      "pg": "x !~ '[^A-Za-z0-9_]'",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "atom/glob-not-index-name",
+      "kind": "atom",
+      "sqlite": "x NOT GLOB '*[^a-z0-9_-]*'",
+      "pg": "x !~ '[^a-z0-9_-]'",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "atom/glob-not-url-safe-base64",
+      "kind": "atom",
+      "sqlite": "x NOT GLOB '*[^A-Za-z0-9_-]*'",
+      "pg": "x !~ '[^A-Za-z0-9_-]'",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "atom/glob-alnum",
+      "kind": "atom",
+      "sqlite": "x GLOB '[A-Za-z0-9]'",
+      "pg": "x ~ '^[A-Za-z0-9]$'",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "atom/glob-identifier-start",
+      "kind": "atom",
+      "sqlite": "x GLOB '[A-Za-z_]'",
+      "pg": "x ~ '^[A-Za-z_]$'",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "atom/glob-lower-alnum",
+      "kind": "atom",
+      "sqlite": "x GLOB '[a-z0-9]'",
+      "pg": "x ~ '^[a-z0-9]$'",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "atom/glob-base64-last-sextet",
+      "kind": "atom",
+      "sqlite": "x GLOB '[AQgw]'",
+      "pg": "x ~ '^[AQgw]$'",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "atom/like-not-slash",
+      "kind": "atom",
+      "sqlite": "x NOT LIKE '%/%'",
+      "pg": "x !~~ '%/%'",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "atom/like-not-backslash",
+      "kind": "atom",
+      "sqlite": "x NOT LIKE '%\\%'",
+      "pg": "strpos(x, '\\') = 0",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "atom/like-not-double-backslash",
+      "kind": "atom",
+      "sqlite": "x NOT LIKE '%\\\\%'",
+      "pg": "strpos(x, '\\\\') = 0",
+      "columns": [
+        "x"
+      ],
+      "target": "x"
+    },
+    {
+      "id": "check/api_mutation_receipt_tenant_state/api_mutation_receipt_state_tenant_id_bounded/tenant_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(tenant_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(tenant_id AS BLOB), X'00') = 0 AND tenant_id = trim(tenant_id) AND tenant_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "api_mutation_receipt_tenant_state",
+      "constraint": "api_mutation_receipt_state_tenant_id_bounded",
+      "sqlite_constraint": "api_mutation_receipt_state_tenant_id_bounded",
+      "columns": [
+        "tenant_id"
+      ],
+      "target": "tenant_id"
+    },
+    {
+      "id": "check/api_mutation_receipts/api_mutation_receipt_actor_id_bounded/actor_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(actor_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(actor_id AS BLOB), X'00') = 0 AND actor_id = trim(actor_id) AND actor_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "api_mutation_receipts",
+      "constraint": "api_mutation_receipt_actor_id_bounded",
+      "sqlite_constraint": "api_mutation_receipt_actor_id_bounded",
+      "columns": [
+        "actor_id"
+      ],
+      "target": "actor_id"
+    },
+    {
+      "id": "check/api_mutation_receipts/api_mutation_receipt_request_id_bounded/client_request_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(client_request_id AS BLOB)) BETWEEN 16 AND 128 AND client_request_id NOT GLOB '*[^ -~]*' )",
+      "table": "api_mutation_receipts",
+      "constraint": "api_mutation_receipt_request_id_bounded",
+      "sqlite_constraint": "api_mutation_receipt_request_id_bounded",
+      "columns": [
+        "client_request_id"
+      ],
+      "target": "client_request_id"
+    },
+    {
+      "id": "check/api_mutation_receipts/api_mutation_receipt_target_id_bounded/target_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(target_id AS BLOB)) BETWEEN 1 AND 256 AND instr(CAST(target_id AS BLOB), X'00') = 0 AND target_id = trim(target_id) AND target_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "api_mutation_receipts",
+      "constraint": "api_mutation_receipt_target_id_bounded",
+      "sqlite_constraint": "api_mutation_receipt_target_id_bounded",
+      "columns": [
+        "target_id"
+      ],
+      "target": "target_id"
+    },
+    {
+      "id": "check/app_workspaces/app_workspaces_app_id_check2/app_id",
+      "kind": "check",
+      "sqlite": "(substr(app_id, 5) NOT GLOB '*[^A-Za-z0-9_-]*')",
+      "table": "app_workspaces",
+      "constraint": "app_workspaces_app_id_check2",
+      "sqlite_constraint": null,
+      "columns": [
+        "app_id"
+      ],
+      "target": "app_id",
+      "seeds": [
+        "app_abcdefghijklmnopqrstuQ",
+        "app_ABCDEFGHIJ-_0123456789w",
+        "search"
+      ]
+    },
+    {
+      "id": "check/app_workspaces/app_workspaces_app_id_check3/app_id",
+      "kind": "check",
+      "sqlite": "(substr(app_id, 26, 1) GLOB '[AQgw]')",
+      "table": "app_workspaces",
+      "constraint": "app_workspaces_app_id_check3",
+      "sqlite_constraint": null,
+      "columns": [
+        "app_id"
+      ],
+      "target": "app_id",
+      "seeds": [
+        "app_abcdefghijklmnopqrstuQ",
+        "app_ABCDEFGHIJ-_0123456789w",
+        "search"
+      ]
+    },
+    {
+      "id": "check/app_workspaces/app_workspaces_slug_check2/slug",
+      "kind": "check",
+      "sqlite": "(slug NOT GLOB '*[^a-z0-9_-]*')",
+      "table": "app_workspaces",
+      "constraint": "app_workspaces_slug_check2",
+      "sqlite_constraint": null,
+      "columns": [
+        "slug"
+      ],
+      "target": "slug"
+    },
+    {
+      "id": "check/app_workspaces/app_workspaces_slug_check3/slug",
+      "kind": "check",
+      "sqlite": "(substr(slug, 1, 1) GLOB '[a-z0-9]')",
+      "table": "app_workspaces",
+      "constraint": "app_workspaces_slug_check3",
+      "sqlite_constraint": null,
+      "columns": [
+        "slug"
+      ],
+      "target": "slug"
+    },
+    {
+      "id": "check/audit_events/audit_events_actor_id_bounded/actor_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(actor_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(actor_id AS BLOB), X'00') = 0 AND actor_id = trim(actor_id) AND actor_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "audit_events",
+      "constraint": "audit_events_actor_id_bounded",
+      "sqlite_constraint": "audit_events_actor_id_bounded",
+      "columns": [
+        "actor_id"
+      ],
+      "target": "actor_id"
+    },
+    {
+      "id": "check/audit_events/audit_events_target_id_bounded/target_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(target_id AS BLOB)) BETWEEN 1 AND 128 AND instr(CAST(target_id AS BLOB), X'00') = 0 AND target_id = trim(target_id) AND target_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "audit_events",
+      "constraint": "audit_events_target_id_bounded",
+      "sqlite_constraint": "audit_events_target_id_bounded",
+      "columns": [
+        "target_id"
+      ],
+      "target": "target_id"
+    },
+    {
+      "id": "check/audit_events/audit_events_knowledge_app_id_bounded/app_id",
+      "kind": "check",
+      "sqlite": "( app_id IS NULL OR ( length(CAST(app_id AS BLOB)) BETWEEN 1 AND 128 AND instr(CAST(app_id AS BLOB), X'00') = 0 AND app_id = trim(app_id) AND app_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) ) )",
+      "table": "audit_events",
+      "constraint": "audit_events_knowledge_app_id_bounded",
+      "sqlite_constraint": "audit_events_knowledge_app_id_bounded",
+      "columns": [
+        "app_id"
+      ],
+      "target": "app_id",
+      "seeds": [
+        "app_abcdefghijklmnopqrstuQ",
+        "app_ABCDEFGHIJ-_0123456789w",
+        "search"
+      ]
+    },
+    {
+      "id": "check/audit_tenant_state/audit_tenant_state_tenant_id_bounded/tenant_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(tenant_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(tenant_id AS BLOB), X'00') = 0 AND tenant_id = trim(tenant_id) AND tenant_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "audit_tenant_state",
+      "constraint": "audit_tenant_state_tenant_id_bounded",
+      "sqlite_constraint": "audit_tenant_state_tenant_id_bounded",
+      "columns": [
+        "tenant_id"
+      ],
+      "target": "tenant_id"
+    },
+    {
+      "id": "check/collector_authorized_indexes/collector_authorized_indexes_name_canonical/index_name",
+      "kind": "check",
+      "sqlite": "( length(index_name) BETWEEN 1 AND 255 AND index_name = lower(index_name) AND index_name NOT GLOB '*[^a-z0-9_-]*' AND substr(index_name, 1, 1) GLOB '[a-z0-9]' AND instr(index_name, 'kvstore') = 0 )",
+      "table": "collector_authorized_indexes",
+      "constraint": "collector_authorized_indexes_name_canonical",
+      "sqlite_constraint": "collector_authorized_indexes_name_canonical",
+      "columns": [
+        "index_name"
+      ],
+      "target": "index_name"
+    },
+    {
+      "id": "check/collector_fleet/collector_fleet_collector_id_canonical/collector_id",
+      "kind": "check",
+      "sqlite": "( length(collector_id) BETWEEN 1 AND 128 AND instr(collector_id, char(0)) = 0 AND substr(collector_id, 1, 1) GLOB '[A-Za-z0-9]' AND collector_id NOT GLOB '*[^A-Za-z0-9._:-]*' )",
+      "table": "collector_fleet",
+      "constraint": "collector_fleet_collector_id_canonical",
+      "sqlite_constraint": "collector_fleet_collector_id_canonical",
+      "columns": [
+        "collector_id"
+      ],
+      "target": "collector_id"
+    },
+    {
+      "id": "check/collector_inputs/collector_inputs_id_canonical/input_id",
+      "kind": "check",
+      "sqlite": "( length(input_id) BETWEEN 1 AND 128 AND instr(input_id, char(0)) = 0 AND substr(input_id, 1, 1) GLOB '[A-Za-z0-9]' AND input_id NOT GLOB '*[^A-Za-z0-9._:-]*' )",
+      "table": "collector_inputs",
+      "constraint": "collector_inputs_id_canonical",
+      "sqlite_constraint": "collector_inputs_id_canonical",
+      "columns": [
+        "input_id"
+      ],
+      "target": "input_id"
+    },
+    {
+      "id": "check/collector_inputs/collector_inputs_index_name_canonical/index_name",
+      "kind": "check",
+      "sqlite": "( length(index_name) BETWEEN 1 AND 255 AND index_name = lower(index_name) AND index_name NOT GLOB '*[^a-z0-9_-]*' AND substr(index_name, 1, 1) GLOB '[a-z0-9]' AND instr(index_name, 'kvstore') = 0 )",
+      "table": "collector_inputs",
+      "constraint": "collector_inputs_index_name_canonical",
+      "sqlite_constraint": "collector_inputs_index_name_canonical",
+      "columns": [
+        "index_name"
+      ],
+      "target": "index_name"
+    },
+    {
+      "id": "check/collector_runtime/collector_runtime_boot_epoch_canonical/boot_epoch",
+      "kind": "check",
+      "sqlite": "( boot_epoch IS NULL OR ( length(boot_epoch) BETWEEN 1 AND 128 AND instr(boot_epoch, char(0)) = 0 AND substr(boot_epoch, 1, 1) GLOB '[A-Za-z0-9]' AND boot_epoch NOT GLOB '*[^A-Za-z0-9._:-]*' ) )",
+      "table": "collector_runtime",
+      "constraint": "collector_runtime_boot_epoch_canonical",
+      "sqlite_constraint": "collector_runtime_boot_epoch_canonical",
+      "columns": [
+        "boot_epoch"
+      ],
+      "target": "boot_epoch"
+    },
+    {
+      "id": "check/collector_runtime/collector_runtime_stream_id_canonical/stream_id",
+      "kind": "check",
+      "sqlite": "( stream_id IS NULL OR ( length(stream_id) BETWEEN 1 AND 128 AND instr(stream_id, char(0)) = 0 AND substr(stream_id, 1, 1) GLOB '[A-Za-z0-9]' AND stream_id NOT GLOB '*[^A-Za-z0-9._:-]*' ) )",
+      "table": "collector_runtime",
+      "constraint": "collector_runtime_stream_id_canonical",
+      "sqlite_constraint": "collector_runtime_stream_id_canonical",
+      "columns": [
+        "stream_id"
+      ],
+      "target": "stream_id"
+    },
+    {
+      "id": "check/collector_runtime/collector_runtime_instance_id_canonical/active_instance_id",
+      "kind": "check",
+      "sqlite": "( active_instance_id IS NULL OR ( length(active_instance_id) BETWEEN 1 AND 128 AND instr(active_instance_id, char(0)) = 0 AND substr(active_instance_id, 1, 1) GLOB '[A-Za-z0-9]' AND active_instance_id NOT GLOB '*[^A-Za-z0-9._:-]*' ) )",
+      "table": "collector_runtime",
+      "constraint": "collector_runtime_instance_id_canonical",
+      "sqlite_constraint": "collector_runtime_instance_id_canonical",
+      "columns": [
+        "active_instance_id"
+      ],
+      "target": "active_instance_id"
+    },
+    {
+      "id": "check/collector_runtime/collector_runtime_source_revision_valid/source_revision",
+      "kind": "check",
+      "sqlite": "( source_revision = 'development' OR ( length(CAST(source_revision AS BLOB)) IN (40, 64) AND source_revision NOT GLOB '*[^0-9a-f]*' ) )",
+      "table": "collector_runtime",
+      "constraint": "collector_runtime_source_revision_valid",
+      "sqlite_constraint": "collector_runtime_source_revision_valid",
+      "columns": [
+        "source_revision"
+      ],
+      "target": "source_revision",
+      "seeds": [
+        "0123456789abcdef0123456789abcdef01234567",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "development"
+      ]
+    },
+    {
+      "id": "check/durable_export_jobs/durable_export_job_artifact_shape_is_exact/artifact_name",
+      "kind": "check",
+      "sqlite": "( ( artifact_name = '' AND artifact_sha256 IS NULL ) OR ( length(CAST(artifact_name AS BLOB)) BETWEEN 1 AND 256 AND artifact_name NOT LIKE '%/%' AND artifact_name NOT LIKE '%\\%' AND length(artifact_sha256) = 32 ) )",
+      "table": "durable_export_jobs",
+      "constraint": "durable_export_job_artifact_shape_is_exact",
+      "sqlite_constraint": "durable_export_job_artifact_shape_is_exact",
+      "columns": [
+        "artifact_name",
+        "artifact_sha256"
+      ],
+      "target": "artifact_name",
+      "contexts": [
+        {
+          "artifact_sha256": {
+            "hex": "abababababababababababababababababababababababababababababababab"
+          }
+        },
+        {
+          "artifact_sha256": null
+        },
+        {
+          "artifact_sha256": {
+            "hex": "ababababababababababababababababababababababababababababababab"
+          }
+        }
+      ]
+    },
+    {
+      "id": "check/durable_search_jobs/durable_search_jobs_check/artifact_name",
+      "kind": "check",
+      "sqlite": "( (artifact_name IS NULL AND artifact_sha256 IS NULL AND artifact_size_bytes = 0) OR ( length(CAST(artifact_name AS BLOB)) BETWEEN 1 AND 320 AND artifact_name NOT LIKE '%/%' AND artifact_name NOT LIKE '%\\\\%' AND length(artifact_sha256) = 32 AND artifact_size_bytes > 0 ) )",
+      "table": "durable_search_jobs",
+      "constraint": "durable_search_jobs_check",
+      "sqlite_constraint": null,
+      "columns": [
+        "artifact_name",
+        "artifact_sha256",
+        "artifact_size_bytes"
+      ],
+      "target": "artifact_name",
+      "contexts": [
+        {
+          "artifact_sha256": {
+            "hex": "abababababababababababababababababababababababababababababababab"
+          },
+          "artifact_size_bytes": 1
+        },
+        {
+          "artifact_sha256": null,
+          "artifact_size_bytes": 0
+        },
+        {
+          "artifact_sha256": {
+            "hex": "abababababababababababababababababababababababababababababababab"
+          },
+          "artifact_size_bytes": 0
+        }
+      ]
+    },
+    {
+      "id": "check/feature_operation_audit_tenant_state/feature_operation_audit_state_tenant_id_bounded/tenant_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(tenant_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(tenant_id AS BLOB), X'00') = 0 AND tenant_id = trim(tenant_id) AND tenant_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "feature_operation_audit_tenant_state",
+      "constraint": "feature_operation_audit_state_tenant_id_bounded",
+      "sqlite_constraint": "feature_operation_audit_state_tenant_id_bounded",
+      "columns": [
+        "tenant_id"
+      ],
+      "target": "tenant_id"
+    },
+    {
+      "id": "check/index_data_deletion_completions/index_data_deletion_completions_operation_id_canonical/deletion_operation_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(deletion_operation_id AS BLOB)) BETWEEN 1 AND 128 AND instr(CAST(deletion_operation_id AS BLOB), X'00') = 0 AND substr(deletion_operation_id, 1, 1) GLOB '[A-Za-z0-9]' AND deletion_operation_id NOT GLOB '*[^A-Za-z0-9._:-]*' )",
+      "table": "index_data_deletion_completions",
+      "constraint": "index_data_deletion_completions_operation_id_canonical",
+      "sqlite_constraint": "index_data_deletion_completions_operation_id_canonical",
+      "columns": [
+        "deletion_operation_id"
+      ],
+      "target": "deletion_operation_id"
+    },
+    {
+      "id": "check/index_data_deletion_completions/index_data_deletion_completions_correlation_id_canonical/correlation_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(correlation_id AS BLOB)) BETWEEN 1 AND 128 AND instr(CAST(correlation_id AS BLOB), X'00') = 0 AND substr(correlation_id, 1, 1) GLOB '[A-Za-z0-9]' AND correlation_id NOT GLOB '*[^A-Za-z0-9._:-]*' )",
+      "table": "index_data_deletion_completions",
+      "constraint": "index_data_deletion_completions_correlation_id_canonical",
+      "sqlite_constraint": "index_data_deletion_completions_correlation_id_canonical",
+      "columns": [
+        "correlation_id"
+      ],
+      "target": "correlation_id"
+    },
+    {
+      "id": "check/index_data_deletion_completions/index_data_deletion_completions_index_name_canonical/index_name",
+      "kind": "check",
+      "sqlite": "( length(CAST(index_name AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(index_name AS BLOB), X'00') = 0 AND index_name = lower(index_name) AND index_name NOT GLOB '*[^a-z0-9_-]*' AND substr(index_name, 1, 1) GLOB '[a-z0-9]' AND instr(index_name, 'kvstore') = 0 )",
+      "table": "index_data_deletion_completions",
+      "constraint": "index_data_deletion_completions_index_name_canonical",
+      "sqlite_constraint": "index_data_deletion_completions_index_name_canonical",
+      "columns": [
+        "index_name"
+      ],
+      "target": "index_name"
+    },
+    {
+      "id": "check/index_data_deletion_completions/index_data_deletion_completions_database_canonical/clickhouse_database",
+      "kind": "check",
+      "sqlite": "( length(CAST(clickhouse_database AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(clickhouse_database AS BLOB), X'00') = 0 AND substr(clickhouse_database, 1, 1) GLOB '[A-Za-z_]' AND clickhouse_database NOT GLOB '*[^A-Za-z0-9_]*' )",
+      "table": "index_data_deletion_completions",
+      "constraint": "index_data_deletion_completions_database_canonical",
+      "sqlite_constraint": "index_data_deletion_completions_database_canonical",
+      "columns": [
+        "clickhouse_database"
+      ],
+      "target": "clickhouse_database"
+    },
+    {
+      "id": "check/index_data_deletion_completions/index_data_deletion_completions_table_canonical/clickhouse_table",
+      "kind": "check",
+      "sqlite": "( length(CAST(clickhouse_table AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(clickhouse_table AS BLOB), X'00') = 0 AND substr(clickhouse_table, 1, 1) GLOB '[A-Za-z_]' AND clickhouse_table NOT GLOB '*[^A-Za-z0-9_]*' )",
+      "table": "index_data_deletion_completions",
+      "constraint": "index_data_deletion_completions_table_canonical",
+      "sqlite_constraint": "index_data_deletion_completions_table_canonical",
+      "columns": [
+        "clickhouse_table"
+      ],
+      "target": "clickhouse_table"
+    },
+    {
+      "id": "check/index_data_deletion_completions/index_data_deletion_completions_table_uuid_canonical/clickhouse_table_uuid",
+      "kind": "check",
+      "sqlite": "( length(CAST(clickhouse_table_uuid AS BLOB)) = 36 AND instr(CAST(clickhouse_table_uuid AS BLOB), X'00') = 0 AND clickhouse_table_uuid = lower(clickhouse_table_uuid) AND substr(clickhouse_table_uuid, 9, 1) = '-' AND substr(clickhouse_table_uuid, 14, 1) = '-' AND substr(clickhouse_table_uuid, 19, 1) = '-' AND substr(clickhouse_table_uuid, 24, 1) = '-' AND length(replace(clickhouse_table_uuid, '-', '')) = 32 AND replace(clickhouse_table_uuid, '-', '') NOT GLOB '*[^0-9a-f]*' AND clickhouse_table_uuid <> '00000000-0000-0000-0000-000000000000' )",
+      "table": "index_data_deletion_completions",
+      "constraint": "index_data_deletion_completions_table_uuid_canonical",
+      "sqlite_constraint": "index_data_deletion_completions_table_uuid_canonical",
+      "columns": [
+        "clickhouse_table_uuid"
+      ],
+      "target": "clickhouse_table_uuid",
+      "seeds": [
+        "123e4567-e89b-12d3-a456-426614174000",
+        "00000000-0000-0000-0000-000000000000"
+      ]
+    },
+    {
+      "id": "check/index_deletion_mutation_attempts/index_deletion_mutation_attempts_correlation_id_canonical/correlation_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(correlation_id AS BLOB)) BETWEEN 1 AND 128 AND instr(CAST(correlation_id AS BLOB), X'00') = 0 AND substr(correlation_id, 1, 1) GLOB '[A-Za-z0-9]' AND correlation_id NOT GLOB '*[^A-Za-z0-9._:-]*' )",
+      "table": "index_deletion_mutation_attempts",
+      "constraint": "index_deletion_mutation_attempts_correlation_id_canonical",
+      "sqlite_constraint": "index_deletion_mutation_attempts_correlation_id_canonical",
+      "columns": [
+        "correlation_id"
+      ],
+      "target": "correlation_id"
+    },
+    {
+      "id": "check/index_deletion_mutation_attempts/index_deletion_mutation_attempts_database_canonical/clickhouse_database",
+      "kind": "check",
+      "sqlite": "( length(CAST(clickhouse_database AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(clickhouse_database AS BLOB), X'00') = 0 AND substr(clickhouse_database, 1, 1) GLOB '[A-Za-z_]' AND clickhouse_database NOT GLOB '*[^A-Za-z0-9_]*' )",
+      "table": "index_deletion_mutation_attempts",
+      "constraint": "index_deletion_mutation_attempts_database_canonical",
+      "sqlite_constraint": "index_deletion_mutation_attempts_database_canonical",
+      "columns": [
+        "clickhouse_database"
+      ],
+      "target": "clickhouse_database"
+    },
+    {
+      "id": "check/index_deletion_mutation_attempts/index_deletion_mutation_attempts_table_canonical/clickhouse_table",
+      "kind": "check",
+      "sqlite": "( length(CAST(clickhouse_table AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(clickhouse_table AS BLOB), X'00') = 0 AND substr(clickhouse_table, 1, 1) GLOB '[A-Za-z_]' AND clickhouse_table NOT GLOB '*[^A-Za-z0-9_]*' )",
+      "table": "index_deletion_mutation_attempts",
+      "constraint": "index_deletion_mutation_attempts_table_canonical",
+      "sqlite_constraint": "index_deletion_mutation_attempts_table_canonical",
+      "columns": [
+        "clickhouse_table"
+      ],
+      "target": "clickhouse_table"
+    },
+    {
+      "id": "check/index_deletion_mutation_attempts/index_deletion_mutation_attempts_table_uuid_canonical/clickhouse_table_uuid",
+      "kind": "check",
+      "sqlite": "( length(CAST(clickhouse_table_uuid AS BLOB)) = 36 AND instr(CAST(clickhouse_table_uuid AS BLOB), X'00') = 0 AND clickhouse_table_uuid = lower(clickhouse_table_uuid) AND substr(clickhouse_table_uuid, 9, 1) = '-' AND substr(clickhouse_table_uuid, 14, 1) = '-' AND substr(clickhouse_table_uuid, 19, 1) = '-' AND substr(clickhouse_table_uuid, 24, 1) = '-' AND length(replace(clickhouse_table_uuid, '-', '')) = 32 AND replace(clickhouse_table_uuid, '-', '') NOT GLOB '*[^0-9a-f]*' AND clickhouse_table_uuid <> '00000000-0000-0000-0000-000000000000' )",
+      "table": "index_deletion_mutation_attempts",
+      "constraint": "index_deletion_mutation_attempts_table_uuid_canonical",
+      "sqlite_constraint": "index_deletion_mutation_attempts_table_uuid_canonical",
+      "columns": [
+        "clickhouse_table_uuid"
+      ],
+      "target": "clickhouse_table_uuid",
+      "seeds": [
+        "123e4567-e89b-12d3-a456-426614174000",
+        "00000000-0000-0000-0000-000000000000"
+      ]
+    },
+    {
+      "id": "check/index_deletion_operations/index_deletion_operations_deletion_operation_id_check/deletion_operation_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(deletion_operation_id AS BLOB)) BETWEEN 1 AND 128 AND instr( CAST(deletion_operation_id AS BLOB), X'00' ) = 0 AND substr(deletion_operation_id, 1, 1) GLOB '[A-Za-z0-9]' AND deletion_operation_id NOT GLOB '*[^A-Za-z0-9._:-]*' )",
+      "table": "index_deletion_operations",
+      "constraint": "index_deletion_operations_deletion_operation_id_check",
+      "sqlite_constraint": null,
+      "columns": [
+        "deletion_operation_id"
+      ],
+      "target": "deletion_operation_id"
+    },
+    {
+      "id": "check/index_deletion_operations/index_deletion_operations_tenant_id_bounded/tenant_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(tenant_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(tenant_id AS BLOB), X'00') = 0 AND tenant_id = trim(tenant_id) AND tenant_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "index_deletion_operations",
+      "constraint": "index_deletion_operations_tenant_id_bounded",
+      "sqlite_constraint": "index_deletion_operations_tenant_id_bounded",
+      "columns": [
+        "tenant_id"
+      ],
+      "target": "tenant_id"
+    },
+    {
+      "id": "check/indexes/indexes_name_check2/name",
+      "kind": "check",
+      "sqlite": "(name NOT GLOB '*[^a-z0-9_-]*')",
+      "table": "indexes",
+      "constraint": "indexes_name_check2",
+      "sqlite_constraint": null,
+      "columns": [
+        "name"
+      ],
+      "target": "name"
+    },
+    {
+      "id": "check/indexes/indexes_name_check3/name",
+      "kind": "check",
+      "sqlite": "(substr(name, 1, 1) GLOB '[a-z0-9]')",
+      "table": "indexes",
+      "constraint": "indexes_name_check3",
+      "sqlite_constraint": null,
+      "columns": [
+        "name"
+      ],
+      "target": "name"
+    },
+    {
+      "id": "check/ingestion_token_hec_profiles/ingestion_token_hec_profiles_default_host_bounded/default_host",
+      "kind": "check",
+      "sqlite": "( default_host IS NULL OR ( length(CAST(default_host AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(default_host AS BLOB), X'00') = 0 AND default_host = trim(default_host) AND default_host NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) ) )",
+      "table": "ingestion_token_hec_profiles",
+      "constraint": "ingestion_token_hec_profiles_default_host_bounded",
+      "sqlite_constraint": "ingestion_token_hec_profiles_default_host_bounded",
+      "columns": [
+        "default_host"
+      ],
+      "target": "default_host"
+    },
+    {
+      "id": "check/ingestion_token_hec_profiles/ingestion_token_hec_profiles_default_source_bounded/default_source",
+      "kind": "check",
+      "sqlite": "( default_source IS NULL OR ( length(CAST(default_source AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(default_source AS BLOB), X'00') = 0 AND default_source = trim(default_source) AND default_source NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) ) )",
+      "table": "ingestion_token_hec_profiles",
+      "constraint": "ingestion_token_hec_profiles_default_source_bounded",
+      "sqlite_constraint": "ingestion_token_hec_profiles_default_source_bounded",
+      "columns": [
+        "default_source"
+      ],
+      "target": "default_source"
+    },
+    {
+      "id": "check/ingestion_token_hec_profiles/ingestion_token_hec_profiles_default_sourcetype_bounded/default_sourcetype",
+      "kind": "check",
+      "sqlite": "( default_sourcetype IS NULL OR ( length(CAST(default_sourcetype AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(default_sourcetype AS BLOB), X'00') = 0 AND default_sourcetype = trim(default_sourcetype) AND default_sourcetype NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) ) )",
+      "table": "ingestion_token_hec_profiles",
+      "constraint": "ingestion_token_hec_profiles_default_sourcetype_bounded",
+      "sqlite_constraint": "ingestion_token_hec_profiles_default_sourcetype_bounded",
+      "columns": [
+        "default_sourcetype"
+      ],
+      "target": "default_sourcetype"
+    },
+    {
+      "id": "check/ingestion_tokens/ingestion_tokens_bound_collector_id_canonical/bound_collector_id",
+      "kind": "check",
+      "sqlite": "( bound_collector_id IS NULL OR ( length(bound_collector_id) BETWEEN 1 AND 128 AND instr(bound_collector_id, char(0)) = 0 AND substr(bound_collector_id, 1, 1) GLOB '[A-Za-z0-9]' AND bound_collector_id NOT GLOB '*[^A-Za-z0-9._:-]*' ) )",
+      "table": "ingestion_tokens",
+      "constraint": "ingestion_tokens_bound_collector_id_canonical",
+      "sqlite_constraint": "ingestion_tokens_bound_collector_id_canonical",
+      "columns": [
+        "bound_collector_id"
+      ],
+      "target": "bound_collector_id"
+    },
+    {
+      "id": "check/knowledge_attempt_audit_events/knowledge_attempt_audit_actor_id_bounded/actor_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(actor_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(actor_id AS BLOB), X'00') = 0 AND actor_id = trim(actor_id) AND actor_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_attempt_audit_events",
+      "constraint": "knowledge_attempt_audit_actor_id_bounded",
+      "sqlite_constraint": "knowledge_attempt_audit_actor_id_bounded",
+      "columns": [
+        "actor_id"
+      ],
+      "target": "actor_id"
+    },
+    {
+      "id": "check/knowledge_attempt_audit_events/knowledge_attempt_audit_app_shape/app_id",
+      "kind": "check",
+      "sqlite": "( app_id IS NULL OR ( length(CAST(app_id AS BLOB)) BETWEEN 1 AND 128 AND instr(CAST(app_id AS BLOB), X'00') = 0 AND app_id = trim(app_id) AND app_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) ) )",
+      "table": "knowledge_attempt_audit_events",
+      "constraint": "knowledge_attempt_audit_app_shape",
+      "sqlite_constraint": "knowledge_attempt_audit_app_shape",
+      "columns": [
+        "app_id"
+      ],
+      "target": "app_id",
+      "seeds": [
+        "app_abcdefghijklmnopqrstuQ",
+        "app_ABCDEFGHIJ-_0123456789w",
+        "search"
+      ]
+    },
+    {
+      "id": "check/knowledge_attempt_audit_events/knowledge_attempt_audit_object_shape/knowledge_object_id",
+      "kind": "check",
+      "sqlite": "( ( knowledge_object_id IS NULL AND object_type IS NULL AND object_version IS NULL AND sharing_scope IS NULL ) OR ( app_id IS NOT NULL AND reason NOT IN ( 'not_administrator', 'not_found_or_forbidden' ) AND knowledge_object_id IS NOT NULL AND object_type IS NOT NULL AND object_version IS NOT NULL AND sharing_scope IS NOT NULL AND length(CAST(knowledge_object_id AS BLOB)) BETWEEN 1 AND 128 AND instr(CAST(knowledge_object_id AS BLOB), X'00') = 0 AND knowledge_object_id = trim(knowledge_object_id) AND knowledge_object_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) ) )",
+      "table": "knowledge_attempt_audit_events",
+      "constraint": "knowledge_attempt_audit_object_shape",
+      "sqlite_constraint": "knowledge_attempt_audit_object_shape",
+      "columns": [
+        "app_id",
+        "knowledge_object_id",
+        "object_type",
+        "object_version",
+        "reason",
+        "sharing_scope"
+      ],
+      "target": "knowledge_object_id",
+      "contexts": [
+        {
+          "app_id": "search",
+          "reason": "invalid_request",
+          "object_type": "saved_search",
+          "object_version": 1,
+          "sharing_scope": "private"
+        },
+        {
+          "app_id": "search",
+          "reason": "not_administrator",
+          "object_type": "saved_search",
+          "object_version": 1,
+          "sharing_scope": "private"
+        },
+        {
+          "app_id": null,
+          "reason": "invalid_request",
+          "object_type": null,
+          "object_version": null,
+          "sharing_scope": null
+        }
+      ]
+    },
+    {
+      "id": "check/knowledge_attempt_audit_tenant_state/knowledge_attempt_audit_state_tenant_id_bounded/tenant_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(tenant_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(tenant_id AS BLOB), X'00') = 0 AND tenant_id = trim(tenant_id) AND tenant_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_attempt_audit_tenant_state",
+      "constraint": "knowledge_attempt_audit_state_tenant_id_bounded",
+      "sqlite_constraint": "knowledge_attempt_audit_state_tenant_id_bounded",
+      "columns": [
+        "tenant_id"
+      ],
+      "target": "tenant_id"
+    },
+    {
+      "id": "check/knowledge_catalog_tenants/knowledge_catalog_tenant_id_bounded/tenant_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(tenant_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(tenant_id AS BLOB), X'00') = 0 AND tenant_id = trim(tenant_id) AND tenant_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_catalog_tenants",
+      "constraint": "knowledge_catalog_tenant_id_bounded",
+      "sqlite_constraint": "knowledge_catalog_tenant_id_bounded",
+      "columns": [
+        "tenant_id"
+      ],
+      "target": "tenant_id"
+    },
+    {
+      "id": "check/knowledge_lookup_asset_stages/knowledge_lookup_asset_stage_id_bounded/stage_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(stage_id AS BLOB)) BETWEEN 1 AND 128 AND instr(CAST(stage_id AS BLOB), X'00') = 0 AND stage_id = trim(stage_id) AND stage_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_lookup_asset_stages",
+      "constraint": "knowledge_lookup_asset_stage_id_bounded",
+      "sqlite_constraint": "knowledge_lookup_asset_stage_id_bounded",
+      "columns": [
+        "stage_id"
+      ],
+      "target": "stage_id"
+    },
+    {
+      "id": "check/knowledge_lookup_asset_stages/knowledge_lookup_asset_stage_owner_bounded/owner_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(owner_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(owner_id AS BLOB), X'00') = 0 AND owner_id = trim(owner_id) AND owner_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_lookup_asset_stages",
+      "constraint": "knowledge_lookup_asset_stage_owner_bounded",
+      "sqlite_constraint": "knowledge_lookup_asset_stage_owner_bounded",
+      "columns": [
+        "owner_id"
+      ],
+      "target": "owner_id"
+    },
+    {
+      "id": "check/knowledge_lookup_assets/knowledge_lookup_asset_id_bounded/lookup_asset_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(lookup_asset_id AS BLOB)) BETWEEN 1 AND 128 AND instr(CAST(lookup_asset_id AS BLOB), X'00') = 0 AND lookup_asset_id = trim(lookup_asset_id) AND lookup_asset_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_lookup_assets",
+      "constraint": "knowledge_lookup_asset_id_bounded",
+      "sqlite_constraint": "knowledge_lookup_asset_id_bounded",
+      "columns": [
+        "lookup_asset_id"
+      ],
+      "target": "lookup_asset_id"
+    },
+    {
+      "id": "check/knowledge_mutation_commit_authorities/knowledge_mutation_commit_actor_id_bounded/actor_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(actor_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(actor_id AS BLOB), X'00') = 0 AND actor_id = trim(actor_id) AND actor_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_mutation_commit_authorities",
+      "constraint": "knowledge_mutation_commit_actor_id_bounded",
+      "sqlite_constraint": "knowledge_mutation_commit_actor_id_bounded",
+      "columns": [
+        "actor_id"
+      ],
+      "target": "actor_id"
+    },
+    {
+      "id": "check/knowledge_mutation_commit_authorities/knowledge_mutation_commit_request_id_bounded/client_request_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(client_request_id AS BLOB)) BETWEEN 16 AND 128 AND client_request_id NOT GLOB '*[^!-~]*' )",
+      "table": "knowledge_mutation_commit_authorities",
+      "constraint": "knowledge_mutation_commit_request_id_bounded",
+      "sqlite_constraint": "knowledge_mutation_commit_request_id_bounded",
+      "columns": [
+        "client_request_id"
+      ],
+      "target": "client_request_id"
+    },
+    {
+      "id": "check/knowledge_mutation_idempotency/knowledge_mutation_idempotency_actor_id_bounded/actor_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(actor_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(actor_id AS BLOB), X'00') = 0 AND actor_id = trim(actor_id) AND actor_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_mutation_idempotency",
+      "constraint": "knowledge_mutation_idempotency_actor_id_bounded",
+      "sqlite_constraint": "knowledge_mutation_idempotency_actor_id_bounded",
+      "columns": [
+        "actor_id"
+      ],
+      "target": "actor_id"
+    },
+    {
+      "id": "check/knowledge_mutation_idempotency/knowledge_mutation_idempotency_request_id_bounded/client_request_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(client_request_id AS BLOB)) BETWEEN 16 AND 128 AND client_request_id NOT GLOB '*[^!-~]*' )",
+      "table": "knowledge_mutation_idempotency",
+      "constraint": "knowledge_mutation_idempotency_request_id_bounded",
+      "sqlite_constraint": "knowledge_mutation_idempotency_request_id_bounded",
+      "columns": [
+        "client_request_id"
+      ],
+      "target": "client_request_id"
+    },
+    {
+      "id": "check/knowledge_object_acl/knowledge_object_acl_role_id_check/role_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(role_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(role_id AS BLOB), X'00') = 0 AND role_id = trim(role_id) AND role_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_object_acl",
+      "constraint": "knowledge_object_acl_role_id_check",
+      "sqlite_constraint": null,
+      "columns": [
+        "role_id"
+      ],
+      "target": "role_id"
+    },
+    {
+      "id": "check/knowledge_object_list_projections/knowledge_list_projection_description_canonical/description",
+      "kind": "check",
+      "sqlite": "( length(CAST(description AS BLOB)) <= 16384 AND instr(CAST(description AS BLOB), X'00') = 0 AND ( (description_present = 0 AND description = '') OR ( description_present = 1 AND length(CAST(description AS BLOB)) >= 1 AND description = trim(description) AND description NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) ) ) )",
+      "table": "knowledge_object_list_projections",
+      "constraint": "knowledge_list_projection_description_canonical",
+      "sqlite_constraint": "knowledge_list_projection_description_canonical",
+      "columns": [
+        "description",
+        "description_present"
+      ],
+      "target": "description",
+      "contexts": [
+        {
+          "description_present": 1
+        },
+        {
+          "description_present": 0
+        }
+      ]
+    },
+    {
+      "id": "check/knowledge_object_list_selector_patterns/knowledge_object_list_selector_patterns_value_check/value",
+      "kind": "check",
+      "sqlite": "( value = trim(value) AND value NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_object_list_selector_patterns",
+      "constraint": "knowledge_object_list_selector_patterns_value_check",
+      "sqlite_constraint": null,
+      "columns": [
+        "value"
+      ],
+      "target": "value"
+    },
+    {
+      "id": "check/knowledge_object_versions/knowledge_object_versions_name_bounded/name",
+      "kind": "check",
+      "sqlite": "( length(CAST(name AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(name AS BLOB), X'00') = 0 AND name = trim(name) AND name NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_object_versions",
+      "constraint": "knowledge_object_versions_name_bounded",
+      "sqlite_constraint": "knowledge_object_versions_name_bounded",
+      "columns": [
+        "name"
+      ],
+      "target": "name"
+    },
+    {
+      "id": "check/knowledge_object_versions/knowledge_object_versions_owner_id_bounded/owner_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(owner_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(owner_id AS BLOB), X'00') = 0 AND owner_id = trim(owner_id) AND owner_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_object_versions",
+      "constraint": "knowledge_object_versions_owner_id_bounded",
+      "sqlite_constraint": "knowledge_object_versions_owner_id_bounded",
+      "columns": [
+        "owner_id"
+      ],
+      "target": "owner_id"
+    },
+    {
+      "id": "check/knowledge_objects/knowledge_objects_id_bounded/knowledge_object_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(knowledge_object_id AS BLOB)) BETWEEN 1 AND 128 AND instr(CAST(knowledge_object_id AS BLOB), X'00') = 0 AND knowledge_object_id = trim(knowledge_object_id) AND knowledge_object_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_objects",
+      "constraint": "knowledge_objects_id_bounded",
+      "sqlite_constraint": "knowledge_objects_id_bounded",
+      "columns": [
+        "knowledge_object_id"
+      ],
+      "target": "knowledge_object_id"
+    },
+    {
+      "id": "check/knowledge_objects/knowledge_objects_owner_id_bounded/owner_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(owner_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(owner_id AS BLOB), X'00') = 0 AND owner_id = trim(owner_id) AND owner_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_objects",
+      "constraint": "knowledge_objects_owner_id_bounded",
+      "sqlite_constraint": "knowledge_objects_owner_id_bounded",
+      "columns": [
+        "owner_id"
+      ],
+      "target": "owner_id"
+    },
+    {
+      "id": "check/knowledge_objects/knowledge_objects_name_bounded/name",
+      "kind": "check",
+      "sqlite": "( length(CAST(name AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(name AS BLOB), X'00') = 0 AND name = trim(name) AND name NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_objects",
+      "constraint": "knowledge_objects_name_bounded",
+      "sqlite_constraint": "knowledge_objects_name_bounded",
+      "columns": [
+        "name"
+      ],
+      "target": "name"
+    },
+    {
+      "id": "check/knowledge_recovery_audit/knowledge_recovery_audit_actor_id_check/actor_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(actor_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(actor_id AS BLOB), X'00') = 0 AND actor_id = trim(actor_id) AND actor_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "knowledge_recovery_audit",
+      "constraint": "knowledge_recovery_audit_actor_id_check",
+      "sqlite_constraint": null,
+      "columns": [
+        "actor_id"
+      ],
+      "target": "actor_id"
+    },
+    {
+      "id": "check/search_attempt_audit_events/search_attempt_audit_actor_id_bounded/actor_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(actor_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(actor_id AS BLOB), X'00') = 0 AND actor_id = trim(actor_id) AND actor_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "search_attempt_audit_events",
+      "constraint": "search_attempt_audit_actor_id_bounded",
+      "sqlite_constraint": "search_attempt_audit_actor_id_bounded",
+      "columns": [
+        "actor_id"
+      ],
+      "target": "actor_id"
+    },
+    {
+      "id": "check/search_attempt_audit_events/search_attempt_audit_owner_id_bounded/owner_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(owner_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(owner_id AS BLOB), X'00') = 0 AND owner_id = trim(owner_id) AND owner_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "search_attempt_audit_events",
+      "constraint": "search_attempt_audit_owner_id_bounded",
+      "sqlite_constraint": "search_attempt_audit_owner_id_bounded",
+      "columns": [
+        "owner_id"
+      ],
+      "target": "owner_id"
+    },
+    {
+      "id": "check/search_attempt_audit_events/search_attempt_audit_job_id_bounded/search_job_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(search_job_id AS BLOB)) BETWEEN 1 AND 256 AND instr(CAST(search_job_id AS BLOB), X'00') = 0 AND search_job_id = trim(search_job_id) AND search_job_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "search_attempt_audit_events",
+      "constraint": "search_attempt_audit_job_id_bounded",
+      "sqlite_constraint": "search_attempt_audit_job_id_bounded",
+      "columns": [
+        "search_job_id"
+      ],
+      "target": "search_job_id"
+    },
+    {
+      "id": "check/search_attempt_audit_tenant_state/search_attempt_audit_state_tenant_id_bounded/tenant_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(tenant_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(tenant_id AS BLOB), X'00') = 0 AND tenant_id = trim(tenant_id) AND tenant_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "search_attempt_audit_tenant_state",
+      "constraint": "search_attempt_audit_state_tenant_id_bounded",
+      "sqlite_constraint": "search_attempt_audit_state_tenant_id_bounded",
+      "columns": [
+        "tenant_id"
+      ],
+      "target": "tenant_id"
+    },
+    {
+      "id": "check/tenants/tenants_tenant_id_bounded/tenant_id",
+      "kind": "check",
+      "sqlite": "( length(CAST(tenant_id AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(tenant_id AS BLOB), X'00') = 0 AND tenant_id = trim(tenant_id) AND tenant_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) )",
+      "table": "tenants",
+      "constraint": "tenants_tenant_id_bounded",
+      "sqlite_constraint": "audit_tenant_state_tenant_id_bounded",
+      "columns": [
+        "tenant_id"
+      ],
+      "target": "tenant_id",
+      "sqlite_table": "audit_tenant_state"
+    },
+    {
+      "id": "trigger/index_catalog_record_is_bounded/index_id",
+      "kind": "trigger",
+      "sqlite": "NOT ( length(CAST(NEW.index_id AS BLOB)) BETWEEN 1 AND 128 AND instr(CAST(NEW.index_id AS BLOB), X'00') = 0 AND NEW.index_id = trim(NEW.index_id) AND NEW.index_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND length(CAST(NEW.display_name AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(NEW.display_name AS BLOB), X'00') = 0 AND NEW.display_name = trim(NEW.display_name) AND NEW.display_name NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND length(CAST(NEW.description AS BLOB)) BETWEEN 0 AND 8192 AND instr(CAST(NEW.description AS BLOB), X'00') = 0 AND NEW.description NOT GLOB ( '*[' || char(1) || '-' || char(8) || char(11) || '-' || char(12) || char(14) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND length(CAST(NEW.default_sourcetype AS BLOB)) BETWEEN 0 AND 255 AND instr(CAST(NEW.default_sourcetype AS BLOB), X'00') = 0 AND NEW.default_sourcetype = trim(NEW.default_sourcetype) AND NEW.default_sourcetype NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND NEW.created_at_unix_micro BETWEEN 1 AND 253402300799999999 AND NEW.updated_at_unix_micro BETWEEN NEW.created_at_unix_micro AND 253402300799999999 )",
+      "sqlite_triggers": [
+        "index_catalog_record_insert_is_bounded",
+        "index_catalog_record_update_is_bounded"
+      ],
+      "table": "indexes",
+      "function": "index_catalog_record_is_bounded",
+      "columns": [
+        "index_id",
+        "display_name",
+        "description",
+        "default_sourcetype",
+        "created_at_unix_micro",
+        "updated_at_unix_micro"
+      ],
+      "target": "index_id",
+      "contexts": [
+        {
+          "display_name": "Main",
+          "description": "line one\nline two",
+          "default_sourcetype": "json",
+          "created_at_unix_micro": 1,
+          "updated_at_unix_micro": 2
+        }
+      ]
+    },
+    {
+      "id": "trigger/index_catalog_record_is_bounded/display_name",
+      "kind": "trigger",
+      "sqlite": "NOT ( length(CAST(NEW.index_id AS BLOB)) BETWEEN 1 AND 128 AND instr(CAST(NEW.index_id AS BLOB), X'00') = 0 AND NEW.index_id = trim(NEW.index_id) AND NEW.index_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND length(CAST(NEW.display_name AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(NEW.display_name AS BLOB), X'00') = 0 AND NEW.display_name = trim(NEW.display_name) AND NEW.display_name NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND length(CAST(NEW.description AS BLOB)) BETWEEN 0 AND 8192 AND instr(CAST(NEW.description AS BLOB), X'00') = 0 AND NEW.description NOT GLOB ( '*[' || char(1) || '-' || char(8) || char(11) || '-' || char(12) || char(14) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND length(CAST(NEW.default_sourcetype AS BLOB)) BETWEEN 0 AND 255 AND instr(CAST(NEW.default_sourcetype AS BLOB), X'00') = 0 AND NEW.default_sourcetype = trim(NEW.default_sourcetype) AND NEW.default_sourcetype NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND NEW.created_at_unix_micro BETWEEN 1 AND 253402300799999999 AND NEW.updated_at_unix_micro BETWEEN NEW.created_at_unix_micro AND 253402300799999999 )",
+      "sqlite_triggers": [
+        "index_catalog_record_insert_is_bounded",
+        "index_catalog_record_update_is_bounded"
+      ],
+      "table": "indexes",
+      "function": "index_catalog_record_is_bounded",
+      "columns": [
+        "index_id",
+        "display_name",
+        "description",
+        "default_sourcetype",
+        "created_at_unix_micro",
+        "updated_at_unix_micro"
+      ],
+      "target": "display_name",
+      "contexts": [
+        {
+          "index_id": "idx_0001",
+          "description": "line one\nline two",
+          "default_sourcetype": "json",
+          "created_at_unix_micro": 1,
+          "updated_at_unix_micro": 2
+        }
+      ]
+    },
+    {
+      "id": "trigger/index_catalog_record_is_bounded/description",
+      "kind": "trigger",
+      "sqlite": "NOT ( length(CAST(NEW.index_id AS BLOB)) BETWEEN 1 AND 128 AND instr(CAST(NEW.index_id AS BLOB), X'00') = 0 AND NEW.index_id = trim(NEW.index_id) AND NEW.index_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND length(CAST(NEW.display_name AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(NEW.display_name AS BLOB), X'00') = 0 AND NEW.display_name = trim(NEW.display_name) AND NEW.display_name NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND length(CAST(NEW.description AS BLOB)) BETWEEN 0 AND 8192 AND instr(CAST(NEW.description AS BLOB), X'00') = 0 AND NEW.description NOT GLOB ( '*[' || char(1) || '-' || char(8) || char(11) || '-' || char(12) || char(14) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND length(CAST(NEW.default_sourcetype AS BLOB)) BETWEEN 0 AND 255 AND instr(CAST(NEW.default_sourcetype AS BLOB), X'00') = 0 AND NEW.default_sourcetype = trim(NEW.default_sourcetype) AND NEW.default_sourcetype NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND NEW.created_at_unix_micro BETWEEN 1 AND 253402300799999999 AND NEW.updated_at_unix_micro BETWEEN NEW.created_at_unix_micro AND 253402300799999999 )",
+      "sqlite_triggers": [
+        "index_catalog_record_insert_is_bounded",
+        "index_catalog_record_update_is_bounded"
+      ],
+      "table": "indexes",
+      "function": "index_catalog_record_is_bounded",
+      "columns": [
+        "index_id",
+        "display_name",
+        "description",
+        "default_sourcetype",
+        "created_at_unix_micro",
+        "updated_at_unix_micro"
+      ],
+      "target": "description",
+      "contexts": [
+        {
+          "index_id": "idx_0001",
+          "display_name": "Main",
+          "default_sourcetype": "json",
+          "created_at_unix_micro": 1,
+          "updated_at_unix_micro": 2
+        }
+      ]
+    },
+    {
+      "id": "trigger/index_catalog_record_is_bounded/default_sourcetype",
+      "kind": "trigger",
+      "sqlite": "NOT ( length(CAST(NEW.index_id AS BLOB)) BETWEEN 1 AND 128 AND instr(CAST(NEW.index_id AS BLOB), X'00') = 0 AND NEW.index_id = trim(NEW.index_id) AND NEW.index_id NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND length(CAST(NEW.display_name AS BLOB)) BETWEEN 1 AND 255 AND instr(CAST(NEW.display_name AS BLOB), X'00') = 0 AND NEW.display_name = trim(NEW.display_name) AND NEW.display_name NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND length(CAST(NEW.description AS BLOB)) BETWEEN 0 AND 8192 AND instr(CAST(NEW.description AS BLOB), X'00') = 0 AND NEW.description NOT GLOB ( '*[' || char(1) || '-' || char(8) || char(11) || '-' || char(12) || char(14) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND length(CAST(NEW.default_sourcetype AS BLOB)) BETWEEN 0 AND 255 AND instr(CAST(NEW.default_sourcetype AS BLOB), X'00') = 0 AND NEW.default_sourcetype = trim(NEW.default_sourcetype) AND NEW.default_sourcetype NOT GLOB ( '*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*' ) AND NEW.created_at_unix_micro BETWEEN 1 AND 253402300799999999 AND NEW.updated_at_unix_micro BETWEEN NEW.created_at_unix_micro AND 253402300799999999 )",
+      "sqlite_triggers": [
+        "index_catalog_record_insert_is_bounded",
+        "index_catalog_record_update_is_bounded"
+      ],
+      "table": "indexes",
+      "function": "index_catalog_record_is_bounded",
+      "columns": [
+        "index_id",
+        "display_name",
+        "description",
+        "default_sourcetype",
+        "created_at_unix_micro",
+        "updated_at_unix_micro"
+      ],
+      "target": "default_sourcetype",
+      "contexts": [
+        {
+          "index_id": "idx_0001",
+          "display_name": "Main",
+          "description": "line one\nline two",
+          "created_at_unix_micro": 1,
+          "updated_at_unix_micro": 2
+        }
+      ]
+    },
+    {
+      "id": "trigger/canonical_dashboard_app_exists/app_id",
+      "kind": "trigger",
+      "sqlite": "length(NEW.app_id) = 26 AND substr(NEW.app_id, 1, 4) = 'app_' AND substr(NEW.app_id, 5) NOT GLOB '*[^A-Za-z0-9_-]*' AND substr(NEW.app_id, 26, 1) GLOB '[AQgw]' AND NOT EXISTS ( SELECT 1 FROM app_workspaces WHERE tenant_id = NEW.tenant_id AND app_id = NEW.app_id )",
+      "sqlite_triggers": [
+        "canonical_dashboard_app_exists_insert",
+        "canonical_dashboard_app_exists_update"
+      ],
+      "table": "dashboards",
+      "function": "canonical_dashboard_app_exists",
+      "columns": [
+        "app_id",
+        "tenant_id"
+      ],
+      "target": "app_id",
+      "contexts": [
+        {
+          "tenant_id": "default"
+        }
+      ],
+      "seeds": [
+        "app_abcdefghijklmnopqrstuQ",
+        "app_ABCDEFGHIJ-_0123456789w",
+        "search"
+      ]
+    },
+    {
+      "id": "trigger/canonical_saved_search_app_exists/app_id",
+      "kind": "trigger",
+      "sqlite": "length(NEW.app_id) = 26 AND substr(NEW.app_id, 1, 4) = 'app_' AND substr(NEW.app_id, 5) NOT GLOB '*[^A-Za-z0-9_-]*' AND substr(NEW.app_id, 26, 1) GLOB '[AQgw]' AND NOT EXISTS ( SELECT 1 FROM app_workspaces WHERE app_id = NEW.app_id ) AND NOT EXISTS ( SELECT 1 FROM saved_searches WHERE app_id = NEW.app_id )",
+      "sqlite_triggers": [
+        "canonical_saved_search_app_exists_insert",
+        "canonical_saved_search_app_exists_update"
+      ],
+      "table": "saved_searches",
+      "function": "canonical_saved_search_app_exists",
+      "columns": [
+        "app_id"
+      ],
+      "target": "app_id",
+      "seeds": [
+        "app_abcdefghijklmnopqrstuQ",
+        "app_ABCDEFGHIJ-_0123456789w",
+        "search"
+      ]
+    }
+  ]
+}

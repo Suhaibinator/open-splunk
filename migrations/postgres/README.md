@@ -55,7 +55,9 @@ also sets `standard_conforming_strings = on` and `client_encoding = UTF8`, and
 startup parameters on every pooled connection. A database or role default of
 `standard_conforming_strings = off` would otherwise read `'\x'::bytea` as the
 byte `x`, and a non-UTF-8 client encoding would reinterpret every byte pgx
-sends.
+sends. A PL/pgSQL trigger
+body is parsed again by each session that fires it, so other clients of the
+database should keep the default as well.
 
 ## Translation rules
 
