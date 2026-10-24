@@ -40,6 +40,7 @@ import {
   SiteDirectoryAccessState,
   focusAfterCommit,
   useDirectoryPage,
+  useEmptyPageFallback,
   useSiteDirectoryAccess,
 } from "./site-directory-shared";
 
@@ -132,7 +133,8 @@ function OrganizationsDirectory({ client, headingId, pageSize }: {
     () => organizationNames(picker.page?.items ?? [], page?.items ?? []),
     [page, picker.page],
   );
-  const busy = directory.status === "loading";
+  const steppingBack = useEmptyPageFallback(directory, setPageNumber);
+  const busy = directory.status === "loading" || steppingBack;
 
   function applySearch() {
     setSearch(searchDraft.trim());

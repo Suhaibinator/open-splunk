@@ -14,12 +14,14 @@ import {
   createUserErrorField,
   createUserInput,
   createUserSuccessMessage,
+  formatCount,
   hasErrors,
   isUserFilter,
   organizationAncestry,
   organizationKind,
   organizationNames,
   pageAfterRemoval,
+  pageForEmptyResult,
   pagePositionLabel,
   pageRangeLabel,
   presentDirectoryError,
@@ -326,4 +328,34 @@ test("page labels count from the page's first row, with or without a total", () 
   assert.equal(pageAfterRemoval({ ...info, currentPage: 3 }, 0), 2);
   assert.equal(pageAfterRemoval({ ...info, currentPage: 3 }, 2), 3);
   assert.equal(pageAfterRemoval({ ...info, currentPage: 1 }, 0), 1);
+});
+
+test("page labels group large counts, so ten thousand reads as one number", () => {
+  const info = { currentPage: 400, hasNextPage: false, hasPrevPage: true, itemsPerPage: 25, totalItems: 10_000, totalPages: 400 };
+  assert.equal(formatCount(10_000), (10_000).toLocaleString());
+  assert.equal(pageRangeLabel(info, 25, "users"), `Showing ${(9_976).toLocaleString()}–${(10_000).toLocaleString()} of ${(10_000).toLocaleString()} users`);
+  assert.equal(pagePositionLabel({ ...info, currentPage: 1_200, totalPages: 1_250 }), `Page ${(1_200).toLocaleString()} of ${(1_250).toLocaleString()}`);
+});
+
+test("an empty page past the first steps back to the last page the server reports, and always ends", () => {
+  const info = { currentPage: 5, hasNextPage: false, hasPrevPage: true, itemsPerPage: 10, totalItems: 31, totalPages: 4 };
+  assert.equal(pageForEmptyResult(info, 3), null, "a page with rows stays");
+  assert.equal(pageForEmptyResult({ ...info, currentPage: 1 }, 0), null, "an empty first page is an empty directory");
+  assert.equal(pageForEmptyResult(info, 0), 4, "one past the end goes to the last page");
+  assert.equal(pageForEmptyResult({ ...info, currentPage: 9, totalPages: 2 }, 0), 2, "several past the end jump straight to the last page");
+  assert.equal(pageForEmptyResult({ ...info, currentPage: 3, totalPages: 7 }, 0), 2, "a total that still claims more pages never moves forward");
+  assert.equal(pageForEmptyResult({ ...info, currentPage: 3, totalPages: undefined }, 0), 2, "without a total it steps back one page");
+  assert.equal(pageForEmptyResult({ ...info, currentPage: 3, totalPages: 0 }, 0), 1, "a total of no pages lands on the first");
+  // Following the answer from any page reaches page 1 or a page with rows in at most that many steps.
+  for (const totalPages of [undefined, 0, 1, 3, 50]) {
+    let current = 60;
+    let steps = 0;
+    for (let next = pageForEmptyResult({ ...info, currentPage: current, totalPages }, 0); next !== null; next = pageForEmptyResult({ ...info, currentPage: current, totalPages }, 0)) {
+      assert.ok(next < current, `page ${current} stepped to ${next}`);
+      current = next;
+      steps += 1;
+    }
+    assert.equal(current, 1, `with totalPages ${String(totalPages)}`);
+    assert.ok(steps <= 60);
+  }
 });

@@ -568,20 +568,41 @@ export function createOrganizationErrorField(error: IdentityError): CreateOrgani
 // --------------------------------------------------------------------------
 
 /** "Showing 11–20 of 23 users", or without a total when the server did not count. */
+/** A count as the page shows it: grouped, so ten thousand reads as 10,000. */
+export function formatCount(value: number): string {
+  return value.toLocaleString();
+}
+
 export function pageRangeLabel(page: PageInfo, count: number, noun: string): string {
   if (count === 0) return `No ${noun}`;
   const first = (page.currentPage - 1) * page.itemsPerPage + 1;
   const last = first + count - 1;
   return page.totalItems === undefined
-    ? `Showing ${first}–${last} ${noun}`
-    : `Showing ${first}–${last} of ${page.totalItems} ${noun}`;
+    ? `Showing ${formatCount(first)}–${formatCount(last)} ${noun}`
+    : `Showing ${formatCount(first)}–${formatCount(last)} of ${formatCount(page.totalItems)} ${noun}`;
 }
 
 export function pagePositionLabel(page: PageInfo): string {
-  return page.totalPages === undefined ? `Page ${page.currentPage}` : `Page ${page.currentPage} of ${page.totalPages}`;
+  return page.totalPages === undefined
+    ? `Page ${formatCount(page.currentPage)}`
+    : `Page ${formatCount(page.currentPage)} of ${formatCount(page.totalPages)}`;
 }
 
 /** The page to show after rows were removed: one back when the current page emptied. */
 export function pageAfterRemoval(page: PageInfo, remainingOnPage: number): number {
   return remainingOnPage === 0 && page.currentPage > 1 ? page.currentPage - 1 : page.currentPage;
+}
+
+/**
+ * The page to show instead of an empty one past the first, or null when the
+ * page is fine. A page empties when rows go away while it is open -- removed
+ * here, removed by someone else, or moved out of a filter by a change (an
+ * unbanned account under "Banned") -- and an empty page past the end would
+ * read as an empty directory. It steps back to the last page the server
+ * reports, or one page when it reports no total, so it always ends.
+ */
+export function pageForEmptyResult(page: PageInfo, count: number): number | null {
+  if (count > 0 || page.currentPage <= 1) return null;
+  const last = page.totalPages ?? page.currentPage - 1;
+  return Math.max(1, Math.min(last, page.currentPage - 1));
 }
