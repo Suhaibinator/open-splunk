@@ -237,7 +237,7 @@ for (const [email, role] of [["mark@open-splunk.test", "a member"], ["mona@open-
       assert.equal(state(view.container), "forbidden");
       assert.match(view.container.textContent, new RegExp(`needs the Admin role\\. You are ${role}\\.`, "u"));
       assert.equal(hasButton(view.container, "Invite member"), false);
-      assert.equal(view.container.querySelector("table"), null);
+      assert.equal(view.container.querySelector("table") === null, true);
     } finally {
       await view.unmount();
     }
@@ -290,7 +290,7 @@ test("an inherited role reads as inherited and offers no removal", async () => {
     assert.match(cell(alice, "Actions"), /Inherited from Acme Operations; remove them there\./u);
     // A disabled action does nothing when activated.
     await click(buttonNamed(alice, "Remove Alice Abara"));
-    assert.equal(view.container.querySelector('[data-dialog="Remove Alice Abara?"]'), null);
+    assert.equal(view.container.querySelector('[data-dialog="Remove Alice Abara?"]') === null, true);
   } finally {
     await view.unmount();
   }
@@ -324,7 +324,7 @@ test("an admin may only grant roles below its own and cannot change an owner", a
     assert.ok(mona);
     assert.match(cell(mona, "Explicit role"), /Member/u);
     assert.match(toast(view.container), /Mona Moreau's role is now member\./u);
-    assert.equal(view.container.querySelector('[data-dialog="Change role for Mona Moreau"]'), null);
+    assert.equal(view.container.querySelector('[data-dialog="Change role for Mona Moreau"]') === null, true);
   } finally {
     await view.unmount();
   }
@@ -345,9 +345,12 @@ test("inviting validates the address, sends the invitation and lists it", async 
     assert.equal(client.sentMessages().length, 0, "an empty address must not reach the server");
 
     await type(email, "new.person@example.com");
+    await choose(invite, "members-invite-role", "owner");
+    assert.match(invite.textContent, /Owners can manage everything/u, "inviting an owner warns what the role holds");
     await choose(invite, "members-invite-role", "moderator");
+    assert.equal(/Owners can manage everything/u.test(invite.textContent), false, "the warning follows the chosen role");
     await submit(invite, "members-invite-form");
-    assert.equal(view.container.querySelector('[data-dialog="Invite member"]'), null);
+    assert.equal(view.container.querySelector('[data-dialog="Invite member"]') === null, true);
     assert.match(toast(view.container), /Invitation sent to new\.person@example\.com as moderator\./u);
     const sent = client.lastMessage("organization_invitation", "new.person@example.com");
     assert.ok(sent);
@@ -394,7 +397,7 @@ test("an invitation that fails in transit keeps the dialog open with an alert", 
     assert.match(invite.querySelector('[role="alert"]')?.textContent ?? "", /Wait 4 seconds/u);
 
     await submit(invite, "members-invite-form");
-    assert.equal(view.container.querySelector('[data-dialog="Invite member"]'), null);
+    assert.equal(view.container.querySelector('[data-dialog="Invite member"]') === null, true);
   } finally {
     await view.unmount();
   }
@@ -465,7 +468,7 @@ test("an owner without site admin hands over ownership by promoting another owne
     const confirm = dialog(view.container, "Leave Globex Security?");
     assert.match(confirm.textContent, /You lose your owner role in Globex Security immediately/u);
     await click(buttonNamed(confirm, "Leave organization"));
-    assert.equal(view.container.querySelector('[data-dialog="Leave Globex Security?"]'), null);
+    assert.equal(view.container.querySelector('[data-dialog="Leave Globex Security?"]') === null, true);
     // The session is re-read: without a role in Globex the panel closes to them.
     assert.notEqual(state(view.container), "ready");
     assert.equal(hasButton(view.container, "Invite member"), false);
@@ -571,7 +574,7 @@ test("removing a member asks first, then drops the row", async () => {
 
     await click(buttonNamed(view.container, "Remove Mark Mendez"));
     await click(buttonNamed(dialog(view.container, "Remove Mark Mendez?"), "Remove member"));
-    assert.equal(memberRow(view.container, "5"), null);
+    assert.equal(memberRow(view.container, "5") === null, true);
     assert.match(toast(view.container), /Mark Mendez was removed from Acme Operations\./u);
     assert.equal(view.container.querySelectorAll("tr[data-member-id]").length, 6);
   } finally {
@@ -585,7 +588,7 @@ test("revoking an invitation asks first; one already gone refreshes the list", a
   try {
     await click(buttonNamed(view.container, "Revoke invitation for late@open-splunk.test"));
     await click(buttonNamed(dialog(view.container, "Revoke invitation?"), "Revoke invitation"));
-    assert.equal(invitationRow(view.container, FAKE_EXPIRED_INVITATION_ID), null);
+    assert.equal(invitationRow(view.container, FAKE_EXPIRED_INVITATION_ID) === null, true);
     assert.match(toast(view.container), /The invitation for late@open-splunk\.test was revoked\./u);
 
     await click(buttonNamed(view.container, "Revoke invitation for nora@open-splunk.test"));
@@ -660,7 +663,7 @@ test("members page through the server's pages", async () => {
     assert.match(pagerText(), /Page 3 of 3/u);
     assert.equal(view.container.querySelectorAll("tr[data-member-id]").length, 1);
     assert.equal(buttonNamed(pager(), "Next").hasAttribute("disabled"), true);
-    assert.equal(view.container.querySelector('nav[aria-label="Invitation pages"]'), null, "one page of invitations needs no pager");
+    assert.equal(view.container.querySelector('nav[aria-label="Invitation pages"]') === null, true, "one page of invitations needs no pager");
   } finally {
     await view.unmount();
   }

@@ -806,6 +806,11 @@ function InviteDialog({ actor, client, organization, onClose, onFailed, onInvite
           <FieldNote error={shownEmailError} fieldId={INVITE_EMAIL_ID}>The invitation link is sent to this address and expires after seven days.</FieldNote>
         </label>
         <RoleChoices disabled={pending} legend="Role" name="members-invite-role" onChange={setRole} options={options} value={role} />
+        {role === "owner" ? (
+          <Notice title="Owners can manage everything">
+            Once they accept, an owner holds every capability in {organization.name}, including changing and removing the other owners it outranks.
+          </Notice>
+        ) : null}
       </form>
     </Modal>
   );

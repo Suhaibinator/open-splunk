@@ -208,10 +208,12 @@ export function memberPolicy(actor: MembersActor, member: OrganizationMember, co
   let removal: RemovalPolicy;
   if (member.explicitRole === null) {
     removal = { allowed: false, reason: `Inherited from ${inheritedName}; remove them there.` };
+  } else if (!self && !manageable) {
+    // Checked before the last-owner guard, as for a role change: an actor who
+    // is outranked could not remove this member whatever the owner count.
+    removal = { allowed: false, reason: outranked("remove") };
   } else if (lastOwner) {
     removal = { allowed: false, reason: lastOwnerReason };
-  } else if (!self && !manageable) {
-    removal = { allowed: false, reason: outranked("remove") };
   } else {
     removal = {
       allowed: true,
