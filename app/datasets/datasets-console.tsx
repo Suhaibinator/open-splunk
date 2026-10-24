@@ -9,6 +9,8 @@ import { boundedIndexSearchQuery, searchLaunchHref } from "@/lib/search/launch-u
 import { AppIcon } from "../_components/app-icon";
 import { StatusLabel } from "../_components/status";
 import { PageHeading } from "../_components/product-shell";
+import { ShellOffer } from "../_components/product-identity";
+import { adminSectionAccess } from "../admin/admin-navigation";
 import { BackendDatasetsConsole } from "./backend-datasets-console";
 
 const DATASETS = [
@@ -52,7 +54,7 @@ function DemoDatasetsConsole() {
         eyebrow="DATA"
         title="Datasets"
         description="Understand available indexes, source types, and field coverage."
-        actions={<><Link className="button" href="/admin/?section=indexes">Manage indexes</Link><Link className="button button--primary" href="/search/events/">Search data</Link></>}
+        actions={<><ShellOffer requirement={adminSectionAccess("indexes")}><Link className="button" href="/admin/?section=indexes">Manage indexes</Link></ShellOffer><Link className="button button--primary" href="/search/events/">Search data</Link></>}
       />
 
       <div className="dataset-toolbar">
@@ -88,7 +90,7 @@ function DemoDatasetsConsole() {
               <footer>
                 <Link href={searchLaunchHref(boundedIndexSearchQuery(item.name))} aria-label={`Search index ${item.name}`}>Search index</Link>
                 <Link href={searchLaunchHref(`index=${item.name} | stats count by sourcetype | sort -count`)} aria-label={`Explore sources in index ${item.name}`}>Explore sources</Link>
-                <Link href="/admin/?section=indexes" aria-label={`Manage index ${item.name} in Administration`}>Manage</Link>
+                <ShellOffer requirement={adminSectionAccess("indexes")}><Link href="/admin/?section=indexes" aria-label={`Manage index ${item.name} in Administration`}>Manage</Link></ShellOffer>
               </footer>
             </article>
           ))}

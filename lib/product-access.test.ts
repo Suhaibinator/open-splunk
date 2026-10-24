@@ -128,8 +128,12 @@ test("requirements match all or any, and an empty requirement never grants", () 
   assert.deepEqual(missingCapabilities(null, some), []);
 });
 
+function roleTable(role: keyof typeof ORG_ROLE_CAPABILITIES) {
+  return ORG_ROLE_CAPABILITIES[role];
+}
+
 test("the lowest role meeting a requirement drives the forbidden advice", () => {
-  const table = (role: keyof typeof ORG_ROLE_CAPABILITIES) => ORG_ROLE_CAPABILITIES[role];
+  const table = roleTable;
   assert.equal(lowestRoleMeeting(requireAll("search"), table), "member");
   assert.equal(lowestRoleMeeting(PRODUCT_SECTION_ACCESS.admin, table), "moderator");
   assert.equal(lowestRoleMeeting(requireAll("indexes.admin"), table), "admin");

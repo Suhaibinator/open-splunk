@@ -25,6 +25,8 @@ import { BackendResourceState } from "../_components/backend-resource-state";
 import { StatusLabel } from "../_components/status";
 import { AppIcon } from "../_components/app-icon";
 import { PageHeading } from "../_components/product-shell";
+import { ShellOffer } from "../_components/product-identity";
+import { adminSectionAccess } from "../admin/admin-navigation";
 import { IndexObservabilityPanel } from "./index-observability-panel";
 import { nextObservedIndexId, retainVisibleObservedIndexId } from "./index-observability-data";
 
@@ -207,7 +209,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
         eyebrow="DATA"
         title="Datasets"
         description="Browse the indexes authorized for this browser session."
-        actions={<><Link className="button" href="/admin/?section=indexes">Manage indexes</Link><Link className="button button--primary" href="/search/events/">Search data</Link></>}
+        actions={<><ShellOffer requirement={adminSectionAccess("indexes")}><Link className="button" href="/admin/?section=indexes">Manage indexes</Link></ShellOffer><Link className="button button--primary" href="/search/events/">Search data</Link></>}
       />
 
       {loading ? (

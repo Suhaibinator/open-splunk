@@ -200,6 +200,7 @@ import { BackendResourceState } from "./_components/backend-resource-state";
 import { StatusDot, statusClassName } from "./_components/status";
 import { ProductShell, ThemeMenu } from "./_components/product-shell";
 import { ShellOffer, ShellSessionText, ShellSignOutItems } from "./_components/product-identity";
+import { adminSectionAccess } from "./admin/admin-navigation";
 import { AlertSecretRecovery } from "./reports/alert-secret-recovery";
 import { AlertWizard } from "./reports/alert-wizard";
 import { defaultAlertForm } from "./reports/alerts-ui-state";
@@ -7508,7 +7509,7 @@ export function SearchWorkspace({
 
   const productUtilities = (
     <nav className="suite-utilities" aria-label="Product utilities">
-      <Link className="health-indicator" href={productHref("/admin/")} title="Open system administration">{backendEnabled ? "Backend mode" : "Demo workspace"}</Link>
+      <ShellOffer requirement={ADMIN_CONSOLE_ACCESS} fallback={<span className="suite-context health-indicator">{backendEnabled ? "Backend mode" : "Demo workspace"}</span>}><Link className="health-indicator" href={productHref("/admin/")} title="Open system administration">{backendEnabled ? "Backend mode" : "Demo workspace"}</Link></ShellOffer>
       <button type="button" onClick={() => showToast("No new messages.")}>Messages</button>
       <ShellOffer requirement={ADMIN_CONSOLE_ACCESS}><Link href={productHref("/admin/")}>Settings</Link></ShellOffer>
       <div className="suite-menu-anchor">
@@ -8143,7 +8144,7 @@ export function SearchWorkspace({
           {backendEnabled && backendConnectionState === "error"
             ? <button className="button button--secondary button--compact" type="button" onClick={() => void retryBackendConnection()}>Retry backend connection</button>
             : backendHasNoSearchableIndexes
-              ? <Link className="button button--secondary button--compact" href={productHref("/admin/")}>Review index access</Link>
+              ? <ShellOffer requirement={adminSectionAccess("indexes")}><Link className="button button--secondary button--compact" href={productHref("/admin/")}>Review index access</Link></ShellOffer>
               : emptyStateCanRun
                 ? <button className="button button--secondary button--compact" type="button" onClick={() => {
                     if (backendWorkspaceTransitionBlocked()) return;

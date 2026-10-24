@@ -1180,6 +1180,7 @@
   .drawer-app-retry { background: var(--bg-surface); border: 1px solid var(--border-strong); text-align: left; }
   .drawer-rule { border-top: 1px solid var(--border); margin: 9px var(--space-4); }
   .suite-product-bar > .suite-org-anchor { display: none; }
+
   /* The drawer's buttons take the link row above; these undo the button's own chrome. */
   .drawer > .drawer-org,
   .drawer > .drawer-action { background: transparent; border-block: 0; border-right: 0; color: var(--fg-text); text-align: left; width: 100%; }

@@ -13,8 +13,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { IdentityError, type IdentityClient } from "@/lib/api/identity";
 import { createFakeIdentityClient, type FakeIdentityClient } from "@/lib/api/identity-fake";
 
+import { ADMIN_CONSOLE_ACCESS } from "@/lib/product-access";
+
 import { AdminConsole } from "../admin/admin-console";
+import { DatasetsConsole } from "../datasets/datasets-console";
+import { HomeDashboard } from "../home-dashboard";
 import { IdentityProvider } from "./identity-provider";
+import { ShellOffer } from "./product-identity";
 import { ProductShell } from "./product-shell";
 
 type Section = Parameters<typeof ProductShell>[0]["activeSection"];
@@ -225,11 +230,9 @@ test("a principal without an organization is told how to join one", async () => 
     await settle();
     assert.equal(view.container.querySelector("h1")?.textContent, "You are not in an organization yet");
     assert.match(text(view.container), /Signed in as nora@open-splunk\.test/u);
-    assert.deepEqual(
-      view.container.querySelectorAll("nav").find((nav) => nav.getAttribute("aria-label") === "Search & Reporting navigation")?.querySelectorAll("a") ?? [],
-      [],
-      "no product surface is offered",
-    );
+    const productNav = view.container.querySelectorAll("nav").find((nav) => nav.getAttribute("aria-label") === "Search & Reporting navigation");
+    assert.equal(productNav === undefined, false, "the product navigation renders");
+    assert.equal(productNav?.querySelectorAll("a").length, 0, "no product surface is offered");
     const trigger = organizationTrigger(view.container);
     assert.match(trigger?.textContent ?? "", /No organization/u);
     await click(trigger);
@@ -407,4 +410,38 @@ test("the administration console offers only the sections a moderator holds and 
   } finally {
     await admin.unmount();
   }
+});
+
+async function staticPage(email: string, section: Section, page: ReactNode): Promise<string> {
+  const client = signedIn(email);
+  const principal = await client.getPrincipal();
+  return renderToStaticMarkup(
+    <IdentityProvider client={client} initialPrincipal={principal}>
+      <ProductShell activeSection={section} appName="Search & Reporting" dataMode="demo">{page}</ProductShell>
+    </IdentityProvider>,
+  );
+}
+
+test("a link into a surface the principal cannot open is left out, or shown as its fallback", async () => {
+  const offered = <ShellOffer requirement={ADMIN_CONSOLE_ACCESS} fallback={<span>plain</span>}><b>linked</b></ShellOffer>;
+  assert.equal(renderToStaticMarkup(offered), "<b>linked</b>", "a page without identity offers everything");
+  const member = signedIn("mark@open-splunk.test");
+  const markup = renderToStaticMarkup(<IdentityProvider client={member} initialPrincipal={await member.getPrincipal()}>{offered}</IdentityProvider>);
+  assert.equal(markup, "<span>plain</span>");
+});
+
+test("the home and datasets pages offer administration links only to a principal who may administer", async () => {
+  const memberHome = await staticPage("mark@open-splunk.test", "home", <HomeDashboard dataMode="demo" />);
+  assert.match(memberHome, /New search/u, "the page renders for a member");
+  assert.doesNotMatch(memberHome, /Administration preview|Open settings|Open administration/u);
+  const adminHome = await staticPage("alice@open-splunk.test", "home", <HomeDashboard dataMode="demo" />);
+  assert.match(adminHome, /Administration preview/u);
+  assert.match(adminHome, /Open administration/u);
+
+  const moderatorDatasets = await staticPage("mona@open-splunk.test", "datasets", <DatasetsConsole dataMode="demo" apiBaseUrl="" />);
+  assert.match(moderatorDatasets, /Search data/u, "the page renders for a moderator");
+  assert.doesNotMatch(moderatorDatasets, /Manage indexes|Manage index /u, "managing indexes takes indexes.admin");
+  const adminDatasets = await staticPage("alice@open-splunk.test", "datasets", <DatasetsConsole dataMode="demo" apiBaseUrl="" />);
+  assert.match(adminDatasets, /Manage indexes/u);
+  assert.match(adminDatasets, /Manage index /u);
 });

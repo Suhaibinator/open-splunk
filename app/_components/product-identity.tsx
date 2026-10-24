@@ -115,10 +115,19 @@ export function useShellIdentity(): ShellIdentity {
   };
 }
 
-/** Renders its children only where the shell offers a surface with this requirement. */
-export function ShellOffer({ requirement, children }: { readonly requirement: AccessRequirement | null; readonly children?: ReactNode }) {
+/**
+ * Renders its children only where the shell offers a surface with this
+ * requirement, and `fallback` (nothing, by default) where it does not: a link
+ * into a surface the principal cannot open is left out, or replaced by its
+ * plain text, rather than leading to a forbidden page.
+ */
+export function ShellOffer({ requirement, fallback = null, children }: {
+  readonly requirement: AccessRequirement | null;
+  readonly fallback?: ReactNode;
+  readonly children?: ReactNode;
+}) {
   const { offers } = useShellIdentity();
-  return offers(requirement) ? <>{children}</> : null;
+  return <>{offers(requirement) ? children : fallback}</>;
 }
 
 // --------------------------------------------------------------------------
