@@ -11,6 +11,7 @@ import { useIdentity } from "../_components/identity-provider";
 import { Modal } from "../_components/modal";
 import { Select, SelectOption } from "../_components/select";
 import { StatusLabel } from "../_components/status";
+import { useSubmitFocus } from "../_components/submit-focus";
 import {
   ACCESS_MODE_OPTIONS,
   EMPTY_CREATE_USER_DRAFT,
@@ -399,6 +400,7 @@ function UserActionDialog({ action, admin, client, returnFocus, self, onClose, o
   const reasonId = useId();
   const typedId = useId();
   const confirmed = copy.typedConfirmation === null || typed.trim().toLowerCase() === copy.typedConfirmation.toLowerCase();
+  const { attachForm, refocus } = useSubmitFocus();
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -412,6 +414,8 @@ function UserActionDialog({ action, admin, client, returnFocus, self, onClose, o
     } catch (caught) {
       setError(asIdentityError(caught));
       setPending(false);
+      // The fields were disabled while pending; Enter in one left focus nowhere.
+      refocus();
     }
   }
 
@@ -438,7 +442,7 @@ function UserActionDialog({ action, admin, client, returnFocus, self, onClose, o
         </>
       )}
     >
-      <form className="admin-form" id={formId} onSubmit={(event) => void submit(event)} aria-busy={pending}>
+      <form className="admin-form" id={formId} onSubmit={(event) => void submit(event)} aria-busy={pending} ref={attachForm}>
         <DirectoryFormError message={error === null ? null : presentMutationError(error)} />
         {copy.typedConfirmation === null ? null : (
           <label htmlFor={typedId}>
@@ -461,9 +465,10 @@ function UserActionDialog({ action, admin, client, returnFocus, self, onClose, o
             value={reason}
             disabled={pending}
             maxLength={500}
+            aria-describedby={`${reasonId}-note`}
             onChange={(event) => setReason(event.target.value)}
           />
-          <small>Recorded with the change in the audit log.</small>
+          <small id={`${reasonId}-note`}>Recorded with the change in the audit log.</small>
         </label>
       </form>
     </Modal>
@@ -490,6 +495,7 @@ function CreateUserDialog({ client, onClose, onCreated }: {
   const formId = useId();
   const reasonId = useId();
   const accessName = useId();
+  const { attachForm, refocus } = useSubmitFocus();
 
   const clientErrors = attempted ? validateCreateUserDraft(draft) : {};
   const serverField = serverError === null ? null : createUserErrorField(serverError);
@@ -509,7 +515,10 @@ function CreateUserDialog({ client, onClose, onCreated }: {
     event.preventDefault();
     if (pending) return;
     setAttempted(true);
-    if (hasErrors(validateCreateUserDraft(draft))) return;
+    if (hasErrors(validateCreateUserDraft(draft))) {
+      refocus();
+      return;
+    }
     setPending(true);
     setServerError(null);
     try {
@@ -518,6 +527,7 @@ function CreateUserDialog({ client, onClose, onCreated }: {
     } catch (caught) {
       setServerError(asIdentityError(caught));
       setPending(false);
+      refocus();
     }
   }
 
@@ -540,7 +550,7 @@ function CreateUserDialog({ client, onClose, onCreated }: {
         </>
       )}
     >
-      <form className="admin-form" id={formId} noValidate onSubmit={(event) => void submit(event)} aria-busy={pending}>
+      <form className="admin-form" id={formId} noValidate onSubmit={(event) => void submit(event)} aria-busy={pending} ref={attachForm}>
         <DirectoryFormError message={formMessage} />
         <div className="site-directory-form-grid">
           <label htmlFor={CREATE_FIELD_IDS.email}>
@@ -636,8 +646,8 @@ function CreateUserDialog({ client, onClose, onCreated }: {
         </label>
         <label htmlFor={reasonId}>
           <span>Reason (optional)</span>
-          <textarea id={reasonId} value={draft.reason} disabled={pending} maxLength={500} onChange={(event) => update({ reason: event.target.value })} />
-          <small>Recorded with the change in the audit log.</small>
+          <textarea id={reasonId} value={draft.reason} disabled={pending} maxLength={500} aria-describedby={`${reasonId}-note`} onChange={(event) => update({ reason: event.target.value })} />
+          <small id={`${reasonId}-note`}>Recorded with the change in the audit log.</small>
         </label>
       </form>
     </Modal>

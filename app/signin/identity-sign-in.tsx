@@ -8,6 +8,7 @@ import { DEMO_IDENTITY_HINTS } from "@/lib/demo/identity-data";
 
 import { AppIcon } from "../_components/app-icon";
 import { useIdentity } from "../_components/identity-provider";
+import { SubmitFocusAnnouncement, useSubmitFocus } from "../_components/submit-focus";
 import {
   AuthAlert,
   AuthCardHeader,
@@ -206,6 +207,7 @@ function CredentialsStep({
   // Read once: the step opens on whichever field still needs filling, and
   // refocusing as the user types would fight them.
   const [openOnPassword] = useState(() => email.length > 0);
+  const { attachForm, attachRegion, refocus } = useSubmitFocus();
 
   useEffect(() => {
     (openOnPassword ? passwordInput : emailInput).current?.focus();
@@ -220,8 +222,10 @@ function CredentialsStep({
       password: password.length === 0 ? "Enter your password." : null,
     };
     setErrors(next);
-    if (next.email !== null) { emailInput.current?.focus(); return; }
-    if (next.password !== null) { passwordInput.current?.focus(); return; }
+    if (next.email !== null || next.password !== null) {
+      refocus();
+      return;
+    }
     setPending(true);
     setFailure(null);
     try {
@@ -245,7 +249,8 @@ function CredentialsStep({
     <>
       <AuthCardHeader title="Sign in" intro="Use your work email and password, or a connected provider." />
       <OAuthProviders navigate={navigate} returnTo={returnTo} />
-      <form className="signin-form" noValidate aria-busy={pending} aria-label="Sign in with email" onSubmit={(event) => { void submit(event); }}>
+      <form className="signin-form" noValidate aria-busy={pending} aria-label="Sign in with email" onSubmit={(event) => { void submit(event); }} ref={attachForm}>
+        <SubmitFocusAnnouncement attach={attachRegion} />
         <TextField
           autoComplete="username"
           error={errors.email}
@@ -378,6 +383,7 @@ function OtpStep({ challenge, onSignedIn, onRestart, demo }: OtpStepProps) {
   const [pending, setPending] = useState(false);
   const [networkFailure, setNetworkFailure] = useState<AuthErrorCopy | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const { attachForm, attachRegion, refocus } = useSubmitFocus();
 
   useEffect(() => {
     input.current?.focus();
@@ -389,7 +395,7 @@ function OtpStep({ challenge, onSignedIn, onRestart, demo }: OtpStepProps) {
     const trimmed = code.replace(/\s+/gu, "");
     if (!OTP_SHAPE.test(trimmed)) {
       setFieldError("Enter the 6-digit code from your authenticator app.");
-      input.current?.focus();
+      refocus();
       return;
     }
     setPending(true);
@@ -404,7 +410,7 @@ function OtpStep({ challenge, onSignedIn, onRestart, demo }: OtpStepProps) {
       if (copy.kind === "otp_required") {
         setCode("");
         setFieldError(`${copy.title}. ${copy.detail}`);
-        input.current?.focus();
+        refocus();
         return;
       }
       if (copy.kind === "network") {
@@ -423,7 +429,8 @@ function OtpStep({ challenge, onSignedIn, onRestart, demo }: OtpStepProps) {
         title="Two-step verification"
         intro={<>Enter the code from your authenticator app for <b>{challenge.email}</b>.</>}
       />
-      <form className="signin-form" noValidate aria-busy={pending} aria-label="Verification code" onSubmit={(event) => { void submit(event); }}>
+      <form className="signin-form" noValidate aria-busy={pending} aria-label="Verification code" onSubmit={(event) => { void submit(event); }} ref={attachForm}>
+        <SubmitFocusAnnouncement attach={attachRegion} />
         <TextField
           autoComplete="one-time-code"
           error={fieldError}
@@ -437,7 +444,6 @@ function OtpStep({ challenge, onSignedIn, onRestart, demo }: OtpStepProps) {
           value={code}
         />
         {networkFailure === null ? null : <AuthAlert copy={networkFailure} />}
-        {fieldError === null ? null : <span className="sr-only" role="alert">{fieldError}</span>}
         <SubmitButton pending={pending} pendingLabel="Verifying…">Verify and sign in</SubmitButton>
       </form>
       <button className="button button--ghost button--block signin-action" type="button" onClick={() => onRestart(null, null)}>

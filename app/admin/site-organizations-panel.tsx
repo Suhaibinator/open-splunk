@@ -10,6 +10,7 @@ import { FieldNote, fieldControlProps } from "../_components/field-validation";
 import { useIdentity } from "../_components/identity-provider";
 import { Modal } from "../_components/modal";
 import { Select, SelectOption } from "../_components/select";
+import { useSubmitFocus } from "../_components/submit-focus";
 import {
   EMPTY_CREATE_ORGANIZATION_DRAFT,
   ORGANIZATION_KIND_LABELS,
@@ -316,6 +317,7 @@ function CreateOrganizationDialog({ client, parents, parentsFailed, onClose, onC
   const [pending, setPending] = useState(false);
   const [serverError, setServerError] = useState<IdentityError | null>(null);
   const formId = useId();
+  const { attachForm, refocus } = useSubmitFocus();
 
   const clientErrors = attempted ? validateCreateOrganizationDraft(draft) : {};
   const serverField = serverError === null ? null : createOrganizationErrorField(serverError);
@@ -335,7 +337,10 @@ function CreateOrganizationDialog({ client, parents, parentsFailed, onClose, onC
     event.preventDefault();
     if (pending) return;
     setAttempted(true);
-    if (hasErrors(validateCreateOrganizationDraft(draft))) return;
+    if (hasErrors(validateCreateOrganizationDraft(draft))) {
+      refocus();
+      return;
+    }
     setPending(true);
     setServerError(null);
     try {
@@ -343,6 +348,7 @@ function CreateOrganizationDialog({ client, parents, parentsFailed, onClose, onC
     } catch (caught) {
       setServerError(asIdentityError(caught));
       setPending(false);
+      refocus();
     }
   }
 
@@ -371,7 +377,7 @@ function CreateOrganizationDialog({ client, parents, parentsFailed, onClose, onC
         </>
       )}
     >
-      <form className="admin-form" id={formId} noValidate onSubmit={(event) => void submit(event)} aria-busy={pending}>
+      <form className="admin-form" id={formId} noValidate onSubmit={(event) => void submit(event)} aria-busy={pending} ref={attachForm}>
         <DirectoryFormError message={formMessage} />
         <label htmlFor={ORGANIZATION_FIELD_IDS.name}>
           <span>Name</span>

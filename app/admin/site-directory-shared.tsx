@@ -327,9 +327,37 @@ export interface DirectoryPagerProps {
   readonly onPage: (page: number) => void;
 }
 
-/** The range, the position, and Previous / Next; the range line is the live region that announces a new page. */
+/**
+ * The range, the position, and Previous / Next; the range line is the live
+ * region that announces a new page.
+ *
+ * Keyboard focus stays on the pager while pages turn. A page in flight holds
+ * the buttons with `aria-disabled` rather than `disabled`, which would drop
+ * the focused button's focus to the document on every press; and when the
+ * page that arrives is the last (or first), the button that led there is
+ * disabled for real, so focus moves to the other one.
+ */
 export function DirectoryPager({ label, noun, page, busy, onPage }: DirectoryPagerProps) {
   const info = page.page;
+  const previousRef = useRef<HTMLButtonElement>(null);
+  const nextRef = useRef<HTMLButtonElement>(null);
+  const pressed = useRef<"previous" | "next" | null>(null);
+
+  useEffect(() => {
+    if (busy || pressed.current === null) return;
+    const [from, to] = pressed.current === "next" ? [nextRef, previousRef] : [previousRef, nextRef];
+    const stranded = pressed.current === "next" ? !info.hasNextPage : !info.hasPrevPage;
+    const active = document.activeElement;
+    if (stranded && (active === null || active === document.body || active === from.current)) to.current?.focus();
+    pressed.current = null;
+  }, [busy, info.hasNextPage, info.hasPrevPage]);
+
+  function turn(direction: "previous" | "next") {
+    if (busy) return;
+    pressed.current = direction;
+    onPage(info.currentPage + (direction === "next" ? 1 : -1));
+  }
+
   return (
     <nav className="admin-pagination-footer admin-pagination-footer--inset" aria-label={label}>
       <div>
@@ -338,18 +366,22 @@ export function DirectoryPager({ label, noun, page, busy, onPage }: DirectoryPag
       </div>
       <div className="site-directory-pager-buttons">
         <button
+          ref={previousRef}
           className="button button--secondary button--compact"
           type="button"
-          disabled={busy || !info.hasPrevPage}
-          onClick={() => onPage(info.currentPage - 1)}
+          disabled={!info.hasPrevPage}
+          aria-disabled={busy || undefined}
+          onClick={() => turn("previous")}
         >
           <AppIcon name="chevron-left" size="xs" /> Previous
         </button>
         <button
+          ref={nextRef}
           className="button button--secondary button--compact"
           type="button"
-          disabled={busy || !info.hasNextPage}
-          onClick={() => onPage(info.currentPage + 1)}
+          disabled={!info.hasNextPage}
+          aria-disabled={busy || undefined}
+          onClick={() => turn("next")}
         >
           Next <AppIcon name="chevron-right" size="xs" />
         </button>
@@ -467,6 +499,7 @@ export function DirectoryRowMenu({ label, items }: { readonly label: string; rea
       {open ? (
         <div className="resource-action-menu site-directory-menu" id={menuId} role="menu" tabIndex={-1} aria-label={label} onKeyDown={handleMenuKey}>
           {items.map((item) => {
+            const labelId = `${menuId}-${item.key}-label`;
             const reasonId = `${menuId}-${item.key}-reason`;
             const disabled = item.disabledReason !== undefined && item.disabledReason !== null;
             return (
@@ -476,6 +509,8 @@ export function DirectoryRowMenu({ label, items }: { readonly label: string; rea
                 type="button"
                 className={item.danger === true ? "site-directory-menu-item is-danger" : "site-directory-menu-item"}
                 aria-disabled={disabled ? true : undefined}
+                // Named by the label alone, so the reason is read once, as the description.
+                aria-labelledby={labelId}
                 aria-describedby={disabled ? reasonId : undefined}
                 onClick={() => {
                   if (disabled) return;
@@ -483,7 +518,7 @@ export function DirectoryRowMenu({ label, items }: { readonly label: string; rea
                   item.onSelect(triggerRef.current);
                 }}
               >
-                <strong>{item.label}</strong>
+                <strong id={labelId}>{item.label}</strong>
                 {disabled ? <small id={reasonId}>{item.disabledReason}</small> : null}
               </button>
             );
