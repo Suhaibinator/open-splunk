@@ -66,7 +66,7 @@ func databaseExists(t *testing.T, name string) bool {
 func TestNewPostgresControlDBClonesOneTemplateUnderParallelLoad(t *testing.T) {
 	t.Parallel()
 	files := uniqueTemplateMigrations(t)
-	key, err := controlTemplateKey(files)
+	key, err := controlTemplateKey(files, nil)
 	if err != nil {
 		t.Fatalf("controlTemplateKey() = %v", err)
 	}

@@ -2,6 +2,7 @@ package testsupport
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -11,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -63,11 +66,40 @@ type PostgresTemplate struct {
 
 var postgresTemplateKey = regexp.MustCompile(`^[a-z0-9_]{1,40}$`)
 
+// Test databases are named ostest_<owner>_<suffix>, where owner is a token
+// for the test process that created them. A live process keeps one session
+// open whose application_name carries its token, so a database whose owner
+// has no session in pg_stat_activity was left by a process that died without
+// running its cleanups (a -test.timeout alarm, a panic in a parallel
+// sibling, a kill). pg_stat_activity spans the whole server, unlike advisory
+// locks, which are scoped to the database a session is connected to and so
+// would miss a process whose administrator DSN names another database.
+// Names in any other form, such as those of older helper versions still
+// running elsewhere against the same server, are never reclaimed.
+const (
+	postgresTestDatabasePrefix     = "ostest_"
+	postgresOwnerTokenBytes        = 8
+	postgresOwnerApplicationPrefix = "open-splunk-test-owner/"
+)
+
+var postgresOwnedDatabaseName = regexp.MustCompile(`^ostest_([0-9a-f]{16})_[0-9a-f]{16}$`)
+
 var postgresAdmin struct {
-	once sync.Once
-	dsn  string
-	pool *sql.DB
-	err  error
+	once  sync.Once
+	dsn   string
+	pool  *sql.DB
+	owner *postgresOwner
+	err   error
+
+	reportOnce sync.Once
+	sweepErr   error
+}
+
+// postgresOwner is this process's claim on the databases it creates. The
+// connection is never closed: its session ends when the process does.
+type postgresOwner struct {
+	token string
+	conn  *pgx.Conn
 }
 
 var postgresTemplates struct {
@@ -78,6 +110,9 @@ var postgresTemplates struct {
 type postgresTemplateState struct {
 	mu    sync.Mutex
 	ready bool
+	// err memoizes a failed build, so a broken template fails every caller
+	// in the process with one diagnosis instead of being rebuilt per test.
+	err error
 }
 
 // PostgresAdminDSN returns the administrator connection string for the test
@@ -101,11 +136,111 @@ func postgresAdminHandle(t testing.TB) (string, *sql.DB) {
 			configured,
 			ensureSharedPostgresContainer,
 		)
+		if postgresAdmin.err != nil {
+			return
+		}
+		postgresAdmin.owner, postgresAdmin.err = claimPostgresOwner(ctx, postgresAdmin.dsn)
+		if postgresAdmin.err != nil {
+			postgresAdmin.err = errors.Join(postgresAdmin.err, postgresAdmin.pool.Close())
+			return
+		}
+		postgresAdmin.sweepErr = reclaimDeadOwnerDatabases(ctx, postgresAdmin.pool, postgresAdmin.owner.token)
 	})
 	// The outcome is memoized, so every test in a process without a server
 	// fails promptly with the same diagnosis instead of retrying a start.
 	requirePostgresAvailable(t, postgresAdmin.err)
+	postgresAdmin.reportOnce.Do(func() {
+		// Reclaiming is best effort: a failure leaks space, not correctness.
+		if postgresAdmin.sweepErr != nil {
+			t.Logf("reclaim PostgreSQL test databases of dead test processes: %v", postgresAdmin.sweepErr)
+		}
+	})
 	return postgresAdmin.dsn, postgresAdmin.pool
+}
+
+// claimPostgresOwner picks this process's owner token and opens the session
+// that advertises it, before the process creates any database.
+func claimPostgresOwner(ctx context.Context, adminDSN string) (*postgresOwner, error) {
+	token, err := randomHex(postgresOwnerTokenBytes)
+	if err != nil {
+		return nil, fmt.Errorf("create PostgreSQL test owner token: %w", err)
+	}
+	config, err := pgx.ParseConfig(adminDSN)
+	if err != nil {
+		return nil, errors.New("PostgreSQL administrator connection string is invalid")
+	}
+	// A startup parameter, so the session carries the name from its first
+	// moment; the owner session never runs a statement that could change it.
+	if config.RuntimeParams == nil {
+		config.RuntimeParams = make(map[string]string)
+	}
+	config.RuntimeParams["application_name"] = postgresOwnerApplicationPrefix + token
+	connectContext, cancel := context.WithTimeout(ctx, postgresConnectTimeout)
+	defer cancel()
+	conn, err := pgx.ConnectConfig(connectContext, config)
+	if err != nil {
+		return nil, fmt.Errorf("open PostgreSQL test owner session: %w", err)
+	}
+	return &postgresOwner{token: token, conn: conn}, nil
+}
+
+// reclaimDeadOwnerDatabases drops the test databases of every owner that has
+// no session left. Databases are listed before owners are probed, and an
+// owner's session exists before its first database, so a listed database
+// whose owner has no session belongs to a process that is gone.
+func reclaimDeadOwnerDatabases(ctx context.Context, admin *sql.DB, ownToken string) (returnedErr error) {
+	rows, err := admin.QueryContext(ctx,
+		`SELECT datname FROM pg_catalog.pg_database WHERE starts_with(datname, $1) ORDER BY datname`,
+		postgresTestDatabasePrefix,
+	)
+	if err != nil {
+		return fmt.Errorf("list test databases: %w", err)
+	}
+	byOwner := make(map[string][]string)
+	var owners []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return errors.Join(fmt.Errorf("list test databases: %w", err), rows.Close())
+		}
+		match := postgresOwnedDatabaseName.FindStringSubmatch(name)
+		if match == nil || match[1] == ownToken {
+			continue
+		}
+		if _, seen := byOwner[match[1]]; !seen {
+			owners = append(owners, match[1])
+		}
+		byOwner[match[1]] = append(byOwner[match[1]], name)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return fmt.Errorf("list test databases: %w", err)
+	}
+	for _, owner := range owners {
+		returnedErr = errors.Join(returnedErr, reclaimOwnerDatabases(ctx, admin, owner, byOwner[owner]))
+	}
+	return returnedErr
+}
+
+func reclaimOwnerDatabases(ctx context.Context, admin *sql.DB, owner string, names []string) (returnedErr error) {
+	var alive bool
+	if err := admin.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity WHERE application_name = $1)`,
+		postgresOwnerApplicationPrefix+owner,
+	).Scan(&alive); err != nil {
+		return fmt.Errorf("probe test owner %s: %w", owner, err)
+	}
+	if alive {
+		return nil
+	}
+	// Tokens are never reused, so a dead owner gains no databases, and
+	// another process reclaiming it at the same time only makes these drops
+	// no-ops.
+	for _, name := range names {
+		if err := dropPostgresDatabase(ctx, admin, name); err != nil {
+			returnedErr = errors.Join(returnedErr, fmt.Errorf("drop %s: %w", name, err))
+		}
+	}
+	return returnedErr
 }
 
 // requirePostgresAvailable fails rather than skips: control-plane tests that
@@ -342,9 +477,12 @@ func probePostgres(ctx context.Context, dsn string) error {
 // NewPostgresDatabase returns the connection string of a new database cloned
 // from template, building the template first if no process has. Each call
 // gets its own database, dropped when the test finishes, so tests may run
-// with t.Parallel freely. Template construction is serialized across
-// goroutines by an in-process lock and across concurrently running test
-// binaries by a PostgreSQL advisory lock on the administrator database.
+// with t.Parallel freely; a database whose process died before its cleanup
+// ran is dropped by the next test process to start. Template construction
+// is serialized across goroutines by an in-process lock and across
+// concurrently running test binaries by a PostgreSQL advisory lock on the
+// administrator database. A failed build fails every later caller in the
+// process with the same error instead of being retried per test.
 func NewPostgresDatabase(t testing.TB, template PostgresTemplate) string {
 	t.Helper()
 	if !postgresTemplateKey.MatchString(template.Key) || template.Build == nil {
@@ -360,7 +498,7 @@ func NewPostgresDatabase(t testing.TB, template PostgresTemplate) string {
 	if err != nil {
 		t.Fatalf("name PostgreSQL test database: %v", err)
 	}
-	name := "ostest_" + suffix
+	name := postgresTestDatabasePrefix + postgresAdmin.owner.token + "_" + suffix
 	t.Cleanup(func() {
 		dropContext, cancel := context.WithTimeout(context.Background(), postgresDropTimeout)
 		defer cancel()
@@ -380,29 +518,62 @@ func NewPostgresDatabase(t testing.TB, template PostgresTemplate) string {
 	return dsn
 }
 
+// DefaultPostgresTenantID is the tenant the bootstrap organization claims,
+// and the one WithDefaultPostgresTenant seeds.
+const DefaultPostgresTenantID = "default"
+
+// postgresSeedTenantCreatedAtUnixMicro stamps seeded tenant rows. It is fixed
+// so a template's contents depend only on its key.
+const postgresSeedTenantCreatedAtUnixMicro = int64(1_700_000_000_000_000)
+
+const postgresTenantSeedIdentityFormat = "open-splunk/test-template/tenants-1\x00"
+
+// PostgresControlOption adds seed data to a control-plane template. Seeded
+// templates are keyed by their seed as well as their migrations, so seeded
+// and unseeded clones never share a template.
+type PostgresControlOption func(*postgresControlOptions)
+
+type postgresControlOptions struct {
+	tenants []string
+}
+
+// WithPostgresTenants seeds an active tenants row for each tenant ID, with no
+// organization, so writes to the many tables whose tenant_id references
+// tenants do not fail with foreign_key_violation (23503). Order and
+// duplicates do not matter.
+func WithPostgresTenants(tenantIDs ...string) PostgresControlOption {
+	return func(options *postgresControlOptions) {
+		options.tenants = append(options.tenants, tenantIDs...)
+	}
+}
+
+// WithDefaultPostgresTenant seeds the DefaultPostgresTenantID tenant.
+func WithDefaultPostgresTenant() PostgresControlOption {
+	return WithPostgresTenants(DefaultPostgresTenantID)
+}
+
 // NewPostgresControlDB returns a control-plane handle over a fresh database
-// migrated with the embedded PostgreSQL migrations. The handle is closed and
-// the database dropped when the test finishes.
-func NewPostgresControlDB(t testing.TB) *control.PostgresDB {
+// migrated with the embedded PostgreSQL migrations and seeded as options
+// ask. The handle is closed and the database dropped when the test finishes.
+func NewPostgresControlDB(t testing.TB, options ...PostgresControlOption) *control.PostgresDB {
 	t.Helper()
-	return NewPostgresControlDBWithMigrations(t, migrations.Postgres())
+	return NewPostgresControlDBWithMigrations(t, migrations.Postgres(), options...)
 }
 
 // NewPostgresControlDBWithMigrations is NewPostgresControlDB for an explicit
-// migration set. The template is keyed by the set's migration identity, so a
-// changed migration always builds a new template.
-func NewPostgresControlDBWithMigrations(t testing.TB, migrationFS fs.FS) *control.PostgresDB {
+// migration set. The template is keyed by the set's migration identity and
+// the seed, so a changed migration always builds a new template.
+func NewPostgresControlDBWithMigrations(
+	t testing.TB,
+	migrationFS fs.FS,
+	options ...PostgresControlOption,
+) *control.PostgresDB {
 	t.Helper()
-	key, err := controlTemplateKey(migrationFS)
+	template, err := PostgresControlTemplate(migrationFS, options...)
 	if err != nil {
 		t.Fatalf("identify PostgreSQL migrations: %v", err)
 	}
-	dsn := NewPostgresDatabase(t, PostgresTemplate{
-		Key: key,
-		Build: func(ctx context.Context, db *sql.DB) error {
-			return control.ApplyPostgresMigrations(ctx, db, migrationFS)
-		},
-	})
+	dsn := NewPostgresDatabase(t, template)
 	openContext, cancel := context.WithTimeout(context.Background(), postgresCloneTimeout)
 	defer cancel()
 	// Opening re-verifies the cloned ledger against migrationFS, so a
@@ -419,14 +590,115 @@ func NewPostgresControlDBWithMigrations(t testing.TB, migrationFS fs.FS) *contro
 	return db
 }
 
-// controlTemplateKey derives a template key from the migration identity, so
-// any change to the ordered migration files selects a new template.
-func controlTemplateKey(migrationFS fs.FS) (string, error) {
+// PostgresControlTemplate returns the template that
+// NewPostgresControlDBWithMigrations clones for migrationFS and options.
+func PostgresControlTemplate(migrationFS fs.FS, options ...PostgresControlOption) (PostgresTemplate, error) {
+	var resolved postgresControlOptions
+	for _, option := range options {
+		if option != nil {
+			option(&resolved)
+		}
+	}
+	tenants := slices.Clone(resolved.tenants)
+	slices.Sort(tenants)
+	tenants = slices.Compact(tenants)
+	key, err := controlTemplateKey(migrationFS, tenants)
+	if err != nil {
+		return PostgresTemplate{}, err
+	}
+	return PostgresTemplate{
+		Key: key,
+		Build: func(ctx context.Context, db *sql.DB) error {
+			if err := control.ApplyPostgresMigrations(ctx, db, migrationFS); err != nil {
+				return err
+			}
+			return seedPostgresTenants(ctx, db, tenants)
+		},
+	}, nil
+}
+
+func seedPostgresTenants(ctx context.Context, db *sql.DB, tenants []string) (returnedErr error) {
+	if len(tenants) == 0 {
+		return nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tenant seed: %w", err)
+	}
+	defer func() {
+		if returnedErr != nil {
+			returnedErr = errors.Join(returnedErr, tx.Rollback())
+		}
+	}()
+	for _, tenant := range tenants {
+		// The build pool has no search_path pin, so name the schema.
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO open_splunk.tenants
+				(tenant_id, created_at_unix_micro, updated_at_unix_micro)
+			VALUES ($1, $2, $2)`,
+			tenant,
+			postgresSeedTenantCreatedAtUnixMicro,
+		); err != nil {
+			return fmt.Errorf("seed tenant %q: %w", tenant, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit tenant seed: %w", err)
+	}
+	return nil
+}
+
+// controlTemplateKey derives a template key from the migration identity and
+// the sorted, deduplicated seeded tenants, so any change to the ordered
+// migration files or the seed selects a new template. An unseeded set keeps
+// the key it had before seeds existed.
+func controlTemplateKey(migrationFS fs.FS, tenants []string) (string, error) {
 	identity, err := control.PostgresMigrationSetIdentity(migrationFS)
 	if err != nil {
 		return "", err
 	}
-	return "ctl_" + hex.EncodeToString(identity.SHA256[:16]), nil
+	if len(tenants) == 0 {
+		return "ctl_" + hex.EncodeToString(identity.SHA256[:16]), nil
+	}
+	hasher := sha256.New()
+	_, _ = hasher.Write([]byte(postgresTenantSeedIdentityFormat))
+	_, _ = hasher.Write(identity.SHA256[:])
+	for _, tenant := range tenants {
+		_, _ = hasher.Write([]byte(strconv.Itoa(len(tenant))))
+		_, _ = hasher.Write([]byte{0})
+		_, _ = hasher.Write([]byte(tenant))
+	}
+	return "ctt_" + hex.EncodeToString(hasher.Sum(nil)[:16]), nil
+}
+
+// DropPostgresTemplate drops the template database for key and forgets it in
+// this process. It is for tests that build one-off templates; nothing else
+// may be cloning that template concurrently.
+func DropPostgresTemplate(t testing.TB, key string) {
+	t.Helper()
+	if !postgresTemplateKey.MatchString(key) {
+		t.Fatalf("PostgreSQL template needs a key matching %s", postgresTemplateKey)
+	}
+	_, admin := postgresAdminHandle(t)
+	templateName := postgresTemplateName(key)
+	postgresTemplates.mu.Lock()
+	delete(postgresTemplates.states, templateName)
+	postgresTemplates.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), postgresDropTimeout)
+	defer cancel()
+	conn, err := admin.Conn(ctx)
+	if err != nil {
+		t.Errorf("acquire administrator session: %v", err)
+		return
+	}
+	defer func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("release administrator session: %v", err)
+		}
+	}()
+	if err := discardPostgresDatabaseOn(ctx, conn, templateName); err != nil {
+		t.Errorf("drop PostgreSQL template %s: %v", templateName, err)
+	}
 }
 
 func postgresTemplateName(key string) string {
@@ -455,9 +727,13 @@ func ensurePostgresTemplate(
 	if state.ready {
 		return nil
 	}
+	if state.err != nil {
+		return fmt.Errorf("an earlier build in this test process failed: %w", state.err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), postgresTemplateTimeout)
 	defer cancel()
 	if err := buildPostgresTemplate(ctx, adminDSN, admin, templateName, build); err != nil {
+		state.err = err
 		return err
 	}
 	state.ready = true
@@ -465,10 +741,10 @@ func ensurePostgresTemplate(
 }
 
 // buildPostgresTemplate publishes templateName exactly once per server. It
-// builds into a staging database and renames it only after the build
-// succeeds, so a template that exists under its final name is complete, and
-// a builder that crashed leaves only a staging database the next holder of
-// the lock discards.
+// builds into a staging database and, only after the build succeeds, marks
+// it a template and renames it in one transaction, so a template that exists
+// under its final name is complete, and a builder that crashed leaves only a
+// staging database the next holder of the lock discards.
 func buildPostgresTemplate(
 	ctx context.Context,
 	adminDSN string,
@@ -515,7 +791,7 @@ func buildPostgresTemplate(
 	}
 
 	staging := templateName + "_build"
-	if err := dropPostgresDatabaseOn(ctx, conn, staging); err != nil {
+	if err := discardPostgresDatabaseOn(ctx, conn, staging); err != nil {
 		return fmt.Errorf("discard stale staging database: %w", err)
 	}
 	if _, err := conn.ExecContext(ctx, `CREATE DATABASE `+quotePostgresIdentifier(staging)); err != nil {
@@ -523,11 +799,14 @@ func buildPostgresTemplate(
 	}
 	stagingDSN, err := postgresDSNForDatabase(adminDSN, staging)
 	if err != nil {
-		return err
+		return errors.Join(err, discardPostgresDatabaseOn(ctx, conn, staging))
 	}
 	stagingConfig, err := pgx.ParseConfig(stagingDSN)
 	if err != nil {
-		return errors.New("staging database connection string is invalid")
+		return errors.Join(
+			errors.New("staging database connection string is invalid"),
+			discardPostgresDatabaseOn(ctx, conn, staging),
+		)
 	}
 	stagingDB := stdlib.OpenDB(*stagingConfig)
 	buildErr := build(ctx, stagingDB)
@@ -537,20 +816,68 @@ func buildPostgresTemplate(
 		buildErr = errors.Join(buildErr, fmt.Errorf("close staging database: %w", err))
 	}
 	if buildErr != nil {
-		return errors.Join(buildErr, dropPostgresDatabaseOn(ctx, conn, staging))
+		return errors.Join(buildErr, discardPostgresDatabaseOn(ctx, conn, staging))
 	}
+	if err := publishPostgresTemplate(ctx, conn, staging, templateName); err != nil {
+		return errors.Join(err, discardPostgresDatabaseOn(ctx, conn, staging))
+	}
+	return nil
+}
+
+// publishPostgresTemplate marks staging a template and gives it its final
+// name in one transaction. As two autocommit statements, a builder that died
+// between them left a staging database flagged as a template, which DROP
+// DATABASE refuses ("cannot drop a template database"), so every later build
+// of that template failed.
+func publishPostgresTemplate(ctx context.Context, conn *sql.Conn, staging, templateName string) (returnedErr error) {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin template publication: %w", err)
+	}
+	defer func() {
+		if returnedErr != nil {
+			returnedErr = errors.Join(returnedErr, tx.Rollback())
+		}
+	}()
 	quotedStaging := quotePostgresIdentifier(staging)
-	if _, err := conn.ExecContext(ctx,
+	if _, err := tx.ExecContext(ctx,
 		`ALTER DATABASE `+quotedStaging+` WITH IS_TEMPLATE true ALLOW_CONNECTIONS false`,
 	); err != nil {
 		return fmt.Errorf("mark staging database as a template: %w", err)
 	}
-	if _, err := conn.ExecContext(ctx,
+	if _, err := tx.ExecContext(ctx,
 		`ALTER DATABASE `+quotedStaging+` RENAME TO `+quotePostgresIdentifier(templateName),
 	); err != nil {
 		return fmt.Errorf("publish template: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit template publication: %w", err)
+	}
 	return nil
+}
+
+// discardPostgresDatabaseOn drops name if it exists, clearing its template
+// flag first, because DROP DATABASE refuses a template. Such a staging
+// database is left by older helper versions that published in two steps.
+func discardPostgresDatabaseOn(ctx context.Context, conn *sql.Conn, name string) error {
+	var isTemplate bool
+	err := conn.QueryRowContext(ctx,
+		`SELECT datistemplate FROM pg_catalog.pg_database WHERE datname = $1`,
+		name,
+	).Scan(&isTemplate)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return err
+	case isTemplate:
+		if _, err := conn.ExecContext(ctx,
+			`ALTER DATABASE `+quotePostgresIdentifier(name)+` WITH IS_TEMPLATE false`,
+		); err != nil {
+			return err
+		}
+	}
+	return dropPostgresDatabaseOn(ctx, conn, name)
 }
 
 func clonePostgresDatabase(ctx context.Context, admin *sql.DB, templateName, name string) error {
@@ -601,6 +928,15 @@ func postgresDSNForDatabase(adminDSN, database string) (string, error) {
 		}
 		parsed.Path = "/" + database
 		parsed.RawPath = ""
+		// A dbname (or pgx's database) query parameter overrides the path,
+		// so leaving one in place would point every test database, and every
+		// template build, at the administrator's own database.
+		query := parsed.Query()
+		if query.Has("dbname") || query.Has("database") {
+			query.Del("dbname")
+			query.Del("database")
+			parsed.RawQuery = query.Encode()
+		}
 		return parsed.String(), nil
 	}
 	// Later keywords override earlier ones in keyword/value strings.
