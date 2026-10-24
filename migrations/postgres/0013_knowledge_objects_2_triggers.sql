@@ -6,6 +6,10 @@
 -- byte-identical to the SQLite RAISE(ABORT, ...) text and is raised with the
 -- default SQLSTATE P0001. No Go code matches on these messages.
 --
+-- Every function pins search_path FROM CURRENT (the runner's open_splunk),
+-- so the unqualified tables a trigger reads and writes are the control
+-- tables whatever search_path the firing session uses.
+--
 -- Porting notes:
 --
 -- * Identifiers are limited to 63 bytes. Two SQLite names are longer and are
@@ -90,7 +94,9 @@
 -- knowledge_object_versions --------------------------------------------------
 
 CREATE FUNCTION knowledge_object_version_after_insert() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     UPDATE knowledge_catalog_tenants
     SET version_count = version_count + 1
@@ -104,7 +110,9 @@ AFTER INSERT ON knowledge_object_versions
 FOR EACH ROW EXECUTE FUNCTION knowledge_object_version_after_insert();
 
 CREATE FUNCTION knowledge_object_version_capacity_is_available() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1
@@ -126,7 +134,9 @@ BEFORE INSERT ON knowledge_object_versions
 FOR EACH ROW EXECUTE FUNCTION knowledge_object_version_capacity_is_available();
 
 CREATE FUNCTION knowledge_object_version_creates_lifecycle() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     INSERT INTO knowledge_object_version_lifecycle (
         tenant_id, knowledge_object_id, object_version,
@@ -165,7 +175,9 @@ AFTER INSERT ON knowledge_object_versions
 FOR EACH ROW EXECUTE FUNCTION knowledge_object_version_creates_lifecycle();
 
 CREATE FUNCTION knowledge_object_version_creates_staged_order_key() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM knowledge_object_list_projections
@@ -202,7 +214,9 @@ AFTER INSERT ON knowledge_object_versions
 FOR EACH ROW EXECUTE FUNCTION knowledge_object_version_creates_staged_order_key();
 
 CREATE FUNCTION knowledge_object_version_delete_is_forbidden() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge object version cannot be deleted';
     RETURN OLD;
@@ -214,7 +228,9 @@ BEFORE DELETE ON knowledge_object_versions
 FOR EACH ROW EXECUTE FUNCTION knowledge_object_version_delete_is_forbidden();
 
 CREATE FUNCTION knowledge_object_version_identity_collision_is_forbidden() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM knowledge_object_versions
@@ -233,7 +249,9 @@ BEFORE INSERT ON knowledge_object_versions
 FOR EACH ROW EXECUTE FUNCTION knowledge_object_version_identity_collision_is_forbidden();
 
 CREATE FUNCTION knowledge_object_version_is_contiguous() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF NEW.object_version > 1 AND NOT EXISTS (
         SELECT 1
@@ -253,7 +271,9 @@ BEFORE INSERT ON knowledge_object_versions
 FOR EACH ROW EXECUTE FUNCTION knowledge_object_version_is_contiguous();
 
 CREATE FUNCTION knowledge_object_version_transition_is_exact() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF NEW.object_version > 65536
       OR (
@@ -313,7 +333,9 @@ BEFORE INSERT ON knowledge_object_versions
 FOR EACH ROW EXECUTE FUNCTION knowledge_object_version_transition_is_exact();
 
 CREATE FUNCTION knowledge_object_version_update_is_forbidden() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge object version is immutable';
     RETURN NEW;
@@ -328,7 +350,9 @@ FOR EACH ROW EXECUTE FUNCTION knowledge_object_version_update_is_forbidden();
 -- has not computed yet in a BEFORE trigger, so it is written out as its
 -- generating expression.
 CREATE FUNCTION knowledge_object_version_writer_semantics_are_exact() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 DECLARE
     new_definition_digest_key bytea := coalesce(NEW.definition_digest, '\x'::bytea);
 BEGIN
@@ -450,7 +474,9 @@ FOR EACH ROW EXECUTE FUNCTION knowledge_object_version_writer_semantics_are_exac
 -- knowledge_object_dependency_seals ------------------------------------------
 
 CREATE FUNCTION knowledge_dependency_seal_delete_is_forbidden() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge dependency seal cannot be deleted';
     RETURN OLD;
@@ -462,7 +488,9 @@ BEFORE DELETE ON knowledge_object_dependency_seals
 FOR EACH ROW EXECUTE FUNCTION knowledge_dependency_seal_delete_is_forbidden();
 
 CREATE FUNCTION knowledge_dependency_seal_identity_collision_is_forbidden() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF EXISTS (
         SELECT 1
@@ -482,7 +510,9 @@ BEFORE INSERT ON knowledge_object_dependency_seals
 FOR EACH ROW EXECUTE FUNCTION knowledge_dependency_seal_identity_collision_is_forbidden();
 
 CREATE FUNCTION knowledge_dependency_seal_is_complete() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF NEW.dependency_count <> (
         SELECT count(*)
@@ -502,7 +532,9 @@ BEFORE INSERT ON knowledge_object_dependency_seals
 FOR EACH ROW EXECUTE FUNCTION knowledge_dependency_seal_is_complete();
 
 CREATE FUNCTION knowledge_dependency_seal_update_is_forbidden() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge dependency seal is immutable';
     RETURN NEW;
@@ -514,7 +546,9 @@ BEFORE UPDATE ON knowledge_object_dependency_seals
 FOR EACH ROW EXECUTE FUNCTION knowledge_dependency_seal_update_is_forbidden();
 
 CREATE FUNCTION knowledge_object_state_only_dependencies_are_exact() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF NEW.object_version > 1
      AND EXISTS (
@@ -591,7 +625,9 @@ FOR EACH ROW EXECUTE FUNCTION knowledge_object_state_only_dependencies_are_exact
 -- knowledge_object_version_lifecycle -----------------------------------------
 
 CREATE FUNCTION knowledge_object_version_lifecycle_agrees_with_version() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1
@@ -653,7 +689,9 @@ BEFORE INSERT ON knowledge_object_version_lifecycle
 FOR EACH ROW EXECUTE FUNCTION knowledge_object_version_lifecycle_agrees_with_version();
 
 CREATE FUNCTION knowledge_object_version_lifecycle_delete_is_forbidden() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge object version lifecycle cannot be deleted';
     RETURN OLD;
@@ -665,7 +703,9 @@ BEFORE DELETE ON knowledge_object_version_lifecycle
 FOR EACH ROW EXECUTE FUNCTION knowledge_object_version_lifecycle_delete_is_forbidden();
 
 CREATE FUNCTION knowledge_object_version_lifecycle_identity_collision_is_forbid() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM knowledge_object_version_lifecycle
@@ -684,7 +724,9 @@ BEFORE INSERT ON knowledge_object_version_lifecycle
 FOR EACH ROW EXECUTE FUNCTION knowledge_object_version_lifecycle_identity_collision_is_forbid();
 
 CREATE FUNCTION knowledge_object_version_lifecycle_update_is_forbidden() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge object version lifecycle is immutable';
     RETURN NEW;
@@ -698,7 +740,9 @@ FOR EACH ROW EXECUTE FUNCTION knowledge_object_version_lifecycle_update_is_forbi
 -- knowledge_app_type_active_counters -----------------------------------------
 
 CREATE FUNCTION knowledge_app_type_active_counter_delete_is_forbidden() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge app/type active counter cannot be deleted';
     RETURN OLD;
@@ -710,7 +754,9 @@ BEFORE DELETE ON knowledge_app_type_active_counters
 FOR EACH ROW EXECUTE FUNCTION knowledge_app_type_active_counter_delete_is_forbidden();
 
 CREATE FUNCTION knowledge_app_type_active_counter_identity_collision_is_forbidd() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM knowledge_app_type_active_counters
@@ -728,7 +774,9 @@ BEFORE INSERT ON knowledge_app_type_active_counters
 FOR EACH ROW EXECUTE FUNCTION knowledge_app_type_active_counter_identity_collision_is_forbidd();
 
 CREATE FUNCTION knowledge_app_type_active_counter_identity_is_immutable() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge app/type active counter identity is immutable';
     RETURN NEW;
@@ -748,7 +796,9 @@ EXECUTE FUNCTION knowledge_app_type_active_counter_identity_is_immutable();
 -- knowledge_owner_active_counters --------------------------------------------
 
 CREATE FUNCTION knowledge_owner_active_counter_delete_is_forbidden() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge owner active counter cannot be deleted';
     RETURN OLD;
@@ -760,7 +810,9 @@ BEFORE DELETE ON knowledge_owner_active_counters
 FOR EACH ROW EXECUTE FUNCTION knowledge_owner_active_counter_delete_is_forbidden();
 
 CREATE FUNCTION knowledge_owner_active_counter_identity_collision_is_forbidden() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM knowledge_owner_active_counters
@@ -777,7 +829,9 @@ BEFORE INSERT ON knowledge_owner_active_counters
 FOR EACH ROW EXECUTE FUNCTION knowledge_owner_active_counter_identity_collision_is_forbidden();
 
 CREATE FUNCTION knowledge_owner_active_counter_identity_is_immutable() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     RAISE EXCEPTION 'knowledge owner active counter identity is immutable';
     RETURN NEW;
@@ -793,7 +847,9 @@ EXECUTE FUNCTION knowledge_owner_active_counter_identity_is_immutable();
 -- knowledge_object_acl -------------------------------------------------------
 
 CREATE FUNCTION knowledge_object_acl_identity_collision_is_forbidden() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM knowledge_object_acl
