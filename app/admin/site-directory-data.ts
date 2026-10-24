@@ -498,7 +498,7 @@ const DESCRIPTION_LIMIT = 500;
 export function slugFromName(name: string): string {
   return name
     .normalize("NFKD")
-    .replaceAll(/[̀-ͯ]/gu, "")
+    .replaceAll(/[\u0300-\u036F]/gu, "")
     .toLowerCase()
     .replaceAll(/[^a-z0-9]+/gu, "-")
     .replaceAll(/^-+|-+$/gu, "")

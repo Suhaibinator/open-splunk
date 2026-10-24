@@ -9,6 +9,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 
 import type { Capability, IdentityClient, IdentityError, Page, UserId } from "@/lib/api/identity";
@@ -27,6 +28,11 @@ import {
 
 /** Where a signed-out administrator goes to sign back in. */
 export const SIGN_IN_PATH = "/signin/";
+
+/** Focuses an element after the current commit, once a closing dialog has handed focus back. */
+export function focusAfterCommit(element: HTMLElement | null): void {
+  globalThis.setTimeout(() => element?.focus(), 0);
+}
 
 // --------------------------------------------------------------------------
 // The capability gate
@@ -133,6 +139,40 @@ export function DirectoryHeader({ headingId, title, description, actionLabel, on
         {disabledReason === null ? null : <small id={reasonId}>{disabledReason}</small>}
       </div>
     </header>
+  );
+}
+
+export interface DirectorySearchFormProps {
+  /** The search landmark's name, and the search box's label. */
+  readonly label: string;
+  readonly placeholder: string;
+  readonly value: string;
+  readonly inputRef: RefObject<HTMLInputElement | null>;
+  readonly onChange: (value: string) => void;
+  readonly onSubmit: () => void;
+  /** Further controls (a filter) between the box and the submit button. */
+  readonly children?: ReactNode;
+}
+
+/** The directory's search, on the admin console's shared toolbar: the box, any filter, then Search. */
+export function DirectorySearchForm({ label, placeholder, value, inputRef, onChange, onSubmit, children }: DirectorySearchFormProps) {
+  return (
+    <form
+      className="admin-toolbar"
+      role="search"
+      aria-label={label}
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSubmit();
+      }}
+    >
+      <label>
+        <span className="sr-only">{label}</span>
+        <input ref={inputRef} type="search" value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+      </label>
+      {children}
+      <button type="submit">Search</button>
+    </form>
   );
 }
 
@@ -291,7 +331,7 @@ export interface DirectoryPagerProps {
 export function DirectoryPager({ label, noun, page, busy, onPage }: DirectoryPagerProps) {
   const info = page.page;
   return (
-    <nav className="admin-pagination-footer site-directory-pager" aria-label={label}>
+    <nav className="admin-pagination-footer admin-pagination-footer--inset" aria-label={label}>
       <div>
         <strong role="status">{busy ? `Loading ${noun}…` : pageRangeLabel(info, page.items.length, noun)}</strong>
         <small>{pagePositionLabel(info)}</small>
@@ -355,14 +395,17 @@ export interface DirectoryMenuItem {
   readonly onSelect: (trigger: HTMLButtonElement | null) => void;
 }
 
-function enabledMenuItems(container: HTMLElement | null): HTMLButtonElement[] {
-  return Array.from(container?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []).filter((item) => !item.disabled);
+/** Every item, disabled ones included: a disabled item stays focusable so its reason can be read. */
+function menuItemsIn(container: HTMLElement | null): HTMLButtonElement[] {
+  return Array.from(container?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
 }
 
 /**
  * A row's overflow menu: the trigger, then a `role="menu"` list that takes
  * focus on open, moves with the arrow keys, Home and End, and closes on
- * Escape, Tab or a click outside, returning focus to the trigger.
+ * Escape, Tab or a click outside, returning focus to the trigger. A disabled
+ * item is `aria-disabled` rather than `disabled`, so arrowing onto it still
+ * reads the reason it describes; activating it does nothing.
  */
 export function DirectoryRowMenu({ label, items }: { readonly label: string; readonly items: readonly DirectoryMenuItem[] }) {
   const [open, setOpen] = useState(false);
@@ -372,7 +415,7 @@ export function DirectoryRowMenu({ label, items }: { readonly label: string; rea
 
   useEffect(() => {
     if (!open) return;
-    enabledMenuItems(wrapRef.current)[0]?.focus();
+    menuItemsIn(wrapRef.current)[0]?.focus();
     function closeOnOutsidePointer(event: PointerEvent) {
       if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
     }
@@ -395,17 +438,17 @@ export function DirectoryRowMenu({ label, items }: { readonly label: string; rea
       setOpen(false);
       return;
     }
-    const enabled = enabledMenuItems(wrapRef.current);
-    if (enabled.length === 0) return;
-    const index = enabled.findIndex((item) => item === document.activeElement);
+    const entries = menuItemsIn(wrapRef.current);
+    if (entries.length === 0) return;
+    const index = entries.findIndex((item) => item === document.activeElement);
     let next: number;
-    if (event.key === "ArrowDown") next = index < 0 ? 0 : (index + 1) % enabled.length;
-    else if (event.key === "ArrowUp") next = index < 0 ? enabled.length - 1 : (index - 1 + enabled.length) % enabled.length;
+    if (event.key === "ArrowDown") next = index < 0 ? 0 : (index + 1) % entries.length;
+    else if (event.key === "ArrowUp") next = index < 0 ? entries.length - 1 : (index - 1 + entries.length) % entries.length;
     else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = enabled.length - 1;
+    else if (event.key === "End") next = entries.length - 1;
     else return;
     event.preventDefault();
-    enabled[next]?.focus();
+    entries[next]?.focus();
   }
 
   return (
@@ -433,9 +476,10 @@ export function DirectoryRowMenu({ label, items }: { readonly label: string; rea
                 role="menuitem"
                 type="button"
                 className={item.danger === true ? "site-directory-menu-item is-danger" : "site-directory-menu-item"}
-                disabled={disabled}
+                aria-disabled={disabled ? true : undefined}
                 aria-describedby={disabled ? reasonId : undefined}
                 onClick={() => {
+                  if (disabled) return;
                   setOpen(false);
                   item.onSelect(triggerRef.current);
                 }}

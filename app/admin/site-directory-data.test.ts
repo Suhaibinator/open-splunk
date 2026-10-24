@@ -85,15 +85,18 @@ test("every identity error kind presents a titled state with exactly one next st
   }
 });
 
+function nextStepFor(kind: (typeof IDENTITY_ERROR_KINDS)[number]) {
+  return presentDirectoryError(new IdentityError(kind, "x"), "users").action;
+}
+
 test("each kind maps to the action an administrator can take about it", () => {
-  const action = (kind: (typeof IDENTITY_ERROR_KINDS)[number]) => presentDirectoryError(new IdentityError(kind, "x"), "users").action;
-  assert.equal(action("unauthenticated"), "sign_in");
-  assert.equal(action("otp_required"), "sign_in");
-  assert.equal(action("forbidden"), "none");
-  assert.equal(action("not_configured"), "none");
-  assert.equal(action("invalid"), "clear_search");
-  assert.equal(action("network"), "retry");
-  assert.equal(action("rate_limited"), "retry");
+  assert.equal(nextStepFor("unauthenticated"), "sign_in");
+  assert.equal(nextStepFor("otp_required"), "sign_in");
+  assert.equal(nextStepFor("forbidden"), "none");
+  assert.equal(nextStepFor("not_configured"), "none");
+  assert.equal(nextStepFor("invalid"), "clear_search");
+  assert.equal(nextStepFor("network"), "retry");
+  assert.equal(nextStepFor("rate_limited"), "retry");
   assert.equal(presentDirectoryError(new IdentityError("not_configured", "x"), "users").kind, "unavailable");
   assert.equal(presentDirectoryError(new IdentityError("network", "x"), "users").kind, "error");
 });

@@ -325,22 +325,23 @@ test("search and filters narrow the directory, and an empty match offers to clea
   await settle();
   assert.equal(browser.document.activeElement, searchInput(mounted));
 
-  const banned = mounted.container.querySelectorAll('input[type="radio"]').find((radio) => radio.value === "banned");
-  assert.ok(banned);
-  await act(async () => {
-    banned.checked = true;
-    banned.dispatchEvent(fakeEvent("click"));
-  });
-  await settle();
+  const filter = (value: string) => {
+    const option = searchForm(mounted).querySelector(`[data-option="${value}"]`);
+    assert.ok(option, `no filter option ${value}`);
+    return option;
+  };
+  await mounted.click(filter("banned"));
   assert.deepEqual(rowIds(mounted), ["8"]);
-  const admins = mounted.container.querySelectorAll('input[type="radio"]').find((radio) => radio.value === "site_admins");
-  assert.ok(admins);
-  await act(async () => {
-    admins.checked = true;
-    admins.dispatchEvent(fakeEvent("click"));
-  });
-  await settle();
+  await mounted.click(filter("site_admins"));
   assert.deepEqual(rowIds(mounted), ["1"]);
+  // A search and a filter compose; clearing resets both.
+  await search(mounted, "ada");
+  assert.deepEqual(rowIds(mounted), ["1"]);
+  await search(mounted, "mona");
+  assert.match(mounted.text(), /No users match/u);
+  await mounted.click(mounted.button("Clear search"));
+  assert.equal(rowIds(mounted).length, 9);
+  assert.equal(searchForm(mounted).querySelector("[data-select-value]")?.getAttribute("data-select-value"), "all");
 });
 
 test("each list failure kind renders its own next step", async () => {
@@ -431,7 +432,7 @@ test("the row menu takes focus, moves with the arrows, and bans through a confir
   assert.equal(mounted.container.querySelector("output"), null);
   await mounted.click(mounted.button("Actions for Mark Mendez"));
   assert.ok(menuItem(mounted, "Unban user"));
-  assert.equal(menuItem(mounted, "Revoke sessions").disabled, true);
+  assert.equal(menuItem(mounted, "Revoke sessions").getAttribute("aria-disabled"), "true");
 });
 
 test("a failed change stays in the dialog with an alert, and a vanished user reloads the list on close", async () => {
@@ -487,14 +488,23 @@ test("the self row explains its disabled actions, and signing out its sessions s
   const mounted = await mount(users(fakeAs(FAKE_SITE_ADMIN_EMAIL)));
   await mounted.click(mounted.button("Actions for Ada Lovelace"));
   const removeAdmin = menuItem(mounted, "Remove site admin");
-  assert.equal(removeAdmin.disabled, true);
+  assert.equal(removeAdmin.getAttribute("aria-disabled"), "true");
   const reasonId = removeAdmin.getAttribute("aria-describedby");
   assert.ok(reasonId);
   assert.match(mounted.container.querySelector(`#${reasonId}`)?.textContent ?? "", /cannot remove site administrator access from your own account/u);
-  assert.equal(menuItem(mounted, "Ban user").disabled, true);
-  assert.equal(menuItem(mounted, "Delete user").disabled, true);
-  // Focus skips the disabled items.
-  assert.equal(browser.document.activeElement, menuItem(mounted, "Sign out my sessions"));
+  assert.equal(menuItem(mounted, "Ban user").getAttribute("aria-disabled"), "true");
+  assert.equal(menuItem(mounted, "Delete user").getAttribute("aria-disabled"), "true");
+  assert.equal(menuItem(mounted, "Sign out my sessions").hasAttribute("aria-disabled"), false);
+  // A disabled item stays focusable, so the arrows reach it and its reason is read.
+  assert.equal(browser.document.activeElement, removeAdmin);
+  const menu = mounted.container.querySelector('[role="menu"]');
+  assert.ok(menu);
+  await mounted.key(menu, "ArrowDown");
+  assert.equal(browser.document.activeElement, menuItem(mounted, "Ban user"));
+  // Activating a disabled item neither closes the menu nor opens a dialog.
+  await mounted.click(menuItem(mounted, "Ban user"));
+  assert.ok(mounted.container.querySelector('[role="menu"]'));
+  assert.equal(mounted.container.querySelector("[data-modal]"), null);
 
   await mounted.click(menuItem(mounted, "Sign out my sessions"));
   assert.match(textOf(dialog(mounted)), /including this one/u);
@@ -631,4 +641,55 @@ test("create organization suggests the slug, picks a parent, and maps a taken sl
     "Acme Platform",
     "Acme Edge Europe",
   ]);
+});
+
+test("a personal workspace is flagged and is never offered as a parent", async () => {
+  const base = fakeAs(FAKE_SITE_ADMIN_EMAIL);
+  const client = Object.create(base) as IdentityClient;
+  client.adminListOrganizations = async (query, page) => {
+    const listed = await base.adminListOrganizations(query, page);
+    const personal = {
+      createdAt: "2026-02-01T09:00:00.000Z",
+      id: "40",
+      lineage: [],
+      name: "Nora's workspace",
+      personalOwnerUserId: "7",
+      slug: "nora-personal",
+      updatedAt: "2026-02-01T09:00:00.000Z",
+    };
+    return { ...listed, items: [...listed.items, personal] };
+  };
+  const mounted = await mount(organizations(client));
+  const row = mounted.rows().find((candidate) => candidate.getAttribute("data-organization-id") === "40");
+  assert.ok(row, mounted.text());
+  assert.match(textOf(row), /Personal/u);
+  assert.match(textOf(row), /Root organization/u);
+
+  await mounted.click(mounted.button("Create organization"));
+  assert.ok(dialog(mounted).querySelector('[data-option="1"]'));
+  assert.equal(dialog(mounted).querySelector('[data-option="40"]'), null);
+});
+
+test("a failed create keeps the dialog open with an alert, and a disabled parent picker says why", async () => {
+  const client = fakeAs(FAKE_SITE_ADMIN_EMAIL);
+  client.failNext("adminListOrganizations");
+  client.failNext("adminListOrganizations");
+  const mounted = await mount(organizations(client));
+  // Both the page and the picker failed; Retry recovers the page only.
+  await mounted.click(mounted.button("Retry"));
+  assert.equal(mounted.rows().length, 3);
+  await mounted.click(mounted.button("Create organization"));
+  assert.match(textOf(dialog(mounted)), /only a top-level organization can be created/u);
+  assert.equal(dialog(mounted).querySelector('[data-option="__top_level__"]')?.disabled, true);
+  assert.equal(dialog(mounted).querySelector('[data-option="1"]'), null);
+
+  const name = dialog(mounted).querySelector("#site-orgs-create-name");
+  assert.ok(name);
+  await mounted.type(name, "Initech");
+  client.failNext("adminCreateOrganization", new IdentityError("rate_limited", "Too many requests.", { retryAfterMs: 3_000 }));
+  await mounted.submit(dialogForm(mounted));
+  assert.match(dialog(mounted).querySelector('[role="alert"]')?.textContent ?? "", /Try again in 3 s/u);
+  await mounted.submit(dialogForm(mounted));
+  assert.equal(mounted.container.querySelector("[data-modal]"), null);
+  assert.match(mounted.container.querySelector("output")?.textContent ?? "", /Created Initech\./u);
 });

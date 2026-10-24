@@ -4,12 +4,12 @@ import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 
 
 import type { AdminUser, IdentityClient, IdentityError, UserId } from "@/lib/api/identity";
 
-import { AppIcon } from "../_components/app-icon";
 import { BackendResourceState } from "../_components/backend-resource-state";
 import { formatMediumDateTime } from "../_components/date-format";
 import { FieldNote, fieldControlProps } from "../_components/field-validation";
 import { useIdentity } from "../_components/identity-provider";
 import { Modal } from "../_components/modal";
+import { Select, SelectOption } from "../_components/select";
 import { StatusLabel } from "../_components/status";
 import {
   ACCESS_MODE_OPTIONS,
@@ -45,9 +45,11 @@ import {
   DirectoryHeader,
   DirectoryPager,
   DirectoryRowMenu,
+  DirectorySearchForm,
   DirectorySkeletonRows,
   DirectoryToast,
   SiteDirectoryAccessState,
+  focusAfterCommit,
   useDirectoryPage,
   useSiteDirectoryAccess,
 } from "./site-directory-shared";
@@ -55,11 +57,6 @@ import {
 const USERS_TITLE = "Users";
 const USERS_DESCRIPTION = "Every account on this server. Create accounts, grant site administrator access, and suspend or remove users.";
 const USER_TABLE_COLUMNS = 6;
-
-/** Focuses an element after the current commit, once a closing dialog has handed focus back. */
-function focusAfterCommit(element: HTMLElement | null): void {
-  globalThis.setTimeout(() => element?.focus(), 0);
-}
 
 export interface SiteUsersPanelProps {
   /** Rows per page; tests page a short directory with a smaller one. */
@@ -108,7 +105,7 @@ function UsersDirectory({ client, headingId, pageSize, selfId }: UsersDirectoryP
   const [dialog, setDialog] = useState<UsersDialog | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const filterName = useId();
+  const filterId = useId();
 
   const key = JSON.stringify([search, filter, pageNumber, pageSize]);
   const load = useCallback(
@@ -125,8 +122,7 @@ function UsersDirectory({ client, headingId, pageSize, selfId }: UsersDirectoryP
     if (errorKind === "unauthenticated" || errorKind === "forbidden") refresh().catch(() => undefined);
   }, [errorKind, refresh]);
 
-  function applySearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function applySearch() {
     setSearch(searchDraft.trim());
     setPageNumber(1);
   }
@@ -254,35 +250,21 @@ function UsersDirectory({ client, headingId, pageSize, selfId }: UsersDirectoryP
         onAction={() => setDialog({ kind: "create" })}
         disabledReason={null}
       />
-      <form className="site-directory-toolbar" role="search" aria-label="Search users" onSubmit={applySearch}>
-        <label className="site-directory-search">
-          <span className="sr-only">Search users</span>
-          <i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
-          <input
-            ref={searchRef}
-            type="search"
-            value={searchDraft}
-            placeholder="Name, email, username or user ID"
-            onChange={(event) => setSearchDraft(event.target.value)}
-          />
+      <DirectorySearchForm
+        label="Search users"
+        placeholder="Name, email, username or user ID"
+        value={searchDraft}
+        inputRef={searchRef}
+        onChange={setSearchDraft}
+        onSubmit={applySearch}
+      >
+        <label htmlFor={filterId}>
+          <span className="sr-only">Show</span>
+          <Select id={filterId} value={filter} onValueChange={chooseFilter}>
+            {USER_FILTERS.map((option) => <SelectOption key={option.value} value={option.value}>{option.label}</SelectOption>)}
+          </Select>
         </label>
-        <button className="button" type="submit">Search</button>
-        <fieldset className="site-directory-filters">
-          <legend className="sr-only">Show</legend>
-          {USER_FILTERS.map((option) => (
-            <label key={option.value} className={filter === option.value ? "is-selected" : undefined}>
-              <input
-                type="radio"
-                name={filterName}
-                value={option.value}
-                checked={filter === option.value}
-                onChange={(event) => chooseFilter(event.target.value)}
-              />
-              <span>{option.label}</span>
-            </label>
-          ))}
-        </fieldset>
-      </form>
+      </DirectorySearchForm>
       {body}
 
       {dialog?.kind === "create" ? (

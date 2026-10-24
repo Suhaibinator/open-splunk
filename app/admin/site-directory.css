@@ -1,10 +1,11 @@
 /* Site directory
    The site-admin Users and Organizations panels (`app/admin/site-users-panel.tsx`,
    `app/admin/site-organizations-panel.tsx`). They sit inside the admin
-   console's section stack and reuse its header, pagination footer and row
-   action menu, the shared table (in card mode below 760px), status, badge,
-   button, modal and resource-state primitives; this file owns only the
-   toolbar, the identity cell, the lineage trail and the form layout those
+   console's section stack and reuse its header, search toolbar, inset
+   pagination footer and row action menu, the shared table (in card mode
+   below 760px), status, badge, button, modal and resource-state primitives;
+   this file owns only the header's disabled-action note, the identity cell,
+   the described menu items, the lineage trail and the form layout those
    primitives do not describe. */
 
 .site-directory-header-action {
@@ -19,90 +20,6 @@
   font-size: var(--type-xs);
   max-width: 280px;
   text-align: right;
-}
-
-.site-directory-toolbar {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-3);
-}
-
-.site-directory-search {
-  align-items: center;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-strong);
-  display: flex;
-  flex: 1 1 280px;
-  height: var(--space-7);
-  min-width: 0;
-}
-
-.site-directory-search:focus-within {
-  border-color: var(--border-focus);
-}
-
-.site-directory-search i {
-  color: var(--fg-muted);
-  display: flex;
-  font-style: normal;
-  padding-left: var(--space-2);
-}
-
-.site-directory-search input {
-  background: transparent;
-  border: 0;
-  flex: 1;
-  font-size: var(--type-xs);
-  height: 100%;
-  min-width: 0;
-  padding: 0 var(--space-2);
-}
-
-.site-directory-filters {
-  border: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-  margin: 0;
-  padding: 0;
-}
-
-.site-directory-filters label {
-  align-items: center;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  color: var(--fg-secondary);
-  cursor: pointer;
-  display: inline-flex;
-  font-size: var(--type-xs);
-  font-weight: 600;
-  min-height: var(--space-7);
-  padding: 0 var(--space-3);
-  position: relative;
-}
-
-.site-directory-filters label.is-selected {
-  background: var(--accent-soft);
-  border-color: var(--accent-bright);
-  color: var(--accent-hover);
-}
-
-.site-directory-filters label:focus-within {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-}
-
-/* The radio stays in the accessibility tree and takes the arrow keys; the
-   chip around it is what paints. */
-.site-directory-filters input {
-  clip-path: inset(50%);
-  height: 1px;
-  margin: 0;
-  overflow: hidden;
-  position: absolute;
-  width: 1px;
 }
 
 .site-directory-users-table {
@@ -144,11 +61,11 @@
   color: var(--status-error-strong);
 }
 
-.site-directory-menu-item:disabled {
+.site-directory-menu-item[aria-disabled="true"] {
   cursor: not-allowed;
 }
 
-.site-directory-menu-item:disabled strong {
+.site-directory-menu-item[aria-disabled="true"] strong {
   color: var(--fg-faint);
 }
 
@@ -163,13 +80,9 @@
   gap: 2px;
 }
 
-.site-directory-pager {
-  border-top: 1px solid var(--border-subtle);
-  padding: 10px 14px;
-}
-
-.site-directory-pager-buttons {
-  display: flex;
+/* The footer stacks its own children; the button pair stays a row. */
+.admin-pagination-footer > .site-directory-pager-buttons {
+  flex-direction: row;
   gap: var(--space-2);
 }
 
@@ -246,10 +159,6 @@
     min-height: 42px;
   }
 
-  .site-directory-search {
-    flex-basis: 100%;
-  }
-
   .site-directory-row-actions {
     text-align: left;
     width: auto;
@@ -261,11 +170,6 @@
 
   .site-directory-form-grid {
     grid-template-columns: 1fr;
-  }
-
-  .site-directory-pager {
-    align-items: stretch;
-    flex-direction: column;
   }
 
   .site-directory-pager-buttons > .button {

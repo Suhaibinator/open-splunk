@@ -4,7 +4,6 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEven
 
 import type { IdentityClient, IdentityError, IdentityOrganization, Page } from "@/lib/api/identity";
 
-import { AppIcon } from "../_components/app-icon";
 import { BackendResourceState } from "../_components/backend-resource-state";
 import { formatMediumDateTime } from "../_components/date-format";
 import { FieldNote, fieldControlProps } from "../_components/field-validation";
@@ -35,9 +34,11 @@ import {
   DirectoryFormError,
   DirectoryHeader,
   DirectoryPager,
+  DirectorySearchForm,
   DirectorySkeletonRows,
   DirectoryToast,
   SiteDirectoryAccessState,
+  focusAfterCommit,
   useDirectoryPage,
   useSiteDirectoryAccess,
 } from "./site-directory-shared";
@@ -51,10 +52,6 @@ const KIND_BADGE: Readonly<Record<OrganizationKind, string>> = {
   personal: "badge badge--warning",
   top_level: "badge badge--info",
 };
-
-function focusAfterCommit(element: HTMLElement | null): void {
-  globalThis.setTimeout(() => element?.focus(), 0);
-}
 
 export interface SiteOrganizationsPanelProps {
   readonly pageSize?: number;
@@ -137,8 +134,7 @@ function OrganizationsDirectory({ client, headingId, pageSize }: {
   );
   const busy = directory.status === "loading";
 
-  function applySearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function applySearch() {
     setSearch(searchDraft.trim());
     setPageNumber(1);
   }
@@ -221,20 +217,14 @@ function OrganizationsDirectory({ client, headingId, pageSize }: {
         onAction={() => setCreating(true)}
         disabledReason={null}
       />
-      <form className="site-directory-toolbar" role="search" aria-label="Search organizations" onSubmit={applySearch}>
-        <label className="site-directory-search">
-          <span className="sr-only">Search organizations</span>
-          <i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
-          <input
-            ref={searchRef}
-            type="search"
-            value={searchDraft}
-            placeholder="Organization name or slug"
-            onChange={(event) => setSearchDraft(event.target.value)}
-          />
-        </label>
-        <button className="button" type="submit">Search</button>
-      </form>
+      <DirectorySearchForm
+        label="Search organizations"
+        placeholder="Organization name or slug"
+        value={searchDraft}
+        inputRef={searchRef}
+        onChange={setSearchDraft}
+        onSubmit={applySearch}
+      />
       {body}
       {creating ? (
         <CreateOrganizationDialog
