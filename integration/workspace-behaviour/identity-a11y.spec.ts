@@ -76,7 +76,11 @@ test("the organization menu closes on Tab and moves focus to the next control in
   await page.keyboard.press("Tab");
   await expect(menu).toHaveCount(0);
   await expect(trigger).not.toBeFocused();
-  expect(await page.evaluate(() => document.querySelector(".suite-product-bar")?.contains(document.activeElement) ?? false), "focus moves on within the bar").toBe(true);
+  // The menu moves focus on the next frame, so the check retries until it lands.
+  await expect.poll(() => page.evaluate(() => {
+    const active = document.activeElement;
+    return active !== null && active !== document.body && (document.querySelector(".suite-product-bar")?.contains(active) ?? false);
+  }), { message: "focus moves on within the bar" }).toBe(true);
 
   await trigger.focus();
   await page.keyboard.press("ArrowUp");

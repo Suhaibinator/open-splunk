@@ -134,10 +134,22 @@ function submitProductFind(
  */
 const MENU_ITEM_SELECTOR = '[role="menuitem"], [role="menuitemradio"]';
 
-function focusFirstMenuItem(nextMenu: ProductMenu) {
+/**
+ * Focuses the first (or last) entry of a menu once it has rendered, unless a
+ * key pressed before the next frame (End, Home, an arrow) already moved focus
+ * into it: the deferred focus must not snap it back.
+ */
+function focusMenuEdge(nextMenu: ProductMenu, edge: "first" | "last") {
   window.requestAnimationFrame(() => {
-    document.querySelector<HTMLElement>(`[data-suite-menu="${nextMenu}"] :is(${MENU_ITEM_SELECTOR})`)?.focus();
+    const popover = document.querySelector<HTMLElement>(`[data-suite-menu="${nextMenu}"]`);
+    if (popover === null || popover.contains(document.activeElement)) return;
+    const items = popover.querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR);
+    items.item(edge === "first" ? 0 : items.length - 1)?.focus();
   });
+}
+
+function focusFirstMenuItem(nextMenu: ProductMenu) {
+  focusMenuEdge(nextMenu, "first");
 }
 
 const THEME_LABELS: Record<ThemePreference, string> = {
@@ -287,11 +299,7 @@ function ProductShellFrame({
     event.preventDefault();
     menuTriggerRef.current = event.currentTarget;
     setMenu(nextMenu);
-    if (event.key === "ArrowDown") focusFirstMenuItem(nextMenu);
-    else window.requestAnimationFrame(() => {
-      const items = document.querySelectorAll<HTMLElement>(`[data-suite-menu="${nextMenu}"] :is(${MENU_ITEM_SELECTOR})`);
-      items.item(items.length - 1)?.focus();
-    });
+    focusMenuEdge(nextMenu, event.key === "ArrowDown" ? "first" : "last");
   }
 
   /**

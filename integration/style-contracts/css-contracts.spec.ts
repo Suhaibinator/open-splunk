@@ -2611,8 +2611,17 @@ async function horizontalOverflow(page: Page): Promise<{ overflow: number; cross
     for (const element of document.querySelectorAll("main *")) {
       const style = globalThis.getComputedStyle(element);
       if (style.display === "none" || style.position === "absolute" || style.position === "fixed") continue;
-      // Content inside a scroll container scrolls there, not on the page.
-      if (element.closest(".table-wrap") !== null && !element.classList.contains("table-wrap")) continue;
+      // Content inside a scroll or clipping container (a .table-wrap, an
+      // ellipsis-truncated name) scrolls or is cut there, not on the page; the
+      // container itself is still measured.
+      let clipped = false;
+      for (let parent = element.parentElement; parent !== null && parent.tagName !== "MAIN"; parent = parent.parentElement) {
+        if (globalThis.getComputedStyle(parent).overflowX !== "visible") {
+          clipped = true;
+          break;
+        }
+      }
+      if (clipped) continue;
       const box = element.getBoundingClientRect();
       if (box.width > 0 && box.right > viewport + 0.5) {
         crossing.push(`${element.tagName.toLowerCase()}${[...element.classList].map((name) => `.${name}`).join("")} ends at ${Math.round(box.right)}`);

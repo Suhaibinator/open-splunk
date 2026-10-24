@@ -45,7 +45,6 @@ function watchDialogs(page: Page): string[] {
 for (const returnTo of [
   "javascript:alert(document.domain)",
   "/\\evil.example/steal",
-  "/%5Cevil.example/steal",
   "/\t/evil.example/steal",
   "https:evil.example",
   "/%2e%2e//evil.example",
@@ -63,11 +62,27 @@ for (const returnTo of [
   });
 }
 
+// An encoded backslash is not a separator to the URL parser, so it stays a
+// literal path segment on this origin (return-to-hostile.test.ts holds the
+// same contract); it never names evil.example as a host.
+test("returnTo \"/%5Cevil.example/steal\" stays a path on this origin", async ({ page, baseURL }) => {
+  const dialogs = watchDialogs(page);
+  await signOutFirst(page, `/signin/?returnTo=${encodeURIComponent("/%5Cevil.example/steal")}`);
+  await signIn(page, "mona@open-splunk.test");
+  await expect.poll(() => new URL(page.url()).pathname).toBe("/%5Cevil.example/steal");
+  const landed = new URL(page.url());
+  expect(landed.origin).toBe(new URL(baseURL ?? "http://127.0.0.1").origin);
+  expect(landed.host).not.toContain("evil.example");
+  expect(dialogs).toEqual([]);
+});
+
 test("Back after a password sign-in returns to the page before sign-in, not to the sign-in card", async ({ page }) => {
   await page.goto("/help/");
-  await signOutFirst(page, "/signin/?returnTo=%2Freports%2F");
+  // /datasets/ renders where it lands; /reports/ would canonicalise itself to
+  // /reports/saved-searches/ and race the URL assertion.
+  await signOutFirst(page, "/signin/?returnTo=%2Fdatasets%2F");
   await signIn(page, "mona@open-splunk.test");
-  await expect(page).toHaveURL(/\/reports\/$/u);
+  await expect(page).toHaveURL(/\/datasets\/$/u);
   await page.goBack();
   await expect(page).toHaveURL(/\/help\/$/u);
 });
@@ -112,7 +127,10 @@ test("too many wrong authenticator codes hold sign-in with a focusable countdown
   await expect(page.getByRole("alert").filter({ hasText: "Too many codes tried" })).toBeVisible();
   const held = page.getByRole("button", { name: /Try again in 1 minute/u });
   await expect(held).toHaveAttribute("aria-disabled", "true");
-  await expect(held).toBeEnabled();
+  // aria-disabled, not the native attribute: Playwright reads either as
+  // "disabled", so the native one is checked directly to prove the countdown
+  // keeps its place in the Tab order.
+  expect(await held.evaluate((button) => (button as HTMLButtonElement).disabled), "the held button is not natively disabled").toBe(false);
   await held.focus();
   await expect(held).toBeFocused();
   await held.press("Enter");
