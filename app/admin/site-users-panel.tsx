@@ -52,6 +52,7 @@ import {
   SiteDirectoryAccessState,
   focusAfterCommit,
   useDirectoryPage,
+  useEmptyPageFallback,
   useSiteDirectoryAccess,
 } from "./site-directory-shared";
 
@@ -173,7 +174,8 @@ function UsersDirectory({ client, headingId, pageSize, selfId }: UsersDirectoryP
   }
 
   const page = directory.page;
-  const busy = directory.status === "loading";
+  const steppingBack = useEmptyPageFallback(directory, setPageNumber);
+  const busy = directory.status === "loading" || steppingBack;
   const filtered = search.length > 0 || filter !== "all";
 
   let body;

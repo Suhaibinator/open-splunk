@@ -337,6 +337,21 @@ export interface OrganizationSwitch {
   select(choice: OrganizationChoice): Promise<boolean>;
 }
 
+/**
+ * Whether switching to `organizationName` may go ahead. A switch remounts the
+ * page in the new organization, which discards whatever it has not saved as
+ * surely as leaving it would, so it asks the same question leaving does:
+ * every page holding unsaved work (a dirty form, a one-time secret on screen)
+ * already cancels `beforeunload`, and a cancelled one here becomes a
+ * confirmation instead of a silent loss.
+ */
+export function confirmDiscardingUnsavedWork(organizationName: string): boolean {
+  if (typeof window === "undefined") return true;
+  const proceed = window.dispatchEvent(new Event("beforeunload", { cancelable: true }));
+  if (proceed) return true;
+  return window.confirm(`This page has changes that are not saved. Switching to ${organizationName} discards them. Switch anyway?`);
+}
+
 export function useOrganizationSwitch(): OrganizationSwitch {
   const identity = useOptionalIdentity();
   const principal = identity?.status === "signed_in" ? identity.principal : null;
@@ -349,6 +364,7 @@ export function useOrganizationSwitch(): OrganizationSwitch {
   const select = useCallback(async (choice: OrganizationChoice) => {
     if (identity === null || pending !== null) return false;
     if (choice.active) return true;
+    if (!confirmDiscardingUnsavedWork(choice.name)) return false;
     setPending(choice);
     setError(null);
     setAnnouncement(`Switching to ${choice.name}…`);

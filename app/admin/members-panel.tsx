@@ -21,10 +21,12 @@ import { AppIcon } from "../_components/app-icon";
 import { BackendResourceState } from "../_components/backend-resource-state";
 import { formatMediumDateTime } from "../_components/date-format";
 import { FieldNote, fieldControlProps, type FieldError } from "../_components/field-validation";
-import { IdentityProvider, useIdentity } from "../_components/identity-provider";
+import { useIdentity } from "../_components/identity-provider";
 import { Modal } from "../_components/modal";
+import { ShellIdentityBoundary } from "../_components/product-identity";
 import { StatusLabel } from "../_components/status";
 import { SubmitFocusAnnouncement, useSubmitFocus } from "../_components/submit-focus";
+import { formatCount, pageForEmptyResult } from "./site-directory-data";
 import { DirectoryPager } from "./site-directory-shared";
 import {
   CAPABILITY_LABELS,
@@ -59,14 +61,17 @@ export interface MembersSectionProps {
 }
 
 /**
- * The administration section: its own identity provider, until the product
- * shell mounts one for every page.
+ * The administration section, reading the identity the product shell already
+ * provides, or mounting its own when rendered outside the shell. Sharing the
+ * shell's provider is what keeps the two in step: leaving the organization,
+ * or lowering one's own role, here re-reads the principal the bar, the
+ * navigation and the access gate show too.
  */
 export function MembersSection({ dataMode, now }: MembersSectionProps) {
   return (
-    <IdentityProvider dataMode={dataMode}>
+    <ShellIdentityBoundary dataMode={dataMode}>
       <MembersPanel now={now} />
-    </IdentityProvider>
+    </ShellIdentityBoundary>
   );
 }
 
@@ -220,7 +225,12 @@ function usePagedList<T>(
     let cancelled = false;
     load(page).then(
       (value) => {
-        if (!cancelled) setLoaded({ page, generation, result: { ok: true, value } });
+        if (cancelled) return;
+        // A page emptied while it was open (its last row removed, here or by
+        // someone else) steps back rather than reading as an empty organization.
+        const stepBackTo = pageForEmptyResult(value.page, value.items.length);
+        if (stepBackTo === null) setLoaded({ page, generation, result: { ok: true, value } });
+        else setPage(stepBackTo);
       },
       (error: unknown) => {
         if (cancelled) return;
@@ -306,10 +316,15 @@ function MembersManager({ client, organization, principal, now, onSessionChanged
     if (options.selfChanged === true) onSessionChanged();
   }
 
-  /** A mutation failed: refresh whatever may be stale, and re-read the session if it ended. */
+  /**
+   * A mutation failed: refresh whatever may be stale, and re-read the session
+   * if it ended. A refusal is stale state on one side or the other -- the
+   * actor's own role changed, or the member's did (promoted past what the
+   * actor may manage, say) since the list was read -- so it re-reads both.
+   */
   function failed(error: unknown) {
     if (isIdentityError(error, "unauthenticated") || isIdentityError(error, "otp_required") || isIdentityError(error, "forbidden")) onSessionChanged();
-    if (isIdentityError(error, "not_found") || isIdentityError(error, "conflict")) {
+    if (isIdentityError(error, "not_found") || isIdentityError(error, "conflict") || isIdentityError(error, "forbidden")) {
       members.reload();
       invitations.reload();
     }
@@ -347,7 +362,7 @@ function MembersManager({ client, organization, principal, now, onSessionChanged
             <h3 id="members-heading" ref={membersHeadingRef} tabIndex={-1}>Members</h3>
             <p>Explicit roles are granted here; effective roles also count roles inherited from parent organizations.</p>
           </div>
-          {memberPage?.page.totalItems === undefined ? null : <span>{memberPage.page.totalItems === 1 ? "1 member" : `${memberPage.page.totalItems} members`}</span>}
+          {memberPage?.page.totalItems === undefined ? null : <span>{memberPage.page.totalItems === 1 ? "1 member" : `${formatCount(memberPage.page.totalItems)} members`}</span>}
         </header>
         <MembersTable
           actor={actor}
@@ -474,12 +489,12 @@ function MembersTable({ actor, explicitOwners, loaded, organization, organizatio
     return <BackendResourceState kind="loading" title="Loading members" message={`Reading the members of ${organization.name}.`} />;
   }
   if (!loaded.result.ok) return failureState(describeMembersFailure(loaded.result.error, "load members"), onRetry);
-  const { items } = loaded.result.value;
+  const { items, page } = loaded.result.value;
   if (items.length === 0) {
     return (
       <BackendResourceState
         kind="empty"
-        title="No members on this page"
+        title={page.currentPage > 1 ? "No members on this page" : "No members yet"}
         message="Invite someone to give them access to this organization."
         action={<button type="button" onClick={onInvite}>Invite member</button>}
       />

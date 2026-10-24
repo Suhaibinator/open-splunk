@@ -72,6 +72,8 @@ const testFiles = [
   path.join("app", "admin", "app-catalog-mutations.test.tsx"),
   path.join("app", "admin", "members-policy.test.ts"),
   path.join("app", "admin", "members-panel.mount.test.tsx"),
+  path.join("app", "admin", "admin-shell-states.mount.test.tsx"),
+  path.join("app", "admin", "admin-list-edges.mount.test.tsx"),
   path.join("app", "admin", "backend-admin-console-hec.test.ts"),
   path.join("app", "admin", "hec-operations.test.tsx"),
   path.join("app", "admin", "hec-operations-lifecycle.mount.test.tsx"),

@@ -19,6 +19,7 @@ import { BackendResourceState } from "../_components/backend-resource-state";
 import { useIdentity } from "../_components/identity-provider";
 import {
   asIdentityError,
+  pageForEmptyResult,
   pagePositionLabel,
   pageRangeLabel,
   presentDirectoryError,
@@ -251,6 +252,21 @@ export function useDirectoryPage<T>(key: string, load: () => Promise<Page<T>>): 
     return { error: null, errorAt: null, page: current.outcome.page, reload, status: "ready", updateItems };
   }
   return { error: current.outcome.error, errorAt: current.outcome.at, page: current.lastPage, reload, status: "error", updateItems };
+}
+
+/**
+ * Steps a directory back from an empty page past the first (see
+ * `pageForEmptyResult`). True while it does, so the panel shows the page as
+ * loading rather than as an empty directory.
+ */
+export function useEmptyPageFallback<T>(directory: DirectoryPageState<T>, setPage: (page: number) => void): boolean {
+  const target = directory.status === "ready" && directory.page !== null
+    ? pageForEmptyResult(directory.page.page, directory.page.items.length)
+    : null;
+  useEffect(() => {
+    if (target !== null) setPage(target);
+  }, [setPage, target]);
+  return target !== null;
 }
 
 /** Seconds left until `until`, ticking once a second; 0 once it has passed or when there is nothing to wait for. */
