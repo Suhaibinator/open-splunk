@@ -31,6 +31,14 @@ var embeddedMigrationSHA256 = map[string]map[string]string{
 		"0001_baseline.sql":              "3f1d7104e6fbb1072c8353855d055a950b22135828ec9f23d0bd63c1fef601da",
 		"0002_normalized_id_indexes.sql": "e8c5ae6e7887d2b2ae9917feb6b2bf3d93e2c4d81567fc9891b40f3469278b7d",
 	},
+	"PostgreSQL": {
+		"0001_tenants_core_ingest.sql": "213fc0fd309f24a453bcd87382ccb8c5a8e1d16b4f1bc9f1fea3ba18026be361",
+		"0002_collectors_apps.sql":     "034e45d058053b410bd4a573218e54d43ad37c599561bcfc0600a1451a35f3ff",
+		"0003_search.sql":              "88332c4141a3be8a3e62a21bd68775741eb2d02214564fb01dc4236fe57dec16",
+		"0004_audit.sql":               "269b02434caee6843189b6a4992588004944192698ddbe8986f9ab09bc428f87",
+		"0005_knowledge.sql":           "6b26e119ceb0f3ad8e149abb70fa58973be9ca98c3a7812b0514341931109385",
+		"0006_lookups.sql":             "b186d69c8dcbe1745426839443d51e6a210a926405f82ee05eae7be331aa322c",
+	},
 }
 
 func TestEmbeddedMigrationSetsAreContiguousAndHaveOneBaseline(t *testing.T) {
