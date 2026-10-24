@@ -87,4 +87,5 @@
 @import url("../search-workspace/components/workspace-dialogs.css");
 @import url("../search-workspace/panels/visualization-panel.css");
 @import url("../help/help.css");
+@import url("../admin/members.css");
 @import url("./interaction.css");

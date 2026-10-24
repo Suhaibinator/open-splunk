@@ -61,7 +61,8 @@ is:
 | 32 | `app/search-workspace/components/workspace-dialogs.css` | workspace dialogs; `workspace-dialog-` namespace |
 | 33 | `app/search-workspace/panels/visualization-panel.css` | result visualizations; `visualization-` namespace |
 | 34 | `app/help/help.css` | Help documentation, navigation, and search; `help-` namespace |
-| 35 | `app/styles/interaction.css` | coarse-pointer and reduced-motion floors |
+| 35 | `app/admin/members.css` | Members & invitations panel and dialogs; `members-` namespace |
+| 36 | `app/styles/interaction.css` | coarse-pointer and reduced-motion floors |
 
 The five palette files must follow both base token files: a palette's light
 block is written as `:root:where([data-palette="…"])` so it keeps base light's
