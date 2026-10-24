@@ -50,6 +50,7 @@ var embeddedMigrationSHA256 = map[string]map[string]string{
 		"0016_lookups_triggers.sql":                  "6860a46e6f946cbc7f38d0825d9b04bcc220282086f0b6c6f517f94a27f176df",
 		"0017_audit_1_triggers.sql":                  "f0f89013fe8b7c160ccca9a7bc86227332f6c529ef003c542c545282e91c75cc",
 		"0018_audit_2_triggers.sql":                  "58daf74ec5928c7330e177efb8ac0ecba741e5ae9abf6601c41f8e198569b7d2",
+		"0019_pin_routine_search_path.sql":           "be28087281c4bd65acee34ccdd217192476850b82ca25fbc81ef14aae067d010",
 	},
 }
 

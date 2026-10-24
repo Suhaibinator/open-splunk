@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -25,11 +26,22 @@ const (
 
 // ApplyPostgresMigrations applies a contiguous, ordered set of SQL migrations
 // to the open_splunk schema. Ledger verification and every pending migration
-// run in one transaction holding pg_advisory_xact_lock, so concurrent server
-// starts serialize, a failed migration leaves no partial schema, and a
-// crashed runner releases the lock with its session. Reapplying an unchanged
-// set is a no-op; any rewritten, renamed, gapped, or unknown ledger entry is
-// refused as drift.
+// run in one READ COMMITTED transaction holding pg_advisory_xact_lock, so
+// concurrent runners serialize whatever the server's default isolation is, a
+// failed migration leaves no partial schema, and a crashed runner releases
+// the lock with its session. Reapplying an unchanged set is a no-op; any
+// rewritten, renamed, gapped, or unknown ledger entry, or an empty ledger
+// over existing objects, is refused as drift.
+//
+// The run uses one pooled session and discards it afterwards, so session
+// state a migration sets (a plain SET, say) never reaches later users of the
+// pool. A session holding temporary relations is refused, because they would
+// shadow the control tables that migration bodies name unqualified, and a
+// migration that ends the runner's transaction (COMMIT, ROLLBACK and their
+// synonyms) is refused before its ledger row is written.
+//
+// The migration lock only serializes runners. A server must also hold the
+// single-active-server lock while it migrates; OpenPostgresServer does both.
 func ApplyPostgresMigrations(ctx context.Context, db *sql.DB, migrationFS fs.FS) (err error) {
 	if ctx == nil || db == nil || migrationFS == nil {
 		return fmt.Errorf("%w: migration context, database, and filesystem are required", ErrInvalidArgument)
@@ -39,7 +51,20 @@ func ApplyPostgresMigrations(ctx context.Context, db *sql.DB, migrationFS fs.FS)
 		return err
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("reserve PostgreSQL migration session: %w", err)
+	}
+	defer func() {
+		err = errors.Join(err, discardPostgresMigrationSession(conn))
+	}()
+
+	// READ COMMITTED gives every statement a fresh snapshot, so a runner that
+	// waited for the lock inspects the catalog as the previous runner left
+	// it. At REPEATABLE READ or SERIALIZABLE (a database or role default) the
+	// snapshot would be taken by the lock statement, before the lock is
+	// granted.
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return fmt.Errorf("begin PostgreSQL migrations: %w", err)
 	}
@@ -52,17 +77,33 @@ func ApplyPostgresMigrations(ctx context.Context, db *sql.DB, migrationFS fs.FS)
 		}
 	}()
 
+	// Migration bodies use unqualified names. Pin them to the control schema
+	// before running anything, even when the caller's pool does not, so
+	// neither the lock call nor a migration resolves a name through the
+	// caller's search_path and a migration can never create objects in public
+	// or another schema. Each migration re-pins it below.
+	if err := pinPostgresMigrationSearchPath(ctx, tx); err != nil {
+		return err
+	}
+	var hasTemporaryRelations bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_catalog.pg_class WHERE relnamespace = pg_catalog.pg_my_temp_schema()
+		)`).Scan(&hasTemporaryRelations); err != nil {
+		return fmt.Errorf("inspect PostgreSQL migration session: %w", err)
+	}
+	if hasTemporaryRelations {
+		return fmt.Errorf(
+			"%w: the PostgreSQL migration session holds temporary relations, which would shadow control tables",
+			ErrInvalidArgument,
+		)
+	}
+
 	lockContext, cancelLock := context.WithTimeout(ctx, migrationLockRetryWindow)
-	_, lockErr := tx.ExecContext(lockContext, `SELECT pg_advisory_xact_lock($1)`, postgresMigrationAdvisoryLockKey)
+	_, lockErr := tx.ExecContext(lockContext, `SELECT pg_catalog.pg_advisory_xact_lock($1)`, postgresMigrationAdvisoryLockKey)
 	cancelLock()
 	if lockErr != nil {
 		return fmt.Errorf("acquire PostgreSQL migration lock: %w", lockErr)
-	}
-	// Migration bodies use unqualified names. Pin them to the control schema
-	// for this transaction even when the caller's pool does not, so a
-	// migration can never create objects in public or another schema.
-	if _, err := tx.ExecContext(ctx, `SET LOCAL search_path TO `+PostgresSchema); err != nil {
-		return fmt.Errorf("pin PostgreSQL migration search_path: %w", err)
 	}
 
 	var schemaExists, ledgerExists, schemaHasObjects bool
@@ -92,11 +133,50 @@ func ApplyPostgresMigrations(ctx context.Context, db *sql.DB, migrationFS fs.FS)
 	if err != nil {
 		return err
 	}
-	for _, next := range loaded[int(appliedCount):] {
+	if appliedCount == 0 && schemaHasObjects {
+		return fmt.Errorf(
+			"%w: empty migration ledger over a %s schema that contains objects",
+			ErrMigrationDrift,
+			PostgresSchema,
+		)
+	}
+	pending := loaded[int(appliedCount):]
+	// The transaction ID identifies the runner's transaction; a migration
+	// that commits or rolls it back leaves the session without it. It is
+	// assigned only when there is work, so a no-op run stays read-only.
+	var transactionID string
+	if len(pending) > 0 {
+		if err := tx.QueryRowContext(ctx, `SELECT pg_catalog.pg_current_xact_id()::text`).Scan(&transactionID); err != nil {
+			return fmt.Errorf("identify PostgreSQL migration transaction: %w", err)
+		}
+	}
+	for _, next := range pending {
+		// A SET or SET LOCAL in an earlier migration must not change where
+		// this one's unqualified names resolve.
+		if err := pinPostgresMigrationSearchPath(ctx, tx); err != nil {
+			return err
+		}
 		// A migration body has no bind parameters, so pgx sends it with the
 		// simple query protocol and multi-statement files run as written.
 		if _, err := tx.ExecContext(ctx, string(next.contents)); err != nil {
 			return fmt.Errorf("apply PostgreSQL migration %s: %w", next.name, err)
+		}
+		// The simple protocol lets a COMMIT or ROLLBACK in the body end the
+		// runner's transaction, releasing the migration lock and leaving the
+		// rest to autocommit. That cannot be undone here, but it is caught
+		// before the ledger records the migration or a later one runs.
+		var currentTransactionID sql.NullString
+		if err := tx.QueryRowContext(ctx,
+			`SELECT pg_catalog.pg_current_xact_id_if_assigned()::text`,
+		).Scan(&currentTransactionID); err != nil {
+			return fmt.Errorf("check PostgreSQL migration %s transaction: %w", next.name, err)
+		}
+		if !currentTransactionID.Valid || currentTransactionID.String != transactionID {
+			return fmt.Errorf(
+				"%w: PostgreSQL migration %s ended the runner's transaction; migrations must not contain transaction control",
+				ErrInvalidArgument,
+				next.name,
+			)
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO open_splunk.schema_migrations (version, name, checksum, applied_at_unix_micro)
@@ -110,6 +190,27 @@ func ApplyPostgresMigrations(ctx context.Context, db *sql.DB, migrationFS fs.FS)
 		return fmt.Errorf("commit PostgreSQL migrations: %w", err)
 	}
 	committed = true
+	return nil
+}
+
+func pinPostgresMigrationSearchPath(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `SET LOCAL search_path TO `+PostgresSchema); err != nil {
+		return fmt.Errorf("pin PostgreSQL migration search_path: %w", err)
+	}
+	return nil
+}
+
+// discardPostgresMigrationSession closes the migration session instead of
+// returning it to the pool. Returning driver.ErrBadConn from Raw is how
+// database/sql is told to drop a connection.
+func discardPostgresMigrationSession(conn *sql.Conn) error {
+	if err := conn.Raw(func(any) error { return driver.ErrBadConn }); err != nil &&
+		!errors.Is(err, driver.ErrBadConn) && !errors.Is(err, sql.ErrConnDone) {
+		return fmt.Errorf("discard PostgreSQL migration session: %w", err)
+	}
+	if err := conn.Close(); err != nil && !errors.Is(err, sql.ErrConnDone) {
+		return fmt.Errorf("close PostgreSQL migration session: %w", err)
+	}
 	return nil
 }
 
@@ -183,8 +284,9 @@ func PostgresMigrationSetIdentity(migrationFS fs.FS) (MigrationIdentity, error) 
 }
 
 // postgresMigrationStateQuery reports whether the schema exists, whether the
-// ledger exists, and whether the schema holds any relation, routine, or
-// user-defined type. Table row types are covered by their pg_class entry.
+// ledger exists, and whether the schema holds any relation other than the
+// ledger table and its primary key, any routine, or any user-defined type.
+// Table row types are covered by their pg_class entry.
 const postgresMigrationStateQuery = `
 	SELECT
 		EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = $1),
@@ -199,6 +301,7 @@ const postgresMigrationStateQuery = `
 			FROM pg_catalog.pg_class AS c
 			JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
 			WHERE n.nspname = $1
+				AND (c.relname, c.relkind) NOT IN (('schema_migrations', 'r'), ('schema_migrations_pkey', 'i'))
 		) OR EXISTS (
 			SELECT 1
 			FROM pg_catalog.pg_proc AS p
@@ -272,7 +375,10 @@ func loadPostgresMigrations(migrationFS fs.FS) ([]migration, error) {
 	}
 	loaded := make([]migration, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+		// Any spelling of the .sql extension is a migration candidate, so a
+		// file saved as NNNN_name.SQL is rejected rather than silently left
+		// out of the set.
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".sql") {
 			continue
 		}
 		matches := migrationFilename.FindStringSubmatch(entry.Name())

@@ -36,6 +36,7 @@ Files apply in filename order, and each file depends only on earlier ones:
 | `0016_lookups_triggers.sql` | triggers on lookup assets, asset versions and stages, asset tenant ledgers, lookup definitions and their versions |
 | `0017_audit_1_triggers.sql` | triggers on `audit_events`, feature-operation and search-attempt audit events, receipt and knowledge-attempt tenant state |
 | `0018_audit_2_triggers.sql` | triggers on `api_mutation_receipts`, `knowledge_attempt_audit_events`, the audit, feature-operation and search-attempt tenant state |
+| `0019_pin_routine_search_path.sql` | pins `search_path = open_splunk` on the 136 routines that `0008`, `0009`, `0012`, `0016` and `0017` created without it |
 
 `0004_audit.sql` comes before knowledge because the knowledge mutation
 authorities reference `audit_events`. Inside a file, tables are ordered by
@@ -47,6 +48,15 @@ index in that file exists.
 Objects are created unqualified. The runner sets `search_path = open_splunk`
 before applying a file; the files never name `public`. The database must use
 UTF-8 encoding, and `0001` raises an error otherwise.
+
+Every routine pins its own `search_path` (`SET search_path FROM CURRENT` in
+its `CREATE FUNCTION`), because a trigger runs with the search_path of
+whichever session fires it, and an unpinned body would resolve its
+unqualified tables there, possibly to a same-named table in `public`. A test
+fails when a routine in `open_splunk` lacks the pin. A file must not contain
+transaction control (`BEGIN`, `COMMIT`, `ROLLBACK` and their synonyms): the
+runner applies all pending files in one transaction and refuses a file that
+ends it.
 
 ## Translation rules
 
