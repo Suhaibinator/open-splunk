@@ -401,6 +401,19 @@ export type InvitationAcceptanceResult =
   | { readonly kind: "account" }
   | { readonly kind: "organization"; readonly membership: OrganizationMembership };
 
+/**
+ * go-common `EmailCreateRequest`. Registration signs nobody in: go-common
+ * emails a verification link, and following it (`completeEmailVerification`)
+ * starts the session.
+ */
+export interface RegistrationInput {
+  readonly email: string;
+  readonly password: string;
+  readonly username: string;
+  readonly firstName: string;
+  readonly lastName: string;
+}
+
 export interface MemberInvitationInput {
   readonly email: string;
   readonly role: OrgRole;
@@ -556,6 +569,14 @@ export interface IdentityClient {
   /** Sets the new password; it does not sign in. */
   completePasswordReset(completion: PasswordResetCompletion): Promise<void>;
   acceptInvitation(acceptance: InvitationAcceptance): Promise<InvitationAcceptanceResult>;
+  /** Creates an unverified account and emails a verification link; it does not sign in. A taken address is `conflict`. */
+  registerWithEmail(input: RegistrationInput): Promise<void>;
+  /** Follows the emailed verification link; resolves with the principal go-common signed in, or null when it did not. */
+  completeEmailVerification(token: string): Promise<Principal | null>;
+  /** The signed-in user's own pending organization invitations (go-common `/user/invitations/list`). */
+  listMyInvitations(page?: PageRequest): Promise<Page<OrganizationInvitation>>;
+  /** Declines one of the signed-in user's own invitations (go-common `/user/invitations/decline`). */
+  declineInvitation(invitationId: string): Promise<void>;
 
   /** Selects the organization later calls act in; a site admin may select any organization. */
   setActiveOrganization(organizationId: OrganizationId): Promise<Principal>;

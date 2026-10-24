@@ -52,6 +52,7 @@ import {
   type PageRequest,
   type PasswordResetCompletion,
   type Principal,
+  type RegistrationInput,
   type UserId,
 } from "./identity";
 
@@ -146,6 +147,7 @@ interface InvitationRecord {
   createdAt: string;
   expiresAt: string;
   acceptedAt?: string;
+  declinedAt?: string;
 }
 
 interface OAuthIdentity {
@@ -248,6 +250,20 @@ export interface FakeIdentityOptions {
   readonly oauthCallbackPath?: string;
   /** Delay before every call settles, to exercise pending states. */
   readonly latencyMs?: number;
+  /**
+   * Organization invitations added to the seeded directory, for a surface that
+   * needs one the fixed seed does not have (the demo's invitation for an
+   * address with no account). Each is pending and expires a week after `now`.
+   */
+  readonly additionalInvitations?: readonly FakeSeedInvitation[];
+}
+
+export interface FakeSeedInvitation {
+  readonly id: string;
+  readonly organizationId: OrganizationId;
+  readonly email: string;
+  readonly role: OrgRole;
+  readonly invitedByUserId: UserId;
 }
 
 export const FAKE_IDENTITY_STORAGE_KEY = "open-splunk.fake-identity-session";
@@ -255,9 +271,9 @@ export const FAKE_OAUTH_CALLBACK_PATH = "/auth/oauth/callback/";
 
 /** A message the fake would have emailed. */
 export interface FakeOutboxMessage {
-  readonly kind: "password_reset" | "account_invitation" | "organization_invitation";
+  readonly kind: "password_reset" | "account_invitation" | "organization_invitation" | "email_verification";
   readonly email: string;
-  /** The reset code, account-invitation token, or organization invitation ID the link carries. */
+  /** The reset code, account-invitation token, organization invitation ID, or verification token the link carries. */
   readonly token: string;
 }
 
@@ -365,6 +381,7 @@ export class FakeIdentityClient implements IdentityClient {
   private memberships: MembershipRecord[] = [];
   private readonly invitations = new Map<string, InvitationRecord>();
   private readonly accountInvitations = new Map<string, { userId: UserId; used: boolean }>();
+  private readonly emailVerifications = new Map<string, { userId: UserId; used: boolean }>();
   private readonly passwordResets = new Map<string, { userId: UserId; expiresAt: number; used: boolean }>();
   private readonly passwordResetRequests = new Map<string, number>();
   private readonly loginFailures = new Map<string, number[]>();
@@ -386,6 +403,15 @@ export class FakeIdentityClient implements IdentityClient {
     this.oauthCallbackPath = options.oauthCallbackPath ?? FAKE_OAUTH_CALLBACK_PATH;
     this.latencyMs = options.latencyMs ?? 0;
     this.seed();
+    for (const extra of options.additionalInvitations ?? []) {
+      const createdAt = this.now();
+      this.invitations.set(extra.id, {
+        ...extra,
+        email: normalizeEmail(extra.email),
+        createdAt: new Date(createdAt).toISOString(),
+        expiresAt: new Date(createdAt + FAKE_INVITATION_TTL_MS).toISOString(),
+      });
+    }
 
     const initialEmail = options.initialSignedInEmail ?? null;
     const initialUser = initialEmail === null ? undefined : this.findUserByEmail(initialEmail);
@@ -434,6 +460,8 @@ export class FakeIdentityClient implements IdentityClient {
         fail("unauthenticated", "Invalid credentials");
       }
       if (record.user.banned) fail("unauthenticated", "User account is banned");
+      // go-common answers 403 for a correct password on an unverified address.
+      if (!record.emailVerified) fail("forbidden", "Email not verified");
       this.loginFailures.delete(email);
       if (record.otpCode !== null) {
         const id = `otp-challenge-${this.next()}`;
@@ -612,7 +640,9 @@ export class FakeIdentityClient implements IdentityClient {
 
       const { record } = this.requireSession();
       const invitation = this.invitations.get(acceptance.invitationId);
-      if (invitation === undefined || invitation.acceptedAt !== undefined) fail("not_found", "Invitation not found");
+      if (invitation === undefined || invitation.acceptedAt !== undefined || invitation.declinedAt !== undefined) {
+        fail("not_found", "Invitation not found");
+      }
       if (invitation.email !== record.user.email) fail("forbidden", "This invitation was sent to a different email address.");
       if (this.now() > Date.parse(invitation.expiresAt)) fail("invalid", "This invitation has expired.");
       if (this.explicitMembership(invitation.organizationId, record.user.id) !== undefined) {
@@ -623,6 +653,68 @@ export class FakeIdentityClient implements IdentityClient {
       this.memberships.push(added);
       invitation.acceptedAt = createdAt;
       return { kind: "organization", membership: this.membershipView(added.organizationId, added.userId) } satisfies InvitationAcceptanceResult;
+    });
+  }
+
+  // ---- registration and the user's own invitations -------------------------
+
+  public registerWithEmail(input: RegistrationInput): Promise<void> {
+    return this.call("registerWithEmail", () => {
+      const email = requireEmail(input.email);
+      const username = typeof input.username === "string" ? input.username.trim() : "";
+      if (!USERNAME_PATTERN.test(username)) {
+        fail("invalid", "Usernames are 3–32 letters, digits, dots, dashes or underscores.");
+      }
+      const firstName = typeof input.firstName === "string" ? input.firstName.trim() : "";
+      const lastName = typeof input.lastName === "string" ? input.lastName.trim() : "";
+      if (firstName.length === 0 || lastName.length === 0) fail("invalid", "Enter your first and last name.");
+      const password = requireNewPassword(input.password);
+      if (this.findUserByEmail(email) !== undefined) fail("conflict", "Email already exists");
+      if ([...this.users.values()].some((record) => record.user.username.toLowerCase() === username.toLowerCase())) {
+        fail("conflict", "Username is already taken");
+      }
+      const record = this.insertUser({ email, username, firstName, lastName, siteAdmin: false, password });
+      const token = `fake-verify-${this.next()}`;
+      this.emailVerifications.set(token, { userId: record.user.id, used: false });
+      this.outbox.push({ kind: "email_verification", email, token });
+    });
+  }
+
+  public completeEmailVerification(token: string): Promise<Principal | null> {
+    return this.call("completeEmailVerification", () => {
+      const verification = this.emailVerifications.get(token);
+      const record = verification === undefined ? undefined : this.users.get(verification.userId);
+      if (verification === undefined || record === undefined) fail("invalid", "Invalid token");
+      if (verification.used) fail("invalid", "Token has already been used");
+      if (record.user.banned) fail("unauthenticated", "User account is banned");
+      verification.used = true;
+      record.emailVerified = true;
+      record.updatedAt = this.isoNow();
+      // go-common signs the verified user in.
+      return this.establishSession(record, "password");
+    });
+  }
+
+  public listMyInvitations(page?: PageRequest): Promise<Page<OrganizationInvitation>> {
+    return this.call("listMyInvitations", () => {
+      const { record } = this.requireSession();
+      const mine = [...this.invitations.values()]
+        .filter((entry) => entry.email === record.user.email && entry.acceptedAt === undefined && entry.declinedAt === undefined)
+        .toSorted((left, right) => comparableId(left.id, right.id))
+        .map((entry) => this.invitationView(entry));
+      return paginate(mine, page);
+    });
+  }
+
+  public declineInvitation(invitationId: string): Promise<void> {
+    return this.call("declineInvitation", () => {
+      const { record } = this.requireSession();
+      const invitation = this.invitations.get(invitationId);
+      if (invitation === undefined || invitation.acceptedAt !== undefined || invitation.declinedAt !== undefined) {
+        fail("not_found", "Invitation not found");
+      }
+      if (invitation.email !== record.user.email) fail("forbidden", "This invitation was sent to a different email address.");
+      invitation.declinedAt = this.isoNow();
     });
   }
 
@@ -1228,7 +1320,7 @@ export class FakeIdentityClient implements IdentityClient {
 
   private pendingInvitations(organizationId: OrganizationId): InvitationRecord[] {
     return [...this.invitations.values()]
-      .filter((entry) => entry.organizationId === organizationId && entry.acceptedAt === undefined)
+      .filter((entry) => entry.organizationId === organizationId && entry.acceptedAt === undefined && entry.declinedAt === undefined)
       .toSorted((left, right) => comparableId(left.id, right.id));
   }
 
