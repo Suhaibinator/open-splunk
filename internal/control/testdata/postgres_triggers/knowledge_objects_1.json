@@ -1,6 +1,7 @@
 [
   {
     "name": "transition_is_blocked rejects disabling a target with an active dependent",
+    "trigger": "knowledge_active_dependency_target_transition_is_blocked",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -34,6 +35,7 @@
   },
   {
     "name": "transition_is_blocked rejects deleting a target with an active dependent",
+    "trigger": "knowledge_active_dependency_target_transition_is_blocked",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -67,6 +69,7 @@
   },
   {
     "name": "transition_is_blocked accepts disabling a target whose dependent is draft",
+    "trigger": "knowledge_active_dependency_target_transition_is_blocked",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -100,6 +103,7 @@
   },
   {
     "name": "transition_is_blocked accepts disabling a target after its dependent is disabled",
+    "trigger": "knowledge_active_dependency_target_transition_is_blocked",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -139,6 +143,7 @@
   },
   {
     "name": "transition_is_blocked wins over the missing sealed projection (Go expects active dependents)",
+    "trigger": "knowledge_active_dependency_target_transition_is_blocked",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -168,6 +173,7 @@
   },
   {
     "name": "version_advance_is_blocked rejects advancing an active target pinned at its prior version",
+    "trigger": "knowledge_active_dependency_target_version_advance_is_blocked",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -201,6 +207,7 @@
   },
   {
     "name": "version_advance_is_blocked accepts advancing a target whose dependent is draft",
+    "trigger": "knowledge_active_dependency_target_version_advance_is_blocked",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -234,6 +241,7 @@
   },
   {
     "name": "version_advance_is_blocked accepts advancing to the version the dependent pins",
+    "trigger": "knowledge_active_dependency_target_version_advance_is_blocked",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -267,6 +275,7 @@
   },
   {
     "name": "active_app_is_required_insert rejects an active object in an archived app",
+    "trigger": "knowledge_object_active_app_is_required_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -289,6 +298,7 @@
   },
   {
     "name": "active_app_is_required_insert accepts a draft object in an archived app",
+    "trigger": "knowledge_object_active_app_is_required_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -311,6 +321,7 @@
   },
   {
     "name": "active_app_is_required_insert accepts an active object in an active app",
+    "trigger": "knowledge_object_active_app_is_required_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -333,6 +344,7 @@
   },
   {
     "name": "active_app_is_required_update rejects enabling an object in an archived app",
+    "trigger": "knowledge_object_active_app_is_required_update",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -360,6 +372,7 @@
   },
   {
     "name": "active_app_is_required_update accepts enabling an object in an active app",
+    "trigger": "knowledge_object_active_app_is_required_update",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -387,6 +400,7 @@
   },
   {
     "name": "active_app_is_required_update accepts disabling a draft object in an archived app",
+    "trigger": "knowledge_object_active_app_is_required_update",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -414,6 +428,7 @@
   },
   {
     "name": "active_capacity_insert rejects when the tenant holds 4096 active objects",
+    "trigger": "knowledge_object_active_capacity_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -437,6 +452,7 @@
   },
   {
     "name": "active_capacity_insert accepts when the tenant holds 4095 active objects",
+    "trigger": "knowledge_object_active_capacity_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -460,6 +476,7 @@
   },
   {
     "name": "active_capacity_insert rejects when the app holds 1024 active objects",
+    "trigger": "knowledge_object_active_capacity_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -483,6 +500,7 @@
   },
   {
     "name": "active_capacity_insert accepts when the app holds 1023 active objects",
+    "trigger": "knowledge_object_active_capacity_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -506,6 +524,7 @@
   },
   {
     "name": "active_capacity_insert rejects when the type holds 2048 active objects",
+    "trigger": "knowledge_object_active_capacity_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -529,6 +548,7 @@
   },
   {
     "name": "active_capacity_insert rejects when the app/type holds 512 active objects",
+    "trigger": "knowledge_object_active_capacity_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -552,6 +572,7 @@
   },
   {
     "name": "active_capacity_insert rejects a private object when the owner holds 512",
+    "trigger": "knowledge_object_active_capacity_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -575,6 +596,7 @@
   },
   {
     "name": "active_capacity_insert accepts an app-scoped object when the owner holds 512 private",
+    "trigger": "knowledge_object_active_capacity_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -598,6 +620,7 @@
   },
   {
     "name": "active_capacity_insert accepts a draft object when the tenant is full",
+    "trigger": "knowledge_object_active_capacity_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -621,6 +644,7 @@
   },
   {
     "name": "active_capacity_update rejects enabling when the tenant is full",
+    "trigger": "knowledge_object_active_capacity_update",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -649,6 +673,7 @@
   },
   {
     "name": "active_capacity_update accepts updating an already active object when the tenant is full",
+    "trigger": "knowledge_object_active_capacity_update",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -677,6 +702,7 @@
   },
   {
     "name": "active_capacity_update rejects moving an active object into a full app",
+    "trigger": "knowledge_object_active_capacity_update",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -705,6 +731,7 @@
   },
   {
     "name": "active_capacity_update rejects making an active object private for a full owner",
+    "trigger": "knowledge_object_active_capacity_update",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -733,6 +760,7 @@
   },
   {
     "name": "active_capacity_update accepts updating a private object for a full owner it already counts in",
+    "trigger": "knowledge_object_active_capacity_update",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -761,6 +789,7 @@
   },
   {
     "name": "active_counters_after_insert accepts an active insert and creates every counter",
+    "trigger": "knowledge_object_active_counters_after_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -783,6 +812,7 @@
   },
   {
     "name": "active_counters_after_insert accepts a private active insert and counts the owner",
+    "trigger": "knowledge_object_active_counters_after_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -805,6 +835,7 @@
   },
   {
     "name": "active_counters_after_insert creates the app counter (a manual duplicate is rejected)",
+    "trigger": "knowledge_object_active_counters_after_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -828,6 +859,7 @@
   },
   {
     "name": "active_counters_after_insert creates the type counter (a manual duplicate is rejected)",
+    "trigger": "knowledge_object_active_counters_after_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -851,6 +883,7 @@
   },
   {
     "name": "active_counters_after_insert skips a draft insert (a manual app counter is accepted)",
+    "trigger": "knowledge_object_active_counters_after_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -874,6 +907,7 @@
   },
   {
     "name": "active_counters_after_insert increments the tenant count to its bound",
+    "trigger": "knowledge_object_active_counters_after_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -902,6 +936,7 @@
   },
   {
     "name": "active_counters_after_update accepts enabling and creates the counters",
+    "trigger": "knowledge_object_active_counters_after_update",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -929,6 +964,7 @@
   },
   {
     "name": "active_counters_after_update increments the tenant count to its bound",
+    "trigger": "knowledge_object_active_counters_after_update",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -962,6 +998,7 @@
   },
   {
     "name": "active_counters_after_update creates the type counter (a manual duplicate is rejected)",
+    "trigger": "knowledge_object_active_counters_after_update",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -990,6 +1027,7 @@
   },
   {
     "name": "active_counters_before_update frees tenant capacity when an active object is disabled",
+    "trigger": "knowledge_object_active_counters_before_update",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1023,6 +1061,7 @@
   },
   {
     "name": "active_counters_before_update without a disable leaves the tenant full",
+    "trigger": "knowledge_object_active_counters_before_update",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1051,6 +1090,7 @@
   },
   {
     "name": "active_counters_before_update frees app capacity when an active object leaves the app",
+    "trigger": "knowledge_object_active_counters_before_update",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1084,6 +1124,7 @@
   },
   {
     "name": "active_counters_before_update accepts disabling and decrements every counter",
+    "trigger": "knowledge_object_active_counters_before_update",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1111,6 +1152,7 @@
   },
   {
     "name": "active_name_collision rejects a second active app-scoped name in one app",
+    "trigger": "knowledge_object_active_name_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1138,6 +1180,7 @@
   },
   {
     "name": "active_name_collision accepts the same app-scoped name in another app",
+    "trigger": "knowledge_object_active_name_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1165,6 +1208,7 @@
   },
   {
     "name": "active_name_collision accepts the same name for another object type",
+    "trigger": "knowledge_object_active_name_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1192,6 +1236,7 @@
   },
   {
     "name": "active_name_collision rejects a second active global name across apps",
+    "trigger": "knowledge_object_active_name_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1219,6 +1264,7 @@
   },
   {
     "name": "active_name_collision rejects a second private name for one owner and app",
+    "trigger": "knowledge_object_active_name_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1246,6 +1292,7 @@
   },
   {
     "name": "active_name_collision accepts the same private name for another owner",
+    "trigger": "knowledge_object_active_name_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1273,6 +1320,7 @@
   },
   {
     "name": "active_name_collision accepts an app-scoped name beside a global one",
+    "trigger": "knowledge_object_active_name_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1300,6 +1348,7 @@
   },
   {
     "name": "active_name_collision accepts an active name beside a draft one",
+    "trigger": "knowledge_object_active_name_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1327,6 +1376,7 @@
   },
   {
     "name": "active_name_collision accepts a draft name beside an active one",
+    "trigger": "knowledge_object_active_name_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1354,6 +1404,7 @@
   },
   {
     "name": "active_name_update_collision rejects enabling onto an active name",
+    "trigger": "knowledge_object_active_name_update_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1386,6 +1437,7 @@
   },
   {
     "name": "active_name_update_collision rejects renaming onto an active name",
+    "trigger": "knowledge_object_active_name_update_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1418,6 +1470,7 @@
   },
   {
     "name": "active_name_update_collision accepts updating an object that keeps its own name",
+    "trigger": "knowledge_object_active_name_update_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1445,6 +1498,7 @@
   },
   {
     "name": "active_name_update_collision accepts enabling after the name holder is disabled",
+    "trigger": "knowledge_object_active_name_update_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1482,6 +1536,7 @@
   },
   {
     "name": "after_insert_count_identity counts each insert toward the identity bound",
+    "trigger": "knowledge_object_after_insert_count_identity",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1510,6 +1565,7 @@
   },
   {
     "name": "after_insert_count_identity accepts the insert that reaches the identity bound",
+    "trigger": "knowledge_object_after_insert_count_identity",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1538,6 +1594,7 @@
   },
   {
     "name": "delete_is_forbidden rejects deleting a registry row",
+    "trigger": "knowledge_object_delete_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1561,6 +1618,7 @@
   },
   {
     "name": "delete_is_forbidden accepts a delete that matches no row",
+    "trigger": "knowledge_object_delete_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1579,6 +1637,7 @@
   },
   {
     "name": "identity_capacity rejects an insert at 8192 identities",
+    "trigger": "knowledge_object_identity_capacity_is_available",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1602,6 +1661,7 @@
   },
   {
     "name": "identity_capacity accepts an insert at 8191 identities",
+    "trigger": "knowledge_object_identity_capacity_is_available",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1625,6 +1685,7 @@
   },
   {
     "name": "identity_collision rejects inserting an existing identity",
+    "trigger": "knowledge_object_identity_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1648,6 +1709,7 @@
   },
   {
     "name": "identity_collision accepts a new identity",
+    "trigger": "knowledge_object_identity_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1670,6 +1732,7 @@
   },
   {
     "name": "insert_requires_sealed_list_projection rejects an unsealed projection",
+    "trigger": "knowledge_object_insert_requires_sealed_list_projection",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1691,6 +1754,7 @@
   },
   {
     "name": "insert_requires_sealed_list_projection rejects a missing projection",
+    "trigger": "knowledge_object_insert_requires_sealed_list_projection",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1711,6 +1775,7 @@
   },
   {
     "name": "insert_requires_sealed_list_projection rejects a projection with another name",
+    "trigger": "knowledge_object_insert_requires_sealed_list_projection",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1733,6 +1798,7 @@
   },
   {
     "name": "insert_requires_sealed_list_projection accepts an exact sealed projection with selectors",
+    "trigger": "knowledge_object_insert_requires_sealed_list_projection",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1757,6 +1823,7 @@
   },
   {
     "name": "registry_transition rejects an update that keeps the version",
+    "trigger": "knowledge_object_registry_transition_is_valid",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1780,6 +1847,7 @@
   },
   {
     "name": "registry_transition accepts an unchanged updated_at",
+    "trigger": "knowledge_object_registry_transition_is_valid",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1807,6 +1875,7 @@
   },
   {
     "name": "registry_transition rejects a changed created_at",
+    "trigger": "knowledge_object_registry_transition_is_valid",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1834,6 +1903,7 @@
   },
   {
     "name": "registry_transition rejects a same-version touch of a deleted object",
+    "trigger": "knowledge_object_registry_transition_is_valid",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1862,6 +1932,7 @@
   },
   {
     "name": "registry_transition accepts the next contiguous version",
+    "trigger": "knowledge_object_registry_transition_is_valid",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1889,6 +1960,7 @@
   },
   {
     "name": "update_removes_old_list_projection accepts a version advance and drops v1 rows",
+    "trigger": "knowledge_object_update_removes_old_list_projection",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1917,6 +1989,7 @@
   },
   {
     "name": "update_removes_old_list_projection frees the v1 projection key (re-projecting v1 is accepted)",
+    "trigger": "knowledge_object_update_removes_old_list_projection",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1946,6 +2019,7 @@
   },
   {
     "name": "update_removes_old_list_projection does not run for a rejected version advance",
+    "trigger": "knowledge_object_update_removes_old_list_projection",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1973,6 +2047,7 @@
   },
   {
     "name": "update_requires_sealed_list_projection rejects an unsealed next projection",
+    "trigger": "knowledge_object_update_requires_sealed_list_projection",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -1999,6 +2074,7 @@
   },
   {
     "name": "update_requires_sealed_list_projection accepts a sealed next projection",
+    "trigger": "knowledge_object_update_requires_sealed_list_projection",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2026,6 +2102,7 @@
   },
   {
     "name": "dependency_delete_is_forbidden rejects deleting an edge",
+    "trigger": "knowledge_dependency_delete_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2055,6 +2132,7 @@
   },
   {
     "name": "dependency_delete_is_forbidden accepts a delete that matches no edge",
+    "trigger": "knowledge_dependency_delete_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2084,6 +2162,7 @@
   },
   {
     "name": "dependency_identity_collision rejects a reused ordinal",
+    "trigger": "knowledge_dependency_identity_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2114,6 +2193,7 @@
   },
   {
     "name": "dependency_identity_collision rejects a repeated target",
+    "trigger": "knowledge_dependency_identity_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2144,6 +2224,7 @@
   },
   {
     "name": "dependency_identity_collision accepts a new ordinal and target",
+    "trigger": "knowledge_dependency_identity_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2174,6 +2255,7 @@
   },
   {
     "name": "dependency_ordinal_is_declared rejects an ordinal at the declared count",
+    "trigger": "knowledge_dependency_ordinal_is_declared",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2204,6 +2286,7 @@
   },
   {
     "name": "dependency_ordinal_is_declared rejects an edge from an unknown source version",
+    "trigger": "knowledge_dependency_ordinal_is_declared",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2234,6 +2317,7 @@
   },
   {
     "name": "dependency_ordinal_is_declared accepts the last declared ordinal",
+    "trigger": "knowledge_dependency_ordinal_is_declared",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2264,6 +2348,7 @@
   },
   {
     "name": "dependency_sealed_version_is_immutable rejects an edge after the seal",
+    "trigger": "knowledge_dependency_sealed_version_is_immutable",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2295,6 +2380,7 @@
   },
   {
     "name": "dependency_sealed_version_is_immutable accepts an edge before the seal",
+    "trigger": "knowledge_dependency_sealed_version_is_immutable",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2325,6 +2411,7 @@
   },
   {
     "name": "dependency_update_is_forbidden rejects any edge update",
+    "trigger": "knowledge_dependency_update_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2354,6 +2441,7 @@
   },
   {
     "name": "dependency_update_is_forbidden accepts an update that matches no edge",
+    "trigger": "knowledge_dependency_update_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2383,6 +2471,7 @@
   },
   {
     "name": "type_active_counter_delete_is_forbidden rejects deleting a counter",
+    "trigger": "knowledge_type_active_counter_delete_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2402,6 +2491,7 @@
   },
   {
     "name": "type_active_counter_delete_is_forbidden accepts a delete that matches no counter",
+    "trigger": "knowledge_type_active_counter_delete_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2420,6 +2510,7 @@
   },
   {
     "name": "type_active_counter_identity_collision rejects a duplicate counter",
+    "trigger": "knowledge_type_active_counter_identity_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2439,6 +2530,7 @@
   },
   {
     "name": "type_active_counter_identity_collision accepts a counter for another type",
+    "trigger": "knowledge_type_active_counter_identity_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2458,6 +2550,7 @@
   },
   {
     "name": "type_active_counter_identity_is_immutable rejects changing the type",
+    "trigger": "knowledge_type_active_counter_identity_is_immutable",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2477,6 +2570,7 @@
   },
   {
     "name": "type_active_counter_identity_is_immutable rejects changing the tenant",
+    "trigger": "knowledge_type_active_counter_identity_is_immutable",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2496,6 +2590,7 @@
   },
   {
     "name": "type_active_counter_identity_is_immutable accepts a same-value identity assignment",
+    "trigger": "knowledge_type_active_counter_identity_is_immutable",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2515,6 +2610,7 @@
   },
   {
     "name": "type_active_counter_identity_is_immutable accepts a count change",
+    "trigger": "knowledge_type_active_counter_identity_is_immutable",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2534,6 +2630,7 @@
   },
   {
     "name": "app_active_counter_delete_is_forbidden rejects deleting a counter",
+    "trigger": "knowledge_app_active_counter_delete_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2553,6 +2650,7 @@
   },
   {
     "name": "app_active_counter_delete_is_forbidden accepts a delete that matches no counter",
+    "trigger": "knowledge_app_active_counter_delete_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2571,6 +2669,7 @@
   },
   {
     "name": "app_active_counter_identity_collision rejects a duplicate counter",
+    "trigger": "knowledge_app_active_counter_identity_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2590,6 +2689,7 @@
   },
   {
     "name": "app_active_counter_identity_collision accepts a counter for another app",
+    "trigger": "knowledge_app_active_counter_identity_collision_is_forbidden",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2609,6 +2709,7 @@
   },
   {
     "name": "app_active_counter_identity_is_immutable rejects changing the app",
+    "trigger": "knowledge_app_active_counter_identity_is_immutable",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2628,6 +2729,7 @@
   },
   {
     "name": "app_active_counter_identity_is_immutable rejects changing the tenant",
+    "trigger": "knowledge_app_active_counter_identity_is_immutable",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2647,6 +2749,7 @@
   },
   {
     "name": "app_active_counter_identity_is_immutable accepts a same-value identity assignment",
+    "trigger": "knowledge_app_active_counter_identity_is_immutable",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
@@ -2666,6 +2769,7 @@
   },
   {
     "name": "app_active_counter_identity_is_immutable accepts a count change",
+    "trigger": "knowledge_app_active_counter_identity_is_immutable",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
       "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
