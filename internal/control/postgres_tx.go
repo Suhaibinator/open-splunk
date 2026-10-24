@@ -41,9 +41,24 @@ var ErrTransactionEndedByCallback = errors.New("control: transaction callback en
 
 var (
 	postgresWriteTxOptions = &sql.TxOptions{Isolation: sql.LevelSerializable}
-	// Read-only transactions use one snapshot for every statement. They never
-	// take SIREAD locks, so a long report cannot abort concurrent writers.
-	postgresReadTxOptions = &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}
+	// Read transactions are SERIALIZABLE too. Beside SERIALIZABLE writers, a
+	// REPEATABLE READ snapshot can show a state that no serial order of the
+	// committed writes produces (the read-only anomaly): a report could see
+	// a deposit and not the earlier-serialized withdrawal it should have
+	// seen first. SQLite's single writer never showed such a state. A
+	// SERIALIZABLE READ ONLY transaction that commits takes part in conflict
+	// detection, so PostgreSQL aborts whichever transaction would complete
+	// the anomaly, and the retry loop reruns it; see finishPostgresReadTx
+	// for why ReadTx commits. PostgreSQL also drops a read-only
+	// transaction's SIREAD locks as soon as its snapshot is provably safe.
+	// DEFERRABLE is not used: it waits for every concurrent serializable
+	// writer to finish first, which a ReadTx inside a WriteTx callback on the
+	// same goroutine would wait for forever.
+	postgresReadTxOptions = &sql.TxOptions{Isolation: sql.LevelSerializable, ReadOnly: true}
+	// postgresSnapshotReadOptions read one snapshot without taking part in
+	// serialization; migration verification reads only the ledger, which
+	// migrations alone write under their own lock.
+	postgresSnapshotReadOptions = &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}
 )
 
 // WriteTx runs fn in a SERIALIZABLE transaction and commits it when fn returns
@@ -63,16 +78,23 @@ var (
 // transaction on the same database, which that single writer never allowed
 // either.
 //
-// Once a server singleton held through db is lost, WriteTx fails with
-// ErrServerSingletonLost without running fn; see OpenPostgresServer.
+// On a handle that holds the server singleton, WriteTx commits only while
+// the singleton's session still holds its lock, and fails with
+// ErrServerSingletonLost once it does not; see AcquireServerSingleton.
 func (db *PostgresDB) WriteTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return db.runSQLTx(ctx, "write", postgresWriteTxOptions, fn)
 }
 
-// ReadTx runs fn in a READ ONLY, REPEATABLE READ transaction so every query in
-// fn reads one consistent snapshot. Attempts to write fail inside PostgreSQL.
-// The transaction is always rolled back after fn returns, and fn ending it
-// early fails with ErrTransactionEndedByCallback as for WriteTx.
+// ReadTx runs fn in a READ ONLY, SERIALIZABLE transaction so every query in
+// fn reads one consistent snapshot that some serial order of the committed
+// write transactions produces. Attempts to write fail inside PostgreSQL.
+// A serialization failure, from fn or from COMMIT, reruns fn after a backoff
+// as for WriteTx, so fn must be safe to run again and must not trust what it
+// read until ReadTx returns nil. When fn returns nil the transaction
+// commits, which writes nothing but is what confirms the reads were
+// serializable; a transaction that wrote anyway (a temporary table, or after
+// SET TRANSACTION READ WRITE) is rolled back instead. fn ending the
+// transaction early fails with ErrTransactionEndedByCallback as for WriteTx.
 func (db *PostgresDB) ReadTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return db.runSQLTx(ctx, "read", postgresReadTxOptions, fn)
 }
@@ -123,6 +145,10 @@ func (db *PostgresDB) ReadGORMTxOn(ctx context.Context, session *gorm.DB, fn fun
 // every other write, so hot-row writers that bypass WriteTx still converge.
 // attempt must not itself call WriteTx or RetryWrite on db. Like WriteTx,
 // RetryWrite refuses to run once the handle's server singleton was lost.
+// Because attempt commits its own transaction, RetryWrite cannot confirm the
+// singleton before that COMMIT as WriteTx does: attempt runs
+// ConfirmServerSingleton on its transaction just before committing, and
+// returns its error after rolling back.
 func (db *PostgresDB) RetryWrite(ctx context.Context, attempt func() error) error {
 	if err := validatePostgresTx(ctx, db, attempt == nil); err != nil {
 		return err
@@ -145,10 +171,7 @@ func (db *PostgresDB) runSQLTx(
 		return err
 	}
 	return retryPostgresTx(ctx, kind, db.writeQueueFor(options), func() error {
-		if err := db.writeFence(options); err != nil {
-			return err
-		}
-		return runPostgresTxAttempt(ctx, db.sql, options, fn)
+		return db.runPostgresTxAttempt(ctx, options, fn)
 	})
 }
 
@@ -175,10 +198,7 @@ func (db *PostgresDB) runGORMTxOn(
 		return err
 	}
 	return retryPostgresTx(ctx, kind, db.writeQueueFor(options), func() error {
-		if err := db.writeFence(options); err != nil {
-			return err
-		}
-		return runPostgresTxAttempt(ctx, db.sql, options, func(tx *sql.Tx) error {
+		return db.runPostgresTxAttempt(ctx, options, func(tx *sql.Tx) error {
 			return fn(bindGORMTx(ctx, session, tx))
 		})
 	})
@@ -197,15 +217,6 @@ func (db *PostgresDB) validateGORMSession(session *gorm.DB) error {
 		)
 	}
 	return nil
-}
-
-// writeFence refuses a write attempt once the handle's server singleton was
-// lost, since another server may now own the database.
-func (db *PostgresDB) writeFence(options *sql.TxOptions) error {
-	if options.ReadOnly {
-		return nil
-	}
-	return db.ServerSingletonErr()
 }
 
 // bindGORMTx returns a fresh GORM session whose statements all run on tx,
@@ -238,13 +249,21 @@ func (db *PostgresDB) writeQueueFor(options *sql.TxOptions) *postgresWriteQueue 
 // can read the server's transaction status after fn returns. database/sql
 // cannot tell that fn ran COMMIT or ROLLBACK as SQL: it would report success
 // for work that was rolled back, or retry work that was already committed.
-func runPostgresTxAttempt(
+//
+// A write attempt on a handle fenced by a server singleton confirms the lock
+// is still held as its last statement before COMMIT, and a handle that has
+// lost its singleton fails before running fn; see AcquireServerSingleton.
+func (db *PostgresDB) runPostgresTxAttempt(
 	ctx context.Context,
-	pool *sql.DB,
 	options *sql.TxOptions,
 	fn func(*sql.Tx) error,
 ) (err error) {
-	conn, err := pool.Conn(ctx)
+	if !options.ReadOnly {
+		if err := db.serverSingletonLostErr(); err != nil {
+			return err
+		}
+	}
+	conn, err := db.sql.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("begin PostgreSQL transaction: %w", err)
 	}
@@ -276,11 +295,42 @@ func runPostgresTxAttempt(
 		return fnErr
 	}
 	if options.ReadOnly {
-		return nil
+		return finishPostgresReadTx(ctx, tx, &finished)
+	}
+	if err := db.checkServerSingletonBeforeCommit(ctx, tx); err != nil {
+		return err
 	}
 	finished = true
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit PostgreSQL transaction: %w", err)
+	}
+	return nil
+}
+
+// finishPostgresReadTx commits a read transaction that changed nothing and
+// leaves any other one to the caller's deferred rollback. Committing is what
+// makes a SERIALIZABLE read count: PostgreSQL forgets the read dependencies
+// of a transaction that rolls back, so a rolled-back report could still have
+// seen a state no serial order produces, while a committed one either was
+// consistent or fails here, or makes the conflicting writer fail, with a
+// retryable 40001. A transaction with an assigned transaction ID wrote
+// something, such as a temporary table row or a row written after the
+// callback ran SET TRANSACTION READ WRITE, and is never committed; ReadTx
+// still reports success for it, as it always discarded such writes.
+func finishPostgresReadTx(ctx context.Context, tx *sql.Tx, finished *bool) error {
+	var wrote bool
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT pg_catalog.pg_current_xact_id_if_assigned() IS NOT NULL`,
+	).Scan(&wrote); err != nil {
+		return fmt.Errorf("inspect PostgreSQL read transaction: %w", err)
+	}
+	if wrote {
+		return nil
+	}
+	*finished = true
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit PostgreSQL read transaction: %w", err)
 	}
 	return nil
 }

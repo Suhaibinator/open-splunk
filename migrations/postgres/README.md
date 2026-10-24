@@ -39,6 +39,7 @@ Files apply in filename order, and each file depends only on earlier ones:
 | `0017_audit_1_triggers.sql` | triggers on `audit_events`, feature-operation and search-attempt audit events, receipt and knowledge-attempt tenant state |
 | `0018_audit_2_triggers.sql` | triggers on `api_mutation_receipts`, `knowledge_attempt_audit_events`, the audit, feature-operation and search-attempt tenant state |
 | `0019_pin_routine_search_path.sql` | pins `search_path = open_splunk, pg_temp` on the 136 routines that `0008`, `0009`, `0012`, `0016` and `0017` created without it |
+| `0020_search_job_cursor_commit_order.sql` | a statement-level lock on `durable_search_jobs` inserts, so `row_cursor` values are drawn in commit order |
 
 `0004_audit.sql` comes before knowledge because the knowledge mutation
 authorities reference `audit_events`. Inside a file, tables are ordered by
@@ -137,7 +138,12 @@ Identifiers are limited to 63 bytes, so
   `(tenant_id, app_id)`.
 - `durable_search_jobs.row_cursor bigint GENERATED ALWAYS AS IDENTITY`
   (unique) replaces SQLite's implicit `rowid`, which the artifact listing used
-  as a high-water cursor. Unlike `rowid`, it is never reused.
+  as a high-water cursor. Unlike `rowid`, it is never reused. Identity values
+  are drawn at INSERT time, not at commit, so `0020` makes every transaction
+  that inserts jobs take a transaction-scoped advisory lock before any value
+  is drawn. Cursors therefore become visible in increasing order, as SQLite's
+  single writer guaranteed: a row can never commit below a high-water mark
+  that a listing has already read.
 
 ## Deviations from SQLite
 

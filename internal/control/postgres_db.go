@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/migrations"
@@ -70,13 +71,18 @@ type PostgresDB struct {
 
 	admission admissionGates
 
+	// writeFence is the server singleton every write transaction confirms
+	// before COMMIT, or nil when this handle holds none.
+	writeFence atomic.Pointer[serverSingleton]
+	// singletonLost closes when this handle loses a server singleton; see
+	// ServerSingletonLost.
+	singletonLost chan struct{}
+
 	mu         sync.Mutex
 	closed     bool
 	singletons map[*serverSingleton]struct{}
-	// singletonLost is closed, and singletonLostErr set, once a server
-	// singleton lock held through this handle is found lost. From then on
-	// the handle refuses write transactions.
-	singletonLost    chan struct{}
+	// singletonLostErr is the sticky ErrServerSingletonLost, set once
+	// together with closing singletonLost.
 	singletonLostErr error
 }
 
@@ -221,8 +227,8 @@ func openPostgres(
 		orm:           orm,
 		connConfig:    connConfig,
 		writeQueue:    newPostgresWriteQueue(),
-		singletons:    make(map[*serverSingleton]struct{}),
 		singletonLost: make(chan struct{}),
+		singletons:    make(map[*serverSingleton]struct{}),
 	}, nil
 }
 

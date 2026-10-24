@@ -220,7 +220,7 @@ func TestPostgresWriteTxRunsSerializable(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ReadTx() = %v", err)
 	}
-	if writeIsolation != "serializable" || readIsolation != "repeatable read" || readOnly != "on" {
+	if writeIsolation != "serializable" || readIsolation != "serializable" || readOnly != "on" {
 		t.Fatalf("isolation write=%q read=%q read_only=%q", writeIsolation, readIsolation, readOnly)
 	}
 }

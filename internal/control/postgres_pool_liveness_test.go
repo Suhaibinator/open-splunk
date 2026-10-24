@@ -86,24 +86,6 @@ func TestOpenPostgresRejectsInvalidPools(t *testing.T) {
 	}
 }
 
-// terminateSingletonHolder ends the session holding the server singleton
-// lock on dsn's database and waits until it is gone.
-func terminateSingletonHolder(t *testing.T, dsn string) {
-	t.Helper()
-	var terminated int
-	if err := openRawPostgres(t, dsn).QueryRowContext(t.Context(), `
-		SELECT count(*) FILTER (WHERE pg_terminate_backend(pid, 5000))
-		FROM pg_locks
-		WHERE locktype = 'advisory'
-			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-			AND classid = x'6f730000'::int::oid AND objid = 2 AND objsubid = 2 AND granted`).Scan(&terminated); err != nil {
-		t.Fatalf("terminate singleton holder: %v", err)
-	}
-	if terminated != 1 {
-		t.Fatalf("terminated %d singleton holders, want 1", terminated)
-	}
-}
-
 // A server whose singleton session PostgreSQL ended (a restart, a network
 // failure, pg_terminate_backend) learns of it while running: the handle
 // signals the loss and refuses writes, because a second server may already

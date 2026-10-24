@@ -2,11 +2,13 @@ package control
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -24,58 +26,78 @@ const (
 	serverSingletonReleaseTimeout = 5 * time.Second
 
 	// serverSingletonProbeInterval is how often the dedicated session is
-	// checked for still holding the lock. It bounds how long a server keeps
-	// writing after PostgreSQL ended its session (a restart, a network
-	// failure, pg_terminate_backend), the window in which a second server
-	// may already have started.
+	// asked whether it still holds the lock. Writes do not wait for it:
+	// WriteTx checks the lock itself before every commit. It bounds how long
+	// an idle server takes to notice that PostgreSQL ended its session (a
+	// restart, a network failure, pg_terminate_backend).
 	serverSingletonProbeInterval = time.Second
 	serverSingletonProbeTimeout  = 5 * time.Second
 )
 
-// serverSingletonHeldSQL reports whether the probing session itself still
-// holds the singleton lock. A two-key advisory lock appears in pg_locks as
-// classid (first key), objid (second key) and objsubid 2.
-var serverSingletonHeldSQL = fmt.Sprintf(`
-	SELECT EXISTS (
-		SELECT 1 FROM pg_catalog.pg_locks
-		WHERE locktype = 'advisory'
-			AND pid = pg_catalog.pg_backend_pid()
-			AND database = (
-				SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database()
-			)
-			AND classid = %d AND objid = %d AND objsubid = 2 AND granted
-	)`,
-	uint32(postgresAdvisoryLockClass),
-	uint32(postgresServerSingletonAdvisoryLockID),
-)
+// serverSingletonHeldQuery reports whether the backend with pid $3 holds the
+// session-level two-key advisory lock ($1, $2) on the current database.
+// PostgreSQL files a two-key advisory lock as classid (first key), objid
+// (second key) and objsubid 2. pg_locks reads the lock manager directly, so the answer is
+// current even inside a SERIALIZABLE transaction's older snapshot, and it
+// takes no predicate locks.
+const serverSingletonHeldQuery = `
+SELECT EXISTS (
+	SELECT 1
+	FROM pg_catalog.pg_locks
+	WHERE locktype = 'advisory'
+		AND database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database())
+		AND classid = $1::integer::oid
+		AND objid = $2::integer::oid
+		AND objsubid = 2
+		AND pid = $3::integer
+		AND mode = 'ExclusiveLock'
+		AND granted
+)`
 
 // ErrServerAlreadyRunning means another session, normally another server
 // process, already holds the control plane's single-active-server lock.
 var ErrServerAlreadyRunning = errors.New("control: another open-splunk server holds the control-plane singleton lock")
 
-// ErrServerSingletonLost means the single-active-server lock held through a
-// handle was lost while the server ran, normally because PostgreSQL ended its
-// dedicated session. Another server may already be running against the
-// database, so the handle refuses every later write transaction and the
-// server must shut down.
-var ErrServerSingletonLost = errors.New("control: the control-plane singleton lock was lost")
+// ErrServerSingletonLost means the session holding this server's singleton
+// lock ended (backend terminated, PostgreSQL restarted or failed over, the
+// connection reset) or no longer holds the lock, so another server may now
+// hold it and migrate the schema. It is sticky: once a handle has lost its
+// singleton every later WriteTx and WriteGORMTx fails with it, and
+// PostgresDB.ServerSingletonLost is closed. The server must stop; a restart
+// takes the lock again or is refused with ErrServerAlreadyRunning.
+var ErrServerSingletonLost = errors.New("control: this server lost the control-plane singleton lock")
 
 type serverSingleton struct {
 	owner *PostgresDB
-	// mu serializes the liveness monitor and release, because a pgx.Conn
-	// must not be used concurrently.
+	// mu serializes probe and release on conn, because a pgx.Conn must not
+	// be used concurrently.
 	mu   sync.Mutex
 	conn *pgx.Conn
-	// stop is closed by release; monitorDone is closed when the monitor
-	// started by watch has returned, and is nil when none was started.
+	// pid is the dedicated session's backend, the one pg_locks must show
+	// holding the lock.
+	pid uint32
+
+	// stop ends the monitor; monitorDone closes once it has returned, after
+	// which only release touches conn. monitoring is set before the
+	// singleton is published to its owner and never changes afterwards.
 	stop        chan struct{}
 	monitorDone chan struct{}
-	once        sync.Once
-	err         error
+	monitoring  bool
+	// releasing is set once release starts, so a WriteTx that finds the lock
+	// gone because of a deliberate release does not fence the handle.
+	releasing atomic.Bool
+
+	once sync.Once
+	err  error
 }
 
 func newServerSingleton(conn *pgx.Conn) *serverSingleton {
-	return &serverSingleton{conn: conn, stop: make(chan struct{})}
+	return &serverSingleton{
+		conn:        conn,
+		pid:         conn.PgConn().PID(),
+		stop:        make(chan struct{}),
+		monitorDone: make(chan struct{}),
+	}
 }
 
 // OpenPostgresServer opens the control plane for the one active server on
@@ -84,12 +106,9 @@ func newServerSingleton(conn *pgx.Conn) *serverSingleton {
 // binary started beside a running server is refused before it can migrate
 // the schema under it. The lock is released by the returned function, by
 // PostgresDB.Close, or by PostgreSQL when the process dies; a failed open
-// releases it before returning.
-//
-// While the server runs, the lock's session is probed every
-// serverSingletonProbeInterval. Once it is found lost, the handle refuses
-// write transactions with ErrServerSingletonLost and closes
-// PostgresDB.ServerSingletonLost, which the server treats as fatal.
+// releases it before returning. The handle is fenced by the lock as
+// AcquireServerSingleton describes, and the server shuts down when
+// PostgresDB.ServerSingletonLost fires.
 func OpenPostgresServer(
 	ctx context.Context,
 	dsn string,
@@ -119,10 +138,9 @@ func OpenPostgresServerWithMigrations(
 	if err != nil {
 		return nil, nil, errors.Join(err, singleton.release())
 	}
-	db.mu.Lock()
-	singleton.watch(db)
-	db.singletons[singleton] = struct{}{}
-	db.mu.Unlock()
+	if err := db.attachServerSingleton(singleton); err != nil {
+		return nil, nil, errors.Join(err, singleton.release(), db.Close())
+	}
 	return db, singleton.release, nil
 }
 
@@ -132,8 +150,17 @@ func OpenPostgresServerWithMigrations(
 // never release it; it is released by the returned function, by
 // PostgresDB.Close, or by PostgreSQL when the process or its connection
 // dies. A held lock fails fast with ErrServerAlreadyRunning rather than
-// waiting. Release is idempotent. A lock lost while held is reported as
-// OpenPostgresServer describes.
+// waiting. Release is idempotent.
+//
+// While the lock is held, db is fenced by it: every WriteTx and WriteGORMTx
+// confirms, inside its transaction and just before COMMIT, that the
+// dedicated session still holds the lock, and a background probe watches the
+// session between writes. Either one finding the lock lost closes
+// db.ServerSingletonLost and fails every later write with
+// ErrServerSingletonLost. Statements run directly on SQLDB or GORMDB are not
+// fenced, which is one more reason mutations belong in WriteTx. A
+// deliberate release ends the fence without tripping it, so a server stops
+// writing before it releases.
 //
 // db is already migrated, so a server must not open with OpenPostgres and
 // then call this: use OpenPostgresServer, which locks before migrating.
@@ -147,41 +174,76 @@ func AcquireServerSingleton(ctx context.Context, db *PostgresDB) (func() error, 
 	if closed {
 		return nil, fmt.Errorf("%w: PostgreSQL control plane is closed", ErrInvalidArgument)
 	}
+	// Refuse a fenced handle before contending for the lock, which another
+	// server most likely holds by now.
+	if err := db.serverSingletonLostErr(); err != nil {
+		return nil, err
+	}
 
 	conn, err := lockServerSingletonSession(ctx, db.connConfig)
 	if err != nil {
 		return nil, err
 	}
 	singleton := newServerSingleton(conn)
-	db.mu.Lock()
-	if db.closed {
-		db.mu.Unlock()
-		return nil, errors.Join(
-			fmt.Errorf("%w: PostgreSQL control plane closed while acquiring singleton", ErrInvalidArgument),
-			singleton.release(),
-		)
+	if err := db.attachServerSingleton(singleton); err != nil {
+		return nil, errors.Join(err, singleton.release())
 	}
-	singleton.watch(db)
-	db.singletons[singleton] = struct{}{}
-	db.mu.Unlock()
 	return singleton.release, nil
 }
 
-// ServerSingletonLost returns a channel that is closed once a server
-// singleton lock held through db is found lost. A server selects on it and
-// shuts down; ServerSingletonErr reports why. It is never closed for a
-// handle that holds no singleton, or whose singleton was released.
-func (db *PostgresDB) ServerSingletonLost() <-chan struct{} {
-	if db == nil {
-		return nil
+// attachServerSingleton makes singleton fence db's writes and starts its
+// monitor. A handle that already lost a singleton stays fenced: it cannot
+// start writing again under a new lock, because writes it issued while the
+// lock was lost may already have interleaved with another server's.
+func (db *PostgresDB) attachServerSingleton(singleton *serverSingleton) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.closed {
+		return fmt.Errorf("%w: PostgreSQL control plane closed while acquiring singleton", ErrInvalidArgument)
 	}
-	return db.singletonLost
+	if db.singletonLostErr != nil {
+		return db.singletonLostErr
+	}
+	singleton.owner = db
+	singleton.monitoring = true
+	go singleton.monitor(serverSingletonProbeInterval)
+	db.singletons[singleton] = struct{}{}
+	db.writeFence.Store(singleton)
+	return nil
 }
 
-// ServerSingletonErr returns nil until a server singleton lock held through
-// db is found lost, and then an error wrapping ErrServerSingletonLost.
-func (db *PostgresDB) ServerSingletonErr() error {
-	if db == nil {
+// detachServerSingleton stops singleton fencing db. After a lost singleton
+// db stays fenced through singletonLostErr; see markServerSingletonLost.
+func (db *PostgresDB) detachServerSingleton(singleton *serverSingleton) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	delete(db.singletons, singleton)
+	db.writeFence.CompareAndSwap(singleton, nil)
+}
+
+// markServerSingletonLost fences db for good: ServerSingletonLost closes and
+// every later write fails with ErrServerSingletonLost wrapping cause. Only
+// the first cause is kept.
+func (db *PostgresDB) markServerSingletonLost(cause error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.singletonLostErr != nil {
+		return
+	}
+	if errors.Is(cause, ErrServerSingletonLost) {
+		db.singletonLostErr = cause
+	} else {
+		db.singletonLostErr = fmt.Errorf("%w: %w", ErrServerSingletonLost, cause)
+	}
+	close(db.singletonLost)
+}
+
+// serverSingletonLostErr returns the sticky loss, or nil while db has not
+// lost a singleton. The common case is one non-blocking channel receive.
+func (db *PostgresDB) serverSingletonLostErr() error {
+	select {
+	case <-db.singletonLost:
+	default:
 		return nil
 	}
 	db.mu.Lock()
@@ -189,14 +251,127 @@ func (db *PostgresDB) ServerSingletonErr() error {
 	return db.singletonLostErr
 }
 
-func (db *PostgresDB) markServerSingletonLost(cause error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	if db.singletonLostErr != nil {
-		return
+// ServerSingletonLost returns a channel that is closed when this handle
+// loses the server singleton lock it acquired through OpenPostgresServer or
+// AcquireServerSingleton. The server selects on it and shuts down: from
+// then on WriteTx and WriteGORMTx fail with ErrServerSingletonLost, and
+// another server may be running and migrating the schema. A deliberate
+// release does not close it. A nil handle returns nil, which never fires.
+func (db *PostgresDB) ServerSingletonLost() <-chan struct{} {
+	if db == nil {
+		return nil
 	}
-	db.singletonLostErr = fmt.Errorf("%w: %w", ErrServerSingletonLost, cause)
-	close(db.singletonLost)
+	return db.singletonLost
+}
+
+// ServerSingletonErr returns nil until this handle loses a server singleton
+// lock, and from then on the sticky error wrapping ErrServerSingletonLost
+// that every later write fails with. A nil handle returns nil.
+func (db *PostgresDB) ServerSingletonErr() error {
+	if db == nil {
+		return nil
+	}
+	return db.serverSingletonLostErr()
+}
+
+// ConfirmServerSingleton is the check WriteTx runs just before COMMIT, for
+// callers that commit their own transaction under RetryWrite. Run on tx as
+// its last statement, it fails with ErrServerSingletonLost, and fences the
+// handle, when this handle's singleton session no longer holds the lock; the
+// caller must then roll tx back. It returns nil for a handle that holds no
+// singleton.
+func (db *PostgresDB) ConfirmServerSingleton(ctx context.Context, tx *sql.Tx) error {
+	if ctx == nil || db == nil || tx == nil {
+		return fmt.Errorf("%w: context, database, and transaction are required", ErrInvalidArgument)
+	}
+	return db.checkServerSingletonBeforeCommit(ctx, tx)
+}
+
+// checkServerSingletonBeforeCommit runs inside every write transaction just
+// before COMMIT. It confirms that this handle's singleton session still holds
+// the lock, so a server whose session died cannot commit once another server
+// may have taken over. A takeover between this check and the COMMIT is
+// confined to that one transaction: the new holder must first wait for
+// PostgreSQL to free the lock, and its migrations then wait on this
+// transaction's table locks.
+func (db *PostgresDB) checkServerSingletonBeforeCommit(ctx context.Context, tx *sql.Tx) error {
+	if err := db.serverSingletonLostErr(); err != nil {
+		return err
+	}
+	singleton := db.writeFence.Load()
+	if singleton == nil {
+		return nil
+	}
+	var held bool
+	if err := tx.QueryRowContext(
+		ctx,
+		serverSingletonHeldQuery,
+		postgresAdvisoryLockClass,
+		postgresServerSingletonAdvisoryLockID,
+		int64(singleton.pid),
+	).Scan(&held); err != nil {
+		return fmt.Errorf("check PostgreSQL server singleton lock: %w", err)
+	}
+	if held {
+		return nil
+	}
+	if singleton.releasing.Load() {
+		// The caller released the lock while this transaction ran. That is
+		// a shutdown, not a loss, so the handle is not fenced, but this
+		// transaction no longer runs under the singleton and must not commit.
+		return fmt.Errorf("%w: released while the transaction ran", ErrServerSingletonLost)
+	}
+	db.markServerSingletonLost(fmt.Errorf("singleton session (backend %d) no longer holds the lock", singleton.pid))
+	return db.serverSingletonLostErr()
+}
+
+// monitor probes the dedicated session every interval until release stops
+// it or the lock is found lost, so a server learns of the loss between
+// writes and can shut down instead of waiting for its next WriteTx.
+func (singleton *serverSingleton) monitor(interval time.Duration) {
+	defer close(singleton.monitorDone)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-singleton.stop:
+			return
+		case <-ticker.C:
+		}
+		if err := singleton.probe(); err != nil {
+			singleton.owner.markServerSingletonLost(err)
+			return
+		}
+	}
+}
+
+// probe reports the lock lost when the session has ended or answers that it
+// no longer holds the lock. A failed query on a session that is still open,
+// such as one canceled with pg_cancel_backend, proves nothing: the session
+// and its lock live on, and the next probe asks again.
+func (singleton *serverSingleton) probe() error {
+	singleton.mu.Lock()
+	defer singleton.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), serverSingletonProbeTimeout)
+	defer cancel()
+	var held bool
+	err := singleton.conn.QueryRow(
+		ctx,
+		serverSingletonHeldQuery,
+		postgresAdvisoryLockClass,
+		postgresServerSingletonAdvisoryLockID,
+		int64(singleton.pid),
+	).Scan(&held)
+	switch {
+	case err == nil && held:
+		return nil
+	case err == nil:
+		return fmt.Errorf("singleton session (backend %d) no longer holds the lock", singleton.pid)
+	case singleton.conn.IsClosed():
+		return fmt.Errorf("singleton session (backend %d) ended: %w", singleton.pid, err)
+	default:
+		return nil
+	}
 }
 
 // lockServerSingletonSession opens the dedicated singleton session and takes
@@ -235,67 +410,16 @@ func lockServerSingletonSession(ctx context.Context, connConfig *pgx.ConnConfig)
 	return conn, nil
 }
 
-// watch records owner and starts the liveness monitor. The caller holds
-// owner.mu and has not yet published the singleton, so release cannot run
-// concurrently with it.
-func (singleton *serverSingleton) watch(owner *PostgresDB) {
-	singleton.owner = owner
-	singleton.monitorDone = make(chan struct{})
-	go singleton.monitor(serverSingletonProbeInterval)
-}
-
-// monitor probes the lock session until release stops it or a probe fails.
-// A failed probe means PostgreSQL may already have granted the lock to
-// another session, so the owner is fenced at once.
-func (singleton *serverSingleton) monitor(interval time.Duration) {
-	defer close(singleton.monitorDone)
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-singleton.stop:
-			return
-		case <-ticker.C:
-		}
-		err := singleton.probe()
-		if err == nil {
-			continue
-		}
-		select {
-		case <-singleton.stop:
-			// Released while probing: an orderly shutdown, not a loss.
-			return
-		default:
-		}
-		singleton.owner.markServerSingletonLost(err)
-		return
-	}
-}
-
-// probe reports an error unless the dedicated session is alive and still
-// holds the lock. A probe that cannot complete in time counts as lost: pgx
-// closes a connection whose query it abandons, which frees the lock.
-func (singleton *serverSingleton) probe() error {
-	singleton.mu.Lock()
-	defer singleton.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), serverSingletonProbeTimeout)
-	defer cancel()
-	var held bool
-	if err := singleton.conn.QueryRow(ctx, serverSingletonHeldSQL).Scan(&held); err != nil {
-		return fmt.Errorf("probe PostgreSQL server singleton session: %w", err)
-	}
-	if !held {
-		return errors.New("PostgreSQL server singleton session no longer holds the lock")
-	}
-	return nil
-}
-
 // release unlocks explicitly before closing so the lock is free as soon as
-// release returns, rather than when the server notices the disconnect.
+// release returns, rather than when the server notices the disconnect. It
+// stops the monitor first, so the two never share the session. A release
+// that finds the lock already gone reports ErrServerSingletonLost and leaves
+// the owner fenced.
 func (singleton *serverSingleton) release() error {
 	singleton.once.Do(func() {
+		singleton.releasing.Store(true)
 		close(singleton.stop)
-		if singleton.monitorDone != nil {
+		if singleton.monitoring {
 			<-singleton.monitorDone
 		}
 		singleton.mu.Lock()
@@ -310,15 +434,16 @@ func (singleton *serverSingleton) release() error {
 			postgresServerSingletonAdvisoryLockID,
 		).Scan(&released)
 		if unlockErr != nil {
-			unlockErr = fmt.Errorf("release PostgreSQL server singleton lock: %w", unlockErr)
+			unlockErr = fmt.Errorf("%w: release: %w", ErrServerSingletonLost, unlockErr)
 		} else if !released {
-			unlockErr = errors.New("release PostgreSQL server singleton lock: session no longer held it")
+			unlockErr = fmt.Errorf("%w: release: session no longer held it", ErrServerSingletonLost)
 		}
 		singleton.err = errors.Join(unlockErr, closeSingletonConn(singleton.conn))
 		if singleton.owner != nil {
-			singleton.owner.mu.Lock()
-			delete(singleton.owner.singletons, singleton)
-			singleton.owner.mu.Unlock()
+			if unlockErr != nil {
+				singleton.owner.markServerSingletonLost(unlockErr)
+			}
+			singleton.owner.detachServerSingleton(singleton)
 		}
 	})
 	return singleton.err

@@ -29,7 +29,9 @@ const (
 	postgresAdvisoryLockClass = int32(0x6f73_0000)
 
 	// postgresMigrationAdvisoryLockID serializes every migration runner on
-	// one database.
+	// one database. Second key 2 is the server singleton
+	// (postgres_singleton.go), and second key 3 orders durable_search_jobs
+	// inserts (migration 0020).
 	postgresMigrationAdvisoryLockID = int32(1)
 
 	postgresMigrationIdentityFormat = "open-splunk/postgres-migrations/format-1\x00"
@@ -262,7 +264,7 @@ func VerifyCurrentPostgresMigrations(
 	if err != nil {
 		return MigrationIdentity{}, err
 	}
-	tx, err := db.BeginTx(ctx, postgresReadTxOptions)
+	tx, err := db.BeginTx(ctx, postgresSnapshotReadOptions)
 	if err != nil {
 		return MigrationIdentity{}, fmt.Errorf("begin PostgreSQL migration verification: %w", err)
 	}
