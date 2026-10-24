@@ -1405,5 +1405,110 @@
     "statement": "INSERT INTO ingestion_token_hec_profiles (ingestion_token_id, indexer_acknowledgment) VALUES ('tok_hec', 0)",
     "expect": "accept",
     "message": ""
+  },
+  {
+    "name": "deletion_operation_insert_moves_index_to_deleting",
+    "trigger": "index_deleting_transition_requires_operation",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)",
+    "expect": "accept",
+    "message": "",
+    "depends_on_lanes": [
+      "core_ingest_3"
+    ],
+    "note": "index_deletion_operation_insert_starts_deletion (core_ingest_3) performs the archived-to-deleting transition, which must pass this lane's transition guard and advance the catalog revision",
+    "check_sql": "SELECT state || ',' || version || ',' || updated_at_unix_micro || ',' || (SELECT revision || ',' || physical_count FROM index_catalog_state WHERE singleton_id = 1) FROM indexes WHERE index_id = 'idx_main'",
+    "check_result": "deleting,2,2000,3,1"
+  },
+  {
+    "name": "operation_owned_deleting_index_update_rejected",
+    "trigger": "deleting_index_with_operation_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)"
+    ],
+    "statement": "UPDATE indexes SET description = 'changed' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "deleting index is coordinator-owned",
+    "depends_on_lanes": [
+      "core_ingest_3"
+    ],
+    "note": "the index reaches 'deleting' only through the core_ingest_3 deletion-operation insert trigger; without it the index stays archived and the update is accepted"
+  },
+  {
+    "name": "completed_deletion_index_update_rejected",
+    "trigger": "tombstoned_index_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)",
+      "INSERT INTO index_deletion_mutation_attempts (deletion_operation_id, correlation_id, tenant_id, clickhouse_database, clickhouse_table, clickhouse_table_uuid, protocol_version, created_at_unix_micro) VALUES ('op.idx-main', 'corr.idx-main', 'default', 'open_splunk', 'events', '0b6c3f4e-8d2a-4f1b-9c3e-5a7d9e1f2b4c', 1, 2500)",
+      "INSERT INTO index_data_deletion_completions (deletion_operation_id, correlation_id, index_id, index_name, archived_index_version, deleting_index_version, tenant_id, clickhouse_database, clickhouse_table, clickhouse_table_uuid, protocol_version, operation_created_at_unix_micro, attempt_created_at_unix_micro, completed_at_unix_micro) VALUES ('op.idx-main', 'corr.idx-main', 'idx_main', 'main', 1, 2, 'default', 'open_splunk', 'events', '0b6c3f4e-8d2a-4f1b-9c3e-5a7d9e1f2b4c', 1, 2000, 2500, 3000)"
+    ],
+    "statement": "UPDATE indexes SET description = 'changed' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "tombstoned index is immutable",
+    "depends_on_lanes": [
+      "core_ingest_2",
+      "core_ingest_3"
+    ],
+    "note": "the core_ingest_2 completion trigger tombstones the deleting index and removes its operation, so the coordinator-owned guard passes and the tombstone guard refuses the update"
+  },
+  {
+    "name": "completed_deletion_index_delete_rejected",
+    "trigger": "index_catalog_index_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)",
+      "INSERT INTO index_deletion_mutation_attempts (deletion_operation_id, correlation_id, tenant_id, clickhouse_database, clickhouse_table, clickhouse_table_uuid, protocol_version, created_at_unix_micro) VALUES ('op.idx-main', 'corr.idx-main', 'default', 'open_splunk', 'events', '0b6c3f4e-8d2a-4f1b-9c3e-5a7d9e1f2b4c', 1, 2500)",
+      "INSERT INTO index_data_deletion_completions (deletion_operation_id, correlation_id, index_id, index_name, archived_index_version, deleting_index_version, tenant_id, clickhouse_database, clickhouse_table, clickhouse_table_uuid, protocol_version, operation_created_at_unix_micro, attempt_created_at_unix_micro, completed_at_unix_micro) VALUES ('op.idx-main', 'corr.idx-main', 'idx_main', 'main', 1, 2, 'default', 'open_splunk', 'events', '0b6c3f4e-8d2a-4f1b-9c3e-5a7d9e1f2b4c', 1, 2000, 2500, 3000)"
+    ],
+    "statement": "DELETE FROM indexes WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog identity cannot be deleted",
+    "depends_on_lanes": [
+      "core_ingest_2",
+      "core_ingest_3"
+    ],
+    "note": "once the completion removes the operation, deleting_index_with_operation_delete_is_forbidden passes and the catalog delete guard refuses the delete; while the operation exists the deleting-index message wins"
+  },
+  {
+    "name": "catalog_state_guard_accepts_index_insert_accounting",
+    "trigger": "index_catalog_after_index_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_web', 'default', 1, 'web', 'Web', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "accept",
+    "message": "",
+    "depends_on_lanes": [
+      "core_ingest_2"
+    ],
+    "note": "this lane's insert accounting must satisfy index_catalog_state_transition_is_valid (core_ingest_2)",
+    "check_sql": "SELECT revision || ',' || physical_count FROM index_catalog_state WHERE singleton_id = 1",
+    "check_result": "3,2"
+  },
+  {
+    "name": "catalog_state_guard_accepts_index_update_accounting",
+    "trigger": "index_catalog_after_index_update",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET description = 'changed' WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": "",
+    "depends_on_lanes": [
+      "core_ingest_2"
+    ],
+    "note": "this lane's update accounting must satisfy index_catalog_state_transition_is_valid (core_ingest_2)",
+    "check_sql": "SELECT revision || ',' || physical_count FROM index_catalog_state WHERE singleton_id = 1",
+    "check_result": "3,1"
   }
 ]

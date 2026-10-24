@@ -264,8 +264,9 @@ func TestPostgresCoreIngest1TriggerScenarios(t *testing.T) {
 // outcome needs another lane's triggers, such as the core_ingest_3 trigger
 // that moves an index to 'deleting' when its deletion operation is inserted.
 // A scenario runs as soon as every lane it names is embedded, and then any
-// difference fails the test. Until then it is reported as skipped, by name,
-// with the missing lanes.
+// difference fails the test. The test never skips: until a lane lands, its
+// scenarios are listed in the test log, by name, with the missing lanes, and
+// the scenarios whose lanes are all present still run.
 func TestPostgresCoreIngest1CrossLaneTriggerScenarios(t *testing.T) {
 	t.Parallel()
 	present := coreIngest1PresentLanes(t, migrations.Postgres())
@@ -297,7 +298,7 @@ func TestPostgresCoreIngest1CrossLaneTriggerScenarios(t *testing.T) {
 		runCoreIngest1Scenarios(t, runnable)
 	}
 	if len(waiting) > 0 {
-		t.Skipf("%d cross-lane scenarios wait for trigger lanes that are not embedded yet: %s",
+		t.Logf("%d cross-lane scenarios wait for trigger lanes that are not embedded yet: %s",
 			len(waiting), strings.Join(waiting, "; "))
 	}
 }
@@ -404,10 +405,10 @@ func TestPostgresCoreIngest1TriggersIgnoreTheSessionSearchPath(t *testing.T) {
 	// A decoy tombstone must not freeze the real index.
 	exec(`UPDATE open_splunk.indexes SET description = 'changed' WHERE index_id = 'idx_main'`)
 
-	var real, decoy string
+	var controlState, decoy string
 	if err := tx.QueryRowContext(ctx, `
 		SELECT revision || ',' || physical_count FROM open_splunk.index_catalog_state WHERE singleton_id = 1`).
-		Scan(&real); err != nil {
+		Scan(&controlState); err != nil {
 		t.Fatalf("read control catalog state: %v", err)
 	}
 	if err := tx.QueryRowContext(ctx, `
@@ -415,8 +416,8 @@ func TestPostgresCoreIngest1TriggersIgnoreTheSessionSearchPath(t *testing.T) {
 		Scan(&decoy); err != nil {
 		t.Fatalf("read decoy catalog state: %v", err)
 	}
-	if real != "3,1" || decoy != "500,0" {
-		t.Fatalf("catalog state after insert and update = %q (decoy %q), want 3,1 (decoy untouched 500,0)", real, decoy)
+	if controlState != "3,1" || decoy != "500,0" {
+		t.Fatalf("catalog state after insert and update = %q (decoy %q), want 3,1 (decoy untouched 500,0)", controlState, decoy)
 	}
 
 	// A real tombstone does freeze it, through the pinned search_path.
@@ -447,7 +448,7 @@ var coreIngest1SQLiteParityScenarios = []coreIngest1Scenario{
 		SetupSQL: []string{
 			coreIngest1TenantSQL,
 			coreIngest1ActiveIndexSQL,
-			coreIngest1HECTokenSQL("tok_hec", "revoked", "2000"),
+			coreIngest1HECTokenSQL("revoked", "2000"),
 			`INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id) VALUES ('tok_hec', 'idx_main')`,
 			`INSERT INTO ingestion_token_hec_profiles (ingestion_token_id, default_index_id, indexer_acknowledgment)
 				VALUES ('tok_hec', 'idx_main', 1)`,
@@ -465,7 +466,7 @@ var coreIngest1SQLiteParityScenarios = []coreIngest1Scenario{
 		Trigger: "ingestion_token_hec_profile_owner_is_immutable",
 		SetupSQL: []string{
 			coreIngest1TenantSQL,
-			coreIngest1HECTokenSQL("tok_hec", "active", "NULL"),
+			coreIngest1HECTokenSQL("active", "NULL"),
 			`INSERT INTO ingestion_token_hec_profiles (ingestion_token_id, indexer_acknowledgment) VALUES ('tok_hec', 0)`,
 		},
 		Statement:   `DELETE FROM ingestion_token_hec_profiles WHERE ingestion_token_id = 'tok_hec'`,
@@ -480,7 +481,7 @@ var coreIngest1SQLiteParityScenarios = []coreIngest1Scenario{
 		Trigger: "ingestion_token_hec_acknowledgment_is_immutable",
 		SetupSQL: []string{
 			coreIngest1TenantSQL,
-			coreIngest1HECTokenSQL("tok_hec", "active", "NULL"),
+			coreIngest1HECTokenSQL("active", "NULL"),
 			`INSERT INTO ingestion_token_hec_profiles (ingestion_token_id, indexer_acknowledgment) VALUES ('tok_hec', 1)`,
 		},
 		Statement: `UPDATE ingestion_token_hec_profiles SET default_index_id = 'missing-index'
@@ -496,7 +497,7 @@ var coreIngest1SQLiteParityScenarios = []coreIngest1Scenario{
 		Trigger: "revoked_ingestion_token_is_irreversible",
 		SetupSQL: []string{
 			coreIngest1TenantSQL,
-			coreIngest1HECTokenSQL("tok_hec", "active", "NULL"),
+			coreIngest1HECTokenSQL("active", "NULL"),
 		},
 		Statement:   `UPDATE ingestion_tokens SET expires_at_unix_micro = 5000 WHERE ingestion_token_id = 'tok_hec'`,
 		Expect:      "accept",
@@ -509,7 +510,7 @@ var coreIngest1SQLiteParityScenarios = []coreIngest1Scenario{
 		Trigger: "revoked_ingestion_token_is_irreversible",
 		SetupSQL: []string{
 			coreIngest1TenantSQL,
-			coreIngest1HECTokenSQL("tok_hec", "active", "NULL"),
+			coreIngest1HECTokenSQL("active", "NULL"),
 		},
 		Statement:   `UPDATE ingestion_tokens SET state = 'disabled' WHERE ingestion_token_id = 'tok_hec'`,
 		Expect:      "accept",
@@ -568,13 +569,13 @@ const coreIngest1ActiveIndexSQL = `INSERT INTO indexes (index_id, tenant_id, ver
 		created_at_unix_micro, updated_at_unix_micro)
 	VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)`
 
-// coreIngest1HECTokenSQL inserts an unbound HEC token in state; revokedAt is
-// a SQL literal (NULL unless state is revoked).
-func coreIngest1HECTokenSQL(id, state, revokedAt string) string {
+// coreIngest1HECTokenSQL inserts the unbound HEC token tok_hec in state;
+// revokedAt is a SQL literal (NULL unless state is revoked).
+func coreIngest1HECTokenSQL(state, revokedAt string) string {
 	return `INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix,
 			token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro,
 			bound_collector_id, purpose)
-		VALUES ('` + id + `', 'default', 1, 'Token ` + id + `', 'osk_abcd1234',
+		VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234',
 			decode('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'hex'), '` + state + `',
 			1000, ` + coreIngest1RevisionTime(revokedAt) + `, ` + revokedAt + `, NULL, 'hec')`
 }
