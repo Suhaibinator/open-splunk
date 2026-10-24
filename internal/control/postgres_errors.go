@@ -17,6 +17,7 @@ const (
 	postgresSerializationFailure = "40001"
 	postgresDeadlockDetected     = "40P01"
 	postgresLockNotAvailable     = "55P03"
+	postgresInvalidTextEncoding  = "22021"
 )
 
 // PostgresErrorCode returns the SQLSTATE of the first PostgreSQL server error
@@ -51,6 +52,16 @@ func IsCheckViolation(err error) bool {
 // foreign_key_violation (23503).
 func IsForeignKeyViolation(err error) bool {
 	return hasPostgresErrorCode(err, postgresForeignKeyViolation)
+}
+
+// IsInvalidTextEncoding reports whether err is PostgreSQL's
+// character_not_in_repertoire (22021): a text value or bind parameter held a
+// NUL byte or was not valid UTF-8. PostgreSQL raises it for reads as well as
+// writes, and before any CHECK runs. SQLite stored such text, or refused NUL
+// through a CHECK constraint, so callers that mapped a CHECK failure to an
+// invalid-argument error map this the same way.
+func IsInvalidTextEncoding(err error) bool {
+	return hasPostgresErrorCode(err, postgresInvalidTextEncoding)
 }
 
 // IsRaise reports whether err is a PL/pgSQL RAISE EXCEPTION carrying the

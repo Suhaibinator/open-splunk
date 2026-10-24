@@ -64,6 +64,16 @@ func ApplyPostgresMigrations(ctx context.Context, db *sql.DB, migrationFS fs.FS)
 	if _, err := tx.ExecContext(ctx, `SET LOCAL search_path TO `+PostgresSchema); err != nil {
 		return fmt.Errorf("pin PostgreSQL migration search_path: %w", err)
 	}
+	// The files spell bytea and regex literals with backslashes ('\x',
+	// '[\u0001-\u001f]', strpos(x, '\')), which mean what they say only with
+	// standard_conforming_strings on. A database or role default of off would
+	// otherwise parse '\x'::bytea as the byte 'x'. The caller's pool may not
+	// pin it, so pin it, and the encoding pgx speaks, for this transaction.
+	if _, err := tx.ExecContext(ctx,
+		`SET LOCAL standard_conforming_strings TO on; SET LOCAL client_encoding TO 'UTF8'`,
+	); err != nil {
+		return fmt.Errorf("pin PostgreSQL migration string semantics: %w", err)
+	}
 
 	var schemaExists, ledgerExists, schemaHasObjects bool
 	if err := tx.QueryRowContext(ctx, postgresMigrationStateQuery, PostgresSchema).
@@ -214,7 +224,7 @@ const postgresMigrationStateQuery = `
 const postgresMigrationLedgerDDL = `
 	CREATE TABLE open_splunk.schema_migrations (
 		version bigint PRIMARY KEY CHECK (version >= 1),
-		name text NOT NULL CHECK (name <> ''),
+		name text COLLATE "C" NOT NULL CHECK (name <> ''),
 		checksum bytea NOT NULL CHECK (octet_length(checksum) = 32),
 		applied_at_unix_micro bigint NOT NULL CHECK (applied_at_unix_micro > 0)
 	)`

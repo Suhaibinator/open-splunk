@@ -959,9 +959,15 @@ CREATE INDEX knowledge_list_projection_authorized_private_idx
         tenant_id, owner_id, app_id, knowledge_object_id, object_version
     ) WHERE sharing_scope = 'private';
 
+-- SQLite keyed this index on (tenant_id, description, knowledge_object_id,
+-- object_version). A PostgreSQL btree tuple holds at most 2704 bytes, and
+-- description admits 16384, so that key refused valid rows with SQLSTATE
+-- 54000 (index row size exceeds btree maximum). No query orders or seeks by
+-- description (the text filter is a substring match), so the key drops it and
+-- keeps the predicate that marks described rows.
 CREATE INDEX knowledge_list_projection_description_idx
     ON knowledge_object_list_projections (
-        tenant_id, description COLLATE "C", knowledge_object_id, object_version
+        tenant_id, knowledge_object_id, object_version
     ) WHERE description_present = 1;
 
 CREATE INDEX knowledge_list_projection_filter_idx

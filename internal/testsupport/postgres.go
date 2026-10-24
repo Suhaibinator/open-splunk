@@ -50,7 +50,7 @@ const (
 	// the helper or the control migration runner changes what a template
 	// contains for an unchanged migration set, so stale templates left on a
 	// long-lived server are never cloned.
-	postgresTemplateFormat = "f1"
+	postgresTemplateFormat = "f2"
 )
 
 // PostgresTemplate describes a reusable database that NewPostgresDatabase
