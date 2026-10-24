@@ -67,7 +67,8 @@ type lookupTriggerScenario struct {
 	Expect    string   `json:"expect"`
 	Message   string   `json:"message"`
 	// DependsOnLanes lists other trigger lanes whose triggers the scenario
-	// needs. Such scenarios run in TestPostgresLookupTriggerCrossLaneScenarios.
+	// needs. Every scenario runs with every shipped trigger enabled, so those
+	// lanes only have to be embedded.
 	DependsOnLanes []string `json:"depends_on_lanes,omitempty"`
 }
 
@@ -270,48 +271,21 @@ func requireLookupLedgersMatchRecount(ctx context.Context, t *testing.T, queryer
 	}
 }
 
-// TestPostgresLookupTriggerScenarios replays every fixture scenario that needs
-// only this lane's triggers. Each runs on its own database so the boundary
-// scenarios, which seed thousands of rows, can run in parallel.
+// TestPostgresLookupTriggerScenarios replays every fixture scenario with every
+// shipped trigger enabled. Each runs on its own database so the boundary
+// scenarios, which seed thousands of rows, can run in parallel. Every trigger
+// lane is merged, so a scenario that depends on another lane runs here too;
+// a lane it names that the embedded migrations lack fails the test instead
+// of leaving the scenario pending.
 func TestPostgresLookupTriggerScenarios(t *testing.T) {
 	t.Parallel()
 	scenarios := loadLookupTriggerScenarios(t)
-	installedLookupTriggerLanes(t)
-	for _, scenario := range scenarios {
-		if len(scenario.DependsOnLanes) > 0 {
-			// Asserted by TestPostgresLookupTriggerCrossLaneScenarios.
-			continue
-		}
-		t.Run(scenario.Name, func(t *testing.T) {
-			t.Parallel()
-			runLookupTriggerScenario(t, testsupport.NewPostgresControlDB(t), scenario)
-		})
+	if len(scenarios) == 0 {
+		t.Fatal("the fixture holds no scenarios")
 	}
-}
-
-// TestPostgresLookupTriggerCrossLaneScenarios replays the scenarios that need
-// another lane's triggers. A scenario runs, and fails on any difference, as
-// soon as every lane it names is in the embedded migration set. Until then it
-// is pending: it never skips, and it logs which lanes it is waiting for so the
-// integrator can see what merging those lanes will enable.
-func TestPostgresLookupTriggerCrossLaneScenarios(t *testing.T) {
-	t.Parallel()
-	scenarios := loadLookupTriggerScenarios(t)
 	installed := installedLookupTriggerLanes(t)
 	for _, scenario := range scenarios {
-		if len(scenario.DependsOnLanes) == 0 {
-			continue
-		}
-		var missing []string
-		for _, lane := range scenario.DependsOnLanes {
-			if !installed[lane] {
-				missing = append(missing, lane)
-			}
-		}
-		if len(missing) > 0 {
-			t.Logf("scenario %q is pending trigger lanes %v", scenario.Name, missing)
-			continue
-		}
+		requirePostgresTriggerLanesEmbedded(t, installed, scenario.DependsOnLanes)
 		t.Run(scenario.Name, func(t *testing.T) {
 			t.Parallel()
 			runLookupTriggerScenario(t, testsupport.NewPostgresControlDB(t), scenario)

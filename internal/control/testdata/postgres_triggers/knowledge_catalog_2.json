@@ -6,7 +6,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_identity_collision/reject_duplicate",
@@ -16,7 +17,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
     "expect": "reject",
-    "message": "knowledge catalog tenant already exists"
+    "message": "knowledge catalog tenant already exists",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_identity_collision/non_empty_duplicate_reports_shape_first",
@@ -26,7 +28,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id, identity_count) VALUES ('t1', 1)",
     "expect": "reject",
-    "message": "knowledge catalog tenant must begin empty"
+    "message": "knowledge catalog tenant must begin empty",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_initial_shape/accept_empty",
@@ -35,7 +38,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id, catalog_revision, identity_count, version_count, definition_body_bytes, idempotency_count, active_object_count, recovery_audit_count) VALUES ('t2', 0, 0, 0, 0, 0, 0, 0)",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_initial_shape/reject_nonzero_catalog_revision",
@@ -44,7 +48,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id, catalog_revision) VALUES ('t2', 1)",
     "expect": "reject",
-    "message": "knowledge catalog tenant must begin empty"
+    "message": "knowledge catalog tenant must begin empty",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_initial_shape/reject_nonzero_identity_count",
@@ -53,7 +58,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id, identity_count) VALUES ('t2', 1)",
     "expect": "reject",
-    "message": "knowledge catalog tenant must begin empty"
+    "message": "knowledge catalog tenant must begin empty",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_initial_shape/reject_nonzero_version_count",
@@ -62,7 +68,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id, version_count) VALUES ('t2', 1)",
     "expect": "reject",
-    "message": "knowledge catalog tenant must begin empty"
+    "message": "knowledge catalog tenant must begin empty",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_initial_shape/reject_nonzero_definition_body_bytes",
@@ -71,7 +78,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id, definition_body_bytes) VALUES ('t2', 1)",
     "expect": "reject",
-    "message": "knowledge catalog tenant must begin empty"
+    "message": "knowledge catalog tenant must begin empty",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_initial_shape/reject_nonzero_idempotency_count",
@@ -80,7 +88,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id, idempotency_count) VALUES ('t2', 1)",
     "expect": "reject",
-    "message": "knowledge catalog tenant must begin empty"
+    "message": "knowledge catalog tenant must begin empty",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_initial_shape/reject_nonzero_active_object_count",
@@ -89,7 +98,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id, active_object_count) VALUES ('t2', 1)",
     "expect": "reject",
-    "message": "knowledge catalog tenant must begin empty"
+    "message": "knowledge catalog tenant must begin empty",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_initial_shape/reject_nonzero_recovery_audit_count",
@@ -98,7 +108,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id, recovery_audit_count) VALUES ('t2', 1)",
     "expect": "reject",
-    "message": "knowledge catalog tenant must begin empty"
+    "message": "knowledge catalog tenant must begin empty",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_transition/accept_advance_by_one",
@@ -108,7 +119,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_tenants SET catalog_revision = catalog_revision + 1 WHERE tenant_id = 't1'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_transition/accept_unchanged_revision",
@@ -118,7 +130,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_tenants SET catalog_revision = catalog_revision WHERE tenant_id = 't1'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_transition/reject_skip",
@@ -128,7 +141,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_tenants SET catalog_revision = 2 WHERE tenant_id = 't1'",
     "expect": "reject",
-    "message": "knowledge catalog revision must advance by one"
+    "message": "knowledge catalog revision must advance by one",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_transition/reject_rewind",
@@ -139,7 +153,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_tenants SET catalog_revision = 0 WHERE tenant_id = 't1'",
     "expect": "reject",
-    "message": "knowledge catalog revision must advance by one"
+    "message": "knowledge catalog revision must advance by one",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_transition/identity_change_reports_identity_first",
@@ -149,7 +164,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_tenants SET tenant_id = 't9', catalog_revision = 5 WHERE tenant_id = 't1'",
     "expect": "reject",
-    "message": "knowledge catalog tenant identity is immutable"
+    "message": "knowledge catalog tenant identity is immutable",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_identity_immutable/accept_same_identity",
@@ -159,7 +175,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_tenants SET tenant_id = 't1' WHERE tenant_id = 't1'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_identity_immutable/reject_rename",
@@ -170,7 +187,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_tenants SET tenant_id = 't2' WHERE tenant_id = 't1'",
     "expect": "reject",
-    "message": "knowledge catalog tenant identity is immutable"
+    "message": "knowledge catalog tenant identity is immutable",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_delete/accept_no_rows",
@@ -180,7 +198,8 @@
     ],
     "statement": "DELETE FROM knowledge_catalog_tenants WHERE tenant_id = 'missing'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_delete/reject",
@@ -190,7 +209,8 @@
     ],
     "statement": "DELETE FROM knowledge_catalog_tenants WHERE tenant_id = 't1'",
     "expect": "reject",
-    "message": "knowledge catalog tenant cannot be deleted"
+    "message": "knowledge catalog tenant cannot be deleted",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_creates_revision_head/accept_insert",
@@ -199,7 +219,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_creates_revision_head/head_exists_at_revision_zero",
@@ -209,7 +230,8 @@
     ],
     "statement": "DELETE FROM knowledge_catalog_tenants WHERE tenant_id IN (SELECT tenant_id FROM knowledge_catalog_revision_heads WHERE catalog_revision = 0 AND length(state_token) = 32)",
     "expect": "reject",
-    "message": "knowledge catalog tenant cannot be deleted"
+    "message": "knowledge catalog tenant cannot be deleted",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_creates_revision_head/no_head_without_tenant",
@@ -219,7 +241,8 @@
     ],
     "statement": "DELETE FROM knowledge_catalog_tenants WHERE tenant_id IN (SELECT tenant_id FROM knowledge_catalog_revision_heads WHERE tenant_id = 't2')",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_provisions_lookup_ledger/accept_insert",
@@ -228,7 +251,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t3')",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_provisions_lookup_ledger/ledger_exists_and_is_empty",
@@ -238,7 +262,8 @@
     ],
     "statement": "DELETE FROM knowledge_catalog_tenants WHERE tenant_id IN (SELECT tenant_id FROM knowledge_lookup_asset_tenant_ledgers WHERE staged_asset_count = 0 AND asset_identity_count = 0 AND published_version_count = 0 AND stored_content_bytes = 0)",
     "expect": "reject",
-    "message": "knowledge catalog tenant cannot be deleted"
+    "message": "knowledge catalog tenant cannot be deleted",
+    "replays_with_every_trigger": true
   },
   {
     "name": "tenant_provisions_lookup_ledger/no_ledger_without_tenant",
@@ -248,7 +273,8 @@
     ],
     "statement": "DELETE FROM knowledge_catalog_tenants WHERE tenant_id IN (SELECT tenant_id FROM knowledge_lookup_asset_tenant_ledgers WHERE tenant_id = 't2')",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "revision_requires_exact_head/accept_with_head",
@@ -258,7 +284,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_tenants SET catalog_revision = catalog_revision + 1 WHERE tenant_id = 't1'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "revision_requires_exact_head/reject_desynchronised_head",
@@ -270,7 +297,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_tenants SET catalog_revision = catalog_revision + 1 WHERE tenant_id = 't1'",
     "expect": "reject",
-    "message": "knowledge catalog revision head is missing"
+    "message": "knowledge catalog revision head is missing",
+    "replays_with_every_trigger": true
   },
   {
     "name": "revision_rotates_state_token/token_rotates_with_revision",
@@ -282,7 +310,8 @@
     ],
     "statement": "DELETE FROM knowledge_catalog_tenants WHERE tenant_id IN (SELECT head.tenant_id FROM knowledge_catalog_revision_heads AS head JOIN kc2_old_head AS old ON old.tenant_id = head.tenant_id WHERE head.catalog_revision = 1 AND length(head.state_token) = 32 AND head.state_token <> old.state_token)",
     "expect": "reject",
-    "message": "knowledge catalog tenant cannot be deleted"
+    "message": "knowledge catalog tenant cannot be deleted",
+    "replays_with_every_trigger": true
   },
   {
     "name": "revision_rotates_state_token/accept_two_advances",
@@ -293,7 +322,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_tenants SET catalog_revision = catalog_revision + 1 WHERE tenant_id = 't1'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "revision_rotates_state_token/reject_when_head_cannot_follow",
@@ -306,7 +336,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_tenants SET catalog_revision = catalog_revision + 1 WHERE tenant_id = 't1'",
     "expect": "reject",
-    "message": "knowledge catalog revision head rotation failed"
+    "message": "knowledge catalog revision head rotation failed",
+    "replays_with_every_trigger": true
   },
   {
     "name": "revision_rotates_state_token/head_guard_rejects_skipped_rotation",
@@ -317,7 +348,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_tenants SET catalog_revision = 2 WHERE tenant_id = 't1'",
     "expect": "reject",
-    "message": "knowledge catalog revision head transition is invalid"
+    "message": "knowledge catalog revision head transition is invalid",
+    "replays_with_every_trigger": true
   },
   {
     "name": "head_identity_collision/accept_via_tenant_insert",
@@ -326,7 +358,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "head_identity_collision/reject_duplicate",
@@ -336,7 +369,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, '\\x3333333333333333333333333333333333333333333333333333333333333333'::bytea)",
     "expect": "reject",
-    "message": "knowledge catalog revision head already exists"
+    "message": "knowledge catalog revision head already exists",
+    "replays_with_every_trigger": true
   },
   {
     "name": "head_identity_collision/disagreeing_duplicate_reports_disagreement_first",
@@ -346,7 +380,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 7, '\\x3333333333333333333333333333333333333333333333333333333333333333'::bytea)",
     "expect": "reject",
-    "message": "knowledge catalog revision head disagrees with tenant"
+    "message": "knowledge catalog revision head disagrees with tenant",
+    "replays_with_every_trigger": true
   },
   {
     "name": "head_insert_agrees/accept_via_tenant_insert",
@@ -355,7 +390,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t2')",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "head_insert_agrees/reject_without_tenant",
@@ -366,7 +402,8 @@
     ],
     "statement": "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t2', 0, '\\x3333333333333333333333333333333333333333333333333333333333333333'::bytea)",
     "expect": "reject",
-    "message": "knowledge catalog revision head disagrees with tenant"
+    "message": "knowledge catalog revision head disagrees with tenant",
+    "replays_with_every_trigger": true
   },
   {
     "name": "head_transition/accept_follow_tenant",
@@ -378,7 +415,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_revision_heads SET catalog_revision = 1, state_token = '\\x3333333333333333333333333333333333333333333333333333333333333333'::bytea WHERE tenant_id = 't1'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "head_transition/accept_via_rotation",
@@ -388,7 +426,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_tenants SET catalog_revision = catalog_revision + 1 WHERE tenant_id = 't1'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "head_transition/reject_ahead_of_tenant",
@@ -398,7 +437,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_revision_heads SET catalog_revision = 1, state_token = '\\x3333333333333333333333333333333333333333333333333333333333333333'::bytea WHERE tenant_id = 't1'",
     "expect": "reject",
-    "message": "knowledge catalog revision head transition is invalid"
+    "message": "knowledge catalog revision head transition is invalid",
+    "replays_with_every_trigger": true
   },
   {
     "name": "head_transition/reject_token_reuse",
@@ -410,7 +450,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_revision_heads SET catalog_revision = 1 WHERE tenant_id = 't1'",
     "expect": "reject",
-    "message": "knowledge catalog revision head transition is invalid"
+    "message": "knowledge catalog revision head transition is invalid",
+    "replays_with_every_trigger": true
   },
   {
     "name": "head_transition/reject_short_token_before_check",
@@ -422,7 +463,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_revision_heads SET catalog_revision = 1, state_token = '\\x33333333333333333333333333333333333333333333333333333333333333'::bytea WHERE tenant_id = 't1'",
     "expect": "reject",
-    "message": "knowledge catalog revision head transition is invalid"
+    "message": "knowledge catalog revision head transition is invalid",
+    "replays_with_every_trigger": true
   },
   {
     "name": "head_transition/reject_skip",
@@ -434,7 +476,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_revision_heads SET catalog_revision = 2, state_token = '\\x3333333333333333333333333333333333333333333333333333333333333333'::bytea WHERE tenant_id = 't1'",
     "expect": "reject",
-    "message": "knowledge catalog revision head transition is invalid"
+    "message": "knowledge catalog revision head transition is invalid",
+    "replays_with_every_trigger": true
   },
   {
     "name": "head_transition/reject_tenant_change",
@@ -447,7 +490,8 @@
     ],
     "statement": "UPDATE knowledge_catalog_revision_heads SET tenant_id = 't2', catalog_revision = 1, state_token = '\\x3333333333333333333333333333333333333333333333333333333333333333'::bytea WHERE tenant_id = 't1'",
     "expect": "reject",
-    "message": "knowledge catalog revision head transition is invalid"
+    "message": "knowledge catalog revision head transition is invalid",
+    "replays_with_every_trigger": true
   },
   {
     "name": "head_delete/accept_no_rows",
@@ -457,7 +501,8 @@
     ],
     "statement": "DELETE FROM knowledge_catalog_revision_heads WHERE tenant_id = 'missing'",
     "expect": "accept",
-    "message": ""
+    "message": "",
+    "replays_with_every_trigger": true
   },
   {
     "name": "head_delete/reject",
@@ -467,7 +512,8 @@
     ],
     "statement": "DELETE FROM knowledge_catalog_revision_heads WHERE tenant_id = 't1'",
     "expect": "reject",
-    "message": "knowledge catalog revision head cannot be deleted"
+    "message": "knowledge catalog revision head cannot be deleted",
+    "replays_with_every_trigger": true
   },
   {
     "name": "authority_is_exact/accept_create",

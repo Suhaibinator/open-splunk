@@ -42,10 +42,7 @@ const (
 	coreIngest2SQLiteRaiseCode = 1811 // SQLITE_CONSTRAINT_TRIGGER, the code RAISE(ABORT, ...) reports.
 )
 
-var (
-	coreIngest2CreateTrigger = regexp.MustCompile(`(?m)^CREATE TRIGGER ([a-z0-9_]+)$`)
-	coreIngest2LaneKey       = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
-)
+var coreIngest2CreateTrigger = regexp.MustCompile(`(?m)^CREATE TRIGGER ([a-z0-9_]+)$`)
 
 // coreIngest2Scenario is one fixture entry. SetupSQL and Statement are
 // PostgreSQL and assume search_path = open_splunk; the SQLite fields spell
@@ -53,8 +50,8 @@ var (
 // writes blob literals differently. PostconditionSQL, when present, is one
 // query, valid in both engines, that must return true after an accepted
 // statement. DependsOnLanes names other trigger lanes whose PostgreSQL
-// triggers the scenario needs; such a scenario runs only in
-// TestPostgresCoreIngest2CrossLaneTriggerScenarios.
+// triggers the scenario needs. Every scenario runs with every shipped trigger
+// enabled, so the lanes only have to be embedded.
 type coreIngest2Scenario struct {
 	Name             string   `json:"name"`
 	Trigger          string   `json:"trigger"`
@@ -102,23 +99,6 @@ func coreIngest2MigrationTriggers(t *testing.T) []string {
 	return names
 }
 
-// coreIngest2ShippedLanes reports which trigger lanes the embedded
-// PostgreSQL set carries, keyed by lane name (NNNN_<lane>_triggers.sql).
-func coreIngest2ShippedLanes(t *testing.T) map[string]bool {
-	t.Helper()
-	names, err := fs.Glob(migrations.Postgres(), "*_triggers.sql")
-	if err != nil {
-		t.Fatalf("list embedded PostgreSQL trigger migrations: %v", err)
-	}
-	lanes := make(map[string]bool, len(names))
-	for _, name := range names {
-		if len(name) > len("0000_") {
-			lanes[strings.TrimSuffix(name[len("0000_"):], "_triggers.sql")] = true
-		}
-	}
-	return lanes
-}
-
 func TestPostgresCoreIngest2TriggerFixtureCoversEveryTrigger(t *testing.T) {
 	t.Parallel()
 	scenarios := loadCoreIngest2Scenarios(t)
@@ -150,10 +130,8 @@ func TestPostgresCoreIngest2TriggerFixtureCoversEveryTrigger(t *testing.T) {
 			t.Fatalf("%s names trigger %q, which %s does not create", label, scenario.Trigger, coreIngest2Migration)
 		}
 		seen[scenario.Name] = true
-		for _, lane := range scenario.DependsOnLanes {
-			if !coreIngest2LaneKey.MatchString(lane) || lane == coreIngest2Lane {
-				t.Fatalf("%s depends on invalid lane %q", label, lane)
-			}
+		if err := checkPostgresTriggerLaneDependencies(coreIngest2Lane, scenario.DependsOnLanes); err != nil {
+			t.Fatalf("%s: %v", label, err)
 		}
 		switch scenario.Expect {
 		case coreIngest2ExpectAccept:
@@ -270,84 +248,30 @@ func TestPostgresCoreIngest2MigrationKeepsTheSQLiteTriggers(t *testing.T) {
 	}
 }
 
-// TestPostgresCoreIngest2TriggerScenarios runs every scenario that needs only
-// this lane's triggers. Each runs on one connection inside a SERIALIZABLE
+// TestPostgresCoreIngest2TriggerScenarios runs every scenario with every
+// shipped trigger enabled. Each runs on one connection inside a SERIALIZABLE
 // transaction, the isolation the control-plane writers use, that is rolled
 // back afterwards, so scenarios cannot see each other's rows or test-only
 // DDL. Some setups disable a trigger or set session_replication_role, which
-// the superuser test role is allowed to do.
+// the superuser test role is allowed to do. Every trigger lane is merged, so
+// a scenario that depends on another lane runs here too; a lane it names
+// that the embedded migrations lack fails the test instead of leaving the
+// scenario pending.
 func TestPostgresCoreIngest2TriggerScenarios(t *testing.T) {
 	t.Parallel()
 	scenarios := loadCoreIngest2Scenarios(t)
+	if len(scenarios) == 0 {
+		t.Fatal("the fixture holds no scenarios")
+	}
+	embedded := postgresEmbeddedTriggerLanes(t)
+	requirePostgresTriggerLanesEmbedded(t, embedded, []string{coreIngest2Lane})
 	db := testsupport.NewPostgresControlDB(t)
-	ran := 0
 	for _, scenario := range scenarios {
-		if len(scenario.DependsOnLanes) != 0 {
-			continue
-		}
-		ran++
+		requirePostgresTriggerLanesEmbedded(t, embedded, scenario.DependsOnLanes)
 		t.Run(scenario.Name, func(t *testing.T) {
 			runCoreIngest2PostgresScenario(t, db.SQLDB(), scenario)
 		})
 	}
-	if ran == 0 {
-		t.Fatal("no lane-local scenario ran")
-	}
-}
-
-// TestPostgresCoreIngest2CrossLaneTriggerScenarios runs the scenarios that
-// need another lane's PostgreSQL triggers. A scenario whose lanes are all in
-// the embedded set must produce its fixture outcome and fails the test
-// otherwise. One whose lanes are not merged yet is logged with the lanes it
-// waits for and not run; it is never skipped or counted as passed, and it
-// starts running, and failing on a wrong outcome, as soon as the integrator
-// embeds those lanes.
-func TestPostgresCoreIngest2CrossLaneTriggerScenarios(t *testing.T) {
-	t.Parallel()
-	scenarios := loadCoreIngest2Scenarios(t)
-	shipped := coreIngest2ShippedLanes(t)
-	if !shipped[coreIngest2Lane] {
-		t.Fatalf("embedded PostgreSQL migrations lack %s", coreIngest2Migration)
-	}
-	var crossLane []coreIngest2Scenario
-	runnable := false
-	for _, scenario := range scenarios {
-		if len(scenario.DependsOnLanes) == 0 {
-			continue
-		}
-		crossLane = append(crossLane, scenario)
-		if coreIngest2MissingLanes(scenario, shipped) == nil {
-			runnable = true
-		}
-	}
-	var db *control.PostgresDB
-	if runnable {
-		db = testsupport.NewPostgresControlDB(t)
-	}
-	waiting := 0
-	for _, scenario := range crossLane {
-		if missing := coreIngest2MissingLanes(scenario, shipped); missing != nil {
-			waiting++
-			t.Logf("scenario %s waits for the PostgreSQL triggers of lanes %v, which the embedded migrations do not carry yet",
-				scenario.Name, missing)
-			continue
-		}
-		t.Run(scenario.Name, func(t *testing.T) {
-			runCoreIngest2PostgresScenario(t, db.SQLDB(), scenario)
-		})
-	}
-	t.Logf("%d of %d scenarios depend on other trigger lanes; %d wait for unmerged lanes",
-		len(crossLane), len(scenarios), waiting)
-}
-
-func coreIngest2MissingLanes(scenario coreIngest2Scenario, shipped map[string]bool) []string {
-	var missing []string
-	for _, lane := range scenario.DependsOnLanes {
-		if !shipped[lane] {
-			missing = append(missing, lane)
-		}
-	}
-	return missing
 }
 
 // TestCoreIngest2TriggerFixtureMatchesSQLite runs the SQLite spelling of

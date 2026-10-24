@@ -102,8 +102,9 @@ type knowledgeObjects1Scenario struct {
 	// Trigger must then leave the rejection exactly as it is.
 	UnchangedWithoutTrigger bool `json:"unchanged_without_trigger,omitempty"`
 	// DependsOnLanes names other trigger lanes whose triggers the scenario's
-	// expected outcome requires. Such a scenario runs only in
-	// TestPostgresKnowledgeObjects1CrossLaneTriggerScenarios.
+	// expected outcome requires. Every scenario runs with every shipped
+	// trigger enabled, so this only documents the dependency; the lanes must
+	// be in the migration ledger.
 	DependsOnLanes []string          `json:"depends_on_lanes,omitempty"`
 	SetupSQL       []string          `json:"setup_sql"`
 	Statement      string            `json:"statement"`
@@ -186,10 +187,8 @@ func TestPostgresKnowledgeObjects1TriggerFixtureIsWellFormed(t *testing.T) {
 		if strings.TrimSpace(scenario.Statement) == "" {
 			t.Errorf("scenario %q has no statement", scenario.Name)
 		}
-		for _, lane := range scenario.DependsOnLanes {
-			if lane == knowledgeObjects1Lane || !knowledgeObjects1LaneName.MatchString(lane) {
-				t.Errorf("scenario %q depends on invalid lane %q", scenario.Name, lane)
-			}
+		if err := checkPostgresTriggerLaneDependencies(knowledgeObjects1Lane, scenario.DependsOnLanes); err != nil {
+			t.Errorf("scenario %q: %v", scenario.Name, err)
 		}
 		switch scenario.Expect {
 		case "accept":
@@ -276,80 +275,24 @@ func TestPostgresKnowledgeObjects1TriggersAreInstalled(t *testing.T) {
 }
 
 // TestPostgresKnowledgeObjects1TriggerScenarios runs every fixture scenario
-// that needs only this lane's triggers.
+// with every shipped trigger enabled. Every trigger lane is merged, so a
+// scenario that depends on another lane runs here too; a lane it names that
+// the migration ledger lacks fails the test instead of leaving the scenario
+// pending, so no expectation can hide behind a misspelled or dropped lane.
 func TestPostgresKnowledgeObjects1TriggerScenarios(t *testing.T) {
 	t.Parallel()
 	scenarios := loadKnowledgeObjects1Scenarios(t)
+	if len(scenarios) == 0 {
+		t.Fatal("the fixture holds no scenarios")
+	}
 	db := testsupport.NewPostgresControlDB(t)
-	ran := 0
+	installed := knowledgeObjects1InstalledLanes(t, db.SQLDB())
 	for _, scenario := range scenarios {
-		if len(scenario.DependsOnLanes) > 0 {
-			continue
-		}
-		ran++
+		requirePostgresTriggerLanesEmbedded(t, installed, scenario.DependsOnLanes)
 		t.Run(scenario.Name, func(t *testing.T) {
 			runKnowledgeObjects1Scenario(t, db.SQLDB(), scenario, "")
 		})
 	}
-	if ran == 0 {
-		t.Fatal("no single-lane scenario ran")
-	}
-}
-
-// TestPostgresKnowledgeObjects1CrossLaneTriggerScenarios runs the scenarios
-// whose expected outcome needs another lane's triggers. It never skips. A
-// scenario whose dependency lanes are all in the migration ledger must hold
-// exactly. A scenario with a missing lane must not hold yet: if it already
-// does, its depends_on_lanes entry is wrong and the test fails, so a stale
-// dependency cannot hide a scenario from TestPostgresKnowledgeObjects1TriggerScenarios.
-func TestPostgresKnowledgeObjects1CrossLaneTriggerScenarios(t *testing.T) {
-	t.Parallel()
-	scenarios := loadKnowledgeObjects1Scenarios(t)
-	var crossLane []knowledgeObjects1Scenario
-	for _, scenario := range scenarios {
-		if len(scenario.DependsOnLanes) > 0 {
-			crossLane = append(crossLane, scenario)
-		}
-	}
-	if len(crossLane) == 0 {
-		t.Log("every knowledge_objects_1 scenario holds with this lane's triggers alone")
-		return
-	}
-	db := testsupport.NewPostgresControlDB(t)
-	installed := knowledgeObjects1InstalledLanes(t, db.SQLDB())
-	for _, scenario := range crossLane {
-		t.Run(scenario.Name, func(t *testing.T) {
-			var missing []string
-			for _, lane := range scenario.DependsOnLanes {
-				if !installed[lane] {
-					missing = append(missing, lane)
-				}
-			}
-			if len(missing) == 0 {
-				runKnowledgeObjects1Scenario(t, db.SQLDB(), scenario, "")
-				return
-			}
-			if knowledgeObjects1ScenarioHolds(t, db.SQLDB(), scenario) {
-				t.Fatalf("scenario already holds without lanes %s; drop them from depends_on_lanes",
-					strings.Join(missing, ", "))
-			}
-			t.Logf("pending until lanes %s are merged", strings.Join(missing, ", "))
-		})
-	}
-}
-
-// knowledgeObjects1ScenarioHolds reports whether the statement has the
-// scenario's expected outcome, without checking the pinned state.
-func knowledgeObjects1ScenarioHolds(t *testing.T, db *sql.DB, scenario knowledgeObjects1Scenario) bool {
-	t.Helper()
-	withoutState := scenario
-	withoutState.State = nil
-	err := execKnowledgeObjects1Scenario(t, db, withoutState, "")
-	if scenario.Expect == "accept" {
-		return err == nil
-	}
-	message, ok := control.RaiseMessage(err)
-	return ok && message == scenario.Message
 }
 
 // TestPostgresKnowledgeObjects1ActiveDependentCheckFollowsCurrentEdges is the
@@ -433,9 +376,10 @@ func TestPostgresKnowledgeObjects1RejectsNeedTheirTrigger(t *testing.T) {
 	db := testsupport.NewPostgresControlDB(t)
 	installed := knowledgeObjects1InstalledLanes(t, db.SQLDB())
 	for _, scenario := range scenarios {
-		if scenario.Expect != "reject" || !knowledgeObjects1LanesInstalled(installed, scenario.DependsOnLanes) {
+		if scenario.Expect != "reject" {
 			continue
 		}
+		requirePostgresTriggerLanesEmbedded(t, installed, scenario.DependsOnLanes)
 		t.Run(scenario.Name, func(t *testing.T) {
 			err := execKnowledgeObjects1Scenario(t, db.SQLDB(), scenario, scenario.Trigger)
 			message, ok := control.RaiseMessage(err)
@@ -449,17 +393,6 @@ func TestPostgresKnowledgeObjects1RejectsNeedTheirTrigger(t *testing.T) {
 		})
 	}
 }
-
-func knowledgeObjects1LanesInstalled(installed map[string]bool, lanes []string) bool {
-	for _, lane := range lanes {
-		if !installed[lane] {
-			return false
-		}
-	}
-	return true
-}
-
-var knowledgeObjects1LaneName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 var knowledgeObjects1LaneMigrationName = regexp.MustCompile(`^[0-9]{4}_([a-z][a-z0-9_]*)_triggers\.sql$`)
 

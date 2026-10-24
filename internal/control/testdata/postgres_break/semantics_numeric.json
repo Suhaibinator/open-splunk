@@ -161,6 +161,7 @@
       "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('tenant-a', 9223372036854775807, 5, 1, 1, 1, 0, 0)"
     ],
     "expect": "reject",
+    "message": "feature-operation audit tenant state is invalid or sequence is exhausted",
     "sqlite_expect": "reject",
     "sqlite_message": "feature-operation audit tenant state is invalid or sequence is exhausted"
   },
