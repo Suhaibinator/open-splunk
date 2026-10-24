@@ -297,9 +297,11 @@ func TestPostgresCoreIngest2TriggerScenarios(t *testing.T) {
 
 // TestPostgresCoreIngest2CrossLaneTriggerScenarios runs the scenarios that
 // need another lane's PostgreSQL triggers. A scenario whose lanes are all in
-// the embedded set must produce its fixture outcome; one whose lanes are not
-// yet merged is reported as skipped with the lanes it waits for, never
-// passed. Once every lane is merged nothing can skip.
+// the embedded set must produce its fixture outcome and fails the test
+// otherwise. One whose lanes are not merged yet is logged with the lanes it
+// waits for and not run; it is never skipped or counted as passed, and it
+// starts running, and failing on a wrong outcome, as soon as the integrator
+// embeds those lanes.
 func TestPostgresCoreIngest2CrossLaneTriggerScenarios(t *testing.T) {
 	t.Parallel()
 	scenarios := loadCoreIngest2Scenarios(t)
@@ -322,15 +324,20 @@ func TestPostgresCoreIngest2CrossLaneTriggerScenarios(t *testing.T) {
 	if runnable {
 		db = testsupport.NewPostgresControlDB(t)
 	}
+	waiting := 0
 	for _, scenario := range crossLane {
+		if missing := coreIngest2MissingLanes(scenario, shipped); missing != nil {
+			waiting++
+			t.Logf("scenario %s waits for the PostgreSQL triggers of lanes %v, which the embedded migrations do not carry yet",
+				scenario.Name, missing)
+			continue
+		}
 		t.Run(scenario.Name, func(t *testing.T) {
-			if missing := coreIngest2MissingLanes(scenario, shipped); missing != nil {
-				t.Skipf("needs the PostgreSQL triggers of lanes %v, which the embedded migrations do not carry yet", missing)
-			}
 			runCoreIngest2PostgresScenario(t, db.SQLDB(), scenario)
 		})
 	}
-	t.Logf("%d of %d scenarios depend on other trigger lanes", len(crossLane), len(scenarios))
+	t.Logf("%d of %d scenarios depend on other trigger lanes; %d wait for unmerged lanes",
+		len(crossLane), len(scenarios), waiting)
 }
 
 func coreIngest2MissingLanes(scenario coreIngest2Scenario, shipped map[string]bool) []string {
@@ -347,7 +354,7 @@ func coreIngest2MissingLanes(scenario coreIngest2Scenario, shipped map[string]bo
 // every scenario against the shipped SQLite schema, which carries all of its
 // triggers, and requires the fixture outcome there too. A scenario that
 // passes on PostgreSQL but not here would mean the fixture, not the port,
-// defines the behaviour.
+// defines the behavior.
 func TestCoreIngest2TriggerFixtureMatchesSQLite(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -398,8 +405,7 @@ func runCoreIngest2SQLiteScenario(t *testing.T, db *sql.DB, scenario coreIngest2
 		statement: scenario.SQLiteStatement,
 		message:   coreIngest2SQLiteRaiseMessage,
 		describe: func(err error) string {
-			var sqliteErr *sqlite.Error
-			if errors.As(err, &sqliteErr) {
+			if sqliteErr, ok := errors.AsType[*sqlite.Error](err); ok {
 				return fmt.Sprintf("SQLite code %d: %v", sqliteErr.Code(), err)
 			}
 			return err.Error()
@@ -411,8 +417,8 @@ func runCoreIngest2SQLiteScenario(t *testing.T, db *sql.DB, scenario coreIngest2
 // SQLite trigger failure, which the driver reports as
 // "constraint failed: <text> (1811)".
 func coreIngest2SQLiteRaiseMessage(err error) (string, bool) {
-	var sqliteErr *sqlite.Error
-	if !errors.As(err, &sqliteErr) || sqliteErr.Code() != coreIngest2SQLiteRaiseCode {
+	sqliteErr, ok := errors.AsType[*sqlite.Error](err)
+	if !ok || sqliteErr.Code() != coreIngest2SQLiteRaiseCode {
 		return "", false
 	}
 	text := sqliteErr.Error()
