@@ -1,6 +1,8 @@
 -- Triggers for app_catalog_revisions, app_default_indexes,
 -- collector_catalog_revisions, collector_fleet and saved_searches, ported
--- from the final SQLite schema (lane collectors_apps_search_2, 17 triggers).
+-- from the final SQLite schema (lane collectors_apps_search_2, 17 triggers),
+-- plus saved_search_tenant_is_immutable, a tenant guard with no SQLite
+-- counterpart (SQLite saved searches had no tenant).
 --
 -- Applied after 0001..0006 with search_path = open_splunk. Every function
 -- pins that search_path with SET search_path FROM CURRENT, so trigger bodies
@@ -544,6 +546,9 @@ EXECUTE FUNCTION collector_catalog_revision_marker_is_undeletable();
 -- characters, last one in [AQgw]) must name an existing app workspace unless
 -- saved searches already use it (the legacy namespace). The BEFORE UPDATE
 -- read of saved_searches still sees the row's old app_id, as in SQLite.
+-- Deliberate difference: both lookups are scoped to NEW.tenant_id (SQLite
+-- saved searches had no tenant), so another tenant's app workspace or legacy
+-- namespace cannot satisfy the check.
 CREATE FUNCTION canonical_saved_search_app_exists()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -555,10 +560,14 @@ BEGIN
         AND substr(NEW.app_id, 5) !~ '[^A-Za-z0-9_-]'
         AND substr(NEW.app_id, 26, 1) ~ '^[AQgw]$'
         AND NOT EXISTS (
-            SELECT 1 FROM app_workspaces WHERE app_id = NEW.app_id
+            SELECT 1
+            FROM app_workspaces
+            WHERE tenant_id = NEW.tenant_id AND app_id = NEW.app_id
         )
         AND NOT EXISTS (
-            SELECT 1 FROM saved_searches WHERE app_id = NEW.app_id
+            SELECT 1
+            FROM saved_searches
+            WHERE tenant_id = NEW.tenant_id AND app_id = NEW.app_id
         ) THEN
         RAISE EXCEPTION 'canonical saved-search app does not exist';
     END IF;
@@ -576,10 +585,31 @@ BEFORE UPDATE OF app_id ON saved_searches
 FOR EACH ROW
 EXECUTE FUNCTION canonical_saved_search_app_exists();
 
+-- No SQLite counterpart: a saved search stays in the tenant that created it,
+-- so its schedules (tenant-scoped foreign keys) and app checks stay exact.
+CREATE FUNCTION saved_search_tenant_is_immutable()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path FROM CURRENT
+AS $$
+BEGIN
+    RAISE EXCEPTION 'saved search tenant is immutable';
+END;
+$$;
+
+CREATE TRIGGER saved_search_tenant_is_immutable
+BEFORE UPDATE OF tenant_id ON saved_searches
+FOR EACH ROW
+WHEN (NEW.tenant_id <> OLD.tenant_id)
+EXECUTE FUNCTION saved_search_tenant_is_immutable();
+
 -- app_default_indexes --------------------------------------------------------
 
 -- Shared by the insert and update triggers, whose SQLite bodies and WHEN
--- clauses are identical. Like SQLite, the index is matched by index_id only.
+-- clauses are identical. Deliberate difference: the index must also belong
+-- to NEW.tenant_id (SQLite indexes had no tenant), so another tenant's
+-- searchable index cannot satisfy the check; the tenant-scoped
+-- app_default_indexes_index_id_fkey refuses the row as well.
 CREATE FUNCTION app_default_indexes_require_searchable_index()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -590,6 +620,7 @@ BEGIN
         SELECT 1
         FROM indexes
         WHERE index_id = NEW.index_id
+          AND tenant_id = NEW.tenant_id
           AND state = 'active'
           AND search_enabled = 1
     ) THEN

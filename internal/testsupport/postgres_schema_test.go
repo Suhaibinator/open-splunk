@@ -22,14 +22,14 @@ import (
 // migrations/postgres/0001..0006 (tables) and the trigger files after them.
 // The table count is the number of CREATE TABLE statements in those files; the ledger table the runner adds is
 // counted separately. The index count covers every index on those tables:
-// the 99 each CREATE INDEX names plus the 119 PostgreSQL creates for the 85
-// PRIMARY KEY and 34 UNIQUE constraints. A foreign key that targets a
+// the 99 each CREATE INDEX names plus the 123 PostgreSQL creates for the 85
+// PRIMARY KEY and 38 UNIQUE constraints. A foreign key that targets a
 // CREATE UNIQUE INDEX does not make that index constraint-backed. A change
 // to any of these numbers must come with a new migration file.
 const (
 	shippedPostgresMigrationVersion = 18
 	shippedPostgresTables           = 85
-	shippedPostgresIndexes          = 218
+	shippedPostgresIndexes          = 222
 	shippedPostgresNamedIndexes     = 99
 )
 

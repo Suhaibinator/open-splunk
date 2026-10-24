@@ -94,6 +94,9 @@ CREATE TABLE indexes (
         ),
     -- SQLite: name UNIQUE (global). Index names are unique per tenant.
     CONSTRAINT indexes_tenant_name_key UNIQUE (tenant_id, name),
+    -- Target of the tenant-scoped foreign keys below, so a row that names an
+    -- index_id must also carry that index's tenant (no SQLite counterpart).
+    CONSTRAINT indexes_tenant_index_id_key UNIQUE (tenant_id, index_id),
     CHECK (char_length(name) BETWEEN 1 AND 255),
     CHECK (name = lower(name)),
     CHECK (name !~ '[^a-z0-9_-]'),
@@ -188,8 +191,11 @@ CREATE TABLE index_data_deletion_completions (
                 BETWEEN attempt_created_at_unix_micro
                     AND 253402300799999999
         ),
-    FOREIGN KEY (index_id)
-        REFERENCES indexes (index_id)
+    -- SQLite: FOREIGN KEY (index_id). Scoped by tenant so a completion can
+    -- only name an index of its own tenant; the SQLite constraint name is kept.
+    CONSTRAINT index_data_deletion_completions_index_id_fkey
+        FOREIGN KEY (tenant_id, index_id)
+        REFERENCES indexes (tenant_id, index_id)
         ON DELETE RESTRICT,
     CONSTRAINT index_data_deletion_completions_tenant_fk FOREIGN KEY (tenant_id)
         REFERENCES tenants (tenant_id) ON UPDATE RESTRICT ON DELETE RESTRICT
@@ -218,8 +224,15 @@ CREATE TABLE index_deletion_operations (
             AND tenant_id = trim(tenant_id)
             AND tenant_id !~ '[\u0001-\u001f\u007f-\u009f]'
         ),
-    FOREIGN KEY (index_id)
-        REFERENCES indexes (index_id)
+    -- Target of index_deletion_mutation_attempts' tenant-scoped key.
+    CONSTRAINT index_deletion_operations_tenant_operation_key
+        UNIQUE (tenant_id, deletion_operation_id),
+    -- SQLite: FOREIGN KEY (index_id). Scoped by tenant: an operation (and the
+    -- trigger that moves its index to 'deleting') can only target an index of
+    -- its own tenant.
+    CONSTRAINT index_deletion_operations_index_id_fkey
+        FOREIGN KEY (tenant_id, index_id)
+        REFERENCES indexes (tenant_id, index_id)
         ON DELETE RESTRICT,
     CONSTRAINT index_deletion_operations_tenant_fk FOREIGN KEY (tenant_id)
         REFERENCES tenants (tenant_id) ON UPDATE RESTRICT ON DELETE RESTRICT
@@ -276,8 +289,10 @@ CREATE TABLE index_deletion_mutation_attempts (
         CHECK (
             created_at_unix_micro BETWEEN 1 AND 253402300799999999
         ),
-    FOREIGN KEY (deletion_operation_id)
-        REFERENCES index_deletion_operations (deletion_operation_id)
+    -- SQLite: FOREIGN KEY (deletion_operation_id). Scoped by tenant.
+    CONSTRAINT index_deletion_mutation_attempts_deletion_operation_id_fkey
+        FOREIGN KEY (tenant_id, deletion_operation_id)
+        REFERENCES index_deletion_operations (tenant_id, deletion_operation_id)
         ON DELETE CASCADE,
     CONSTRAINT index_deletion_mutation_attempts_tenant_fk FOREIGN KEY (tenant_id)
         REFERENCES tenants (tenant_id) ON UPDATE RESTRICT ON DELETE RESTRICT
@@ -491,6 +506,10 @@ CREATE TABLE ingestion_tokens (
         OR
         (state IN ('active', 'disabled') AND revoked_at_unix_micro IS NULL)
     ),
+    -- Target of the tenant-scoped foreign keys of the HEC and ingest bucket
+    -- tables (no SQLite counterpart).
+    CONSTRAINT ingestion_tokens_tenant_token_key
+        UNIQUE (tenant_id, ingestion_token_id),
     CONSTRAINT ingestion_tokens_tenant_fk FOREIGN KEY (tenant_id)
         REFERENCES tenants (tenant_id) ON UPDATE RESTRICT ON DELETE RESTRICT
 );
@@ -508,8 +527,11 @@ CREATE TABLE hec_channels (
     CHECK (octet_length(channel_id) BETWEEN 1 AND 128),
     CHECK (channel_id = trim(channel_id)),
     CHECK (last_used_at_unix_micro >= created_at_unix_micro),
-    FOREIGN KEY (ingestion_token_id)
-        REFERENCES ingestion_tokens (ingestion_token_id)
+    -- SQLite: FOREIGN KEY (ingestion_token_id). Scoped by tenant so the row's
+    -- tenant is its token's tenant; the SQLite constraint name is kept.
+    CONSTRAINT hec_channels_ingestion_token_id_fkey
+        FOREIGN KEY (tenant_id, ingestion_token_id)
+        REFERENCES ingestion_tokens (tenant_id, ingestion_token_id)
         ON UPDATE RESTRICT ON DELETE CASCADE,
     CONSTRAINT hec_channels_tenant_fk FOREIGN KEY (tenant_id)
         REFERENCES tenants (tenant_id) ON UPDATE RESTRICT ON DELETE RESTRICT
@@ -523,8 +545,11 @@ CREATE TABLE hec_source_sequences (
     updated_at_unix_micro bigint NOT NULL,
     PRIMARY KEY (tenant_id, ingestion_token_id),
     CHECK (octet_length(tenant_id) BETWEEN 1 AND 255),
-    FOREIGN KEY (ingestion_token_id)
-        REFERENCES ingestion_tokens (ingestion_token_id)
+    -- SQLite: FOREIGN KEY (ingestion_token_id). Scoped by tenant so the row's
+    -- tenant is its token's tenant; the SQLite constraint name is kept.
+    CONSTRAINT hec_source_sequences_ingestion_token_id_fkey
+        FOREIGN KEY (tenant_id, ingestion_token_id)
+        REFERENCES ingestion_tokens (tenant_id, ingestion_token_id)
         ON UPDATE RESTRICT ON DELETE CASCADE,
     CONSTRAINT hec_source_sequences_tenant_fk FOREIGN KEY (tenant_id)
         REFERENCES tenants (tenant_id) ON UPDATE RESTRICT ON DELETE RESTRICT
@@ -653,7 +678,12 @@ CREATE TABLE ingest_quota_buckets (
     CONSTRAINT ingest_quota_buckets_updated_at_bounded CHECK (
         updated_at_unix_micro BETWEEN 1 AND 253402300799999999
     ),
-    FOREIGN KEY (token_owner_id) REFERENCES ingestion_tokens (ingestion_token_id)
+    -- SQLite: FOREIGN KEY (token_owner_id). Scoped by tenant so a token
+    -- bucket lives in its token's tenant; index buckets (NULL owner) are not
+    -- checked, as before. The SQLite constraint name is kept.
+    CONSTRAINT ingest_quota_buckets_token_owner_id_fkey
+        FOREIGN KEY (tenant_id, token_owner_id)
+        REFERENCES ingestion_tokens (tenant_id, ingestion_token_id)
         ON UPDATE RESTRICT ON DELETE CASCADE,
     CONSTRAINT ingest_quota_buckets_tenant_fk FOREIGN KEY (tenant_id)
         REFERENCES tenants (tenant_id) ON UPDATE RESTRICT ON DELETE RESTRICT
@@ -673,7 +703,11 @@ CREATE TABLE ingest_rejection_buckets (
     updated_at_unix_micro bigint NOT NULL
         CHECK (updated_at_unix_micro BETWEEN 1 AND 253402300799999999),
     PRIMARY KEY (tenant_id, token_id),
-    FOREIGN KEY (token_id) REFERENCES ingestion_tokens (ingestion_token_id)
+    -- SQLite: FOREIGN KEY (token_id). Scoped by tenant; the SQLite
+    -- constraint name is kept.
+    CONSTRAINT ingest_rejection_buckets_token_id_fkey
+        FOREIGN KEY (tenant_id, token_id)
+        REFERENCES ingestion_tokens (tenant_id, ingestion_token_id)
         ON UPDATE RESTRICT ON DELETE CASCADE,
     CONSTRAINT ingest_rejection_buckets_tenant_fk FOREIGN KEY (tenant_id)
         REFERENCES tenants (tenant_id) ON UPDATE RESTRICT ON DELETE RESTRICT

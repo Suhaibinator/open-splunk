@@ -229,6 +229,10 @@ CREATE TABLE saved_searches (
     CHECK (updated_at_unix_micro >= created_at_unix_micro),
     -- SQLite: UNIQUE (owner_id, app_id, name). Scoped by tenant like dashboards/alerts.
     UNIQUE (tenant_id, owner_id, app_id, name),
+    -- Target of the schedule tables' tenant-scoped foreign keys (no SQLite
+    -- counterpart).
+    CONSTRAINT saved_searches_tenant_saved_search_key
+        UNIQUE (tenant_id, saved_search_id),
     CONSTRAINT saved_searches_tenant_fk FOREIGN KEY (tenant_id)
         REFERENCES tenants (tenant_id) ON UPDATE RESTRICT ON DELETE RESTRICT
 );
@@ -264,8 +268,12 @@ CREATE TABLE saved_search_schedule_runs (
     CHECK (search_job_id IS NULL OR octet_length(search_job_id) BETWEEN 1 AND 256),
     CHECK (failure_category IS NULL OR octet_length(failure_category) BETWEEN 1 AND 64),
     CHECK (finished_at_unix_micro IS NULL OR finished_at_unix_micro >= claimed_at_unix_micro),
-    FOREIGN KEY (saved_search_id)
-        REFERENCES saved_searches (saved_search_id)
+    -- SQLite: FOREIGN KEY (saved_search_id). Scoped by tenant so a schedule
+    -- row can only name its own tenant's saved search; the SQLite constraint
+    -- name is kept.
+    CONSTRAINT saved_search_schedule_runs_saved_search_id_fkey
+        FOREIGN KEY (tenant_id, saved_search_id)
+        REFERENCES saved_searches (tenant_id, saved_search_id)
         ON UPDATE RESTRICT ON DELETE CASCADE,
     CONSTRAINT saved_search_schedule_runs_tenant_fk FOREIGN KEY (tenant_id)
         REFERENCES tenants (tenant_id) ON UPDATE RESTRICT ON DELETE RESTRICT
@@ -290,8 +298,12 @@ CREATE TABLE saved_search_schedules (
     CHECK (octet_length(timezone) BETWEEN 1 AND 255),
     CHECK (octet_length(dispatch_ttl) BETWEEN 0 AND 32),
     CHECK (next_run_at_unix_micro IS NULL OR next_run_at_unix_micro > 0),
-    FOREIGN KEY (saved_search_id)
-        REFERENCES saved_searches (saved_search_id)
+    -- SQLite: FOREIGN KEY (saved_search_id). Scoped by tenant so a schedule
+    -- row can only name its own tenant's saved search; the SQLite constraint
+    -- name is kept.
+    CONSTRAINT saved_search_schedules_saved_search_id_fkey
+        FOREIGN KEY (tenant_id, saved_search_id)
+        REFERENCES saved_searches (tenant_id, saved_search_id)
         ON UPDATE RESTRICT ON DELETE CASCADE,
     CONSTRAINT saved_search_schedules_tenant_fk FOREIGN KEY (tenant_id)
         REFERENCES tenants (tenant_id) ON UPDATE RESTRICT ON DELETE RESTRICT

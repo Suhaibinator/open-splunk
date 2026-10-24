@@ -57,6 +57,8 @@ var cas2TriggerTables = map[string]string{
 	"collector_catalog_revision_marker_is_undeletable":               "collector_catalog_revisions",
 	"collector_fleet_admin_version_is_monotonic":                     "collector_fleet",
 	"collector_fleet_identity_is_immutable":                          "collector_fleet",
+	// A tenant guard with no SQLite counterpart.
+	"saved_search_tenant_is_immutable": "saved_searches",
 }
 
 // cas2TriggerScenario is one fixture entry. The setup statements and the
