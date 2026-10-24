@@ -26,7 +26,7 @@
 }
 
 .signin-kicker { color: var(--accent-inverse); font-size: var(--type-xs); font-weight: 700; letter-spacing: 0.18em; }
-.signin-story-copy h1 { font-size: var(--type-display); font-weight: 300; letter-spacing: -0.035em; line-height: 1.05; margin: var(--space-4) 0 var(--space-5); max-width: 530px; }
+.signin-story-copy h2 { font-size: var(--type-display); font-weight: 300; letter-spacing: -0.035em; line-height: 1.05; margin: var(--space-4) 0 var(--space-5); max-width: 530px; }
 .signin-story-copy > p { color: var(--fg-inverse-muted); font-size: var(--type-md); line-height: 1.65; margin: 0 0 35px; max-width: 540px; }
 .signin-capabilities { display: grid; gap: var(--space-3); grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .signin-capabilities > span { border-left: 2px solid var(--accent-bright); display: grid; gap: var(--space-1); grid-template-columns: auto 1fr; padding: 2px 0 2px 10px; }
@@ -54,9 +54,9 @@
 .signin-password-field input { background: transparent; border: 0; height: 38px; min-width: 0; outline: 0; padding: 0 10px; width: 100%; }
 .signin-password-field button { background: transparent; border: 0; color: var(--fg-link); font-size: var(--type-xs); font-weight: 600; height: 38px; padding: 0 11px; }
 .signin-error { align-items: center; background: var(--status-error-soft); border: 1px solid var(--status-error-edge); color: var(--status-error-strong); display: flex; font-size: var(--type-xs); gap: 7px; margin-top: 10px; padding: var(--space-2); }
-.signin-error span { align-items: center; background: var(--status-error); border-radius: 50%; color: var(--fg-inverse); display: flex; flex: 0 0 16px; height: 16px; justify-content: center; width: 16px; }
+.signin-error > span { align-items: center; background: var(--status-error); border-radius: 50%; color: var(--fg-inverse); display: flex; flex: 0 0 16px; height: 16px; justify-content: center; width: 16px; }
 .signin-help-notice { align-items: center; background: var(--status-info-soft); border: 1px solid var(--status-info-edge); color: var(--fg-secondary); display: flex; font-size: var(--type-xs); gap: 7px; margin-top: 10px; padding: var(--space-2); }
-.signin-help-notice span { align-items: center; background: var(--status-info); border-radius: 50%; color: var(--fg-inverse); display: flex; flex: 0 0 16px; height: 16px; justify-content: center; width: 16px; }
+.signin-help-notice > span { align-items: center; background: var(--status-info); border-radius: 50%; color: var(--fg-inverse); display: flex; flex: 0 0 16px; height: 16px; justify-content: center; width: 16px; }
 .signin-submit { align-items: center; background: var(--accent); border: 1px solid var(--accent-hover); border-radius: var(--radius-sm); color: var(--fg-inverse); display: flex; font-weight: 600; gap: 7px; height: 41px; justify-content: center; text-decoration: none; width: 100%; }
 .signin-submit:hover { background: var(--accent-hover); }
 .signin-submit i { animation: spin 700ms linear infinite; border: 2px solid color-mix(in srgb, var(--fg-inverse) 35%, transparent); border-radius: 50%; border-top-color: var(--fg-inverse); height: 14px; width: 14px; }
@@ -69,6 +69,271 @@
 .signin-preview-link span { color: var(--fg-link); font-size: var(--type-xl); margin-left: 7px; }
 .signin-card > footer { color: var(--fg-muted); display: flex; font-size: var(--type-xs); gap: 14px; justify-content: space-between; margin-top: 27px; }
 .signin-card > footer a { color: var(--fg-link); text-decoration: none; }
+
+/* Account sign-in flows
+   The email, second-factor, provider, reset, invitation and verification cards
+   share the card above. Their actions are the `.button` primitive; the rules
+   here only lay them out inside the card, and give the notices a title line. */
+.signin-card form > small {
+  color: var(--fg-muted);
+  display: block;
+  font-size: var(--type-xs);
+  margin-top: var(--space-1);
+}
+
+.signin-card header p b,
+.signin-card form > small b {
+  color: var(--fg-text);
+}
+
+/* A step's heading takes focus only so a screen reader announces the step;
+   it is not a control, so it draws no focus ring. */
+.signin-card h1:focus {
+  outline: 0;
+}
+
+.signin-action {
+  min-height: 41px;
+}
+
+.signin-card > .signin-action {
+  margin-top: var(--space-4);
+}
+
+.signin-form .signin-action {
+  margin-top: var(--space-5);
+}
+
+.signin-form + .signin-action,
+.signin-providers + .signin-form {
+  margin-top: var(--space-3);
+}
+
+.signin-inline-link {
+  color: var(--fg-link);
+  display: inline-block;
+  font-size: var(--type-xs);
+  font-weight: 600;
+  margin-top: var(--space-2);
+  text-decoration: none;
+}
+
+.signin-inline-link:hover {
+  text-decoration: underline;
+}
+
+.signin-message {
+  align-items: flex-start;
+}
+
+.signin-message > div {
+  min-width: 0;
+}
+
+.signin-message strong {
+  display: block;
+  font-weight: 700;
+}
+
+.signin-message p {
+  margin: 2px 0 0;
+}
+
+.signin-message a {
+  color: var(--fg-link);
+  font-weight: 600;
+}
+
+.signin-message-action {
+  margin-top: var(--space-2);
+}
+
+.signin-help-notice[data-tone="success"] {
+  background: var(--status-success-soft);
+  border-color: var(--status-success-edge);
+}
+
+.signin-help-notice[data-tone="success"] > span {
+  background: var(--status-success);
+}
+
+.signin-providers ul,
+.signin-demo ul,
+.signin-invitation-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.signin-providers ul {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.signin-providers .signin-divider {
+  margin-bottom: 0;
+}
+
+.signin-provider-mark {
+  align-items: center;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-strong);
+  display: inline-flex;
+  font-size: var(--type-xs);
+  height: 18px;
+  justify-content: center;
+  width: 18px;
+}
+
+.signin-actions {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.signin-identity {
+  align-items: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.signin-identity > span:last-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.signin-identity b {
+  color: var(--fg-strong);
+  font-size: var(--type-md);
+}
+
+.signin-identity small,
+.signin-invitation-list small,
+.signin-demo small,
+.signin-invitation dd small {
+  color: var(--fg-muted);
+  display: block;
+  font-size: var(--type-xs);
+  overflow-wrap: anywhere;
+}
+
+.signin-identity-mark {
+  align-items: center;
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  color: var(--accent-hover);
+  display: flex;
+  flex: 0 0 auto;
+  font-size: var(--type-md);
+  font-weight: 700;
+  height: var(--space-8);
+  justify-content: center;
+  width: var(--space-8);
+}
+
+.signin-invitation-list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-top: var(--space-3);
+}
+
+/* A text column that wraps beside an action column that never does. */
+.signin-invitation-list li,
+.signin-demo li {
+  align-items: center;
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.signin-invitation-list li {
+  padding: var(--space-2) var(--space-3);
+}
+
+.signin-invitation-list li + li {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.signin-invitation {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+}
+
+.signin-invitation > div {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: minmax(84px, auto) minmax(0, 1fr);
+}
+
+.signin-invitation dd {
+  color: var(--fg-text);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.signin-step-meta {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin: var(--space-3) 0 0;
+  text-align: center;
+}
+
+.signin-loading {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.signin-loading .skeleton--block {
+  min-height: 92px;
+}
+
+.signin-demo {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--type-xs);
+  margin-top: var(--space-6);
+  padding: var(--space-2) var(--space-3);
+}
+
+.signin-demo summary {
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.signin-demo p {
+  color: var(--fg-muted);
+  margin: var(--space-2) 0;
+}
+
+.signin-demo ul {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.signin-demo ul + ul {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+}
+
+.signin-demo a {
+  color: var(--fg-link);
+  font-weight: 600;
+}
+
 
 /* Responsive
    The breakpoint overrides for the rules above. They live in the file that
@@ -92,7 +357,8 @@
   .signin-card form > input,
   .signin-password-field,
   .signin-password-field input { font-size: var(--type-xl); height: 46px; }
-  .signin-submit { min-height: 46px; }
+  .signin-submit,
+  .signin-action { min-height: 46px; }
 }
 
 @media (max-width: 480px) {
