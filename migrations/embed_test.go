@@ -49,6 +49,7 @@ var embeddedMigrationSHA256 = map[string]map[string]string{
 		"0011_collectors_apps_search_2_triggers.sql": "1671f3ce9de8924fd1f42f2f2086c382872c88fb143269ce1488d9b53e3124b5",
 		"0012_knowledge_objects_1_triggers.sql":      "0de87e2dbeb1f224d9330f3d84b511a5c46701688f21e4c088fc33c24e2c1f87",
 		"0013_knowledge_objects_2_triggers.sql":      "7f6c78cc1c9363932622ee1899b99da26b256752f7851cad7b2d0be5e2613811",
+		"0014_knowledge_catalog_1_triggers.sql":      "01ab424c305e380d17791171af43cb8f139b0a5ccef6687177c1371bfe96d955",
 	},
 }
 
