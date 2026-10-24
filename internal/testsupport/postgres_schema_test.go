@@ -27,7 +27,7 @@ import (
 // CREATE UNIQUE INDEX does not make that index constraint-backed. A change
 // to any of these numbers must come with a new migration file.
 const (
-	shippedPostgresMigrationVersion = 9
+	shippedPostgresMigrationVersion = 10
 	shippedPostgresTables           = 85
 	shippedPostgresIndexes          = 218
 	shippedPostgresNamedIndexes     = 99
