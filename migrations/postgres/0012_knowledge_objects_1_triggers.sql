@@ -571,6 +571,8 @@ END;
 $$;
 
 -- Every column in the condition is NOT NULL, so NOT (...) is never NULL.
+-- numeric: OLD.current_version may be 9223372036854775807, and bigint + 1
+-- would raise 22003 instead of this trigger's message.
 CREATE TRIGGER knowledge_object_registry_transition_is_valid
 BEFORE UPDATE ON knowledge_objects
 FOR EACH ROW
@@ -578,7 +580,7 @@ WHEN (NOT (
     NEW.tenant_id = OLD.tenant_id
     AND NEW.knowledge_object_id = OLD.knowledge_object_id
     AND NEW.created_at_unix_micro = OLD.created_at_unix_micro
-    AND NEW.current_version = OLD.current_version + 1
+    AND NEW.current_version = OLD.current_version::numeric + 1
     AND NEW.updated_at_unix_micro >= OLD.updated_at_unix_micro
     AND OLD.state NOT IN ('quarantined', 'deleted')
 ))

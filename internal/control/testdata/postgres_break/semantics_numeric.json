@@ -1,0 +1,691 @@
+[
+  {
+    "name": "ceiling/knowledge_object_update_at_max_version",
+    "area": "ceiling",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-1', 9223372036854775807, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'n', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 10, 10)"
+    ],
+    "statements": [
+      "UPDATE knowledge_objects SET updated_at_unix_micro = 11 WHERE knowledge_object_id = 'ko-1'"
+    ],
+    "expect": "reject",
+    "message": "knowledge object registry transition is invalid",
+    "keep_only_triggers": {
+      "knowledge_objects": [
+        "knowledge_object_registry_transition_is_valid"
+      ]
+    },
+    "sqlite_expect": "reject",
+    "sqlite_message": "knowledge object registry transition is invalid"
+  },
+  {
+    "name": "ceiling/lookup_definition_update_at_max_version",
+    "area": "ceiling",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO knowledge_lookup_definitions (tenant_id, lookup_id, owner_id, app_id, name, sharing_scope, automatic, current_version, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'lk-1', 'owner-1', 'app_aaaaaaaaaaaaaaaaaaaaaA', 'geo', 3, 0, 9223372036854775807, 'ACTIVE', 10, 10)"
+    ],
+    "statements": [
+      "UPDATE knowledge_lookup_definitions SET updated_at_unix_micro = 11 WHERE lookup_id = 'lk-1'"
+    ],
+    "expect": "reject",
+    "message": "lookup definition registry transition is invalid",
+    "keep_only_triggers": {
+      "knowledge_lookup_definitions": [
+        "knowledge_lookup_definition_transition_is_valid"
+      ]
+    },
+    "sqlite_expect": "reject",
+    "sqlite_message": "lookup definition registry transition is invalid"
+  },
+  {
+    "name": "ceiling/lookup_asset_update_at_max_version",
+    "area": "ceiling",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO knowledge_lookup_assets (tenant_id, lookup_asset_id, current_version, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'asset-1', 9223372036854775807, 10, 10)"
+    ],
+    "statements": [
+      "UPDATE knowledge_lookup_assets SET updated_at_unix_micro = 11 WHERE lookup_asset_id = 'asset-1'"
+    ],
+    "expect": "reject",
+    "keep_only_triggers": {
+      "knowledge_lookup_assets": [
+        "knowledge_lookup_asset_identity_transition_is_exact"
+      ]
+    },
+    "message": "lookup asset current version transition is invalid",
+    "sqlite_expect": "reject",
+    "sqlite_message": "lookup asset current version transition is invalid"
+  },
+  {
+    "name": "ceiling/index_catalog_state_transition_at_max_revision",
+    "area": "ceiling",
+    "keep_only_triggers": {
+      "index_catalog_state": [
+        "index_catalog_state_transition_is_valid"
+      ]
+    },
+    "seed_sql": [
+      "UPDATE index_catalog_state SET revision = 9223372036854775807, physical_count = 0"
+    ],
+    "statements": [
+      "UPDATE index_catalog_state SET physical_count = 1"
+    ],
+    "expect": "reject",
+    "message": "index catalog state transition is invalid",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index catalog state transition is invalid"
+  },
+  {
+    "name": "ceiling/index_deleting_transition_at_max_version",
+    "area": "ceiling",
+    "keep_only_triggers": {
+      "indexes": [
+        "index_deleting_transition_requires_operation"
+      ]
+    },
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_1', 'tenant-a', 9223372036854775807, 'main', 'Main', '', 0, 0, 'archived', 1, 1)"
+    ],
+    "sqlite_seed_sql": [
+      "INSERT INTO indexes (index_id, version, name, display_name, description, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_1', 9223372036854775807, 'main', 'Main', '', 0, 0, 'archived', 1, 1)"
+    ],
+    "statements": [
+      "UPDATE indexes SET state = 'deleting', updated_at_unix_micro = 2 WHERE index_id = 'idx_1'"
+    ],
+    "expect": "reject",
+    "message": "deleting index transition requires a matching deletion operation",
+    "sqlite_expect": "reject",
+    "sqlite_message": "deleting index transition requires a matching deletion operation"
+  },
+  {
+    "name": "ceiling/app_catalog_revision_at_max_on_app_update",
+    "area": "ceiling",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('tenant-a', 9223372036854775807)"
+    ],
+    "statements": [
+      "UPDATE app_workspaces SET display_name = 'Alpha 2', version = 2, updated_at_unix_micro = 3 WHERE app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA'"
+    ],
+    "expect": "reject",
+    "sqlite_expect": "reject",
+    "sqlite_message": "cannot store REAL value in INTEGER column app_catalog_revisions.revision",
+    "sqlstate": "22003",
+    "note": "revision + 1 overflows in the AFTER trigger's UPDATE. SQLite widens to REAL and then refuses to store it ('cannot store REAL value in INTEGER column'), so neither engine reaches a trigger message."
+  },
+  {
+    "name": "ceiling/app_catalog_revision_reaches_max_on_app_update",
+    "area": "ceiling",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 'tenant-a', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('tenant-a', 9223372036854775806)"
+    ],
+    "statements": [
+      "UPDATE app_workspaces SET display_name = 'Alpha 2', version = 2, updated_at_unix_micro = 3 WHERE app_id = 'app_aaaaaaaaaaaaaaaaaaaaaA'"
+    ],
+    "expect": "accept",
+    "check_sql": "SELECT revision::text FROM app_catalog_revisions WHERE tenant_id = 'tenant-a'",
+    "check_result": "9223372036854775807",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "ceiling/feature_operation_audit_append_reaches_max_next_sequence",
+    "area": "ceiling",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('tenant-a', 9223372036854775806, 9223372036854775806, 0, NULL)"
+    ],
+    "statements": [
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('tenant-a', 9223372036854775806, 5, 1, 1, 1, 9223372036854775807, 9223372036854775807)"
+    ],
+    "expect": "accept",
+    "check_sql": "SELECT first_sequence::text || ',' || next_sequence::text || ',' || retained_count::text FROM feature_operation_audit_tenant_state WHERE tenant_id = 'tenant-a'",
+    "check_result": "9223372036854775806,9223372036854775807,1",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "ceiling/feature_operation_audit_append_past_max_sequence",
+    "area": "ceiling",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('tenant-a', 9223372036854775807, 9223372036854775807, 0, NULL)"
+    ],
+    "statements": [
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('tenant-a', 9223372036854775807, 5, 1, 1, 1, 0, 0)"
+    ],
+    "expect": "reject",
+    "sqlite_expect": "reject",
+    "sqlite_message": "feature-operation audit tenant state is invalid or sequence is exhausted"
+  },
+  {
+    "name": "ceiling/index_catalog_revision_reaches_max_on_index_update",
+    "area": "ceiling",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "UPDATE index_catalog_state SET revision = 9223372036854775806, physical_count = 1",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_1', 'tenant-a', 1, 'main', 'Main', '', 1, 1, 'active', 1, 1)"
+    ],
+    "sqlite_seed_sql": [
+      "UPDATE index_catalog_state SET revision = 9223372036854775806, physical_count = 1",
+      "INSERT INTO indexes (index_id, version, name, display_name, description, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_1', 1, 'main', 'Main', '', 1, 1, 'active', 1, 1)"
+    ],
+    "statements": [
+      "UPDATE indexes SET description = 'd', version = 2, updated_at_unix_micro = 2 WHERE index_id = 'idx_1'"
+    ],
+    "expect": "accept",
+    "check_sql": "SELECT revision::text || ',' || physical_count::text FROM index_catalog_state",
+    "check_result": "9223372036854775807,1",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "ceiling/search_history_owner_count_reaches_max",
+    "area": "ceiling",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO search_history_owner_counts (tenant_id, owner_id, terminal_count) VALUES ('tenant-a', 'owner-1', 9223372036854775806)"
+    ],
+    "statements": [
+      "INSERT INTO search_history (search_job_id, tenant_id, owner_id, app_id, saved_search_id, final_state, search_text, created_at_unix_micro, finished_at_unix_micro, duration_nanoseconds, matched_events, entry_proto, entry_sha256) VALUES ('job-1', 'tenant-a', 'owner-1', '', '', 6, 'search *', 1, 2, 9223372036854775807, 9223372036854775807, '\\x0a'::bytea, '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea)"
+    ],
+    "expect": "accept",
+    "check_sql": "SELECT terminal_count::text FROM search_history_owner_counts",
+    "check_result": "9223372036854775807",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "partial_unique/alert_runs_second_active_run_is_rejected",
+    "area": "partial_unique",
+    "statements_without_triggers": true,
+    "seed_sql": [
+      "INSERT INTO alert_runs (alert_run_id, alert_id, alert_version, secret_generation, scheduled_at_unix_micro, outcome, evaluation, snapshot_proto) VALUES ('run-1', 'alert-1', 1, 1, 10, 1, 0, '\\x0a'::bytea)"
+    ],
+    "statements": [
+      "INSERT INTO alert_runs (alert_run_id, alert_id, alert_version, secret_generation, scheduled_at_unix_micro, outcome, evaluation, snapshot_proto) VALUES ('run-2', 'alert-1', 1, 1, 11, 1, 0, '\\x0a'::bytea)"
+    ],
+    "expect": "reject",
+    "sqlstate": "23505",
+    "constraint": "alert_runs_one_active",
+    "sqlite_expect": "reject",
+    "sqlite_message": "UNIQUE constraint failed: alert_runs.alert_id"
+  },
+  {
+    "name": "partial_unique/alert_runs_terminal_runs_do_not_collide",
+    "area": "partial_unique",
+    "statements_without_triggers": true,
+    "seed_sql": [
+      "INSERT INTO alert_runs (alert_run_id, alert_id, alert_version, secret_generation, scheduled_at_unix_micro, outcome, evaluation, snapshot_proto) VALUES ('run-1', 'alert-1', 1, 1, 10, 1, 0, '\\x0a'::bytea)",
+      "INSERT INTO alert_runs (alert_run_id, alert_id, alert_version, secret_generation, scheduled_at_unix_micro, outcome, evaluation, snapshot_proto) VALUES ('run-2', 'alert-1', 1, 1, 11, 2, 0, '\\x0a'::bytea)"
+    ],
+    "statements": [
+      "INSERT INTO alert_runs (alert_run_id, alert_id, alert_version, secret_generation, scheduled_at_unix_micro, outcome, evaluation, snapshot_proto) VALUES ('run-3', 'alert-1', 1, 1, 12, 3, 0, '\\x0a'::bytea)"
+    ],
+    "expect": "accept",
+    "check_sql": "SELECT count(*)::text FROM alert_runs WHERE alert_id = 'alert-1'",
+    "check_result": "3",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "partial_unique/alert_runs_terminal_run_cannot_be_reopened_beside_an_active_one",
+    "area": "partial_unique",
+    "statements_without_triggers": true,
+    "seed_sql": [
+      "INSERT INTO alert_runs (alert_run_id, alert_id, alert_version, secret_generation, scheduled_at_unix_micro, outcome, evaluation, snapshot_proto) VALUES ('run-1', 'alert-1', 1, 1, 10, 1, 0, '\\x0a'::bytea)",
+      "INSERT INTO alert_runs (alert_run_id, alert_id, alert_version, secret_generation, scheduled_at_unix_micro, outcome, evaluation, snapshot_proto) VALUES ('run-2', 'alert-1', 1, 1, 11, 2, 0, '\\x0a'::bytea)"
+    ],
+    "statements": [
+      "UPDATE alert_runs SET outcome = 1 WHERE alert_run_id = 'run-2'"
+    ],
+    "expect": "reject",
+    "sqlstate": "23505",
+    "constraint": "alert_runs_one_active",
+    "sqlite_expect": "reject",
+    "sqlite_message": "UNIQUE constraint failed: alert_runs.alert_id"
+  },
+  {
+    "name": "partial_unique/write_group_empty_attempt_ids_never_collide",
+    "area": "partial_unique",
+    "statements_without_triggers": true,
+    "seed_sql": [
+      "INSERT INTO ingest_write_groups (write_group_id, state, attempt_id, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('wg-1', 'ready', '', 1, 1, 1, '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 1, 1, 1)"
+    ],
+    "statements": [
+      "INSERT INTO ingest_write_groups (write_group_id, state, attempt_id, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('wg-2', 'ready', '', 1, 1, 1, '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 2, 2, 1)"
+    ],
+    "expect": "accept",
+    "check_sql": "SELECT count(*)::text FROM ingest_write_groups WHERE attempt_id = ''",
+    "check_result": "2",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "partial_unique/write_group_attempt_id_is_unique_byte_for_byte",
+    "area": "partial_unique",
+    "statements_without_triggers": true,
+    "seed_sql": [
+      "INSERT INTO ingest_write_groups (write_group_id, state, attempt_id, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('wg-1', 'ready', 'Attempt', 1, 1, 1, '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 1, 1, 1)",
+      "INSERT INTO ingest_write_groups (write_group_id, state, attempt_id, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('wg-2', 'ready', 'attempt', 1, 1, 1, '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 2, 2, 1)"
+    ],
+    "statements": [
+      "INSERT INTO ingest_write_groups (write_group_id, state, attempt_id, member_count, row_count, decoded_bytes, membership_sha256, first_sequence, last_sequence, created_at_unix_micro) VALUES ('wg-3', 'ready', 'attempt', 1, 1, 1, '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 3, 3, 1)"
+    ],
+    "expect": "reject",
+    "sqlstate": "23505",
+    "constraint": "ingest_write_groups_attempt_idx",
+    "sqlite_expect": "reject",
+    "sqlite_message": "UNIQUE constraint failed: ingest_write_groups.attempt_id"
+  },
+  {
+    "name": "partial_unique/knowledge_object_active_names_are_case_sensitive",
+    "area": "partial_unique",
+    "statements_without_triggers": true,
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-1', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'Name', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 10, 10)"
+    ],
+    "statements": [
+      "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-2', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'name', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 10, 10)"
+    ],
+    "expect": "accept",
+    "check_sql": "SELECT count(*)::text FROM knowledge_objects WHERE state = 'active'",
+    "check_result": "2",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "partial_unique/knowledge_object_reactivation_collides_with_active_name",
+    "area": "partial_unique",
+    "statements_without_triggers": true,
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-1', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-1', 'field_extraction', 'n', 'app', 'active', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 10, 10)",
+      "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'ko-2', 1, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'owner-2', 'field_extraction', 'n', 'app', 'draft', '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, 10, 10)"
+    ],
+    "statements": [
+      "UPDATE knowledge_objects SET state = 'active' WHERE knowledge_object_id = 'ko-2'"
+    ],
+    "expect": "reject",
+    "sqlstate": "23505",
+    "constraint": "knowledge_objects_active_app_name_idx",
+    "sqlite_expect": "reject",
+    "sqlite_message": "UNIQUE constraint failed: knowledge_objects.tenant_id, knowledge_objects.app_id, knowledge_objects.object_type, knowledge_objects.name"
+  },
+  {
+    "name": "partial_unique/lookup_definition_deleted_global_name_is_reusable",
+    "area": "partial_unique",
+    "statements_without_triggers": true,
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO knowledge_lookup_definitions (tenant_id, lookup_id, owner_id, app_id, name, sharing_scope, automatic, current_version, state, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro, deleted_at_unix_micro) VALUES ('tenant-a', 'lk-1', 'owner-1', 'search', 'geo', 3, 0, 3, 'DELETED', 10, 12, 11, 12)"
+    ],
+    "statements": [
+      "INSERT INTO knowledge_lookup_definitions (tenant_id, lookup_id, owner_id, app_id, name, sharing_scope, automatic, current_version, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'lk-2', 'owner-2', 'other', 'geo', 3, 0, 1, 'ACTIVE', 10, 10)"
+    ],
+    "expect": "accept",
+    "check_sql": "SELECT count(*)::text FROM knowledge_lookup_definitions WHERE name = 'geo'",
+    "check_result": "2",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "partial_unique/lookup_definition_global_name_spans_apps",
+    "area": "partial_unique",
+    "statements_without_triggers": true,
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO knowledge_lookup_definitions (tenant_id, lookup_id, owner_id, app_id, name, sharing_scope, automatic, current_version, state, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro) VALUES ('tenant-a', 'lk-1', 'owner-1', 'search', 'geo', 3, 0, 2, 'DISABLED', 10, 11, 11)"
+    ],
+    "statements": [
+      "INSERT INTO knowledge_lookup_definitions (tenant_id, lookup_id, owner_id, app_id, name, sharing_scope, automatic, current_version, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'lk-2', 'owner-2', 'other', 'geo', 3, 0, 1, 'ACTIVE', 10, 10)"
+    ],
+    "expect": "reject",
+    "sqlstate": "23505",
+    "constraint": "knowledge_lookup_definitions_global_name",
+    "sqlite_expect": "reject",
+    "sqlite_message": "UNIQUE constraint failed: knowledge_lookup_definitions.tenant_id, knowledge_lookup_definitions.name"
+  },
+  {
+    "name": "deferred_fk/lookup_asset_without_its_current_version_fails_at_commit",
+    "area": "deferred_fk",
+    "check_deferred": true,
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO knowledge_lookup_asset_tenant_ledgers (tenant_id, staged_asset_count, asset_identity_count, published_version_count, stored_content_bytes) VALUES ('tenant-a', 0, 0, 0, 0)"
+    ],
+    "statements": [
+      "INSERT INTO knowledge_lookup_assets (tenant_id, lookup_asset_id, current_version, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'asset-1', 1, 10, 10)"
+    ],
+    "expect": "reject",
+    "reject_at": "deferred",
+    "sqlstate": "23503",
+    "constraint": "knowledge_lookup_assets_tenant_id_lookup_asset_id_current__fkey",
+    "disable_triggers_on": [
+      "knowledge_lookup_assets",
+      "knowledge_lookup_asset_versions"
+    ],
+    "sqlite_expect": "reject",
+    "sqlite_message": "FOREIGN KEY constraint failed"
+  },
+  {
+    "name": "deferred_fk/lookup_asset_and_version_cycle_commits_in_either_order",
+    "area": "deferred_fk",
+    "check_deferred": true,
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO knowledge_lookup_asset_tenant_ledgers (tenant_id, staged_asset_count, asset_identity_count, published_version_count, stored_content_bytes) VALUES ('tenant-a', 0, 0, 0, 0)"
+    ],
+    "statements": [
+      "INSERT INTO knowledge_lookup_assets (tenant_id, lookup_asset_id, current_version, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'asset-1', 1, 10, 10)",
+      "INSERT INTO knowledge_lookup_asset_versions (tenant_id, lookup_asset_id, asset_version, source_sha256, content_sha256, source_bytes, canonical_csv, canonical_bytes, row_count, column_count, created_at_unix_micro) VALUES ('tenant-a', 'asset-1', 1, '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, '\\x0202020202020202020202020202020202020202020202020202020202020202'::bytea, 2, '\\x610a'::bytea, 2, 0, 1, 10)",
+      "INSERT INTO knowledge_lookup_asset_versions (tenant_id, lookup_asset_id, asset_version, source_sha256, content_sha256, source_bytes, canonical_csv, canonical_bytes, row_count, column_count, created_at_unix_micro) VALUES ('tenant-a', 'asset-2', 1, '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, '\\x0202020202020202020202020202020202020202020202020202020202020202'::bytea, 2, '\\x610a'::bytea, 2, 0, 1, 10)",
+      "INSERT INTO knowledge_lookup_assets (tenant_id, lookup_asset_id, current_version, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'asset-2', 1, 10, 10)"
+    ],
+    "expect": "accept",
+    "check_sql": "SELECT count(*)::text FROM knowledge_lookup_assets",
+    "check_result": "2",
+    "disable_triggers_on": [
+      "knowledge_lookup_assets",
+      "knowledge_lookup_asset_versions"
+    ],
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "deferred_fk/restrict_on_a_deferrable_key_is_still_immediate",
+    "area": "deferred_fk",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 1, 1)",
+      "INSERT INTO knowledge_lookup_asset_tenant_ledgers (tenant_id, staged_asset_count, asset_identity_count, published_version_count, stored_content_bytes) VALUES ('tenant-a', 0, 0, 0, 0)",
+      "INSERT INTO knowledge_lookup_assets (tenant_id, lookup_asset_id, current_version, created_at_unix_micro, updated_at_unix_micro) VALUES ('tenant-a', 'asset-1', 1, 10, 10)",
+      "INSERT INTO knowledge_lookup_asset_versions (tenant_id, lookup_asset_id, asset_version, source_sha256, content_sha256, source_bytes, canonical_csv, canonical_bytes, row_count, column_count, created_at_unix_micro) VALUES ('tenant-a', 'asset-1', 1, '\\x0101010101010101010101010101010101010101010101010101010101010101'::bytea, '\\x0202020202020202020202020202020202020202020202020202020202020202'::bytea, 2, '\\x610a'::bytea, 2, 0, 1, 10)"
+    ],
+    "statements": [
+      "DELETE FROM knowledge_lookup_asset_versions WHERE lookup_asset_id = 'asset-1'"
+    ],
+    "expect": "reject",
+    "reject_at": "statement",
+    "sqlstate": "23001",
+    "constraint": "knowledge_lookup_assets_tenant_id_lookup_asset_id_current__fkey",
+    "disable_triggers_on": [
+      "knowledge_lookup_assets",
+      "knowledge_lookup_asset_versions"
+    ],
+    "sqlite_expect": "reject",
+    "sqlite_message": "FOREIGN KEY constraint failed"
+  },
+  {
+    "name": "cascade/fleet_delete_cascades_runtime_and_keeps_catalog_counts",
+    "area": "cascade",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c2', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro, disconnected_at_unix_micro) VALUES ('t1', 'c1', 5, 5, 'development', 'host', 'linux', 'arm64', 1, 1, 1, 1)",
+      "INSERT INTO collector_catalog_revisions (tenant_id, revision, fleet_count, runtime_count) VALUES ('t1', 3, 2, 1)"
+    ],
+    "statements": [
+      "DELETE FROM collector_fleet WHERE collector_id = 'c1'"
+    ],
+    "expect": "accept",
+    "check_sql": "SELECT revision::text || ',' || fleet_count::text || ',' || runtime_count::text || ',' || (SELECT count(*) FROM collector_runtime)::text FROM collector_catalog_revisions",
+    "check_result": "5,1,0,0",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "cascade/fleet_delete_at_max_revision_with_runtime",
+    "area": "cascade",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro, disconnected_at_unix_micro) VALUES ('t1', 'c1', 5, 5, 'development', 'host', 'linux', 'arm64', 1, 1, 1, 1)",
+      "INSERT INTO collector_catalog_revisions (tenant_id, revision, fleet_count, runtime_count) VALUES ('t1', 9223372036854775806, 1, 1)"
+    ],
+    "statements": [
+      "DELETE FROM collector_fleet WHERE collector_id = 'c1'"
+    ],
+    "expect": "reject",
+    "message": "collector catalog revision exhausted",
+    "sqlite_expect": "reject",
+    "sqlite_message": "collector catalog revision exhausted"
+  },
+  {
+    "name": "generated/collector_display_name_sort_key_follows_display_name",
+    "area": "generated",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_catalog_revisions (tenant_id, revision, fleet_count, runtime_count) VALUES ('t1', 1, 1, 0)"
+    ],
+    "statements": [
+      "UPDATE collector_fleet SET display_name = 'Édge', admin_version = 2, updated_at_unix_micro = 2 WHERE collector_id = 'c1'"
+    ],
+    "expect": "accept",
+    "check_sql": "SELECT display_name_sort_key || ',' || octet_length(display_name_sort_key)::text FROM collector_fleet",
+    "check_result": "Édge,5",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "generated/collector_display_name_sort_key_cannot_be_assigned",
+    "area": "generated",
+    "pg_only": true,
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statements": [
+      "UPDATE collector_fleet SET display_name_sort_key = 'z' WHERE collector_id = 'c1'"
+    ],
+    "expect": "reject",
+    "sqlstate": "428C9"
+  },
+  {
+    "name": "generated/quarantined_version_must_be_the_current_object_version",
+    "area": "generated",
+    "note": "quarantine_object_id and quarantine_object_version are generated from state, and they are the referencing columns of a deferred foreign key to knowledge_objects (tenant_id, knowledge_object_id, current_version). A quarantined version that is not the current one must fail at commit.",
+    "disable_triggers_on": [
+      "knowledge_objects",
+      "knowledge_object_versions"
+    ],
+    "check_deferred": true,
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 't1', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO knowledge_objects (tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'o1', 2, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'admin', 'field_alias', 'n', 'app', 'active', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 1000, 1000)",
+      "INSERT INTO knowledge_object_versions (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, dependency_count, mutation_kind, quarantine_reason, created_at_unix_micro) VALUES ('t1', 'o1', 2, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'admin', 'field_alias', 'n', 'app', 'active', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 0, 'update', NULL, 1000)"
+    ],
+    "statements": [
+      "INSERT INTO knowledge_object_versions (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, dependency_count, mutation_kind, quarantine_reason, created_at_unix_micro) VALUES ('t1', 'o1', 3, 'app_aaaaaaaaaaaaaaaaaaaaaA', 'admin', 'field_alias', 'n', 'app', 'quarantined', NULL, 0, 'quarantine', 'root_corruption', 1000)"
+    ],
+    "expect": "reject",
+    "reject_at": "deferred",
+    "sqlstate": "23503",
+    "constraint": "knowledge_object_versions_tenant_id_quarantine_object_id_q_fkey",
+    "sqlite_expect": "reject",
+    "sqlite_message": "FOREIGN KEY constraint failed"
+  },
+  {
+    "name": "clock/idempotency_delete_inside_the_retention_fence_is_refused",
+    "area": "clock",
+    "keep_only_triggers": {
+      "knowledge_mutation_idempotency": [
+        "knowledge_mutation_idempotency_delete_in_retention_is_forbidden"
+      ]
+    },
+    "sqlite_keep_only_triggers": {
+      "knowledge_mutation_idempotency": [
+        "knowledge_mutation_idempotency_delete_before_retention_is_forbidden"
+      ]
+    },
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO knowledge_mutation_idempotency (tenant_id, actor_kind, actor_id, route, client_request_id, mutation_kind, request_digest_format_version, request_digest, outcome_format_version, outcome_proto, committed_catalog_revision, committed_catalog_state_token, knowledge_object_id, object_version, successful_audit_sequence, recovery_audit_sequence, created_at_unix_micro, retention_anchor_unix_micro, retain_until_unix_micro) VALUES ('t1', 'browser', 'admin', 'objects.create', 'request-000000000001', 'create', 1, '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 1, '\\x0a'::bytea, 1, '\\x6161616161616161616161616161616161616161616161616161616161616161'::bytea, 'o1', 1, 1, NULL, (extract(epoch FROM clock_timestamp()) * 1000000)::bigint, (extract(epoch FROM clock_timestamp()) * 1000000)::bigint, (extract(epoch FROM clock_timestamp()) * 1000000)::bigint + 608400000000)"
+    ],
+    "sqlite_seed_sql": [
+      "INSERT INTO knowledge_mutation_idempotency (tenant_id, actor_kind, actor_id, route, client_request_id, mutation_kind, request_digest_format_version, request_digest, outcome_format_version, outcome_proto, committed_catalog_revision, committed_catalog_state_token, knowledge_object_id, object_version, successful_audit_sequence, recovery_audit_sequence, created_at_unix_micro, retention_anchor_unix_micro, retain_until_unix_micro) VALUES ('t1', 'browser', 'admin', 'objects.create', 'request-000000000001', 'create', 1, '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 1, '\\x0a'::bytea, 1, '\\x6161616161616161616161616161616161616161616161616161616161616161'::bytea, 'o1', 1, 1, NULL, CAST(unixepoch('subsec') * 1000000 AS INTEGER), CAST(unixepoch('subsec') * 1000000 AS INTEGER), CAST(unixepoch('subsec') * 1000000 AS INTEGER) + 608400000000)"
+    ],
+    "statements": [
+      "DELETE FROM knowledge_mutation_idempotency WHERE tenant_id = 't1'"
+    ],
+    "expect": "reject",
+    "message": "knowledge mutation idempotency retention fence is active",
+    "sqlite_expect": "reject",
+    "sqlite_message": "knowledge mutation idempotency retention fence is active"
+  },
+  {
+    "name": "clock/idempotency_delete_past_the_retention_fence_is_allowed",
+    "area": "clock",
+    "keep_only_triggers": {
+      "knowledge_mutation_idempotency": [
+        "knowledge_mutation_idempotency_delete_in_retention_is_forbidden"
+      ]
+    },
+    "sqlite_keep_only_triggers": {
+      "knowledge_mutation_idempotency": [
+        "knowledge_mutation_idempotency_delete_before_retention_is_forbidden"
+      ]
+    },
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO knowledge_mutation_idempotency (tenant_id, actor_kind, actor_id, route, client_request_id, mutation_kind, request_digest_format_version, request_digest, outcome_format_version, outcome_proto, committed_catalog_revision, committed_catalog_state_token, knowledge_object_id, object_version, successful_audit_sequence, recovery_audit_sequence, created_at_unix_micro, retention_anchor_unix_micro, retain_until_unix_micro) VALUES ('t1', 'browser', 'admin', 'objects.create', 'request-000000000001', 'create', 1, '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 1, '\\x0a'::bytea, 1, '\\x6161616161616161616161616161616161616161616161616161616161616161'::bytea, 'o1', 1, 1, NULL, (extract(epoch FROM clock_timestamp()) * 1000000)::bigint - 691200000000, (extract(epoch FROM clock_timestamp()) * 1000000)::bigint - 691200000000, (extract(epoch FROM clock_timestamp()) * 1000000)::bigint - 86400000000)"
+    ],
+    "sqlite_seed_sql": [
+      "INSERT INTO knowledge_mutation_idempotency (tenant_id, actor_kind, actor_id, route, client_request_id, mutation_kind, request_digest_format_version, request_digest, outcome_format_version, outcome_proto, committed_catalog_revision, committed_catalog_state_token, knowledge_object_id, object_version, successful_audit_sequence, recovery_audit_sequence, created_at_unix_micro, retention_anchor_unix_micro, retain_until_unix_micro) VALUES ('t1', 'browser', 'admin', 'objects.create', 'request-000000000001', 'create', 1, '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 1, '\\x0a'::bytea, 1, '\\x6161616161616161616161616161616161616161616161616161616161616161'::bytea, 'o1', 1, 1, NULL, CAST(unixepoch('subsec') * 1000000 AS INTEGER) - 691200000000, CAST(unixepoch('subsec') * 1000000 AS INTEGER) - 691200000000, CAST(unixepoch('subsec') * 1000000 AS INTEGER) - 86400000000)"
+    ],
+    "statements": [
+      "DELETE FROM knowledge_mutation_idempotency WHERE tenant_id = 't1'"
+    ],
+    "expect": "accept",
+    "check_sql": "SELECT count(*)::text FROM knowledge_mutation_idempotency",
+    "check_result": "0",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "clock/idempotency_fence_reads_the_wall_clock_not_the_transaction_start",
+    "area": "clock",
+    "pg_only": true,
+    "note": "With now() or transaction_timestamp() the second DELETE would still be refused, because the transaction began before the fence expired. SQLite has no in-statement sleep, so this runs on PostgreSQL only.",
+    "keep_only_triggers": {
+      "knowledge_mutation_idempotency": [
+        "knowledge_mutation_idempotency_delete_in_retention_is_forbidden"
+      ]
+    },
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO knowledge_mutation_idempotency (tenant_id, actor_kind, actor_id, route, client_request_id, mutation_kind, request_digest_format_version, request_digest, outcome_format_version, outcome_proto, committed_catalog_revision, committed_catalog_state_token, knowledge_object_id, object_version, successful_audit_sequence, recovery_audit_sequence, created_at_unix_micro, retention_anchor_unix_micro, retain_until_unix_micro) VALUES ('t1', 'browser', 'admin', 'objects.create', 'request-000000000001', 'create', 1, '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 1, '\\x0a'::bytea, 1, '\\x6161616161616161616161616161616161616161616161616161616161616161'::bytea, 'o1', 1, 1, NULL, (extract(epoch FROM clock_timestamp()) * 1000000)::bigint - 604800000000, (extract(epoch FROM clock_timestamp()) * 1000000)::bigint - 604800000000, (extract(epoch FROM clock_timestamp()) * 1000000)::bigint + 300000)"
+    ],
+    "statements": [
+      "SAVEPOINT fence_active",
+      "DO $$ BEGIN DELETE FROM knowledge_mutation_idempotency WHERE tenant_id = 't1'; RAISE EXCEPTION 'fence did not hold'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'knowledge mutation idempotency retention fence is active' THEN RAISE; END IF; END $$",
+      "RELEASE SAVEPOINT fence_active",
+      "SELECT pg_sleep(0.4)",
+      "DELETE FROM knowledge_mutation_idempotency WHERE tenant_id = 't1'"
+    ],
+    "expect": "accept",
+    "check_sql": "SELECT count(*)::text FROM knowledge_mutation_idempotency",
+    "check_result": "0"
+  },
+  {
+    "name": "clock/hec_request_failure_time_is_database_microseconds",
+    "area": "clock",
+    "keep_only_triggers": {
+      "ingest_visibility_reservations": [
+        "hec_request_visibility_failed"
+      ]
+    },
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO ingest_batch_identities (batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro) VALUES ('b1', 's1', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 1, 1)",
+      "INSERT INTO hec_source_sequences (tenant_id, ingestion_token_id, next_request_sequence, updated_at_unix_micro) VALUES ('t1', 'tok', 2, 1)",
+      "INSERT INTO ingest_visibility_reservations (sequence, batch_key, state, phase, attempt_id, index_time_unix_milli, metadata, outbox, created_at_unix_micro) VALUES (1, 'b1', 'reserved', 'unsent', '', 1, '\\x'::bytea, '\\x01'::bytea, 1)",
+      "INSERT INTO hec_requests (tenant_id, ingestion_token_id, request_sequence, request_id, visibility_sequence, state, created_at_unix_micro, terminal_at_unix_micro) VALUES ('t1', 'tok', 1, 'req-1', 1, 'pending', 1, NULL)"
+    ],
+    "statements": [
+      "UPDATE ingest_visibility_reservations SET state = 'abandoned', phase = 'final', outbox = '\\x'::bytea WHERE sequence = 1"
+    ],
+    "expect": "accept",
+    "check_sql": "SELECT state || ',' || (terminal_at_unix_micro BETWEEN (extract(epoch FROM transaction_timestamp()) * 1000000)::bigint AND (extract(epoch FROM clock_timestamp()) * 1000000)::bigint)::text FROM hec_requests",
+    "check_result": "terminal_failure,true",
+    "sqlite_check_sql": "SELECT state || ',' || CASE WHEN terminal_at_unix_micro BETWEEN CAST(unixepoch('subsec') * 1000000 AS INTEGER) - 60000000 AND CAST(unixepoch('subsec') * 1000000 AS INTEGER) THEN 'true' ELSE 'false' END FROM hec_requests",
+    "note": "Abandoned reservations carry no committed time, so the trigger stamps clock_timestamp() in microseconds. The bounds prove the unit and that the value comes from the database clock during the statement. PostgreSQL re-checks a foreign key on UPDATE of a row inserted earlier in the same transaction, so the seed includes the parents.",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "update_of/listed_column_assigned_its_own_value_fires_the_trigger",
+    "area": "update_of",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "UPDATE index_catalog_state SET revision = 5, physical_count = 1",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_1', 't1', 1, 'main', 'Main', 'bad' || chr(1), 1, 1, 'active', 1, 1)"
+    ],
+    "sqlite_seed_sql": [
+      "UPDATE index_catalog_state SET revision = 5, physical_count = 1",
+      "INSERT INTO indexes (index_id, version, name, display_name, description, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_1', 1, 'main', 'Main', 'bad' || char(1), 1, 1, 'active', 1, 1)"
+    ],
+    "statements": [
+      "UPDATE indexes SET description = description WHERE index_id = 'idx_1'"
+    ],
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "update_of/unlisted_column_does_not_fire_the_trigger",
+    "area": "update_of",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "UPDATE index_catalog_state SET revision = 5, physical_count = 1",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_1', 't1', 1, 'main', 'Main', 'bad' || chr(1), 1, 1, 'active', 1, 1)"
+    ],
+    "sqlite_seed_sql": [
+      "UPDATE index_catalog_state SET revision = 5, physical_count = 1",
+      "INSERT INTO indexes (index_id, version, name, display_name, description, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_1', 1, 'main', 'Main', 'bad' || char(1), 1, 1, 'active', 1, 1)"
+    ],
+    "statements": [
+      "UPDATE indexes SET ingestion_enabled = ingestion_enabled WHERE index_id = 'idx_1'"
+    ],
+    "expect": "accept",
+    "check_sql": "SELECT revision::text FROM index_catalog_state",
+    "check_result": "6",
+    "sqlite_expect": "accept"
+  },
+  {
+    "name": "update_of/no_op_key_assignment_still_requires_a_searchable_index",
+    "area": "update_of",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 't1', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_1', 't1', 1, 'main', 'Main', '', 0, 0, 'archived', 1, 1)",
+      "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('t1', 'app_aaaaaaaaaaaaaaaaaaaaaA', 'idx_1')"
+    ],
+    "sqlite_seed_sql": [
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_aaaaaaaaaaaaaaaaaaaaaA', 't1', 1, 'alpha', 'Alpha', 0, 'active', 1, 2, NULL)",
+      "INSERT INTO indexes (index_id, version, name, display_name, description, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_1', 1, 'main', 'Main', '', 0, 0, 'archived', 1, 1)",
+      "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('t1', 'app_aaaaaaaaaaaaaaaaaaaaaA', 'idx_1')"
+    ],
+    "statements": [
+      "UPDATE app_default_indexes SET app_id = app_id"
+    ],
+    "expect": "reject",
+    "message": "app default index is not searchable",
+    "sqlite_expect": "reject",
+    "sqlite_message": "app default index is not searchable"
+  },
+  {
+    "name": "ceiling/knowledge_object_version_insert_with_minimum_bigint",
+    "area": "ceiling",
+    "note": "NEW.object_version - 1 would overflow in a BEFORE trigger, before the CHECK on object_version runs. Both engines report the capacity trigger that fires first, so no arithmetic on the extreme value is reached.",
+    "seed_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statements": [
+      "INSERT INTO knowledge_object_versions (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, definition_digest, dependency_count, mutation_kind, quarantine_reason, created_at_unix_micro) VALUES ('t1', 'o1', -9223372036854775808, 'search', 'admin', 'field_alias', 'n', 'app', 'active', '\\x1111111111111111111111111111111111111111111111111111111111111111'::bytea, 0, 'create', NULL, 1000)"
+    ],
+    "expect": "reject",
+    "message": "knowledge object version capacity exhausted",
+    "sqlite_expect": "reject",
+    "sqlite_message": "knowledge object version capacity exhausted"
+  }
+]
