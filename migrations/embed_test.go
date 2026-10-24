@@ -38,7 +38,7 @@ var embeddedMigrationSHA256 = map[string]map[string]string{
 		"0004_audit.sql":                             "269b02434caee6843189b6a4992588004944192698ddbe8986f9ab09bc428f87",
 		"0005_knowledge.sql":                         "23ccc204234677622e5fc16e2cc1175eb6827da445ae4288098060721328c853",
 		"0006_lookups.sql":                           "b186d69c8dcbe1745426839443d51e6a210a926405f82ee05eae7be331aa322c",
-		"0007_core_ingest_1_triggers.sql":            "e535dcf7ccf6d27d0bbd853c6109830c4110f7cdeabb33297437b08870a5151b",
+		"0007_core_ingest_1_triggers.sql":            "2180b64dcba4ee3a87e9abb03d3c3b3bfbef9aef609f3753f2844d56a021eddd",
 		"0008_core_ingest_2_triggers.sql":            "d8f9ae14d6c764c432428efe60ca802f2bf42968c619aeb26a67f2c0781b8917",
 		"0009_core_ingest_3_triggers.sql":            "ab270b37d8a195671a9a7d0b8ab7640a5654151e7bae413c383f8f4bf9670423",
 		"0010_collectors_apps_search_1_triggers.sql": "99b2be5f5ccca950f6ca118447ceb31a370a5fc34004386ee9a28a423e824d13",

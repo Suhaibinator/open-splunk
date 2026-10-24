@@ -1561,7 +1561,7 @@
   },
   {
     "name": "ingestion_token_index_of_other_tenant_rejected",
-    "trigger": "ingestion_token_index_requires_same_tenant",
+    "trigger": "ingestion_token_index_requires_same_tenant_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
       "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')",
@@ -1574,7 +1574,7 @@
   },
   {
     "name": "ingestion_token_index_of_own_tenant_accepted",
-    "trigger": "ingestion_token_index_requires_same_tenant",
+    "trigger": "ingestion_token_index_requires_same_tenant_insert",
     "setup_sql": [
       "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
       "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')",
@@ -1582,6 +1582,38 @@
       "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_other_main', 'other', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
     ],
     "statement": "INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id) VALUES ('tok_hec', 'idx_main')",
+    "expect": "accept",
+    "message": "",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
+  },
+  {
+    "name": "ingestion_token_index_moved_to_other_tenant_rejected",
+    "trigger": "ingestion_token_index_requires_same_tenant_update",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_second', 'default', 1, 'second', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_other_main', 'other', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id) VALUES ('tok_hec', 'idx_main')"
+    ],
+    "statement": "UPDATE ingestion_token_indexes SET index_id = 'idx_other_main' WHERE ingestion_token_id = 'tok_hec' AND index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "ingestion token index belongs to another tenant",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
+  },
+  {
+    "name": "ingestion_token_index_moved_within_tenant_accepted",
+    "trigger": "ingestion_token_index_requires_same_tenant_update",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_second', 'default', 1, 'second', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_other_main', 'other', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id) VALUES ('tok_hec', 'idx_main')"
+    ],
+    "statement": "UPDATE ingestion_token_indexes SET index_id = 'idx_second' WHERE ingestion_token_id = 'tok_hec' AND index_id = 'idx_main'",
     "expect": "accept",
     "message": "",
     "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"

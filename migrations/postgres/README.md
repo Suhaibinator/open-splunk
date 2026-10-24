@@ -122,9 +122,9 @@ Identifiers are limited to 63 bytes, so
   `index_data_deletion_completions`, `saved_search_schedules` and
   `saved_search_schedule_runs` become `(tenant_id, <id>)` keys under their
   SQLite names (for example `hec_channels_ingestion_token_id_fkey`).
-  `ingestion_token_indexes` has no `tenant_id`, so the trigger
-  `ingestion_token_index_requires_same_tenant` refuses a token bound to
-  another tenant's index. The tenant of an index, token or saved search is
+  `ingestion_token_indexes` has no `tenant_id`, so the triggers
+  `ingestion_token_index_requires_same_tenant_insert` and `_update` refuse a
+  token bound to another tenant's index. The tenant of an index, token or saved search is
   immutable (`indexes_tenant_is_immutable`,
   `ingestion_token_tenant_is_immutable`, `saved_search_tenant_is_immutable`),
   and the saved-search app checks in `0010` and `0011` match on

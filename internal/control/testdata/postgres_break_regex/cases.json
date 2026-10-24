@@ -1224,9 +1224,15 @@
       "table": "saved_searches",
       "function": "canonical_saved_search_app_exists",
       "columns": [
-        "app_id"
+        "app_id",
+        "tenant_id"
       ],
       "target": "app_id",
+      "contexts": [
+        {
+          "tenant_id": "default"
+        }
+      ],
       "seeds": [
         "app_abcdefghijklmnopqrstuQ",
         "app_ABCDEFGHIJ-_0123456789w",

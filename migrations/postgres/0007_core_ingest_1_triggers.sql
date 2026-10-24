@@ -37,11 +37,12 @@
 -- * Tenant guards (no SQLite counterpart, where nothing had a tenant):
 --   indexes_tenant_is_immutable and ingestion_token_tenant_is_immutable keep
 --   an index or token in the tenant that created it, and
---   ingestion_token_index_requires_same_tenant refuses binding a token to
---   another tenant's index. ingestion_token_indexes has no tenant_id column
---   of its own, so a trigger stands in for the tenant-scoped foreign keys the
---   other token and index children use. With both tenants immutable, the
---   check reads rows no concurrent transaction can change.
+--   ingestion_token_index_requires_same_tenant (fired by one trigger per
+--   event, _insert and _update) refuses binding a token to another tenant's
+--   index. ingestion_token_indexes has no tenant_id column of its own, so a
+--   trigger stands in for the tenant-scoped foreign keys the other token and
+--   index children use. With both tenants immutable, the check reads rows no
+--   concurrent transaction can change.
 -- * index_catalog_state still counts physical index rows across all tenants
 --   (capacity 1024 for the whole server), exactly as in SQLite. A per-tenant
 --   capacity needs a schema change and is out of scope here.
@@ -735,7 +736,12 @@ BEGIN
 END;
 $$;
 
-CREATE TRIGGER ingestion_token_index_requires_same_tenant
-BEFORE INSERT OR UPDATE OF ingestion_token_id, index_id ON ingestion_token_indexes
+CREATE TRIGGER ingestion_token_index_requires_same_tenant_insert
+BEFORE INSERT ON ingestion_token_indexes
+FOR EACH ROW
+EXECUTE FUNCTION ingestion_token_index_requires_same_tenant();
+
+CREATE TRIGGER ingestion_token_index_requires_same_tenant_update
+BEFORE UPDATE OF ingestion_token_id, index_id ON ingestion_token_indexes
 FOR EACH ROW
 EXECUTE FUNCTION ingestion_token_index_requires_same_tenant();

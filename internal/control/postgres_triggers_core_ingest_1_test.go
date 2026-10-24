@@ -21,8 +21,9 @@ import (
 
 // The core_ingest_1 trigger lane ports the SQLite triggers on indexes,
 // ingestion_tokens and ingestion_token_hec_profiles to
-// migrations/postgres/0007_core_ingest_1_triggers.sql, which also holds three
-// tenant guards with no SQLite counterpart (one on ingestion_token_indexes).
+// migrations/postgres/0007_core_ingest_1_triggers.sql, which also holds four
+// tenant-guard triggers with no SQLite counterpart (two on
+// ingestion_token_indexes, one per event).
 // Its scenarios live in testdata/postgres_triggers/core_ingest_1.json; each
 // ported one was checked against SQLite when the lane was ported, and these
 // tests hold PostgreSQL to them.
@@ -344,8 +345,8 @@ func TestPostgresCoreIngest1TriggerCatalogMatchesFixture(t *testing.T) {
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		t.Fatalf("read lane triggers: %v", err)
 	}
-	// 29 ported from SQLite plus the 3 tenant guards.
-	const wantTriggers = 32
+	// 29 ported from SQLite plus the 4 tenant-guard triggers.
+	const wantTriggers = 33
 	if len(installed) != wantTriggers {
 		t.Fatalf("lane tables carry %d user triggers, want %d: %v", len(installed), wantTriggers, installed)
 	}

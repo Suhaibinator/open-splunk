@@ -508,6 +508,22 @@ var semNumRenamedTriggers = map[string]string{
 	"knowledge_object_version_lifecycle_identity_collision_is_forbidden":  "knowledge_object_version_lifecycle_identity_collision_is_forbid",
 }
 
+// semNumPostgresOnlyTrigger is a trigger SQLite never had: the tenant guards
+// of 0007 and 0011, which keep rows from referencing or moving into another
+// tenant where SQLite had no tenant to compare.
+type semNumPostgresOnlyTrigger struct {
+	table, event string
+	updateOf     []string
+}
+
+var semNumPostgresOnlyTriggers = map[string]semNumPostgresOnlyTrigger{
+	"indexes_tenant_is_immutable":                       {table: "indexes", event: "UPDATE", updateOf: []string{"tenant_id"}},
+	"ingestion_token_index_requires_same_tenant_insert": {table: "ingestion_token_indexes", event: "INSERT"},
+	"ingestion_token_index_requires_same_tenant_update": {table: "ingestion_token_indexes", event: "UPDATE", updateOf: []string{"index_id", "ingestion_token_id"}},
+	"ingestion_token_tenant_is_immutable":               {table: "ingestion_tokens", event: "UPDATE", updateOf: []string{"tenant_id"}},
+	"saved_search_tenant_is_immutable":                  {table: "saved_searches", event: "UPDATE", updateOf: []string{"tenant_id"}},
+}
+
 // semNumStatementTriggers are the documented FOR EACH STATEMENT ports
 // (0018_audit_2_triggers.sql); every other trigger stays FOR EACH ROW like
 // SQLite's.
@@ -526,8 +542,30 @@ func TestPostgresBreakTriggerSignaturesMatchSQLite(t *testing.T) {
 	for _, trigger := range readSemNumTriggers(ctx, t, db.SQLDB()) {
 		postgresTriggers[trigger.name] = trigger
 	}
-	if len(postgresTriggers) != len(sqliteTriggers) {
-		t.Errorf("PostgreSQL has %d triggers, SQLite has %d", len(postgresTriggers), len(sqliteTriggers))
+	if want := len(sqliteTriggers) + len(semNumPostgresOnlyTriggers); len(postgresTriggers) != want {
+		t.Errorf("PostgreSQL has %d triggers, want SQLite's %d plus %d PostgreSQL-only",
+			len(postgresTriggers), len(sqliteTriggers), len(semNumPostgresOnlyTriggers))
+	}
+	for name, want := range semNumPostgresOnlyTriggers {
+		if _, ok := sqliteTriggers[name]; ok {
+			t.Errorf("%s is listed as PostgreSQL-only, but SQLite has it", name)
+		}
+		got, ok := postgresTriggers[name]
+		if !ok {
+			t.Errorf("PostgreSQL-only trigger %s is missing", name)
+			continue
+		}
+		event := "DELETE"
+		switch {
+		case got.insert:
+			event = "INSERT"
+		case got.update:
+			event = "UPDATE"
+		}
+		if got.table != want.table || !got.before || !got.row || event != want.event ||
+			!slices.Equal(got.updateOf, want.updateOf) {
+			t.Errorf("%s is not BEFORE %s OF %v ON %s FOR EACH ROW", name, want.event, want.updateOf, want.table)
+		}
 	}
 	withUpdateOf := 0
 	for sqliteName, want := range sqliteTriggers {

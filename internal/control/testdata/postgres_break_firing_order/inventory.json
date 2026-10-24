@@ -278,6 +278,7 @@
       "indexes_id_is_immutable",
       "indexes_name_is_immutable",
       "indexes_retention_is_millisecond_aligned_on_update",
+      "indexes_tenant_is_immutable",
       "tombstoned_index_update_is_forbidden"
     ],
     "sqlite_order": [
@@ -290,6 +291,9 @@
       "active_app_default_indexes_remain_searchable",
       "indexes_retention_is_millisecond_aligned_on_update",
       "indexes_name_is_immutable"
+    ],
+    "postgres_only": [
+      "indexes_tenant_is_immutable"
     ]
   },
   {
@@ -397,6 +401,7 @@
       "ingestion_token_digest_is_immutable",
       "ingestion_token_hec_collector_binding_update_is_forbidden",
       "ingestion_token_purpose_is_immutable",
+      "ingestion_token_tenant_is_immutable",
       "revoked_ingestion_token_is_irreversible"
     ],
     "sqlite_order": [
@@ -405,6 +410,9 @@
       "ingestion_token_collector_binding_is_immutable",
       "revoked_ingestion_token_is_irreversible",
       "ingestion_token_digest_is_immutable"
+    ],
+    "postgres_only": [
+      "ingestion_token_tenant_is_immutable"
     ]
   },
   {
@@ -935,6 +943,23 @@
       "knowledge_recovery_audit_matches_terminal_version",
       "knowledge_recovery_audit_identity_collision_is_forbidden",
       "knowledge_recovery_audit_capacity_is_available"
+    ]
+  },
+  {
+    "table": "saved_searches",
+    "timing": "BEFORE",
+    "level": "ROW",
+    "event": "UPDATE",
+    "migration": "0011_collectors_apps_search_2_triggers.sql",
+    "postgres_order": [
+      "canonical_saved_search_app_exists_update",
+      "saved_search_tenant_is_immutable"
+    ],
+    "sqlite_order": [
+      "canonical_saved_search_app_exists_update"
+    ],
+    "postgres_only": [
+      "saved_search_tenant_is_immutable"
     ]
   },
   {

@@ -27,6 +27,8 @@ import (
 //   - testdata/postgres_break_firing_order/inventory.json pins every
 //     same-table, same-timing, same-event group of two or more triggers with
 //     its PostgreSQL order and the order the final SQLite schema fires it in.
+//     Triggers with no SQLite counterpart (the tenant guards) are listed in
+//     postgres_only and left out of the SQLite order.
 //     A new trigger, a rename or a trigger moved between lanes changes which
 //     check reports first, so it fails here until the inventory is reviewed.
 //   - testdata/postgres_break_firing_order/scenarios.json holds rows that
@@ -47,7 +49,8 @@ const (
 )
 
 // firingOrderGroup is one inventory entry: the triggers PostgreSQL fires for
-// one table, timing, level and event, in firing order.
+// one table, timing, level and event, in firing order. PostgresOnly names the
+// triggers SQLite never had; SQLiteOrder lists the others in SQLite's order.
 type firingOrderGroup struct {
 	Table         string   `json:"table"`
 	Timing        string   `json:"timing"`
@@ -56,10 +59,18 @@ type firingOrderGroup struct {
 	Migration     string   `json:"migration"`
 	PostgresOrder []string `json:"postgres_order"`
 	SQLiteOrder   []string `json:"sqlite_order"`
+	PostgresOnly  []string `json:"postgres_only,omitempty"`
 }
 
 func (group firingOrderGroup) key() string {
 	return strings.Join([]string{group.Table, group.Timing, group.Level, group.Event}, " ")
+}
+
+// firesInSQLiteOrder reports whether PostgreSQL runs exactly SQLite's
+// triggers in SQLite's order. A group holding a PostgreSQL-only trigger never
+// does: that trigger can report first where SQLite reported another check.
+func (group firingOrderGroup) firesInSQLiteOrder() bool {
+	return len(group.PostgresOnly) == 0 && slices.Equal(group.SQLiteOrder, group.PostgresOrder)
 }
 
 // firingOrderScenario is one scenario. setup_sql runs inside a transaction
@@ -230,16 +241,22 @@ func TestPostgresBreakFiringOrderInventoryIsConsistent(t *testing.T) {
 				break
 			}
 		}
-		sorted := slices.Sorted(slices.Values(group.SQLiteOrder))
+		for _, name := range group.PostgresOnly {
+			if slices.Contains(group.SQLiteOrder, name) {
+				t.Errorf("%s: %s is listed in both postgres_only and sqlite_order", key, name)
+			}
+		}
+		sorted := slices.Sorted(slices.Values(slices.Concat(group.SQLiteOrder, group.PostgresOnly)))
 		if !slices.Equal(sorted, group.PostgresOrder) {
-			t.Errorf("%s: sqlite_order %v names different triggers than postgres_order %v", key, group.SQLiteOrder, group.PostgresOrder)
+			t.Errorf("%s: sqlite_order %v with postgres_only %v names different triggers than postgres_order %v",
+				key, group.SQLiteOrder, group.PostgresOnly, group.PostgresOrder)
 		}
 		for _, name := range group.PostgresOrder {
 			if files[name] != group.Migration {
 				t.Errorf("%s: trigger %s is created by %q, the inventory says %q", key, name, files[name], group.Migration)
 			}
 		}
-		if !slices.Equal(group.SQLiteOrder, group.PostgresOrder) {
+		if !group.firesInSQLiteOrder() {
 			disagreeing++
 			if !strings.Contains(strings.ToLower(sources[group.Migration]), "firing order") {
 				t.Errorf("%s fires in a different order than SQLite, but %s does not document firing order", key, group.Migration)
@@ -409,7 +426,7 @@ func validateFiringOrderScenario(scenario firingOrderScenario, inventory map[str
 		if scenario.Note == "" {
 			problems = append(problems, "the message differs from SQLite and no note explains why")
 		}
-		if scenario.Message != "" && (scenario.Group == "" || slices.Equal(group.PostgresOrder, group.SQLiteOrder)) {
+		if scenario.Message != "" && (scenario.Group == "" || group.firesInSQLiteOrder()) {
 			problems = append(problems, "the RAISE message differs from SQLite in a group that fires in SQLite order")
 		}
 		if scenario.Consumer != "" {
@@ -576,6 +593,7 @@ func TestPostgresBreakFiringOrderValidatorRejectsUnexplainedDifferences(t *testi
 	inventory := map[string]firingOrderGroup{
 		"t BEFORE ROW INSERT": {Table: "t", Timing: "BEFORE", Level: "ROW", Event: "INSERT", PostgresOrder: []string{"a", "b"}, SQLiteOrder: []string{"b", "a"}},
 		"u BEFORE ROW INSERT": {Table: "u", Timing: "BEFORE", Level: "ROW", Event: "INSERT", PostgresOrder: []string{"a", "b"}, SQLiteOrder: []string{"a", "b"}},
+		"w BEFORE ROW INSERT": {Table: "w", Timing: "BEFORE", Level: "ROW", Event: "INSERT", PostgresOrder: []string{"a", "b"}, SQLiteOrder: []string{"b"}, PostgresOnly: []string{"a"}},
 	}
 	base := firingOrderScenario{
 		Name: "probe", Group: "t BEFORE INSERT", Statement: "SELECT 1", Expect: "reject",
@@ -583,6 +601,11 @@ func TestPostgresBreakFiringOrderValidatorRejectsUnexplainedDifferences(t *testi
 	}
 	if err := validateFiringOrderScenario(base, inventory); err != nil {
 		t.Fatalf("explained difference rejected: %v", err)
+	}
+	postgresOnly := base
+	postgresOnly.Group = "w BEFORE INSERT"
+	if err := validateFiringOrderScenario(postgresOnly, inventory); err != nil {
+		t.Fatalf("difference explained by a PostgreSQL-only trigger rejected: %v", err)
 	}
 	cases := map[string]func(*firingOrderScenario){
 		"no note":               func(scenario *firingOrderScenario) { scenario.Note = "" },
