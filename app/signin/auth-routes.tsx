@@ -10,6 +10,7 @@ import { IdentityProvider, useIdentity } from "../_components/identity-provider"
 import { AuthAlert, AuthCardHeader, AuthFrame, AuthLoading } from "./auth-frame";
 import { describeAuthError } from "./auth-error-copy";
 import { useLocationQuery, type AuthNavigate } from "./auth-hooks";
+import { prefillEmail } from "./email-address";
 import { EmailVerification } from "./email-verification";
 import { OAuthCallback, oauthCallbackParams } from "./oauth-callback";
 import { OrganizationInvitationFlow } from "./organization-invitation";
@@ -88,7 +89,7 @@ function AuthRouteBody({ dataMode, loadingTitle, needsClient, children }: AuthRo
 export function PasswordResetRequestRoute({ dataMode }: AuthRouteProps) {
   return (
     <AuthRoute dataMode={dataMode} loadingTitle="Reset your password">
-      {({ query, demo }) => <PasswordResetRequest demo={demo} initialEmail={query.get("email") ?? ""} />}
+      {({ query, demo }) => <PasswordResetRequest demo={demo} initialEmail={prefillEmail(query.get("email"))} />}
     </AuthRoute>
   );
 }
@@ -174,7 +175,7 @@ export function OrganizationInvitationRoute({ dataMode }: AuthRouteProps) {
         <OrganizationInvitationFlow
           demo={demo}
           invitationId={query.get("id")}
-          invitedEmail={query.get("email")}
+          invitedEmail={prefillEmail(query.get("email"))}
           navigate={navigate}
         />
       )}

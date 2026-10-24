@@ -21,7 +21,7 @@ import { PrincipalSummary } from "./sign-in-completion";
 
 export interface OrganizationInvitationFlowProps {
   readonly invitationId: string | null;
-  /** The address the link says it was sent to; a prefill, never trusted. */
+  /** The address the link says it was sent to, already passed through `prefillEmail`; a prefill, never trusted. Empty or null when unknown. */
   readonly invitedEmail: string | null;
   readonly navigate: AuthNavigate;
   readonly demo?: boolean;
@@ -38,8 +38,9 @@ export interface OrganizationInvitationFlowProps {
  * verification signs them in. Signed in, it shows the invitation if it is one
  * of the user's own, and accepts or declines it.
  */
-export function OrganizationInvitationFlow({ invitationId, invitedEmail, navigate, demo = false, now = Date.now }: OrganizationInvitationFlowProps) {
+export function OrganizationInvitationFlow({ invitationId, invitedEmail: linkEmail, navigate, demo = false, now = Date.now }: OrganizationInvitationFlowProps) {
   const identity = useIdentity();
+  const invitedEmail = linkEmail === null || linkEmail.length === 0 ? null : linkEmail;
 
   if (invitationId === null || invitationId.length === 0) {
     return (

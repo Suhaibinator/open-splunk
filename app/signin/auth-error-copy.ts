@@ -60,6 +60,9 @@ const USERNAME = /username/iu;
 
 const LINK_PROBLEM = /token|link|invitation/iu;
 
+/** The sign-in failure that offers a password reset beside it. */
+export const WRONG_CREDENTIALS_TITLE = "Email or password is incorrect";
+
 function copy(error: IdentityError, title: string, detail: string): AuthErrorCopy {
   return { kind: error.kind, title, detail, retryAfterMs: error.retryAfterMs ?? null, deadLink: false };
 }
@@ -75,8 +78,10 @@ function specific(error: IdentityError, flow: AuthFlow): AuthErrorCopy | null {
       if (BANNED.test(message)) {
         return copy(error, "This account is suspended", "An administrator has suspended this account. Contact your administrator to restore access.");
       }
-      if (flow === "sign_in") return copy(error, "Email or password is incorrect", "Check both and try again, or reset your password.");
-      if (flow === "oauth_callback") return copy(error, "The provider did not sign you in", message.length > 0 ? message : "The sign-in was cancelled or refused. Start again.");
+      if (flow === "sign_in") return copy(error, WRONG_CREDENTIALS_TITLE, "Check both and try again, or reset your password.");
+      // The callback's own query (`error_description`) is anyone's text, so the
+      // provider's reason is never echoed onto the page.
+      if (flow === "oauth_callback") return copy(error, "The provider did not sign you in", "The sign-in was cancelled or refused at the provider. Start again.");
       if (flow === "otp") return copy(error, "Sign in again", "This sign-in attempt is no longer valid. Enter your email and password again.");
       if (flow === "verify_email") return copy(error, "This account cannot sign in", message);
       return copy(error, "Your session has ended", "Sign in again to continue.");
@@ -86,6 +91,12 @@ function specific(error: IdentityError, flow: AuthFlow): AuthErrorCopy | null {
       }
       if (flow === "accept_invitation" || flow === "decline_invitation") {
         return copy(error, "This invitation is for another address", "Sign in with the account the invitation was sent to.");
+      }
+      if (flow === "register") {
+        return copy(error, "Accounts here are by invitation", "This server only creates accounts for invited addresses. Use the address your invitation was sent to.");
+      }
+      if (flow === "oauth_start" || flow === "oauth_callback") {
+        return copy(error, "New accounts can't sign up with this provider", "This server does not create accounts from provider sign-in. Ask an administrator to invite you, then sign in.");
       }
       return null;
     case "otp_required":

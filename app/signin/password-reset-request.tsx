@@ -8,9 +8,8 @@ import { AuthAlert, AuthCardHeader, AuthNotice, SubmitButton, TextField } from "
 import { describeAuthError, type AuthErrorCopy } from "./auth-error-copy";
 import { useCooldown } from "./auth-hooks";
 import { demoOutboxLink } from "./demo-outbox";
+import { emailFieldError } from "./email-address";
 import { signInHref } from "./return-to";
-
-const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 
 export interface PasswordResetRequestProps {
   readonly initialEmail?: string;
@@ -40,7 +39,7 @@ export function PasswordResetRequest({ initialEmail = "", demo = false }: Passwo
     event.preventDefault();
     if (pending || cooldown.remainingMs > 0 || client === null) return;
     const address = email.trim();
-    const error = address.length === 0 ? "Enter your email address." : EMAIL_SHAPE.test(address) ? null : "Enter a valid email address, like name@example.com.";
+    const error = emailFieldError(address);
     setFieldError(error);
     if (error !== null) {
       input.current?.focus();

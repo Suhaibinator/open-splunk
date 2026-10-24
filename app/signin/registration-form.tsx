@@ -7,10 +7,9 @@ import { useIdentity } from "../_components/identity-provider";
 import { AuthAlert, PasswordField, SubmitButton, TextField } from "./auth-frame";
 import { describeAuthError, type AuthErrorCopy } from "./auth-error-copy";
 import { useCooldown } from "./auth-hooks";
+import { emailFieldError } from "./email-address";
 import { signInHref } from "./return-to";
 import { PASSWORD_HINT } from "./token-password-flow";
-
-const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 
 type Field = "email" | "firstName" | "lastName" | "username" | "password";
 type FieldErrors = Readonly<Record<Field, string | null>>;
@@ -72,7 +71,7 @@ export function RegistrationForm({ initialEmail, returnTo, onRegistered, onCance
     if (pending || cooldown.remainingMs > 0 || client === null) return;
     const email = values.email.trim();
     const next: FieldErrors = {
-      email: email.length === 0 ? "Enter your email address." : EMAIL_SHAPE.test(email) ? null : "Enter a valid email address, like name@example.com.",
+      email: emailFieldError(email),
       firstName: values.firstName.trim().length === 0 ? "Enter your first name." : null,
       lastName: values.lastName.trim().length === 0 ? "Enter your last name." : null,
       username: values.username.trim().length < 3 ? "Usernames need at least 3 characters." : null,

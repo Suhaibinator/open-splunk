@@ -244,12 +244,13 @@
   margin-top: var(--space-3);
 }
 
+/* A text column that wraps beside an action column that never does. */
 .signin-invitation-list li,
 .signin-demo li {
   align-items: center;
-  display: flex;
+  display: grid;
   gap: var(--space-3);
-  justify-content: space-between;
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .signin-invitation-list li {
@@ -274,13 +275,6 @@
   display: grid;
   gap: var(--space-3);
   grid-template-columns: minmax(84px, auto) minmax(0, 1fr);
-}
-
-.signin-invitation dt {
-  color: var(--fg-muted);
-  font-size: var(--type-xs);
-  font-weight: 700;
-  text-transform: uppercase;
 }
 
 .signin-invitation dd {
@@ -340,9 +334,6 @@
   font-weight: 600;
 }
 
-.signin-demo li > span {
-  min-width: 0;
-}
 
 /* Responsive
    The breakpoint overrides for the rules above. They live in the file that

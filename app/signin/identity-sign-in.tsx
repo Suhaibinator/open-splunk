@@ -17,9 +17,10 @@ import {
   SubmitButton,
   TextField,
 } from "./auth-frame";
-import { describeAuthError, type AuthErrorCopy } from "./auth-error-copy";
+import { WRONG_CREDENTIALS_TITLE, describeAuthError, type AuthErrorCopy } from "./auth-error-copy";
 import { useCooldown, useResource, type AuthNavigate } from "./auth-hooks";
 import { DemoIdentityHints } from "./demo-identity-hints";
+import { emailFieldError } from "./email-address";
 import { passwordResetRequestHref } from "./return-to";
 import {
   NoOrganizationCard,
@@ -28,7 +29,6 @@ import {
   principalCanEnter,
 } from "./sign-in-completion";
 
-const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 const OTP_SHAPE = /^\d{6}$/u;
 /** How long a rate-limited action waits when the server named no `Retry-After`. */
 const DEFAULT_COOLDOWN_MS = 30_000;
@@ -216,7 +216,7 @@ function CredentialsStep({
     if (pending || cooldownMs > 0 || client === null) return;
     const address = email.trim();
     const next = {
-      email: address.length === 0 ? "Enter your email address." : EMAIL_SHAPE.test(address) ? null : "Enter a valid email address, like name@example.com.",
+      email: emailFieldError(address),
       password: password.length === 0 ? "Enter your password." : null,
     };
     setErrors(next);
@@ -270,7 +270,7 @@ function CredentialsStep({
         {failure === null ? null : (
           <AuthAlert
             copy={failure}
-            action={failure.kind === "unauthenticated" && failure.title.startsWith("Email") ? (
+            action={failure.title === WRONG_CREDENTIALS_TITLE ? (
               <Link href={passwordResetRequestHref(email.trim())}>Reset your password</Link>
             ) : undefined}
           />

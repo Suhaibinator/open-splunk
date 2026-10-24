@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { IDENTITY_ERROR_KINDS, IdentityError } from "@/lib/api/identity";
 
-import { describeAuthError, formatWait, toIdentityError, type AuthFlow } from "./auth-error-copy";
+import { WRONG_CREDENTIALS_TITLE, describeAuthError, formatWait, toIdentityError, type AuthFlow } from "./auth-error-copy";
 
 const FLOWS: readonly AuthFlow[] = [
   "session",
@@ -92,4 +92,22 @@ test("invitation answers distinguish another address, an answered invitation and
 test("an OAuth identity linked to someone else is explained, not echoed", () => {
   const copy = describeAuthError(new IdentityError("conflict", "This provider account is linked to a different user."), "oauth_callback");
   assert.equal(copy.title, "This provider account belongs to someone else");
+});
+
+test("a provider's refusal reason is never echoed, since the callback query is anyone's text", () => {
+  const copy = describeAuthError(new IdentityError("unauthenticated", "Call 555-0100 to unlock"), "oauth_callback");
+  assert.equal(copy.title, "The provider did not sign you in");
+  assert.equal(copy.detail.includes("555-0100"), false);
+});
+
+test("an invite-only server explains a refused registration and a refused provider sign-up", () => {
+  assert.equal(describeAuthError(new IdentityError("forbidden", "Email signup is invite-only"), "register").title, "Accounts here are by invitation");
+  assert.equal(describeAuthError(new IdentityError("forbidden", "OAuth signup is disabled"), "oauth_callback").title, "New accounts can't sign up with this provider");
+  // An unverified address still reads as unverified, whichever flow saw it.
+  assert.equal(describeAuthError(new IdentityError("forbidden", "Email not verified"), "register").title, "Verify your email address first");
+});
+
+test("only a wrong password offers the reset beside it", () => {
+  assert.equal(describeAuthError(new IdentityError("unauthenticated", "Invalid credentials"), "sign_in").title, WRONG_CREDENTIALS_TITLE);
+  assert.notEqual(describeAuthError(new IdentityError("unauthenticated", "User account is banned"), "sign_in").title, WRONG_CREDENTIALS_TITLE);
 });

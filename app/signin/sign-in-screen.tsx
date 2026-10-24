@@ -8,6 +8,7 @@ import { IdentityProvider, useIdentity } from "../_components/identity-provider"
 import { AdministratorSessionScreen } from "./administrator-session-screen";
 import { AuthCardHeader, AuthFrame, AuthLoading } from "./auth-frame";
 import { useLocationQuery } from "./auth-hooks";
+import { prefillEmail } from "./email-address";
 import { IdentitySignIn } from "./identity-sign-in";
 import { safeReturnTo } from "./return-to";
 import { useAuthNavigate } from "./use-auth-navigate";
@@ -51,7 +52,7 @@ function SignInRoute({ dataMode }: SignInScreenProps) {
       ) : (
         <IdentitySignIn
           demo={!backend}
-          initialEmail={query.get("email") ?? ""}
+          initialEmail={prefillEmail(query.get("email"))}
           navigate={navigate}
           onUseAdministratorToken={backend ? () => setAdministratorToken(true) : undefined}
           returnTo={safeReturnTo(query.get("returnTo"))}
