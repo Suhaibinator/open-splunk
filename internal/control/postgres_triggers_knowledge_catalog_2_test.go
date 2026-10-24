@@ -906,8 +906,8 @@ func TestPostgresKnowledgeCatalog2TriggersIgnoreTheCallerSearchPath(t *testing.T
 			t.Fatalf("scan lane function: %v", err)
 		}
 		functions++
-		if config != "search_path="+control.PostgresSchema {
-			t.Errorf("function %s runs with settings %q, want search_path=%s", name, config, control.PostgresSchema)
+		if config != "search_path="+control.PostgresSearchPath {
+			t.Errorf("function %s runs with settings %q, want search_path=%s", name, config, control.PostgresSearchPath)
 		}
 	}
 	if err := rows.Err(); err != nil {

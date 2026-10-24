@@ -147,7 +147,7 @@ func TestAcquireServerSingletonIsReleasedWhenTheHolderSessionDies(t *testing.T) 
 			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
 			AND classid = x'6f730000'::int::oid
 			AND objid = 2
-			AND objsubid = 1
+			AND objsubid = 2
 			AND granted`).Scan(&terminated); err != nil {
 		t.Fatalf("terminate holder session: %v", err)
 	}

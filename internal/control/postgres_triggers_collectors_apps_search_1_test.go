@@ -280,8 +280,8 @@ func TestPostgresCollectorsAppsSearch1TriggersAreInstalled(t *testing.T) {
 		).Scan(&config); err != nil {
 			t.Fatalf("read %s configuration: %v", function, err)
 		}
-		if config != "search_path="+control.PostgresSchema {
-			t.Errorf("function %s proconfig = %q, want search_path=%s", function, config, control.PostgresSchema)
+		if config != "search_path="+control.PostgresSearchPath {
+			t.Errorf("function %s proconfig = %q, want search_path=%s", function, config, control.PostgresSearchPath)
 		}
 	}
 }
