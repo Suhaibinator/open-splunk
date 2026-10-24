@@ -48,6 +48,12 @@ Objects are created unqualified. The runner sets `search_path = open_splunk`
 before applying a file; the files never name `public`. The database must use
 UTF-8 encoding, and `0001` raises an error otherwise.
 
+Several literals carry backslashes (`strpos(x, '\\')`, `'\x'::bytea`), so the
+runner and every control-plane session pin `standard_conforming_strings = on`.
+A database or role default of `off` would read them as escapes: `'\\'` would
+become one backslash, and a PL/pgSQL trigger body is parsed again by each
+session that fires it. Clients other than the server should keep the default.
+
 ## Translation rules
 
 | SQLite | PostgreSQL |

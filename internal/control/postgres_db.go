@@ -111,13 +111,21 @@ func parsePostgresConfig(dsn string) (*pgx.ConnConfig, error) {
 	// connection, including ones the pool opens after a reconnect, so no
 	// session can observe a different schema or time zone. PostgreSQL folds
 	// parameter names, so drop every spelling a caller may have supplied.
+	//
+	// standard_conforming_strings is pinned on because the schema's literals
+	// carry backslashes ('\\' in a LIKE port, '\x'::bytea). A database or
+	// role default of off would make a session read them as escapes, and a
+	// PL/pgSQL trigger body is parsed again by every session that fires it.
 	for name := range connConfig.RuntimeParams {
-		if strings.EqualFold(name, "search_path") || strings.EqualFold(name, "timezone") {
+		if strings.EqualFold(name, "search_path") ||
+			strings.EqualFold(name, "timezone") ||
+			strings.EqualFold(name, "standard_conforming_strings") {
 			delete(connConfig.RuntimeParams, name)
 		}
 	}
 	connConfig.RuntimeParams["search_path"] = PostgresSchema
 	connConfig.RuntimeParams["timezone"] = "UTC"
+	connConfig.RuntimeParams["standard_conforming_strings"] = "on"
 	if strings.TrimSpace(connConfig.RuntimeParams["application_name"]) == "" {
 		connConfig.RuntimeParams["application_name"] = postgresApplicationName
 	}

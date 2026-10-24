@@ -64,6 +64,13 @@ func ApplyPostgresMigrations(ctx context.Context, db *sql.DB, migrationFS fs.FS)
 	if _, err := tx.ExecContext(ctx, `SET LOCAL search_path TO `+PostgresSchema); err != nil {
 		return fmt.Errorf("pin PostgreSQL migration search_path: %w", err)
 	}
+	// Migration literals carry backslashes ('\\', '\x'::bytea). Read them
+	// standardly even when the caller's session inherits
+	// standard_conforming_strings = off from a database or role default,
+	// which would turn '\\' into one backslash or fail to parse.
+	if _, err := tx.ExecContext(ctx, `SET LOCAL standard_conforming_strings TO on`); err != nil {
+		return fmt.Errorf("pin PostgreSQL migration standard_conforming_strings: %w", err)
+	}
 
 	var schemaExists, ledgerExists, schemaHasObjects bool
 	if err := tx.QueryRowContext(ctx, postgresMigrationStateQuery, PostgresSchema).
