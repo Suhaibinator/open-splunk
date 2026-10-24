@@ -188,6 +188,11 @@ func Routes() []string {
 // Allowed reports whether a principal holding capabilities may call method on
 // path. Unknown paths and mismatched methods are denied. Public routes are
 // allowed with any set, including the empty one.
+//
+// The lookup is exact and never cleans, decodes, or re-cases path. Callers
+// pass the decoded request.URL.Path that dispatch itself uses, and only after
+// the server's exact-route boundary has refused any request whose escaped
+// path differs from it, so authorization and dispatch see one path.
 func Allowed(capabilities CapabilitySet, method, path string) bool {
 	requirement, ok := routeRequirements[path]
 	if !ok || requirement.Method != method {

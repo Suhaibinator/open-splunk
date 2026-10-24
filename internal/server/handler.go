@@ -1163,8 +1163,29 @@ func NewHandler(config Config) (*Handler, error) {
 	// itself could otherwise reach the SPA's index document.
 	mux.Handle("/api", apiBoundary)
 	mux.Handle("/api/", apiBoundary)
-	mux.Handle("/", spa)
+	mux.Handle("/", apiNamespaceAliases(spa))
 	return &Handler{next: mux, searchWebSocket: searchWebSocket}, nil
+}
+
+// inAPINamespace reports whether path is /api or lies beneath it.
+func inAPINamespace(path string) bool {
+	return path == apiPathPrefix || strings.HasPrefix(path, apiPathPrefix+"/")
+}
+
+// apiNamespaceAliases keeps escaped aliases of the API namespace, such as
+// /api%2Findexes%2Flist, out of the SPA. ServeMux matches the escaped path, so
+// such a request misses the /api patterns, yet its decoded path names an API
+// route. It is rejected as an unknown API route, as the HEC handler does for
+// escaped aliases of its namespace, so raw-path proxy policy and application
+// routing cannot disagree about who owns the request.
+func apiNamespaceAliases(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if inAPINamespace(request.URL.Path) || inAPINamespace(request.URL.EscapedPath()) {
+			writeAPIError(response, http.StatusNotFound, "API route not found")
+			return
+		}
+		next.ServeHTTP(response, request)
+	})
 }
 
 func isNilDependency(value any) bool {
@@ -1179,10 +1200,17 @@ func postAPIRoutes(paths ...string) map[string]string {
 	return result
 }
 
+// exactAPIRoutes admits only an exact allowlisted path with its one method.
+// Every inner layer (origin checks, route authorization, and SRouter
+// dispatch) decides on the decoded request.URL.Path, so the path must also be
+// its own escaped form: an alias such as /api/indexes%2Flist or
+// /api/%69ndexes/list would otherwise reach an administrator route while a
+// reverse proxy or WAF matching the raw path saw a different one. Every route
+// path is plain ASCII, so a canonical request never needs an escape.
 func exactAPIRoutes(next http.Handler, routes map[string]string) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		method, exists := routes[request.URL.Path]
-		if !exists {
+		if !exists || request.URL.EscapedPath() != request.URL.Path {
 			writeAPIError(response, http.StatusNotFound, "API route not found")
 			return
 		}
