@@ -12,6 +12,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { type Palette, PALETTE_CONTRAST_FLOOR, PALETTES, resolvePalette } from "../../lib/palettes";
 import { resolveTheme, THEME_BOOT_SCRIPT } from "../../lib/theme-preference";
 import { addApplicationStyles } from "./application-stylesheets";
+import { IDENTITY_BAR_FIXTURE, IDENTITY_MARKS, IDENTITY_MENUS_FIXTURE, IDENTITY_PANEL_FIXTURE, IDENTITY_READABLE_TEXT } from "./identity-fixture";
 import { KNOB_CONSUMERS, SHELL_FIXTURE } from "./palette-fixture";
 
 const COMPACT_WIDTH = 980;
@@ -2578,6 +2579,150 @@ test.describe("search workspace stacking", () => {
       expect(probe.hitInMenu, `${palette} ${mode}: the pointer at (${probe.x}, ${probe.y}) reaches ${probe.hitPath}, not the menu`).toBe(true);
       // Glass is the palette that filters the menu; classic leaves it plain.
       expect(probe.backdropFilter === "none", `${palette} ${mode}: backdrop-filter is ${probe.backdropFilter}`).toBe(palette === "classic");
+    });
+  });
+});
+
+/* == Identity surface contracts ================================================ */
+
+// The organization switcher, the user button and menu, the members panel, the
+// site directory and the sign-in card print text the product does not write.
+// The unit and mount tests prove that text arrives whole, escaped and inside a
+// bidi isolate; only a browser can say how it then folds. Every width either
+// side of each breakpoint step, the narrowest phone, and a desktop window at
+// 200% zoom (a 640px layout viewport at device scale 2) has to fit without a
+// horizontal page scroll, truncating the bar's names with an ellipsis rather
+// than pushing the bar wider, and every ink has to keep its floor on the
+// ground it actually lands on.
+
+const IDENTITY_WIDTHS: readonly number[] = [1241, 1240, 1239, 981, 980, 979, 761, 760, 759, 481, 480, 479, 320];
+
+async function mountIdentity(page: Page, markup: string, width: number): Promise<void> {
+  await page.setViewportSize({ height: 900, width });
+  await page.setContent(`<main>${markup}</main>`);
+  await addApplicationStyles(page);
+}
+
+/** How far the page scrolls sideways, and the elements whose box crosses the viewport's right edge. */
+async function horizontalOverflow(page: Page): Promise<{ overflow: number; crossing: string[] }> {
+  return page.evaluate(() => {
+    const viewport = document.documentElement.clientWidth;
+    const crossing: string[] = [];
+    for (const element of document.querySelectorAll("main *")) {
+      const style = globalThis.getComputedStyle(element);
+      if (style.display === "none" || style.position === "absolute" || style.position === "fixed") continue;
+      // Content inside a scroll or clipping container (a .table-wrap, an
+      // ellipsis-truncated name) scrolls or is cut there, not on the page; the
+      // container itself is still measured.
+      let clipped = false;
+      for (let parent = element.parentElement; parent !== null && parent.tagName !== "MAIN"; parent = parent.parentElement) {
+        if (globalThis.getComputedStyle(parent).overflowX !== "visible") {
+          clipped = true;
+          break;
+        }
+      }
+      if (clipped) continue;
+      const box = element.getBoundingClientRect();
+      if (box.width > 0 && box.right > viewport + 0.5) {
+        crossing.push(`${element.tagName.toLowerCase()}${[...element.classList].map((name) => `.${name}`).join("")} ends at ${Math.round(box.right)}`);
+      }
+    }
+    return { crossing: crossing.slice(0, 8), overflow: document.documentElement.scrollWidth - viewport };
+  });
+}
+
+/** Each titled name in the bar: whether it fits the viewport, and whether a cut is drawn as an ellipsis. */
+async function barNames(page: Page): Promise<Array<{ cutCleanly: boolean; fits: boolean; label: string }>> {
+  return page.evaluate(() => [...document.querySelectorAll(".suite-product-bar [title]")].flatMap((element) => {
+    const style = globalThis.getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden") return [];
+    const box = element.getBoundingClientRect();
+    const cut = element.scrollWidth > element.clientWidth + 1;
+    return [{
+      cutCleanly: !cut || (style.textOverflow === "ellipsis" && style.overflowX === "hidden"),
+      fits: box.right <= document.documentElement.clientWidth + 0.5,
+      label: `${element.tagName.toLowerCase()} in ${element.parentElement?.className ?? "?"}`,
+    }];
+  }));
+}
+
+test.describe("identity surface contracts", () => {
+  test("hostile names fold without a horizontal scroll either side of every breakpoint step", async ({ page }) => {
+    await sequentially(IDENTITY_WIDTHS, async (width) => {
+      await mountIdentity(page, `${IDENTITY_BAR_FIXTURE}${IDENTITY_PANEL_FIXTURE}`, width);
+      const { crossing, overflow } = await horizontalOverflow(page);
+      expect(overflow, `${width}px: the page scrolls sideways; crossing the edge: ${crossing.join("; ")}`).toBeLessThanOrEqual(0);
+      expect(crossing, `${width}px: boxes past the viewport`).toEqual([]);
+      const names = await barNames(page);
+      expect(names.filter((name) => !name.fits).map((name) => name.label), `${width}px: a bar name runs past the viewport`).toEqual([]);
+      expect(names.filter((name) => !name.cutCleanly).map((name) => name.label), `${width}px: a truncated bar name is clipped without an ellipsis`).toEqual([]);
+    });
+  });
+
+  test.describe("at 200% zoom", () => {
+    test.use({ deviceScaleFactor: 2 });
+
+    test("a desktop window zoomed to 200% still fits the identity surfaces", async ({ page }) => {
+      await mountIdentity(page, `${IDENTITY_BAR_FIXTURE}${IDENTITY_PANEL_FIXTURE}`, DESKTOP_WIDTH / 2);
+      const { crossing, overflow } = await horizontalOverflow(page);
+      expect(overflow, `200%: the page scrolls sideways; crossing the edge: ${crossing.join("; ")}`).toBeLessThanOrEqual(0);
+      const names = await barNames(page);
+      expect(names.filter((name) => !name.fits || !name.cutCleanly).map((name) => name.label)).toEqual([]);
+    });
+  });
+
+  test("the bar caps the display name and the switcher name, and keeps the avatar unsquashed", async ({ page }) => {
+    await mountIdentity(page, IDENTITY_BAR_FIXTURE, DESKTOP_WIDTH);
+    const name = page.locator(".suite-user-button > b");
+    expect((await name.boundingBox())?.width ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(180.5);
+    await expect(name).toHaveCSS("text-overflow", "ellipsis");
+    const avatar = await page.locator(".suite-user-button > span").boundingBox();
+    expect(avatar === null ? null : Math.round(avatar.width), "the avatar keeps its 17px square under a long name").toBe(17);
+    await expect(page.locator(".suite-org-switcher > strong")).toHaveCSS("text-overflow", "ellipsis");
+  });
+
+  test("a long description is capped on its inner block on a desktop table and runs full-width in card mode", async ({ page }) => {
+    await mountIdentity(page, IDENTITY_PANEL_FIXTURE, DESKTOP_WIDTH);
+    const description = page.locator(".site-directory-description");
+    await expect(description).toHaveCSS("display", "block");
+    expect((await description.boundingBox())?.width ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(280.5);
+    await mountIdentity(page, IDENTITY_PANEL_FIXTURE, MOBILE_WIDTH);
+    await expect(description).toHaveCSS("max-width", "none");
+    const cell = await page.locator('td[data-label="Description"]').first().boundingBox();
+    const block = await description.boundingBox();
+    expect(block !== null && cell !== null && block.width <= cell.width + 0.5, "the description stays inside its card cell").toBe(true);
+  });
+
+  test("an error state inside a members card keeps its 4px error stripe", async ({ page }) => {
+    await mountIdentity(page, IDENTITY_PANEL_FIXTURE, DESKTOP_WIDTH);
+    const state = page.locator(".identity-probe-error-card .backend-resource-state");
+    await expect(state).toHaveCSS("border-left-width", "4px");
+    const stripe = await state.evaluate((element) => globalThis.getComputedStyle(element).borderLeftColor);
+    const [error] = await resolveTokens(page, ["--status-error"]);
+    expect(stripe).toBe(error);
+  });
+
+  test("every bdi isolates its text from the sentence around it", async ({ page }) => {
+    await mountIdentity(page, `${IDENTITY_BAR_FIXTURE}${IDENTITY_MENUS_FIXTURE}${IDENTITY_PANEL_FIXTURE}`, DESKTOP_WIDTH);
+    const modes = await page.evaluate(() => [...new Set([...document.querySelectorAll("bdi")].map((element) => globalThis.getComputedStyle(element).unicodeBidi))]);
+    expect(modes).toEqual(["isolate"]);
+  });
+
+  test("identity text and initials clear their floor on the ground they land on, in every palette and mode", async ({ page }) => {
+    await mountIdentity(page, `${IDENTITY_MENUS_FIXTURE}${IDENTITY_PANEL_FIXTURE}`, DESKTOP_WIDTH);
+    await inEveryScope(page, async ({ mode, palette }) => {
+      const floor = contrastFloorOf(palette);
+      const text = await inkedElements(page, IDENTITY_READABLE_TEXT);
+      const shortText = text
+        // Status inks promise AA on their own wash in every palette; that is the floor the token layer holds them to.
+        .filter(({ ground, ink, label }) => contrastRatio(ink, ground) < (label.startsWith(".signin-help-notice") ? AA_CONTRAST : floor))
+        .map(({ ground, ink, label }) => `${label} is ${contrastRatio(ink, ground).toFixed(2)}:1`);
+      expect(shortText, `${palette} ${mode}: identity text below its floor`).toEqual([]);
+      const marks = await inkedElements(page, IDENTITY_MARKS);
+      const shortMarks = marks
+        .filter(({ ground, ink }) => contrastRatio(ink, ground) < AA_CONTRAST)
+        .map(({ ground, ink, label }) => `${label} is ${contrastRatio(ink, ground).toFixed(2)}:1`);
+      expect(shortMarks, `${palette} ${mode}: initials below AA on their own fill`).toEqual([]);
     });
   });
 });

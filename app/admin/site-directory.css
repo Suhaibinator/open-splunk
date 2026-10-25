@@ -1,0 +1,174 @@
+/* Site directory
+   The site-admin Users and Organizations panels (`app/admin/site-users-panel.tsx`,
+   `app/admin/site-organizations-panel.tsx`). They sit inside the admin
+   console's section stack and reuse its header, search toolbar, inset
+   pagination footer and row action menu, the shared table (in card mode
+   below 760px), status, badge, button, modal and resource-state primitives;
+   this file owns only the header's disabled-action note, the identity cell,
+   the described menu items, the lineage trail and the form layout those
+   primitives do not describe. Dialog errors are the shared
+   `.backend-inline-error`. */
+
+.site-directory-header-action {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.site-directory-header-action small {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  max-width: 280px;
+  text-align: right;
+}
+
+.site-directory-users-table {
+  min-width: 860px;
+}
+
+.site-directory-organizations-table {
+  min-width: 820px;
+}
+
+.site-directory-name {
+  align-items: center;
+  color: var(--fg-text);
+  display: flex;
+  gap: var(--space-2);
+}
+
+.site-directory-access small {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+}
+
+.site-directory-access {
+  display: grid;
+  gap: var(--space-1);
+  justify-items: start;
+}
+
+.site-directory-row-actions {
+  text-align: right;
+  width: 48px;
+}
+
+.site-directory-menu-item {
+  flex-direction: column;
+}
+
+.site-directory-menu-item.is-danger strong {
+  color: var(--status-error-strong);
+}
+
+.site-directory-menu-item[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+.site-directory-menu-item[aria-disabled="true"] strong {
+  color: var(--fg-faint);
+}
+
+.site-directory-menu-item small {
+  color: var(--fg-muted);
+  font-size: var(--type-xxs);
+  white-space: normal;
+}
+
+.site-directory-menu.resource-action-menu > button {
+  align-items: flex-start;
+  gap: 2px;
+}
+
+/* The footer stacks its own children; the button pair stays a row. */
+.admin-pagination-footer > .site-directory-pager-buttons {
+  flex-direction: row;
+  gap: var(--space-2);
+}
+
+/* "Root organization" and "No description" are information, not a disabled
+   label: --fg-faint is 3.1:1 on the table's surface. */
+.site-directory-muted {
+  color: var(--fg-muted);
+}
+
+/* A block inside the cell, because a table cell's own max-width does not
+   bound its column; below 760px the card prints the description whole. */
+.site-directory-description {
+  display: block;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.site-directory-lineage {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.site-directory-lineage li {
+  color: var(--fg-muted);
+}
+
+.site-directory-lineage li + li::before {
+  color: var(--fg-faint);
+  content: "›";
+  margin-right: var(--space-1);
+}
+
+.site-directory-lineage li[aria-current="true"] {
+  color: var(--fg-text);
+  font-weight: 600;
+}
+
+.site-directory-form-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.site-directory-form-grid > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+@media (max-width: 760px) {
+  .site-directory-header-action {
+    align-items: stretch;
+    align-self: stretch;
+  }
+
+  .site-directory-header-action small {
+    max-width: none;
+    text-align: left;
+  }
+
+  .site-directory-header-action .button {
+    min-height: 42px;
+  }
+
+  .site-directory-row-actions {
+    text-align: left;
+    width: auto;
+  }
+
+  .site-directory-description {
+    max-width: none;
+  }
+
+  .site-directory-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .site-directory-pager-buttons > .button {
+    flex: 1;
+    min-height: 42px;
+  }
+}

@@ -8,6 +8,7 @@ import {
   getSystemBootstrap,
 } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
+import { ADMIN_CONSOLE_ACCESS } from "@/lib/product-access";
 import {
   backendAppHref,
   currentBackendAppId,
@@ -23,6 +24,7 @@ import {
 import { BackendResourceState } from "./_components/backend-resource-state";
 import { StatusLabel, type StatusTone } from "./_components/status";
 import { AppIcon } from "./_components/app-icon";
+import { ShellOffer } from "./_components/product-identity";
 import { formatMediumDateTime } from "./_components/date-format";
 import { homeSearchFinishedAt, homeSearchStatus } from "./home-dashboard-data";
 
@@ -180,7 +182,7 @@ export function HomeDashboard({ apiBaseUrl = "", dataMode }: HomeDashboardProps)
         </div>
         <div className="home-hero-actions">
           <Link className="button button--primary" href={productHref("/search/events/")}>New search</Link>
-          <Link className="button" href={productHref("/admin/")}>{dataMode === "backend" ? "Administration" : "Administration preview"}</Link>
+          <ShellOffer requirement={ADMIN_CONSOLE_ACCESS}><Link className="button" href={productHref("/admin/")}>{dataMode === "backend" ? "Administration" : "Administration preview"}</Link></ShellOffer>
         </div>
       </header>
 
@@ -191,7 +193,7 @@ export function HomeDashboard({ apiBaseUrl = "", dataMode }: HomeDashboardProps)
           <small>{dataMode === "backend" ? "Connected surfaces report their own backend availability and errors." : "Explore the interface with deterministic sample data."}</small>
         </div>
         <span className={`badge ${dataMode === "backend" ? "badge--success" : "badge--warning"}`}>{dataMode === "backend" ? "Backend mode" : "Demo data"}</span>
-        <Link href={productHref("/admin/")}>{dataMode === "backend" ? "Check connection" : "Open settings"} <AppIcon name="chevron-right" size="xs" /></Link>
+        <ShellOffer requirement={ADMIN_CONSOLE_ACCESS}><Link href={productHref("/admin/")}>{dataMode === "backend" ? "Check connection" : "Open settings"} <AppIcon name="chevron-right" size="xs" /></Link></ShellOffer>
       </section>
 
       <section className="home-metrics" aria-label={dataMode === "backend" ? "Backend-supported surfaces" : "Preview deployment summary"}>
@@ -214,7 +216,7 @@ export function HomeDashboard({ apiBaseUrl = "", dataMode }: HomeDashboardProps)
 
       <div className="home-content-grid">
         <section className="suite-card home-apps-card">
-          <header className="suite-card-header"><div><h2>Apps</h2><p>Choose a workspace for your next task.</p></div><Link href={productHref("/admin/")}>Administration</Link></header>
+          <header className="suite-card-header"><div><h2>Apps</h2><p>Choose a workspace for your next task.</p></div><ShellOffer requirement={ADMIN_CONSOLE_ACCESS}><Link href={productHref("/admin/")}>Administration</Link></ShellOffer></header>
           <div className="app-launcher-grid">
             <Link className="app-launch-card" href={productHref("/search/events/")}>
               <span className="app-launch-icon" aria-hidden="true">⌕</span>
@@ -248,7 +250,7 @@ export function HomeDashboard({ apiBaseUrl = "", dataMode }: HomeDashboardProps)
               <li><span aria-hidden="true">1</span><div><strong>Run a preview search</strong><small>Use deterministic events</small></div><Link href="/search/events/">Open</Link></li>
               <li><span aria-hidden="true">2</span><div><strong>Browse preview datasets</strong><small>Inspect fixture index cards</small></div><Link href="/datasets/">Open</Link></li>
               <li><span aria-hidden="true">3</span><div><strong>Review preview activity</strong><small>Inspect sample job states</small></div><Link href="/activity/jobs/">Open</Link></li>
-              <li><span aria-hidden="true">4</span><div><strong>Open administration</strong><small>Explore sample controls</small></div><Link href="/admin/">Open</Link></li>
+              <ShellOffer requirement={ADMIN_CONSOLE_ACCESS}><li><span aria-hidden="true">4</span><div><strong>Open administration</strong><small>Explore sample controls</small></div><Link href="/admin/">Open</Link></li></ShellOffer>
             </ol>
           )}
         </aside>

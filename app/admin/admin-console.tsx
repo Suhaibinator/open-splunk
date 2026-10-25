@@ -12,11 +12,20 @@ import { AppIcon, type AppIconName } from "../_components/app-icon";
 import { StatusDot, StatusLabel } from "../_components/status";
 import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../_components/modal";
-import { ADMIN_SECTION_QUERY_PARAMETER, adminSectionPath, resolveAdminSection } from "./admin-navigation";
+import { ProductForbidden, useShellIdentity } from "../_components/product-identity";
+import {
+  ADMIN_SECTION_QUERY_PARAMETER,
+  adminNavigationFor,
+  adminSectionAccess,
+  adminSectionPath,
+  resolveAdminSection,
+} from "./admin-navigation";
 import { BackendAdminConsole } from "./backend-admin-console";
+import { MembersSection } from "./members-panel";
+import { SiteDirectorySection } from "./site-directory-section";
 import { Select, SelectOption } from "../_components/select";
 
-type AdminSection = "overview" | "indexes" | "collectors" | "access" | "server";
+type AdminSection = "overview" | "indexes" | "collectors" | "access" | "members" | "users" | "organizations" | "server";
 
 interface IndexRow {
   name: string;
@@ -43,6 +52,9 @@ const NAV_ITEMS: Array<{ key: AdminSection; label: string; detail: string; icon:
   { key: "indexes", label: "Indexes", detail: "Storage and retention", icon: "database" },
   { key: "collectors", label: "Data inputs", detail: "Collectors and tokens", icon: "download" },
   { key: "access", label: "Users & access", detail: "Roles and authentication", icon: "users" },
+  { key: "members", label: "Members & invitations", detail: "Organization roles and invites", icon: "users" },
+  { key: "users", label: "Users", detail: "Accounts and site admins", icon: "users" },
+  { key: "organizations", label: "Organizations", detail: "Tenants and hierarchy", icon: "list" },
   { key: "server", label: "Server settings", detail: "Limits and preferences", icon: "settings" },
 ];
 const DEMO_ADMIN_SECTIONS = NAV_ITEMS.map((item) => item.key);
@@ -135,7 +147,13 @@ function DemoAdminConsole() {
     }, 500);
   }
 
-  const primaryAction = section === "indexes"
+  const shellIdentity = useShellIdentity();
+  const navigationItems = adminNavigationFor(NAV_ITEMS, shellIdentity.offers);
+  const sectionOffered = shellIdentity.offers(adminSectionAccess(section));
+  const forbiddenPrincipal = sectionOffered ? null : shellIdentity.principal;
+  const primaryAction = !sectionOffered
+    ? undefined
+    : section === "indexes"
     ? <button className="button button--primary" type="button" onClick={openIndexDialog}><AppIcon name="plus" size="sm" /> Simulate index</button>
     : section === "collectors"
       ? <button className="button button--primary" type="button" onClick={() => setModal("token")}>Generate demo token</button>
@@ -148,14 +166,14 @@ function DemoAdminConsole() {
       <div className="admin-mobile-section-picker">
         <label htmlFor="admin-section">Administration section</label>
         <Select id="admin-section" value={section} onValueChange={(selectedValue) => navigateSection(selectedValue as AdminSection)}>
-          {NAV_ITEMS.map((item) => <SelectOption value={item.key} key={item.key}>{item.label}</SelectOption>)}
+          {navigationItems.map((item) => <SelectOption value={item.key} key={item.key}>{item.label}</SelectOption>)}
         </Select>
       </div>
 
       <div className="admin-layout">
         <aside className="admin-sidebar" aria-label="Administration navigation">
           <span className="admin-sidebar-label">SETTINGS</span>
-          {NAV_ITEMS.map((item) => (
+          {navigationItems.map((item) => (
             <button className={section === item.key ? "active" : undefined} type="button" aria-current={section === item.key ? "page" : undefined} onClick={() => navigateSection(item.key)} key={item.key}>
               <i aria-hidden="true"><AppIcon name={item.icon} size="md" /></i><span><strong>{item.label}</strong><small>{item.detail}</small></span><b aria-hidden="true"><AppIcon name="chevron-right" size="xs" /></b>
             </button>
@@ -164,6 +182,14 @@ function DemoAdminConsole() {
         </aside>
 
         <section className="admin-content">
+          {forbiddenPrincipal !== null ? (
+            <ProductForbidden
+              inline
+              principal={forbiddenPrincipal}
+              requirement={adminSectionAccess(section)}
+              label={NAV_ITEMS.find((item) => item.key === section)?.label ?? "this section"}
+            />
+          ) : <>
           {section === "overview" ? <OverviewSection onNavigate={navigateSection} /> : null}
           {section === "indexes" ? (
             <IndexesSection
@@ -181,7 +207,10 @@ function DemoAdminConsole() {
           ) : null}
           {section === "collectors" ? <CollectorsSection /> : null}
           {section === "access" ? <AccessSection /> : null}
+          {section === "members" ? <MembersSection dataMode="demo" /> : null}
+          {section === "users" || section === "organizations" ? <SiteDirectorySection dataMode="demo" view={section} /> : null}
           {section === "server" ? <ServerSection saving={saving} onSave={saveServerSettings} /> : null}
+          </>}
         </section>
       </div>
 

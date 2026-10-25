@@ -429,7 +429,8 @@
 
 .admin-mobile-section-picker label,
 .job-inspector section > span,
-.inspector-query > span {
+.inspector-query > span,
+.signin-invitation dt {
   color: var(--fg-muted);
   font-size: var(--type-xs);
   font-weight: 700;

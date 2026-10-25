@@ -69,7 +69,14 @@ import {
   type TokenIndexScopeOption,
   type TokenScopeSource,
 } from "./backend-admin-panels";
-import { ADMIN_SECTION_QUERY_PARAMETER, adminSectionPath, resolveAdminSection } from "./admin-navigation";
+import { ProductForbidden, useShellIdentity } from "../_components/product-identity";
+import {
+  ADMIN_SECTION_QUERY_PARAMETER,
+  adminNavigationFor,
+  adminSectionAccess,
+  adminSectionPath,
+  resolveAdminSection,
+} from "./admin-navigation";
 import { KnowledgeManagerGate } from "./knowledge-manager-gate";
 import { LookupManagerGate } from "./lookup-manager-gate";
 import { IssuedTokenDialog, TokenCreationDialog, type TokenCreateFormValue } from "./token-creation-dialog";
@@ -3170,7 +3177,8 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     : null;
   const knowledgeAdvertised = knowledgeFeatureAdvertised && knowledgeApps !== null;
   const lookupAdvertised = lookupFeatureAdvertised && knowledgeApps !== null;
-  const navigationItems = backendAdminNavigation(knowledgeAdvertised, lookupAdvertised);
+  const shellIdentity = useShellIdentity();
+  const navigationItems = adminNavigationFor(backendAdminNavigation(knowledgeAdvertised, lookupAdvertised), shellIdentity.offers);
   const section = (
     (locationSection === "knowledge" && !knowledgeAdvertised)
     || (locationSection === "lookups" && !lookupAdvertised)
@@ -3291,6 +3299,14 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         </aside>
 
         <section className="admin-content">
+          {!shellIdentity.offers(adminSectionAccess(section)) && shellIdentity.principal !== null ? (
+            <ProductForbidden
+              inline
+              principal={shellIdentity.principal}
+              requirement={adminSectionAccess(section)}
+              label={backendAdminNavigation(true, true).find((item) => item.key === section)?.label ?? "this section"}
+            />
+          ) : <>
           {section === "overview" ? (
             <BackendOverview
               actions={{ navigate: navigateSection, reload: load }}
@@ -3414,6 +3430,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               onDirtyChange={setServerSettingsDirty}
             />
           ) : null}
+          </>}
         </section>
       </div>
 
