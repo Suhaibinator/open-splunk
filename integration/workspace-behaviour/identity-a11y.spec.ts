@@ -26,12 +26,19 @@ async function tabStaysWithin(page: Page, scope: Locator, times: number, key: "T
 }
 
 async function createUserFromKeyboard(page: Page, email: string, username: string): Promise<void> {
-  await page.getByRole("button", { name: "Create user" }).first().click();
+  const opener = page.getByRole("button", { name: "Create user" }).first();
+  await opener.click();
   const dialog = page.getByRole("dialog", { name: "Create user" });
+  // The dialog moves focus to its first field once it opens; typing before
+  // that lands would send later keystrokes into the wrong field.
+  await expect(dialog.getByRole("textbox", { name: /^Email/u })).toBeFocused();
   await dialog.getByRole("textbox", { name: /^Email/u }).fill(email);
   await dialog.getByRole("textbox", { name: /^Username/u }).fill(username);
   await dialog.getByRole("textbox", { name: /^Username/u }).press("Enter");
   await expect(dialog).toBeHidden();
+  // The closed dialog hands focus back to its opener; a caller that moves
+  // focus before that lands would lose it to the restore.
+  await expect(opener).toBeFocused();
 }
 
 async function signOutFirst(page: Page): Promise<void> {

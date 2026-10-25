@@ -60,7 +60,8 @@ test("an account with an authenticator asks for the code on a second step", asyn
   await expect(page.getByRole("form", { name: "Verification code" }).getByRole("alert")).toContainText("That code was not accepted");
   await code.fill(OTP_CODE);
   await page.getByRole("button", { name: "Verify and sign in" }).click();
-  await expect(page).toHaveURL(/\/reports\/$/u);
+  // Sign-in returns to /reports/, which then settles on its default view.
+  await expect(page).toHaveURL(/\/reports\/saved-searches\/$/u);
 });
 
 test("a provider button runs the OAuth round trip through the callback page", async ({ page }) => {
