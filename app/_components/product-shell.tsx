@@ -17,6 +17,14 @@ import {
 import { searchLaunchHref, splFromFindInput } from "@/lib/search/launch-url";
 import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
 import {
+  ADMIN_CONSOLE_ACCESS,
+  PRODUCT_SECTION_ACCESS,
+  initialOf,
+  returnPathFor,
+  signInHref,
+  type ProductSection,
+} from "@/lib/product-access";
+import {
   currentThemePreference,
   setThemePreference,
   subscribeToThemePreference,
@@ -26,10 +34,18 @@ import {
 
 import { AppIcon } from "./app-icon";
 import { installModalSurface } from "./modal-surface";
+import {
+  OrganizationDrawerSection,
+  OrganizationSwitcher,
+  ProductAccessGate,
+  ShellIdentityBoundary,
+  ShellSignOutItems,
+  useShellIdentity,
+  useShellSession,
+  useShellSignOut,
+} from "./product-identity";
 import { useAppCatalog } from "./use-app-catalog";
 import { Wordmark } from "./wordmark";
-
-type ProductSection = "home" | "search" | "analytics" | "datasets" | "reports" | "dashboards" | "activity" | "admin" | "help";
 
 interface ProductShellProps {
   activeSection: ProductSection;
@@ -73,11 +89,12 @@ interface ProductShellProps {
 }
 
 type BackendAppCatalogState = "idle" | "loading" | "available" | "error";
-type ProductMenu = "apps" | "help" | "user";
+type ProductMenu = "apps" | "help" | "org" | "user";
 
 const PRODUCT_MENU_POPOVER_IDS: Record<ProductMenu, string> = {
   apps: "suite-app-popover",
   help: "suite-help-popover",
+  org: "suite-org-popover",
   user: "suite-user-popover",
 };
 
@@ -117,10 +134,22 @@ function submitProductFind(
  */
 const MENU_ITEM_SELECTOR = '[role="menuitem"], [role="menuitemradio"]';
 
-function focusFirstMenuItem(nextMenu: "apps" | "help" | "user") {
+/**
+ * Focuses the first (or last) entry of a menu once it has rendered, unless a
+ * key pressed before the next frame (End, Home, an arrow) already moved focus
+ * into it: the deferred focus must not snap it back.
+ */
+function focusMenuEdge(nextMenu: ProductMenu, edge: "first" | "last") {
   window.requestAnimationFrame(() => {
-    document.querySelector<HTMLElement>(`[data-suite-menu="${nextMenu}"] :is(${MENU_ITEM_SELECTOR})`)?.focus();
+    const popover = document.querySelector<HTMLElement>(`[data-suite-menu="${nextMenu}"]`);
+    if (popover === null || popover.contains(document.activeElement)) return;
+    const items = popover.querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR);
+    items.item(edge === "first" ? 0 : items.length - 1)?.focus();
   });
+}
+
+function focusFirstMenuItem(nextMenu: ProductMenu) {
+  focusMenuEdge(nextMenu, "first");
 }
 
 const THEME_LABELS: Record<ThemePreference, string> = {
@@ -166,7 +195,20 @@ function appDetail(app: AppSummary, selected: boolean): string {
   return `${count.toLocaleString()} default ${count === 1 ? "index" : "indexes"}`;
 }
 
-export function ProductShell({
+/**
+ * The product chrome around every page but sign-in. It mounts the page's
+ * identity provider (unless one is already above), so the bar, the drawer and
+ * the main region all read the same principal.
+ */
+export function ProductShell(props: ProductShellProps) {
+  return (
+    <ShellIdentityBoundary dataMode={props.dataMode}>
+      <ProductShellFrame {...props} />
+    </ShellIdentityBoundary>
+  );
+}
+
+function ProductShellFrame({
   activeSection,
   apiBaseUrl = "",
   appName,
@@ -207,9 +249,11 @@ export function ProductShell({
   const mobileDrawerRef = useRef<HTMLDialogElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const localSession = dataMode === "backend";
-  const sessionInitial = localSession ? "L" : "A";
-  const sessionLabel = localSession ? "Local session" : "Administrator";
-  const sessionDetail = localSession ? "Single-user backend mode" : "admin@localhost";
+  const shellIdentity = useShellIdentity();
+  const identityActive = shellIdentity.mode !== "legacy";
+  const { context: sessionContext, detail: sessionDetail, initial: sessionInitial, label: sessionLabel, siteAdmin } = useShellSession(dataMode);
+  const offersAdmin = shellIdentity.offers(ADMIN_CONSOLE_ACCESS);
+  const offersSection = (section: ProductSection) => shellIdentity.offers(PRODUCT_SECTION_ACCESS[section]);
   const displayedBackendApps = backendAppCatalog?.apps ?? sharedCatalog.bootstrap?.apps ?? [];
   const displayedBackendAppId = backendAppCatalog?.selectedAppId ?? sharedCatalog.bootstrap?.selectedAppId ?? null;
   const displayedCatalogState = backendAppCatalog?.state
@@ -255,11 +299,22 @@ export function ProductShell({
     event.preventDefault();
     menuTriggerRef.current = event.currentTarget;
     setMenu(nextMenu);
-    if (event.key === "ArrowDown") focusFirstMenuItem(nextMenu);
-    else window.requestAnimationFrame(() => {
-      const items = document.querySelectorAll<HTMLElement>(`[data-suite-menu="${nextMenu}"] :is(${MENU_ITEM_SELECTOR})`);
-      items.item(items.length - 1)?.focus();
-    });
+    focusMenuEdge(nextMenu, event.key === "ArrowDown" ? "first" : "last");
+  }
+
+  /**
+   * The forbidden state's "Switch organization": the bar's menu, or the
+   * drawer below the compact breakpoint, where the bar's switcher folds away.
+   */
+  function openOrganizationChooser() {
+    const trigger = document.querySelector<HTMLButtonElement>(".suite-org-switcher");
+    if (trigger === null || trigger.getClientRects().length === 0) {
+      setMobileOpen(true);
+      return;
+    }
+    menuTriggerRef.current = trigger;
+    setMenu("org");
+    focusFirstMenuItem("org");
   }
 
   function productHref(href: string): string {
@@ -400,7 +455,7 @@ export function ProductShell({
                   const selected = app.appId === displayedBackendAppId;
                   const label = appLabel(app);
                   const contents = <>
-                      <i className="suite-app-icon" aria-hidden="true">{label.charAt(0).toUpperCase() || "⌕"}</i>
+                      <i className="suite-app-icon" aria-hidden="true">{initialOf(label) || "⌕"}</i>
                       <span><strong>{label}</strong><small>{appDetail(app, selected)}</small></span>
                     </>;
                   return backendAppCatalog || catalogActionsBlocked ? (
@@ -416,16 +471,31 @@ export function ProductShell({
                   <Link role="menuitem" href="/dashboards/"><i className="suite-app-icon suite-app-icon--grade" aria-hidden="true">G</i><span><strong>GradeThis Operations</strong><small>Preview service-health workspace</small></span></Link>
                 </>
               )}
-              <span className="suite-menu-rule" />
-              <Link role="menuitem" href={productHref("/admin/")}><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true"><AppIcon name="settings" size="md" /></i><span><strong>Administration</strong><small>{dataMode === "backend" ? "Indexes and ingestion tokens" : "Preview system settings"}</small></span></Link>
+              {offersAdmin ? <>
+                <span className="suite-menu-rule" />
+                <Link role="menuitem" href={productHref("/admin/")}><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true"><AppIcon name="settings" size="md" /></i><span><strong>Administration</strong><small>{dataMode === "backend" ? "Indexes and ingestion tokens" : "Preview system settings"}</small></span></Link>
+              </> : null}
             </div>
           ) : null}
         </div>}
 
+        <OrganizationSwitcher
+          open={menu === "org"}
+          popoverId={PRODUCT_MENU_POPOVER_IDS.org}
+          controlsId={productMenuControlId(menu, "org")}
+          onTriggerClick={(event) => {
+            const opening = menu !== "org";
+            toggleMenu("org", event.currentTarget);
+            if (opening && event.detail === 0) focusFirstMenuItem("org");
+          }}
+          onTriggerKeyDown={(event) => openMenuFromKeyboard(event, "org")}
+          onClose={() => closeMenu(true)}
+        />
+
         {utilities ?? <nav className="suite-utilities" aria-label="Product utilities">
           <span className="suite-context">{dataMode === "backend" ? "Backend workspace" : "Demo workspace"}</span>
-          <Link href={productHref("/admin/")}>Settings</Link>
-          <Link href={productHref("/activity/jobs/")}>Activity {dataMode === "demo" ? <span className="activity-count">1</span> : null}</Link>
+          {offersAdmin ? <Link className="suite-settings-link" href={productHref("/admin/")}>Settings</Link> : null}
+          {offersSection("activity") ? <Link href={productHref("/activity/jobs/")}>Activity {dataMode === "demo" ? <span className="activity-count">1</span> : null}</Link> : null}
           <div className="suite-menu-anchor">
             <button type="button" aria-controls={productMenuControlId(menu, "help")} aria-haspopup="menu" aria-expanded={menu === "help"} onClick={(event) => { const opening = menu !== "help"; toggleMenu("help", event.currentTarget); if (opening && event.detail === 0) focusFirstMenuItem("help"); }} onKeyDown={(event) => openMenuFromKeyboard(event, "help")}>Help <AppIcon name="chevron-down" size="xs" /></button>
             {menu === "help" ? (
@@ -447,13 +517,26 @@ export function ProductShell({
           </form>
           <div className="suite-menu-anchor">
             <button className="suite-user-button" type="button" aria-label={`${sessionLabel} menu`} aria-controls={productMenuControlId(menu, "user")} aria-haspopup="menu" aria-expanded={menu === "user"} onClick={(event) => { const opening = menu !== "user"; toggleMenu("user", event.currentTarget); if (opening && event.detail === 0) focusFirstMenuItem("user"); }} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}>
-              <span>{sessionInitial}</span><b>{sessionLabel}</b><AppIcon name="chevron-down" size="xs" />
+              <span>{sessionInitial}</span><b title={sessionLabel}><bdi>{sessionLabel}</bdi></b><AppIcon name="chevron-down" size="xs" />
             </button>
             {menu === "user" ? (
               <div className="suite-popover suite-utility-popover suite-user-popover" id={PRODUCT_MENU_POPOVER_IDS.user} role="menu" data-suite-menu="user">
-                <div className="suite-user-summary"><span aria-hidden="true">{sessionInitial}</span><div><strong>{sessionLabel}</strong><small>{sessionDetail}</small></div></div>
-                <Link role="menuitem" href={productHref("/admin/")}>{localSession ? "Server administration" : "Account settings"}</Link>
-                <Link role="menuitem" href="/signin/">{localSession ? "About local access" : "Sign out"}</Link>
+                <div className="suite-user-summary">
+                  <span aria-hidden="true">{sessionInitial}</span>
+                  <div>
+                    <strong><bdi>{sessionLabel}</bdi></strong>
+                    <small><bdi>{sessionDetail}</bdi></small>
+                    {sessionContext === null ? null : <small><bdi>{sessionContext}</bdi></small>}
+                    {siteAdmin ? <span className="badge badge--info">Site admin</span> : null}
+                  </div>
+                </div>
+                {offersAdmin && (!identityActive || shellIdentity.mode === "signed_in")
+                  ? <Link role="menuitem" href={productHref("/admin/")}>{localSession ? "Server administration" : identityActive ? "Administration" : "Account settings"}</Link>
+                  : null}
+                <ShellSignOutItems
+                  legacy={<Link role="menuitem" href="/signin/">{localSession ? "About local access" : "Sign out"}</Link>}
+                  onSelect={() => closeMenu()}
+                />
                 <ThemeMenu preference={themePreference} onSelect={setThemePreference} />
               </div>
             ) : null}
@@ -463,7 +546,7 @@ export function ProductShell({
 
       <nav className="suite-app-bar" aria-label={`${appName} navigation`}>
         <div className="suite-primary-nav">
-          {PRIMARY_NAV.map((item) => (
+          {PRIMARY_NAV.filter((item) => offersSection(item.key)).map((item) => (
             <Link
               className={activeSection === item.key ? "active" : undefined}
               href={productHref(item.href)}
@@ -481,10 +564,11 @@ export function ProductShell({
 
       {mobileOpen ? (
         <dialog ref={mobileDrawerRef} className="drawer" open aria-modal="true" aria-label="Mobile product navigation">
-          <header><div><span className="suite-user-avatar" aria-hidden="true">{sessionInitial}</span><span><strong>{sessionLabel}</strong><small>{sessionDetail}</small></span></div><button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)}><AppIcon name="close" size="lg" /></button></header>
+          <header><div><span className="suite-user-avatar" aria-hidden="true">{sessionInitial}</span><span><strong><bdi>{sessionLabel}</bdi></strong><small><bdi>{sessionContext ?? sessionDetail}</bdi></small></span></div><button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)}><AppIcon name="close" size="lg" /></button></header>
+          <OrganizationDrawerSection onSwitched={() => setMobileOpen(false)} />
           <span className="drawer-label">APPLICATION</span>
-          <Link className={activeSection === "home" ? "active" : undefined} aria-current={activeSection === "home" ? "page" : undefined} href={productHref("/")}><span aria-hidden="true"><AppIcon name="home" size="md" /></span>Home</Link>
-          {appSwitcher !== undefined ? (
+          {offersSection("home") ? <Link className={activeSection === "home" ? "active" : undefined} aria-current={activeSection === "home" ? "page" : undefined} href={productHref("/")}><span aria-hidden="true"><AppIcon name="home" size="md" /></span>Home</Link> : null}
+          {!offersSection("search") ? null : appSwitcher !== undefined ? (
             <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href={productHref("/search/events/")}><span aria-hidden="true"><AppIcon name="search" size="md" /></span>{appName}</Link>
           ) : dataMode === "backend" ? (
             displayedCatalogState === "loading" && displayedBackendApps.length === 0 ? (
@@ -499,7 +583,7 @@ export function ProductShell({
               {displayedBackendApps.map((app) => {
               const label = appLabel(app);
               const selected = app.appId === displayedBackendAppId;
-              const contents = <><span aria-hidden="true">{label.charAt(0).toUpperCase() || "⌕"}</span>{label}{selected ? <b>Selected</b> : null}</>;
+              const contents = <><span aria-hidden="true">{initialOf(label) || "⌕"}</span>{label}{selected ? <b>Selected</b> : null}</>;
               return backendAppCatalog || catalogActionsBlocked
                 ? <button className={selected ? "selected-app" : undefined} type="button" disabled={catalogActionsBlocked} onClick={() => { backendAppCatalog?.onSelect(app.appId); setMobileOpen(false); }} key={`mobile-${app.appId}`}>{contents}</button>
                 : <Link className={selected ? "selected-app" : undefined} href={backendAppSearchHref(app.appId)} key={`mobile-${app.appId}`}>{contents}</Link>;
@@ -508,17 +592,21 @@ export function ProductShell({
           ) : (
             <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href={productHref("/search/events/")}><span aria-hidden="true"><AppIcon name="search" size="md" /></span>Search &amp; Reporting</Link>
           )}
-          <Link className={activeSection === "analytics" ? "active" : undefined} aria-current={activeSection === "analytics" ? "page" : undefined} href={productHref("/analytics/")}><span aria-hidden="true"><AppIcon name="analytics" size="md" /></span>Analytics</Link>
-          <Link className={activeSection === "datasets" ? "active" : undefined} aria-current={activeSection === "datasets" ? "page" : undefined} href={productHref("/datasets/")}><span aria-hidden="true"><AppIcon name="database" size="md" /></span>Datasets</Link>
-          <Link className={activeSection === "reports" ? "active" : undefined} aria-current={activeSection === "reports" ? "page" : undefined} href={productHref("/reports/saved-searches/")}><span aria-hidden="true"><AppIcon name="file" size="md" /></span>Reports</Link>
-          <Link className={activeSection === "dashboards" ? "active" : undefined} aria-current={activeSection === "dashboards" ? "page" : undefined} href={productHref("/dashboards/")}><span aria-hidden="true"><AppIcon name="dashboard" size="md" /></span>Dashboards</Link>
-          <span className="drawer-label">SYSTEM</span>
-          <Link className={activeSection === "activity" ? "active" : undefined} aria-current={activeSection === "activity" ? "page" : undefined} href={productHref("/activity/jobs/")}><span aria-hidden="true"><AppIcon name="activity" size="md" /></span>Activity {dataMode === "demo" ? <b className="activity-count">1</b> : null}</Link>
-          <Link className={activeSection === "admin" ? "active" : undefined} aria-current={activeSection === "admin" ? "page" : undefined} href={productHref("/admin/")}><span aria-hidden="true"><AppIcon name="settings" size="md" /></span>Administration</Link>
+          {offersSection("analytics") ? <Link className={activeSection === "analytics" ? "active" : undefined} aria-current={activeSection === "analytics" ? "page" : undefined} href={productHref("/analytics/")}><span aria-hidden="true"><AppIcon name="analytics" size="md" /></span>Analytics</Link> : null}
+          {offersSection("datasets") ? <Link className={activeSection === "datasets" ? "active" : undefined} aria-current={activeSection === "datasets" ? "page" : undefined} href={productHref("/datasets/")}><span aria-hidden="true"><AppIcon name="database" size="md" /></span>Datasets</Link> : null}
+          {offersSection("reports") ? <Link className={activeSection === "reports" ? "active" : undefined} aria-current={activeSection === "reports" ? "page" : undefined} href={productHref("/reports/saved-searches/")}><span aria-hidden="true"><AppIcon name="file" size="md" /></span>Reports</Link> : null}
+          {offersSection("dashboards") ? <Link className={activeSection === "dashboards" ? "active" : undefined} aria-current={activeSection === "dashboards" ? "page" : undefined} href={productHref("/dashboards/")}><span aria-hidden="true"><AppIcon name="dashboard" size="md" /></span>Dashboards</Link> : null}
+          {offersSection("activity") || offersAdmin ? <span className="drawer-label">SYSTEM</span> : null}
+          {offersSection("activity") ? <Link className={activeSection === "activity" ? "active" : undefined} aria-current={activeSection === "activity" ? "page" : undefined} href={productHref("/activity/jobs/")}><span aria-hidden="true"><AppIcon name="activity" size="md" /></span>Activity {dataMode === "demo" ? <b className="activity-count">1</b> : null}</Link> : null}
+          {offersAdmin ? <Link className={activeSection === "admin" ? "active" : undefined} aria-current={activeSection === "admin" ? "page" : undefined} href={productHref("/admin/")}><span aria-hidden="true"><AppIcon name="settings" size="md" /></span>Administration</Link> : null}
           <span className="drawer-label">HELP</span>
           <a className={activeSection === "help" ? "active" : undefined} aria-current={activeSection === "help" ? "page" : undefined} href={productHref("/help/")}><span aria-hidden="true"><AppIcon name="file" size="md" /></span>Documentation</a>
           <span className="drawer-rule" />
-          <Link href="/signin/" onClick={onSignOut}><span aria-hidden="true"><AppIcon name={localSession ? "info" : "logout"} size="md" /></span>{localSession ? "About local access" : "Sign out"}</Link>
+          {identityActive ? (
+            <DrawerSessionActions />
+          ) : (
+            <Link href="/signin/" onClick={onSignOut}><span aria-hidden="true"><AppIcon name={localSession ? "info" : "logout"} size="md" /></span>{localSession ? "About local access" : "Sign out"}</Link>
+          )}
         </dialog>
       ) : null}
       {mobileOpen ? <button className="drawer-backdrop" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} /> : null}
@@ -530,7 +618,9 @@ export function ProductShell({
             <span>{dataMode === "backend" ? backendDisclosure : "Metrics, records, and management actions on this page are sample preview data."}</span>
           </output>
         ) : null}
-        {children}
+        <ProductAccessGate section={activeSection} onSwitchOrganization={openOrganizationChooser}>
+          {children}
+        </ProductAccessGate>
       </main>
       {overlays}
     </div>
@@ -554,5 +644,22 @@ export function PageHeading({ eyebrow, title, description, actions }: PageHeadin
       </div>
       {actions === undefined ? null : <div className="suite-page-actions">{actions}</div>}
     </header>
+  );
+}
+
+/** The drawer's sign-out entries once identity is configured: sign out, or sign in again when signed out. */
+function DrawerSessionActions() {
+  const shellIdentity = useShellIdentity();
+  const { pending, error, signOut } = useShellSignOut();
+  if (shellIdentity.mode !== "signed_in") {
+    return <a href={signInHref(typeof window === "undefined" ? null : returnPathFor(window.location))}><span aria-hidden="true"><AppIcon name="logout" size="md" /></span>Sign in</a>;
+  }
+  return (
+    <>
+      <button className="drawer-action" type="button" aria-disabled={pending || undefined} onClick={() => { if (!pending) void signOut(); }}>
+        <span aria-hidden="true"><AppIcon name="logout" size="md" /></span>{pending ? "Signing out…" : "Sign out"}
+      </button>
+      {error === null ? null : <p className="suite-identity-error drawer-org-error" role="alert">{error}</p>}
+    </>
   );
 }

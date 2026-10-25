@@ -48,20 +48,22 @@ is:
 | 19 | `app/search-workspace/search-fields.css` | fields rail and events |
 | 20 | `app/search-workspace/search-results.css` | patterns, statistics and result grids |
 | 21 | `app/admin/admin.css` | administration and knowledge surfaces |
-| 22 | `app/activity/activity.css` | activity console |
-| 23 | `app/datasets/datasets.css` | dataset cards and field catalog |
-| 24 | `app/signin/signin.css` | sign-in page |
-| 25 | `app/home.css` | landing page |
-| 26 | `app/_components/backend-resource-state.css` | connected-backend empty/error state |
-| 27 | `app/dashboards/dashboards.css` | dashboard page rules |
-| 28 | `app/analytics/analytics.css` | analytics console; `analytics-` namespace |
-| 29 | `app/dashboards/operations-dashboard.css` | operations dashboard; `operations-` namespace |
-| 30 | `app/reports/reports.css` | reports and saved searches; `reports-` namespace |
-| 31 | `app/reports/alerts.css` | alert management; `alerts-` namespace |
-| 32 | `app/search-workspace/components/workspace-dialogs.css` | workspace dialogs; `workspace-dialog-` namespace |
-| 33 | `app/search-workspace/panels/visualization-panel.css` | result visualizations; `visualization-` namespace |
-| 34 | `app/help/help.css` | Help documentation, navigation, and search; `help-` namespace |
-| 35 | `app/styles/interaction.css` | coarse-pointer and reduced-motion floors |
+| 22 | `app/admin/site-directory.css` | site-admin users and organizations panels; `site-directory-` namespace |
+| 23 | `app/activity/activity.css` | activity console |
+| 24 | `app/datasets/datasets.css` | dataset cards and field catalog |
+| 25 | `app/signin/signin.css` | sign-in page |
+| 26 | `app/home.css` | landing page |
+| 27 | `app/_components/backend-resource-state.css` | connected-backend empty/error state |
+| 28 | `app/dashboards/dashboards.css` | dashboard page rules |
+| 29 | `app/analytics/analytics.css` | analytics console; `analytics-` namespace |
+| 30 | `app/dashboards/operations-dashboard.css` | operations dashboard; `operations-` namespace |
+| 31 | `app/reports/reports.css` | reports and saved searches; `reports-` namespace |
+| 32 | `app/reports/alerts.css` | alert management; `alerts-` namespace |
+| 33 | `app/search-workspace/components/workspace-dialogs.css` | workspace dialogs; `workspace-dialog-` namespace |
+| 34 | `app/search-workspace/panels/visualization-panel.css` | result visualizations; `visualization-` namespace |
+| 35 | `app/help/help.css` | Help documentation, navigation, and search; `help-` namespace |
+| 36 | `app/admin/members.css` | Members & invitations panel and dialogs; `members-` namespace |
+| 37 | `app/styles/interaction.css` | coarse-pointer and reduced-motion floors |
 
 The five palette files must follow both base token files: a palette's light
 block is written as `:root:where([data-palette="…"])` so it keeps base light's
@@ -511,8 +513,9 @@ its token file; everything else is the guardrails' job.
    `app/styles/tokens-palette-<name>.css` and `@import` it in
    `app/styles/index.css` after `tokens-scale.css`, among the other palette
    files in name order, and add its row to the cascade table under
-   [Where a rule lives](#where-a-rule-lives) (no test holds that table to
-   `index.css`). The file holds exactly two blocks, light then dark, and
+   [Where a rule lives](#where-a-rule-lives) (the style invariants fail
+   until the table reads exactly as `index.css` imports). The file holds
+   exactly two blocks, light then dark, and
    nothing that is not a token (or `color-scheme`).
 2. **Add hue steps to tier 1.** Any colour the palette needs that no
    primitive already provides goes into the base `:root` of
@@ -613,7 +616,23 @@ class ledgers, and selector reachability. Its palette section holds
 any prelude but the four above, and measures every mandated text pairing in
 all twelve scopes. The reverse markup-to-CSS feature-prefix list is explicit
 rather than derived; when adding a feature stylesheet, add its namespace to
-that list as part of the same change.
+that list as part of the same change. The cascade table above is held to
+`index.css` row for row, and every namespace its ownership column names must
+be on that list.
+
+Its identity section holds the surfaces that print user-supplied text (the
+organization switcher, the user summary and avatars, the access states, the
+members panel, the site directory and the sign-in cards) to three further
+rules: no identity rule paints a shared primitive (`.button`, `.badge`,
+`.status`, `.table`, the drawer, the modal card, `.backend-resource-state`)
+from outside it; no identity rule writes a colour, type, face, corner or
+stacking literal, even one an existing ledger row would admit; and every ink
+those surfaces lay on a ground, listed with the rule that paints it, clears
+its floor in every palette and mode (the palette's text floor, AA for status
+inks, 3:1 for icons and state stripes). A name, address or description the
+user typed is wrapped in `<bdi>` so a right-to-left value cannot reorder the
+text around it, and a container that prints one breaks a long unbroken value
+(`overflow-wrap: anywhere`) or truncates it with its full text on `title`.
 
 `scripts/style-guardrails.test.mjs` verifies that lint and CI wiring cannot be
 silently disabled and covers shorthand/inline spellings that property-based

@@ -1,0 +1,1485 @@
+[
+  {
+    "name": "search_first_append_advances_state",
+    "trigger": "search_attempt_audit_event_advances_and_prunes",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)"
+    ],
+    "verify_sql": "SELECT first_sequence, next_sequence, retained_count FROM search_attempt_audit_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "1|2|1"
+    ]
+  },
+  {
+    "name": "search_append_at_capacity_prunes_oldest",
+    "trigger": "search_attempt_audit_event_advances_and_prunes",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 2, 1002, 'browser', 'alice', 'user', 'alice', 'job-2', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 3, 1003, 'browser', 'alice', 'user', 'alice', 'job-3', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 2, 1002, 'browser', 'alice', 'user', 'alice', 'job-2', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "verify_sql": "SELECT sequence, search_job_id FROM search_attempt_audit_events WHERE tenant_id = 't1' ORDER BY sequence",
+    "verify_rows": [
+      "2|job-2",
+      "3|job-3"
+    ]
+  },
+  {
+    "name": "search_append_accounting_failure_without_guards",
+    "trigger": "search_attempt_audit_event_advances_and_prunes",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "DROP TRIGGER IF EXISTS search_attempt_audit_event_identity_collision_is_forbidden ON search_attempt_audit_events",
+      "DROP TRIGGER IF EXISTS search_attempt_audit_event_insert_requires_current_state ON search_attempt_audit_events"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 5, 1005, 'browser', 'alice', 'user', 'alice', 'job-5', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "reject",
+    "message": "search-attempt audit event accounting failed",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "DROP TRIGGER IF EXISTS search_attempt_audit_event_identity_collision_is_forbidden",
+      "DROP TRIGGER IF EXISTS search_attempt_audit_event_insert_requires_current_state"
+    ],
+    "note": "The BEFORE INSERT state guards make the accounting failure unreachable; the scenario drops them so the AFTER trigger's own check is exercised."
+  },
+  {
+    "name": "search_direct_delete_is_not_rolling_prune",
+    "trigger": "search_attempt_audit_event_delete_requires_rolling_prune",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "DELETE FROM search_attempt_audit_events WHERE tenant_id = 't1' AND sequence = 1",
+    "expect": "reject",
+    "message": "search-attempt audit event deletion is not a rolling prune",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ]
+  },
+  {
+    "name": "search_rolling_prune_delete_is_allowed",
+    "trigger": "search_attempt_audit_event_delete_requires_rolling_prune",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 2, 1002, 'browser', 'alice', 'user', 'alice', 'job-2', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 3, 1003, 'browser', 'alice', 'user', 'alice', 'job-3', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 2, 1002, 'browser', 'alice', 'user', 'alice', 'job-2', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "verify_sql": "SELECT first_sequence, next_sequence, retained_count FROM search_attempt_audit_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "2|4|2"
+    ]
+  },
+  {
+    "name": "search_delete_matching_no_row_is_allowed",
+    "trigger": "search_attempt_audit_event_delete_requires_rolling_prune",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "DELETE FROM search_attempt_audit_events WHERE tenant_id = 't1' AND sequence = 99",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ]
+  },
+  {
+    "name": "search_identity_collision_reports_state_guard_first",
+    "trigger": "search_attempt_audit_event_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-9', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "reject",
+    "message": "search-attempt audit tenant state is invalid or sequence is exhausted",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "note": "SQLite runs insert_requires_current_state before the identity trigger, and a retained sequence is always below next_sequence, so the state message wins; the identity message is defence in depth."
+  },
+  {
+    "name": "search_identity_collision_with_rewound_state_is_rejected",
+    "trigger": "search_attempt_audit_event_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+      "DROP TRIGGER IF EXISTS search_attempt_audit_state_transition_is_valid ON search_attempt_audit_tenant_state",
+      "UPDATE search_attempt_audit_tenant_state SET next_sequence = 1, retained_count = 0 WHERE tenant_id = 't1'"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-9', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "reject",
+    "message": "search-attempt audit event identity already exists",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+      "DROP TRIGGER IF EXISTS search_attempt_audit_state_transition_is_valid",
+      "UPDATE search_attempt_audit_tenant_state SET next_sequence = 1, retained_count = 0 WHERE tenant_id = 't1'"
+    ],
+    "note": "Rewinds the tenant state (dropping lane audit_2's transition guard) so only the identity trigger rejects."
+  },
+  {
+    "name": "search_fresh_identity_is_accepted",
+    "trigger": "search_attempt_audit_event_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 2, 1002, 'browser', 'alice', 'user', 'alice', 'job-2', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ]
+  },
+  {
+    "name": "search_append_without_tenant_state_is_rejected",
+    "trigger": "search_attempt_audit_event_insert_requires_current_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t2', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "reject",
+    "message": "search-attempt audit tenant state is invalid or sequence is exhausted",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)"
+    ]
+  },
+  {
+    "name": "search_append_with_skipped_sequence_is_rejected",
+    "trigger": "search_attempt_audit_event_insert_requires_current_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 3, 1003, 'browser', 'alice', 'user', 'alice', 'job-3', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "reject",
+    "message": "search-attempt audit tenant state is invalid or sequence is exhausted",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ]
+  },
+  {
+    "name": "search_append_at_next_sequence_is_accepted",
+    "trigger": "search_attempt_audit_event_insert_requires_current_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 2, 1002, 'browser', 'alice', 'user', 'alice', 'job-2', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "verify_sql": "SELECT first_sequence, next_sequence, retained_count FROM search_attempt_audit_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "1|3|2"
+    ]
+  },
+  {
+    "name": "search_retained_job_identity_is_rejected",
+    "trigger": "search_attempt_audit_event_job_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 2, 1002, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "reject",
+    "message": "search-attempt audit retained job identity already exists",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ]
+  },
+  {
+    "name": "search_pruned_job_identity_may_be_reused",
+    "trigger": "search_attempt_audit_event_job_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 2, 1002, 'browser', 'alice', 'user', 'alice', 'job-2', NULL, NULL, NULL, NULL, NULL)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 3, 1003, 'browser', 'alice', 'user', 'alice', 'job-3', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 4, 1004, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 2, 1002, 'browser', 'alice', 'user', 'alice', 'job-2', NULL, NULL, NULL, NULL, NULL)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 3, 1003, 'browser', 'alice', 'user', 'alice', 'job-3', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "verify_sql": "SELECT sequence, search_job_id FROM search_attempt_audit_events WHERE tenant_id = 't1' ORDER BY sequence",
+    "verify_rows": [
+      "3|job-3",
+      "4|job-1"
+    ]
+  },
+  {
+    "name": "search_job_identity_reported_before_sequence_identity",
+    "trigger": "search_attempt_audit_event_job_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 2, 1002, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "reject",
+    "message": "search-attempt audit retained job identity already exists",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "note": "Valid next sequence and a retained job id: only the job trigger rejects."
+  },
+  {
+    "name": "search_partial_snapshot_is_rejected",
+    "trigger": "search_attempt_audit_event_knowledge_snapshot_is_complete",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', decode('1111111111111111111111111111111111111111111111111111111111111111', 'hex'), NULL, NULL, NULL, NULL)",
+    "expect": "reject",
+    "message": "search-attempt audit knowledge snapshot must be absent or exact",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)"
+    ],
+    "sqlite_statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', X'1111111111111111111111111111111111111111111111111111111111111111', NULL, NULL, NULL, NULL)"
+  },
+  {
+    "name": "search_partial_snapshot_reported_before_other_guards",
+    "trigger": "search_attempt_audit_event_knowledge_snapshot_is_complete",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', decode('1111111111111111111111111111111111111111111111111111111111111111', 'hex'), NULL, NULL, NULL, NULL)",
+    "expect": "reject",
+    "message": "search-attempt audit knowledge snapshot must be absent or exact",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "sqlite_statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', X'1111111111111111111111111111111111111111111111111111111111111111', NULL, NULL, NULL, NULL)",
+    "note": "Every BEFORE INSERT trigger rejects this row; SQLite fires the snapshot trigger first."
+  },
+  {
+    "name": "search_exact_snapshot_is_accepted",
+    "trigger": "search_attempt_audit_event_knowledge_snapshot_is_complete",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', decode('1111111111111111111111111111111111111111111111111111111111111111', 'hex'), 7, decode('2222222222222222222222222222222222222222222222222222222222222222', 'hex'), 3, 1)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)"
+    ],
+    "sqlite_statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', X'1111111111111111111111111111111111111111111111111111111111111111', 7, X'2222222222222222222222222222222222222222222222222222222222222222', 3, 1)",
+    "verify_sql": "SELECT knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_object_count FROM search_attempt_audit_events",
+    "verify_rows": [
+      "7|3"
+    ]
+  },
+  {
+    "name": "search_rolling_prune_advances_first_sequence",
+    "trigger": "search_attempt_audit_event_prune_advances_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 2, 1002, 'browser', 'alice', 'user', 'alice', 'job-2', NULL, NULL, NULL, NULL, NULL)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 3, 1003, 'browser', 'alice', 'user', 'alice', 'job-3', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 4, 1004, 'browser', 'alice', 'user', 'alice', 'job-4', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 2, 1002, 'browser', 'alice', 'user', 'alice', 'job-2', NULL, NULL, NULL, NULL, NULL)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 3, 1003, 'browser', 'alice', 'user', 'alice', 'job-3', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "verify_sql": "SELECT first_sequence, next_sequence, retained_count FROM search_attempt_audit_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "3|5|2"
+    ]
+  },
+  {
+    "name": "search_prune_accounting_failure_without_delete_guard",
+    "trigger": "search_attempt_audit_event_prune_advances_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+      "DROP TRIGGER IF EXISTS search_attempt_audit_event_delete_requires_rolling_prune ON search_attempt_audit_events"
+    ],
+    "statement": "DELETE FROM search_attempt_audit_events WHERE tenant_id = 't1' AND sequence = 1",
+    "expect": "reject",
+    "message": "search-attempt audit rolling prune accounting failed",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)",
+      "DROP TRIGGER IF EXISTS search_attempt_audit_event_delete_requires_rolling_prune"
+    ],
+    "note": "The BEFORE DELETE guard makes this unreachable; the scenario drops it so the AFTER trigger's own check is exercised."
+  },
+  {
+    "name": "search_event_update_is_rejected",
+    "trigger": "search_attempt_audit_event_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "UPDATE search_attempt_audit_events SET owner_id = 'bob' WHERE tenant_id = 't1' AND sequence = 1",
+    "expect": "reject",
+    "message": "search-attempt audit events cannot be updated",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ]
+  },
+  {
+    "name": "search_event_update_matching_no_row_is_accepted",
+    "trigger": "search_attempt_audit_event_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "UPDATE search_attempt_audit_events SET owner_id = 'bob' WHERE tenant_id = 't1' AND sequence = 99",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO search_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, maximum_retained_attempts) VALUES ('t1', 1, 1, 0, 2)",
+      "INSERT INTO search_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, owner_id, search_job_id, knowledge_snapshot_sha256, knowledge_snapshot_tenant_catalog_revision, knowledge_snapshot_tenant_catalog_state_token, knowledge_snapshot_object_count, knowledge_snapshot_lookup_asset_count) VALUES ('t1', 1, 1001, 'browser', 'alice', 'user', 'alice', 'job-1', NULL, NULL, NULL, NULL, NULL)"
+    ]
+  },
+  {
+    "name": "feature_first_append_advances_state",
+    "trigger": "feature_operation_audit_event_advances_and_prunes_tenant_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)"
+    ],
+    "statement": "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)"
+    ],
+    "verify_sql": "SELECT first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro FROM feature_operation_audit_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "1|2|1|1001"
+    ]
+  },
+  {
+    "name": "feature_append_at_capacity_prunes_oldest",
+    "trigger": "feature_operation_audit_event_advances_and_prunes_tenant_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "ALTER TABLE feature_operation_audit_events DISABLE TRIGGER USER",
+      "INSERT INTO feature_operation_audit_events SELECT 't1', i, 1000 + i, 1, 2, 3, 4, 5 FROM generate_series(1, 100000) AS s(i)",
+      "ALTER TABLE feature_operation_audit_events ENABLE TRIGGER USER",
+      "ALTER TABLE feature_operation_audit_tenant_state DISABLE TRIGGER USER",
+      "UPDATE feature_operation_audit_tenant_state SET next_sequence = 100001, retained_count = 100000, last_occurred_at_unix_micro = 101000 WHERE tenant_id = 't1'",
+      "ALTER TABLE feature_operation_audit_tenant_state ENABLE TRIGGER USER"
+    ],
+    "statement": "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 100001, 101001, 1, 2, 3, 4, 5)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "WITH RECURSIVE s(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM s WHERE i < 100000) INSERT INTO feature_operation_audit_events SELECT 't1', i, 1000 + i, 1, 2, 3, 4, 5 FROM s"
+    ],
+    "verify_sql": "SELECT first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro, (SELECT min(sequence) FROM feature_operation_audit_events) FROM feature_operation_audit_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "2|100002|100000|101001|2"
+    ],
+    "note": "Heavy: fills the 100000-event window first."
+  },
+  {
+    "name": "feature_append_accounting_failure_without_guard",
+    "trigger": "feature_operation_audit_event_advances_and_prunes_tenant_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "DROP TRIGGER IF EXISTS feature_operation_audit_event_insert_requires_current_state ON feature_operation_audit_events"
+    ],
+    "statement": "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 7, 1007, 1, 2, 3, 4, 5)",
+    "expect": "reject",
+    "message": "feature-operation audit event accounting failed",
+    "sqlite_setup_sql": [
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "DROP TRIGGER IF EXISTS feature_operation_audit_event_insert_requires_current_state"
+    ],
+    "note": "The BEFORE INSERT guard makes this unreachable; the scenario drops it so the AFTER trigger's own check is exercised."
+  },
+  {
+    "name": "feature_direct_delete_is_rejected",
+    "trigger": "feature_operation_audit_event_delete_requires_rolling_prune",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)"
+    ],
+    "statement": "DELETE FROM feature_operation_audit_events WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "feature-operation audit events can only be deleted by rolling prune",
+    "sqlite_setup_sql": [
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)"
+    ]
+  },
+  {
+    "name": "feature_delete_matching_no_row_is_accepted",
+    "trigger": "feature_operation_audit_event_delete_requires_rolling_prune",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)"
+    ],
+    "statement": "DELETE FROM feature_operation_audit_events WHERE tenant_id = 't2'",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)"
+    ]
+  },
+  {
+    "name": "feature_append_without_tenant_state_is_rejected",
+    "trigger": "feature_operation_audit_event_insert_requires_current_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)"
+    ],
+    "statement": "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t2', 1, 1001, 1, 2, 3, 4, 5)",
+    "expect": "reject",
+    "message": "feature-operation audit tenant state is invalid or sequence is exhausted",
+    "sqlite_setup_sql": [
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)"
+    ]
+  },
+  {
+    "name": "feature_append_with_wrong_sequence_is_rejected",
+    "trigger": "feature_operation_audit_event_insert_requires_current_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)"
+    ],
+    "statement": "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)",
+    "expect": "reject",
+    "message": "feature-operation audit tenant state is invalid or sequence is exhausted",
+    "sqlite_setup_sql": [
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)"
+    ]
+  },
+  {
+    "name": "feature_append_older_than_last_occurrence_is_rejected",
+    "trigger": "feature_operation_audit_event_insert_requires_current_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)"
+    ],
+    "statement": "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 2, 1000, 1, 2, 3, 4, 5)",
+    "expect": "reject",
+    "message": "feature-operation audit tenant state is invalid or sequence is exhausted",
+    "sqlite_setup_sql": [
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)"
+    ]
+  },
+  {
+    "name": "feature_append_at_last_occurrence_is_accepted",
+    "trigger": "feature_operation_audit_event_insert_requires_current_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)"
+    ],
+    "statement": "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 2, 1001, 1, 2, 3, 4, 5)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)"
+    ],
+    "verify_sql": "SELECT first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro FROM feature_operation_audit_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "1|3|2|1001"
+    ]
+  },
+  {
+    "name": "feature_rolling_prune_advances_first_sequence",
+    "trigger": "feature_operation_audit_event_prune_advances_tenant_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "ALTER TABLE feature_operation_audit_events DISABLE TRIGGER USER",
+      "INSERT INTO feature_operation_audit_events SELECT 't1', i, 1000 + i, 1, 2, 3, 4, 5 FROM generate_series(1, 100000) AS s(i)",
+      "ALTER TABLE feature_operation_audit_events ENABLE TRIGGER USER",
+      "ALTER TABLE feature_operation_audit_tenant_state DISABLE TRIGGER USER",
+      "UPDATE feature_operation_audit_tenant_state SET next_sequence = 100001, retained_count = 100000, last_occurred_at_unix_micro = 101000 WHERE tenant_id = 't1'",
+      "ALTER TABLE feature_operation_audit_tenant_state ENABLE TRIGGER USER"
+    ],
+    "statement": "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 100001, 101001, 1, 2, 3, 4, 5)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "WITH RECURSIVE s(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM s WHERE i < 100000) INSERT INTO feature_operation_audit_events SELECT 't1', i, 1000 + i, 1, 2, 3, 4, 5 FROM s"
+    ],
+    "verify_sql": "SELECT first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro FROM feature_operation_audit_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "2|100002|100000|101001"
+    ],
+    "note": "Heavy: fills the 100000-event window first."
+  },
+  {
+    "name": "feature_prune_failure_without_delete_guard",
+    "trigger": "feature_operation_audit_event_prune_advances_tenant_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)",
+      "DROP TRIGGER IF EXISTS feature_operation_audit_event_delete_requires_rolling_prune ON feature_operation_audit_events"
+    ],
+    "statement": "DELETE FROM feature_operation_audit_events WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "feature-operation audit rolling prune failed",
+    "sqlite_setup_sql": [
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)",
+      "DROP TRIGGER IF EXISTS feature_operation_audit_event_delete_requires_rolling_prune"
+    ],
+    "note": "The BEFORE DELETE guard makes this unreachable; the scenario drops it so the AFTER trigger's own check is exercised."
+  },
+  {
+    "name": "feature_event_update_is_rejected",
+    "trigger": "feature_operation_audit_event_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)"
+    ],
+    "statement": "UPDATE feature_operation_audit_events SET items = 9 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "feature-operation audit events cannot be updated",
+    "sqlite_setup_sql": [
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)"
+    ]
+  },
+  {
+    "name": "feature_event_update_matching_no_row_is_accepted",
+    "trigger": "feature_operation_audit_event_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)"
+    ],
+    "statement": "UPDATE feature_operation_audit_events SET items = 9 WHERE tenant_id = 't2'",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO feature_operation_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count, last_occurred_at_unix_micro) VALUES ('t1', 1, 1, 0, NULL)",
+      "INSERT INTO feature_operation_audit_events (tenant_id, sequence, occurred_at_unix_micro, feature, operation, outcome, items, bytes) VALUES ('t1', 1, 1001, 1, 2, 3, 4, 5)"
+    ]
+  },
+  {
+    "name": "knowledge_state_delete_is_rejected",
+    "trigger": "knowledge_attempt_audit_state_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ],
+    "statement": "DELETE FROM knowledge_attempt_audit_tenant_state WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "knowledge-attempt audit tenant state cannot be deleted",
+    "sqlite_setup_sql": [
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ]
+  },
+  {
+    "name": "knowledge_state_delete_matching_no_row_is_accepted",
+    "trigger": "knowledge_attempt_audit_state_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ],
+    "statement": "DELETE FROM knowledge_attempt_audit_tenant_state WHERE tenant_id = 't2'",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ]
+  },
+  {
+    "name": "knowledge_state_duplicate_is_rejected",
+    "trigger": "knowledge_attempt_audit_state_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ],
+    "statement": "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)",
+    "expect": "reject",
+    "message": "knowledge-attempt audit tenant state already exists",
+    "sqlite_setup_sql": [
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ]
+  },
+  {
+    "name": "knowledge_state_duplicate_on_conflict_is_still_rejected",
+    "trigger": "knowledge_attempt_audit_state_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ],
+    "statement": "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0) ON CONFLICT (tenant_id) DO NOTHING",
+    "expect": "reject",
+    "message": "knowledge-attempt audit tenant state already exists",
+    "sqlite_setup_sql": [
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ],
+    "note": "BEFORE INSERT triggers run before ON CONFLICT in both engines."
+  },
+  {
+    "name": "knowledge_state_duplicate_with_bad_shape_reports_shape_first",
+    "trigger": "knowledge_attempt_audit_state_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ],
+    "statement": "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 2, 2, 0)",
+    "expect": "reject",
+    "message": "knowledge-attempt audit tenant state must begin empty",
+    "sqlite_setup_sql": [
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ],
+    "note": "SQLite fires initial_shape_is_valid before identity_collision."
+  },
+  {
+    "name": "knowledge_state_new_tenant_is_accepted",
+    "trigger": "knowledge_attempt_audit_state_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ],
+    "statement": "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t2', 1, 1, 0)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ]
+  },
+  {
+    "name": "knowledge_state_nonempty_start_is_rejected",
+    "trigger": "knowledge_attempt_audit_state_initial_shape_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 5, 5, 0)",
+    "expect": "reject",
+    "message": "knowledge-attempt audit tenant state must begin empty",
+    "sqlite_setup_sql": []
+  },
+  {
+    "name": "knowledge_state_nonzero_count_is_rejected",
+    "trigger": "knowledge_attempt_audit_state_initial_shape_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 2, 1)",
+    "expect": "reject",
+    "message": "knowledge-attempt audit tenant state must begin empty",
+    "sqlite_setup_sql": []
+  },
+  {
+    "name": "knowledge_state_empty_start_is_accepted",
+    "trigger": "knowledge_attempt_audit_state_initial_shape_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [],
+    "verify_sql": "SELECT first_sequence, next_sequence, retained_count FROM knowledge_attempt_audit_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "1|1|0"
+    ]
+  },
+  {
+    "name": "knowledge_state_growth_without_event_is_rejected",
+    "trigger": "knowledge_attempt_audit_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ],
+    "statement": "UPDATE knowledge_attempt_audit_tenant_state SET next_sequence = 2, retained_count = 1 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "knowledge-attempt audit tenant state transition is invalid",
+    "sqlite_setup_sql": [
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ]
+  },
+  {
+    "name": "knowledge_state_unchanged_update_is_rejected",
+    "trigger": "knowledge_attempt_audit_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ],
+    "statement": "UPDATE knowledge_attempt_audit_tenant_state SET retained_count = retained_count WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "knowledge-attempt audit tenant state transition is invalid",
+    "sqlite_setup_sql": [
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ]
+  },
+  {
+    "name": "knowledge_state_tenant_rename_is_rejected",
+    "trigger": "knowledge_attempt_audit_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)",
+      "DROP TRIGGER IF EXISTS knowledge_attempt_audit_event_advances_and_prunes ON knowledge_attempt_audit_events",
+      "INSERT INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason, app_id, knowledge_object_id, object_type, object_version, sharing_scope) VALUES ('t1', 1, 1001, 'browser', 'admin', 'administrator', 'create', 'rejected', 'invalid_definition', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "UPDATE knowledge_attempt_audit_tenant_state SET tenant_id = 't2', next_sequence = 2, retained_count = 1 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "knowledge-attempt audit tenant state transition is invalid",
+    "sqlite_setup_sql": [
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)",
+      "DROP TRIGGER IF EXISTS knowledge_attempt_audit_event_advances_and_prunes",
+      "INSERT INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason, app_id, knowledge_object_id, object_type, object_version, sharing_scope) VALUES ('t1', 1, 1001, 'browser', 'admin', 'administrator', 'create', 'rejected', 'invalid_definition', NULL, NULL, NULL, NULL, NULL)"
+    ]
+  },
+  {
+    "name": "knowledge_state_growth_with_event_is_accepted",
+    "trigger": "knowledge_attempt_audit_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)",
+      "DROP TRIGGER IF EXISTS knowledge_attempt_audit_event_advances_and_prunes ON knowledge_attempt_audit_events",
+      "INSERT INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason, app_id, knowledge_object_id, object_type, object_version, sharing_scope) VALUES ('t1', 1, 1001, 'browser', 'admin', 'administrator', 'create', 'rejected', 'invalid_definition', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "UPDATE knowledge_attempt_audit_tenant_state SET next_sequence = 2, retained_count = 1 WHERE tenant_id = 't1'",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)",
+      "DROP TRIGGER IF EXISTS knowledge_attempt_audit_event_advances_and_prunes",
+      "INSERT INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason, app_id, knowledge_object_id, object_type, object_version, sharing_scope) VALUES ('t1', 1, 1001, 'browser', 'admin', 'administrator', 'create', 'rejected', 'invalid_definition', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "verify_sql": "SELECT first_sequence, next_sequence, retained_count FROM knowledge_attempt_audit_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "1|2|1"
+    ]
+  },
+  {
+    "name": "knowledge_state_growth_skipping_sequence_is_rejected",
+    "trigger": "knowledge_attempt_audit_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)",
+      "DROP TRIGGER IF EXISTS knowledge_attempt_audit_event_advances_and_prunes ON knowledge_attempt_audit_events",
+      "INSERT INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason, app_id, knowledge_object_id, object_type, object_version, sharing_scope) VALUES ('t1', 1, 1001, 'browser', 'admin', 'administrator', 'create', 'rejected', 'invalid_definition', NULL, NULL, NULL, NULL, NULL)"
+    ],
+    "statement": "UPDATE knowledge_attempt_audit_tenant_state SET next_sequence = 3, retained_count = 2 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "knowledge-attempt audit tenant state transition is invalid",
+    "sqlite_setup_sql": [
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)",
+      "DROP TRIGGER IF EXISTS knowledge_attempt_audit_event_advances_and_prunes",
+      "INSERT INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason, app_id, knowledge_object_id, object_type, object_version, sharing_scope) VALUES ('t1', 1, 1001, 'browser', 'admin', 'administrator', 'create', 'rejected', 'invalid_definition', NULL, NULL, NULL, NULL, NULL)"
+    ]
+  },
+  {
+    "name": "knowledge_event_append_drives_valid_transition",
+    "trigger": "knowledge_attempt_audit_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ],
+    "statement": "INSERT INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason, app_id, knowledge_object_id, object_type, object_version, sharing_scope) VALUES ('t1', 1, 1001, 'browser', 'admin', 'administrator', 'create', 'rejected', 'invalid_definition', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)"
+    ],
+    "verify_sql": "SELECT first_sequence, next_sequence, retained_count FROM knowledge_attempt_audit_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "1|2|1"
+    ],
+    "depends_on_lanes": [
+      "audit_2"
+    ]
+  },
+  {
+    "name": "knowledge_event_append_at_capacity_drives_prune_transition",
+    "trigger": "knowledge_attempt_audit_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)",
+      "ALTER TABLE knowledge_attempt_audit_events DISABLE TRIGGER USER",
+      "INSERT INTO knowledge_attempt_audit_events SELECT 't1', i, 1000 + i, 'browser', 'admin', 'administrator', 'create', 'rejected', 'invalid_definition', NULL, NULL, NULL, NULL, NULL FROM generate_series(1, 100000) AS s(i)",
+      "ALTER TABLE knowledge_attempt_audit_events ENABLE TRIGGER USER",
+      "ALTER TABLE knowledge_attempt_audit_tenant_state DISABLE TRIGGER USER",
+      "UPDATE knowledge_attempt_audit_tenant_state SET next_sequence = 100001, retained_count = 100000 WHERE tenant_id = 't1'",
+      "ALTER TABLE knowledge_attempt_audit_tenant_state ENABLE TRIGGER USER"
+    ],
+    "statement": "INSERT INTO knowledge_attempt_audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, result, reason, app_id, knowledge_object_id, object_type, object_version, sharing_scope) VALUES ('t1', 100001, 101001, 'browser', 'admin', 'administrator', 'create', 'rejected', 'invalid_definition', NULL, NULL, NULL, NULL, NULL)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO knowledge_attempt_audit_tenant_state (tenant_id, first_sequence, next_sequence, retained_count) VALUES ('t1', 1, 1, 0)",
+      "WITH RECURSIVE s(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM s WHERE i < 100000) INSERT INTO knowledge_attempt_audit_events SELECT 't1', i, 1000 + i, 'browser', 'admin', 'administrator', 'create', 'rejected', 'invalid_definition', NULL, NULL, NULL, NULL, NULL FROM s"
+    ],
+    "verify_sql": "SELECT first_sequence, next_sequence, retained_count, (SELECT min(sequence) FROM knowledge_attempt_audit_events) FROM knowledge_attempt_audit_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "2|100002|100000|2"
+    ],
+    "depends_on_lanes": [
+      "audit_2"
+    ],
+    "note": "Heavy: fills the 100000-event window first; the 100001st append drives both the growth and the prune branch."
+  },
+  {
+    "name": "audit_first_append_advances_state",
+    "trigger": "audit_event_advances_tenant_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)"
+    ],
+    "statement": "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)"
+    ],
+    "verify_sql": "SELECT next_sequence, event_count FROM audit_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "2|1"
+    ]
+  },
+  {
+    "name": "audit_append_accounting_failure_without_guards",
+    "trigger": "audit_event_advances_tenant_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "DROP TRIGGER IF EXISTS audit_event_identity_collision_is_forbidden ON audit_events",
+      "DROP TRIGGER IF EXISTS audit_event_insert_requires_current_tenant_state ON audit_events"
+    ],
+    "statement": "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 3, 1003, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)",
+    "expect": "reject",
+    "message": "audit event accounting failed",
+    "sqlite_setup_sql": [
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "DROP TRIGGER IF EXISTS audit_event_identity_collision_is_forbidden",
+      "DROP TRIGGER IF EXISTS audit_event_insert_requires_current_tenant_state"
+    ],
+    "note": "The BEFORE INSERT state guards make this unreachable; the scenario drops them so the AFTER trigger's own check is exercised."
+  },
+  {
+    "name": "audit_event_delete_is_rejected",
+    "trigger": "audit_event_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ],
+    "statement": "DELETE FROM audit_events WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "audit events cannot be deleted",
+    "sqlite_setup_sql": [
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ]
+  },
+  {
+    "name": "audit_event_delete_matching_no_row_is_accepted",
+    "trigger": "audit_event_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ],
+    "statement": "DELETE FROM audit_events WHERE tenant_id = 't2'",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ]
+  },
+  {
+    "name": "audit_identity_collision_reports_state_guard_first",
+    "trigger": "audit_event_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ],
+    "statement": "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)",
+    "expect": "reject",
+    "message": "audit tenant state is invalid or capacity is exhausted",
+    "sqlite_setup_sql": [
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ],
+    "note": "SQLite fires insert_requires_current_tenant_state before the identity trigger, and a stored sequence is always below next_sequence, so the state message wins."
+  },
+  {
+    "name": "audit_identity_collision_with_rewound_state_is_rejected",
+    "trigger": "audit_event_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)",
+      "DROP TRIGGER IF EXISTS audit_tenant_state_transition_is_valid ON audit_tenant_state",
+      "UPDATE audit_tenant_state SET next_sequence = 1, event_count = 0 WHERE tenant_id = 't1'"
+    ],
+    "statement": "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)",
+    "expect": "reject",
+    "message": "audit event identity already exists",
+    "sqlite_setup_sql": [
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)",
+      "DROP TRIGGER IF EXISTS audit_tenant_state_transition_is_valid",
+      "UPDATE audit_tenant_state SET next_sequence = 1, event_count = 0 WHERE tenant_id = 't1'"
+    ],
+    "note": "Rewinds the tenant state (dropping lane audit_2's transition guard) so only the identity trigger rejects."
+  },
+  {
+    "name": "audit_fresh_identity_is_accepted",
+    "trigger": "audit_event_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ],
+    "statement": "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 2, 1002, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ],
+    "verify_sql": "SELECT next_sequence, event_count FROM audit_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "3|2"
+    ]
+  },
+  {
+    "name": "audit_append_without_tenant_state_is_rejected",
+    "trigger": "audit_event_insert_requires_current_tenant_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)"
+    ],
+    "statement": "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t2', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)",
+    "expect": "reject",
+    "message": "audit tenant state is invalid or capacity is exhausted",
+    "sqlite_setup_sql": [
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)"
+    ]
+  },
+  {
+    "name": "audit_append_with_skipped_sequence_is_rejected",
+    "trigger": "audit_event_insert_requires_current_tenant_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ],
+    "statement": "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 3, 1003, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)",
+    "expect": "reject",
+    "message": "audit tenant state is invalid or capacity is exhausted",
+    "sqlite_setup_sql": [
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ]
+  },
+  {
+    "name": "audit_append_beyond_capacity_is_rejected",
+    "trigger": "audit_event_insert_requires_current_tenant_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "ALTER TABLE audit_events DISABLE TRIGGER USER",
+      "INSERT INTO audit_events SELECT 't1', i, 1000 + i, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL FROM generate_series(1, 100000) AS s(i)",
+      "ALTER TABLE audit_events ENABLE TRIGGER USER",
+      "ALTER TABLE audit_tenant_state DISABLE TRIGGER USER",
+      "UPDATE audit_tenant_state SET next_sequence = 100001, event_count = 100000 WHERE tenant_id = 't1'",
+      "ALTER TABLE audit_tenant_state ENABLE TRIGGER USER"
+    ],
+    "statement": "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 100001, 101001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)",
+    "expect": "reject",
+    "message": "audit tenant state is invalid or capacity is exhausted",
+    "sqlite_setup_sql": [
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "WITH RECURSIVE s(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM s WHERE i < 100000) INSERT INTO audit_events SELECT 't1', i, 1000 + i, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL FROM s"
+    ],
+    "note": "Heavy: fills the 100000-event journal first. The trigger fires before the sequence CHECK constraint."
+  },
+  {
+    "name": "audit_append_at_next_sequence_is_accepted",
+    "trigger": "audit_event_insert_requires_current_tenant_state",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 2, 1002, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ],
+    "statement": "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 3, 1003, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 2, 1002, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ],
+    "verify_sql": "SELECT next_sequence, event_count FROM audit_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "4|3"
+    ]
+  },
+  {
+    "name": "audit_event_update_is_rejected",
+    "trigger": "audit_event_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ],
+    "statement": "UPDATE audit_events SET target_id = 'idx-2' WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "audit events cannot be updated",
+    "sqlite_setup_sql": [
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ]
+  },
+  {
+    "name": "audit_event_update_matching_no_row_is_accepted",
+    "trigger": "audit_event_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ],
+    "statement": "UPDATE audit_events SET target_id = 'idx-2' WHERE tenant_id = 't2'",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count) VALUES ('t1', 1, 0)",
+      "INSERT INTO audit_events (tenant_id, sequence, occurred_at_unix_micro, actor_kind, actor_id, actor_role, action, target_kind, target_id, target_version, app_id, object_type, sharing_scope) VALUES ('t1', 1, 1001, 'system', 'system', 'system', 'index.create', 'index', 'idx-1', 1, NULL, NULL, NULL)"
+    ]
+  },
+  {
+    "name": "receipt_state_delete_is_rejected",
+    "trigger": "api_mutation_receipt_tenant_state_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ],
+    "statement": "DELETE FROM api_mutation_receipt_tenant_state WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "API mutation receipt tenant state cannot be deleted",
+    "sqlite_setup_sql": [
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ]
+  },
+  {
+    "name": "receipt_state_delete_matching_no_row_is_accepted",
+    "trigger": "api_mutation_receipt_tenant_state_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ],
+    "statement": "DELETE FROM api_mutation_receipt_tenant_state WHERE tenant_id = 't2'",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ]
+  },
+  {
+    "name": "receipt_state_nonzero_count_start_is_rejected",
+    "trigger": "api_mutation_receipt_tenant_state_initial_shape_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 1, 0, 1000)",
+    "expect": "reject",
+    "message": "API mutation receipt tenant state must begin empty",
+    "sqlite_setup_sql": []
+  },
+  {
+    "name": "receipt_state_nonzero_bytes_start_is_rejected",
+    "trigger": "api_mutation_receipt_tenant_state_initial_shape_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 5, 1000)",
+    "expect": "reject",
+    "message": "API mutation receipt tenant state must begin empty",
+    "sqlite_setup_sql": []
+  },
+  {
+    "name": "receipt_state_nonempty_on_conflict_is_still_rejected",
+    "trigger": "api_mutation_receipt_tenant_state_initial_shape_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ],
+    "statement": "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 1, 0, 1000) ON CONFLICT (tenant_id) DO NOTHING",
+    "expect": "reject",
+    "message": "API mutation receipt tenant state must begin empty",
+    "sqlite_setup_sql": [
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ],
+    "note": "BEFORE INSERT triggers run before ON CONFLICT in both engines."
+  },
+  {
+    "name": "receipt_state_empty_start_is_accepted",
+    "trigger": "api_mutation_receipt_tenant_state_initial_shape_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [],
+    "verify_sql": "SELECT receipt_count, encoded_bytes, high_water_unix_micro FROM api_mutation_receipt_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "0|0|1000"
+    ]
+  },
+  {
+    "name": "receipt_state_default_start_is_accepted",
+    "trigger": "api_mutation_receipt_tenant_state_initial_shape_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, high_water_unix_micro) VALUES ('t1', 77)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [],
+    "verify_sql": "SELECT receipt_count, encoded_bytes, high_water_unix_micro FROM api_mutation_receipt_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "0|0|77"
+    ]
+  },
+  {
+    "name": "receipt_state_existing_on_conflict_is_accepted",
+    "trigger": "api_mutation_receipt_tenant_state_initial_shape_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ],
+    "statement": "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 5000) ON CONFLICT (tenant_id) DO NOTHING",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ],
+    "verify_sql": "SELECT receipt_count, encoded_bytes, high_water_unix_micro FROM api_mutation_receipt_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "0|0|1000"
+    ],
+    "note": "The store's idempotent state bootstrap."
+  },
+  {
+    "name": "receipt_state_high_water_advance_is_accepted",
+    "trigger": "api_mutation_receipt_tenant_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ],
+    "statement": "UPDATE api_mutation_receipt_tenant_state SET high_water_unix_micro = 2000 WHERE tenant_id = 't1'",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ],
+    "verify_sql": "SELECT receipt_count, encoded_bytes, high_water_unix_micro FROM api_mutation_receipt_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "0|0|2000"
+    ]
+  },
+  {
+    "name": "receipt_state_high_water_unchanged_is_accepted",
+    "trigger": "api_mutation_receipt_tenant_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ],
+    "statement": "UPDATE api_mutation_receipt_tenant_state SET high_water_unix_micro = 1000 WHERE tenant_id = 't1'",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ]
+  },
+  {
+    "name": "receipt_state_high_water_regression_is_rejected",
+    "trigger": "api_mutation_receipt_tenant_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ],
+    "statement": "UPDATE api_mutation_receipt_tenant_state SET high_water_unix_micro = 999 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "API mutation receipt tenant state transition is invalid",
+    "sqlite_setup_sql": [
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ]
+  },
+  {
+    "name": "receipt_state_count_drift_is_rejected",
+    "trigger": "api_mutation_receipt_tenant_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ],
+    "statement": "UPDATE api_mutation_receipt_tenant_state SET receipt_count = 1 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "API mutation receipt tenant state transition is invalid",
+    "sqlite_setup_sql": [
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ]
+  },
+  {
+    "name": "receipt_state_bytes_drift_is_rejected",
+    "trigger": "api_mutation_receipt_tenant_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)",
+      "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'system', 'system', '/api/indexes/create', 'request-00000001-abcdef', 1, decode('abababababababababababababababababababababababababababababababab', 'hex'), 'index', 'idx-1', 1, NULL, 500, 600, 500, 194)"
+    ],
+    "statement": "UPDATE api_mutation_receipt_tenant_state SET encoded_bytes = encoded_bytes + 1 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "API mutation receipt tenant state transition is invalid",
+    "sqlite_setup_sql": [
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)",
+      "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'system', 'system', '/api/indexes/create', 'request-00000001-abcdef', 1, X'abababababababababababababababababababababababababababababababab', 'index', 'idx-1', 1, NULL, 500, 600, 500, 194)"
+    ],
+    "depends_on_lanes": [
+      "audit_2"
+    ]
+  },
+  {
+    "name": "receipt_state_tenant_rename_is_rejected",
+    "trigger": "api_mutation_receipt_tenant_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ],
+    "statement": "UPDATE api_mutation_receipt_tenant_state SET tenant_id = 't2' WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "API mutation receipt tenant state transition is invalid",
+    "sqlite_setup_sql": [
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ]
+  },
+  {
+    "name": "receipt_insert_drives_valid_transition",
+    "trigger": "api_mutation_receipt_tenant_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ],
+    "statement": "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'system', 'system', '/api/indexes/create', 'request-00000001-abcdef', 1, decode('abababababababababababababababababababababababababababababababab', 'hex'), 'index', 'idx-1', 1, NULL, 500, 600, 500, 194)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)"
+    ],
+    "sqlite_statement": "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'system', 'system', '/api/indexes/create', 'request-00000001-abcdef', 1, X'abababababababababababababababababababababababababababababababab', 'index', 'idx-1', 1, NULL, 500, 600, 500, 194)",
+    "verify_sql": "SELECT receipt_count, encoded_bytes, high_water_unix_micro FROM api_mutation_receipt_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "1|194|1000"
+    ],
+    "depends_on_lanes": [
+      "audit_2"
+    ]
+  },
+  {
+    "name": "receipt_single_reclaim_drives_valid_transition",
+    "trigger": "api_mutation_receipt_tenant_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)",
+      "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'system', 'system', '/api/indexes/create', 'request-00000001-abcdef', 1, decode('abababababababababababababababababababababababababababababababab', 'hex'), 'index', 'idx-1', 1, NULL, 500, 600, 500, 194)"
+    ],
+    "statement": "DELETE FROM api_mutation_receipts WHERE (tenant_id, actor_kind, actor_id, route, client_request_id) IN (SELECT tenant_id, actor_kind, actor_id, route, client_request_id FROM api_mutation_receipts WHERE tenant_id = 't1' AND target_terminal_at_unix_micro IS NOT NULL AND retain_until_unix_micro <= (SELECT high_water_unix_micro FROM api_mutation_receipt_tenant_state WHERE tenant_id = 't1') ORDER BY retain_until_unix_micro, actor_kind, actor_id, route, client_request_id LIMIT 64)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)",
+      "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'system', 'system', '/api/indexes/create', 'request-00000001-abcdef', 1, X'abababababababababababababababababababababababababababababababab', 'index', 'idx-1', 1, NULL, 500, 600, 500, 194)"
+    ],
+    "verify_sql": "SELECT receipt_count, encoded_bytes, high_water_unix_micro FROM api_mutation_receipt_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "0|0|1000"
+    ],
+    "depends_on_lanes": [
+      "audit_2"
+    ]
+  },
+  {
+    "name": "receipt_batch_reclaim_drives_valid_transition",
+    "trigger": "api_mutation_receipt_tenant_state_transition_is_valid",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)",
+      "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'system', 'system', '/api/indexes/create', 'request-00000001-abcdef', 1, decode('abababababababababababababababababababababababababababababababab', 'hex'), 'index', 'idx-1', 1, NULL, 500, 600, 500, 194)",
+      "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'system', 'system', '/api/indexes/create', 'request-00000002-abcdef', 1, decode('abababababababababababababababababababababababababababababababab', 'hex'), 'index', 'idx-2', 1, NULL, 500, 600, 500, 194)"
+    ],
+    "statement": "DELETE FROM api_mutation_receipts WHERE (tenant_id, actor_kind, actor_id, route, client_request_id) IN (SELECT tenant_id, actor_kind, actor_id, route, client_request_id FROM api_mutation_receipts WHERE tenant_id = 't1' AND target_terminal_at_unix_micro IS NOT NULL AND retain_until_unix_micro <= (SELECT high_water_unix_micro FROM api_mutation_receipt_tenant_state WHERE tenant_id = 't1') ORDER BY retain_until_unix_micro, actor_kind, actor_id, route, client_request_id LIMIT 64)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO api_mutation_receipt_tenant_state (tenant_id, receipt_count, encoded_bytes, high_water_unix_micro) VALUES ('t1', 0, 0, 1000)",
+      "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'system', 'system', '/api/indexes/create', 'request-00000001-abcdef', 1, X'abababababababababababababababababababababababababababababababab', 'index', 'idx-1', 1, NULL, 500, 600, 500, 194)",
+      "INSERT INTO api_mutation_receipts (tenant_id, actor_kind, actor_id, route, client_request_id, canonical_version, request_sha256, target_kind, target_id, target_version, audit_sequence, created_at_unix_micro, retain_until_unix_micro, target_terminal_at_unix_micro, encoded_bytes) VALUES ('t1', 'system', 'system', '/api/indexes/create', 'request-00000002-abcdef', 1, X'abababababababababababababababababababababababababababababababab', 'index', 'idx-2', 1, NULL, 500, 600, 500, 194)"
+    ],
+    "verify_sql": "SELECT receipt_count, encoded_bytes, high_water_unix_micro FROM api_mutation_receipt_tenant_state WHERE tenant_id = 't1'",
+    "verify_rows": [
+      "0|0|1000"
+    ],
+    "depends_on_lanes": [
+      "audit_2"
+    ],
+    "note": "The store's reclaim deletes up to a batch of receipts in one statement. PostgreSQL runs every AFTER ROW trigger after the whole DELETE, so lane audit_2's receipt accounting must leave the state at the post-statement totals in each UPDATE it makes."
+  }
+]

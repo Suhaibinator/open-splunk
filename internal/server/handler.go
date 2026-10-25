@@ -1123,234 +1123,7 @@ func NewHandler(config Config) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	apiRoutes := postAPIRoutes(
-		"/api/system/bootstrap",
-		"/api/search/validate",
-		"/api/search/jobs/create",
-		"/api/search/jobs/get",
-		searchJobsListPath,
-		"/api/search/jobs/results",
-		nearbyContextPath,
-		"/api/search/jobs/cancel",
-		"/api/saved-searches/create",
-		"/api/saved-searches/get",
-		"/api/saved-searches/list",
-		"/api/saved-searches/update",
-		"/api/saved-searches/duplicate",
-		"/api/saved-searches/delete",
-	)
-	administratorRoutes := make(map[string]struct{}, 25)
-	if api.searchPatterns != nil {
-		apiRoutes[apiPathPrefix+searchPatternsListRoute] = http.MethodPost
-		apiRoutes[apiPathPrefix+searchPatternMembersRoute] = http.MethodPost
-	}
-	if api.searchArtifacts != nil {
-		for _, path := range []string{
-			"/api/search/jobs/settings/get",
-			"/api/search/jobs/settings/update",
-			"/api/search/jobs/share",
-		} {
-			apiRoutes[path] = http.MethodPost
-		}
-	}
-	if api.scheduledReports != nil {
-		for _, path := range []string{
-			"/api/saved-searches/schedule/set",
-			"/api/saved-searches/run",
-			"/api/saved-searches/runs/list",
-		} {
-			apiRoutes[path] = http.MethodPost
-		}
-	}
-	if api.scheduledReports != nil || completeAlertFamily {
-		apiRoutes["/api/schedules/validate"] = http.MethodPost
-	}
-	if completeAlertFamily {
-		for _, path := range []string{
-			"/api/alerts/create",
-			"/api/alerts/get",
-			"/api/alerts/list",
-			"/api/alerts/update",
-			"/api/alerts/state/set",
-			"/api/alerts/delete",
-			"/api/alerts/run",
-			"/api/alerts/webhook/test",
-			"/api/alerts/secret/rotate",
-			"/api/alerts/runs/list",
-		} {
-			apiRoutes[path] = http.MethodPost
-			administratorRoutes[path] = struct{}{}
-		}
-	}
-	if api.searchHistory != nil {
-		for _, path := range []string{
-			"/api/search/history/get",
-			"/api/search/history/list",
-			"/api/search/history/delete",
-			"/api/search/history/clear",
-		} {
-			apiRoutes[path] = http.MethodPost
-		}
-	}
-	if api.dashboards != nil {
-		for _, path := range []string{
-			"/api/dashboards/create",
-			"/api/dashboards/get",
-			"/api/dashboards/list",
-			"/api/dashboards/update",
-			"/api/dashboards/delete",
-			"/api/dashboards/panels/run",
-		} {
-			apiRoutes[path] = http.MethodPost
-		}
-	}
-	if api.indexAdmin != nil {
-		for _, path := range []string{
-			"/api/indexes/create",
-			"/api/indexes/get",
-			"/api/indexes/list",
-			"/api/indexes/update",
-			"/api/indexes/state/set",
-			"/api/indexes/delete",
-		} {
-			apiRoutes[path] = http.MethodPost
-			administratorRoutes[path] = struct{}{}
-		}
-	}
-	if api.indexStatistics != nil {
-		apiRoutes["/api/indexes/stats/get"] = http.MethodPost
-		administratorRoutes["/api/indexes/stats/get"] = struct{}{}
-	}
-	if api.indexFields != nil {
-		apiRoutes[indexFieldsListPath] = http.MethodPost
-		administratorRoutes[indexFieldsListPath] = struct{}{}
-	}
-	if api.ingestionTokens != nil {
-		for _, path := range []string{
-			"/api/ingestion-tokens/create",
-			"/api/ingestion-tokens/get",
-			"/api/ingestion-tokens/list",
-			"/api/ingestion-tokens/update",
-			"/api/ingestion-tokens/state/set",
-			"/api/ingestion-tokens/revoke",
-		} {
-			apiRoutes[path] = http.MethodPost
-			administratorRoutes[path] = struct{}{}
-		}
-	}
-	if api.hecOperations != nil {
-		apiRoutes[hecOperationsPath] = http.MethodPost
-		administratorRoutes[hecOperationsPath] = struct{}{}
-	}
-	if api.auditEvents != nil {
-		apiRoutes[auditEventsListPath] = http.MethodPost
-		administratorRoutes[auditEventsListPath] = struct{}{}
-	}
-	if api.searchAttemptAuditEvents != nil {
-		apiRoutes[searchAttemptAuditListPath] = http.MethodPost
-		administratorRoutes[searchAttemptAuditListPath] = struct{}{}
-	}
-	if api.serverSettings != nil {
-		for _, path := range []string{
-			"/api/server/settings/get", "/api/server/settings/update",
-			"/api/server/appearance/get", "/api/server/appearance/update",
-		} {
-			apiRoutes[path] = http.MethodPost
-			administratorRoutes[path] = struct{}{}
-		}
-	}
-	if api.collectorAdmin != nil {
-		for _, path := range []string{
-			"/api/collectors/get",
-			"/api/collectors/list",
-			"/api/collectors/update",
-			"/api/collectors/state/set",
-		} {
-			apiRoutes[path] = http.MethodPost
-			administratorRoutes[path] = struct{}{}
-		}
-	}
-	if api.appAdmin != nil {
-		for _, path := range []string{
-			"/api/apps/create",
-			"/api/apps/get",
-			"/api/apps/list",
-			"/api/apps/update",
-			"/api/apps/state/set",
-			"/api/apps/delete",
-		} {
-			apiRoutes[path] = http.MethodPost
-			administratorRoutes[path] = struct{}{}
-		}
-	}
-	if api.knowledgeManagementConfigured() {
-		for _, path := range []string{
-			knowledgeObjectsCreatePath,
-			knowledgeObjectsGetPath,
-			knowledgeObjectsListPath,
-			knowledgeObjectsDependenciesPath,
-			knowledgeObjectsDependentsPath,
-			knowledgeObjectsValidatePath,
-			knowledgeObjectsUpdatePath,
-			knowledgeObjectsSetStatePath,
-			knowledgeObjectsDeletePath,
-		} {
-			apiRoutes[path] = http.MethodPost
-		}
-	}
-	if _, ready := readyKnowledgeQuarantine(api.knowledgeWriter); ready {
-		for _, path := range []string{
-			knowledgeObjectsQuarantinePreparePath,
-			knowledgeObjectsQuarantinePath,
-		} {
-			apiRoutes[path] = http.MethodPost
-		}
-	}
-	if api.knowledgePreviewConfigured() {
-		apiRoutes[knowledgeObjectsPreviewPath] = http.MethodPost
-	}
-	if api.lookupManagementConfigured() {
-		for _, path := range []string{
-			lookupCreatePath,
-			lookupGetPath,
-			lookupListPath,
-			lookupReplacePath,
-			lookupSetStatePath,
-			lookupDeletePath,
-			lookupPreviewPath,
-		} {
-			apiRoutes[path] = http.MethodPost
-			administratorRoutes[path] = struct{}{}
-		}
-	}
-	if api.exports != nil {
-		for _, path := range []string{
-			"/api/search/exports/create",
-			"/api/search/exports/get",
-			exportJobsListPath,
-			"/api/search/exports/cancel",
-		} {
-			apiRoutes[path] = http.MethodPost
-		}
-		apiRoutes[exportDownloadPath] = http.MethodGet
-	}
-	if api.searchTimelines != nil {
-		apiRoutes[searchTimelinePath] = http.MethodPost
-	}
-	if api.searchInspections != nil {
-		apiRoutes[searchInspectionPath] = http.MethodPost
-		administratorRoutes[searchInspectionPath] = struct{}{}
-	}
-	if api.searchFields != nil {
-		apiRoutes[searchFieldsListPath] = http.MethodPost
-		apiRoutes[searchFieldSummaryPath] = http.MethodPost
-	}
-	if api.searchSuggestions != nil {
-		apiRoutes[searchSuggestionsPath] = http.MethodPost
-	}
-	if api.searchWebSocket != nil {
-		apiRoutes[searchWebSocketPath] = http.MethodGet
-	}
+	apiRoutes, administratorRoutes := browserAPIRoutes(api.browserAPIRouteFeatures())
 	api.administratorRoutes = administratorRoutes
 	apiBoundary := exactAPIRoutes(
 		api.protectBrowserAPIRoutes(
@@ -1390,8 +1163,29 @@ func NewHandler(config Config) (*Handler, error) {
 	// itself could otherwise reach the SPA's index document.
 	mux.Handle("/api", apiBoundary)
 	mux.Handle("/api/", apiBoundary)
-	mux.Handle("/", spa)
+	mux.Handle("/", apiNamespaceAliases(spa))
 	return &Handler{next: mux, searchWebSocket: searchWebSocket}, nil
+}
+
+// inAPINamespace reports whether path is /api or lies beneath it.
+func inAPINamespace(path string) bool {
+	return path == apiPathPrefix || strings.HasPrefix(path, apiPathPrefix+"/")
+}
+
+// apiNamespaceAliases keeps escaped aliases of the API namespace, such as
+// /api%2Findexes%2Flist, out of the SPA. ServeMux matches the escaped path, so
+// such a request misses the /api patterns, yet its decoded path names an API
+// route. It is rejected as an unknown API route, as the HEC handler does for
+// escaped aliases of its namespace, so raw-path proxy policy and application
+// routing cannot disagree about who owns the request.
+func apiNamespaceAliases(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if inAPINamespace(request.URL.Path) || inAPINamespace(request.URL.EscapedPath()) {
+			writeAPIError(response, http.StatusNotFound, "API route not found")
+			return
+		}
+		next.ServeHTTP(response, request)
+	})
 }
 
 func isNilDependency(value any) bool {
@@ -1406,10 +1200,17 @@ func postAPIRoutes(paths ...string) map[string]string {
 	return result
 }
 
+// exactAPIRoutes admits only an exact allowlisted path with its one method.
+// Every inner layer (origin checks, route authorization, and SRouter
+// dispatch) decides on the decoded request.URL.Path, so the path must also be
+// its own escaped form: an alias such as /api/indexes%2Flist or
+// /api/%69ndexes/list would otherwise reach an administrator route while a
+// reverse proxy or WAF matching the raw path saw a different one. Every route
+// path is plain ASCII, so a canonical request never needs an escape.
 func exactAPIRoutes(next http.Handler, routes map[string]string) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		method, exists := routes[request.URL.Path]
-		if !exists {
+		if !exists || request.URL.EscapedPath() != request.URL.Path {
 			writeAPIError(response, http.StatusNotFound, "API route not found")
 			return
 		}

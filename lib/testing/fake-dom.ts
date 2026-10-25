@@ -54,8 +54,18 @@ function ancestry(node: FakeNode): FakeNode[] {
   return path;
 }
 
-/** A `tag`, `#id`, `[attr]` and `[attr="value"]` matcher: the shapes react-dom and the tests use. */
+/**
+ * A `tag`, `#id`, `[attr]` and `[attr="value"]` matcher, or a comma-separated
+ * list of them matching any: the shapes react-dom and the tests use.
+ */
 function compileSelector(selector: string): (element: FakeElement) => boolean {
+  const alternatives = selector.split(",");
+  if (alternatives.length === 1) return compileSimpleSelector(selector);
+  const matchers = alternatives.map((alternative) => compileSimpleSelector(alternative));
+  return (element) => matchers.some((matches) => matches(element));
+}
+
+function compileSimpleSelector(selector: string): (element: FakeElement) => boolean {
   const tests: Array<(element: FakeElement) => boolean> = [];
   let rest = selector.trim();
   const tag = /^[a-z][a-z0-9-]*/iu.exec(rest);
@@ -229,6 +239,9 @@ class FakeStyle {
   }
 }
 
+/** The elements `disabled` applies to, and so the ones a disabled state takes focus from. */
+const FORM_CONTROLS = new Set(["BUTTON", "INPUT", "SELECT", "TEXTAREA"]);
+
 export class FakeElement extends FakeNode {
   public readonly attributes = new Map<string, string>();
   public readonly style = new FakeStyle();
@@ -281,6 +294,19 @@ export class FakeElement extends FakeNode {
     else this.removeAttribute("disabled");
   }
 
+  /**
+   * Whether a browser refuses this element focus: a form control that is
+   * disabled itself or sits inside a disabled `<fieldset>`.
+   */
+  public get focusBlocked(): boolean {
+    if (!FORM_CONTROLS.has(this.nodeName)) return false;
+    if (this.disabled) return true;
+    for (let current = this.parentNode; current !== null; current = current.parentNode) {
+      if (current instanceof FakeElement && current.nodeName === "FIELDSET" && current.disabled) return true;
+    }
+    return false;
+  }
+
   public getAttribute(name: string): string | null {
     return this.attributes.get(name) ?? null;
   }
@@ -295,11 +321,27 @@ export class FakeElement extends FakeNode {
 
   public setAttribute(name: string, value: unknown): void {
     this.attributes.set(name, String(value));
+    // A browser's focus fixup: a focused control that becomes disabled, or
+    // whose fieldset does, loses focus to the document.
+    const active = this.ownerDocument.activeElement;
+    if (name === "disabled" && active !== null && this.contains(active) && active.focusBlocked) {
+      this.ownerDocument.activeElement = null;
+    }
   }
 
   /** The shared Select uses the native popover state to synchronize its listbox. */
   public matches(selector: string): boolean {
     return selector === ":popover-open" ? this.popoverOpen : compileSelector(selector)(this);
+  }
+
+  /** The shared Select looks up its wrapping label with `closest`. */
+  public closest(selector: string): FakeElement | null {
+    const matches = compileSelector(selector);
+    if (matches(this)) return this;
+    for (let current = this.parentNode; current !== null; current = current.parentNode) {
+      if (current instanceof FakeElement && matches(current)) return current;
+    }
+    return null;
   }
 
   public showPopover(): void {
@@ -314,7 +356,9 @@ export class FakeElement extends FakeNode {
     if (this.ownerDocument.activeElement === this) this.ownerDocument.activeElement = null;
   }
 
+  /** As in a browser, focusing a disabled control does nothing. */
   public focus(): void {
+    if (this.focusBlocked) return;
     this.ownerDocument.activeElement = this;
   }
 }
@@ -332,6 +376,10 @@ export class FakeDocument extends FakeNode {
     this.documentElement = this.appendChild(this.createElement("html"));
     this.head = this.documentElement.appendChild(this.createElement("head"));
     this.body = this.documentElement.appendChild(this.createElement("body"));
+  }
+
+  public getElementById(id: string): FakeElement | null {
+    return this.querySelectorAll("[id]").find((element) => element.getAttribute("id") === id) ?? null;
   }
 
   public createElement(name: string): FakeElement {

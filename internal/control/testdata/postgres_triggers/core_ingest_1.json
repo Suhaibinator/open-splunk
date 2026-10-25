@@ -1,0 +1,1621 @@
+[
+  {
+    "name": "active_app_index_search_disable_rejected",
+    "trigger": "active_app_default_indexes_remain_searchable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 'default', 1, 'search', 'App search', 0, 'active', 1000, 1000, NULL)",
+      "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('default', 'app_AAAAAAAAAAAAAAAAAAAAAA', 'idx_main')"
+    ],
+    "statement": "UPDATE indexes SET search_enabled = 0 WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "active app requires searchable index"
+  },
+  {
+    "name": "active_app_index_archive_rejected",
+    "trigger": "active_app_default_indexes_remain_searchable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 'default', 1, 'search', 'App search', 0, 'active', 1000, 1000, NULL)",
+      "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('default', 'app_AAAAAAAAAAAAAAAAAAAAAA', 'idx_main')"
+    ],
+    "statement": "UPDATE indexes SET state = 'archived', version = 2, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "active app requires searchable index"
+  },
+  {
+    "name": "active_app_index_other_update_accepted",
+    "trigger": "active_app_default_indexes_remain_searchable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_AAAAAAAAAAAAAAAAAAAAAA', 'default', 1, 'search', 'App search', 0, 'active', 1000, 1000, NULL)",
+      "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('default', 'app_AAAAAAAAAAAAAAAAAAAAAA', 'idx_main')"
+    ],
+    "statement": "UPDATE indexes SET display_name = 'Main renamed' WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "archived_app_index_search_disable_accepted",
+    "trigger": "active_app_default_indexes_remain_searchable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_BBBBBBBBBBBBBBBBBBBBBQ', 'default', 1, 'old', 'App old', 0, 'archived', 1000, 2000, 2000)",
+      "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('default', 'app_BBBBBBBBBBBBBBBBBBBBBQ', 'idx_main')"
+    ],
+    "statement": "UPDATE indexes SET search_enabled = 0 WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "unreferenced_index_search_disable_accepted",
+    "trigger": "active_app_default_indexes_remain_searchable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET search_enabled = 0 WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "deleting_index_insert_rejected",
+    "trigger": "deleting_index_insert_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'deleting', 1000, 1000)",
+    "expect": "reject",
+    "message": "deleting index creation requires a deletion operation"
+  },
+  {
+    "name": "archived_index_insert_accepted",
+    "trigger": "deleting_index_insert_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "deleting_index_delete_rejected",
+    "trigger": "deleting_index_with_operation_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)",
+      "UPDATE indexes SET state = 'deleting', version = version + 1, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main' AND state = 'archived'",
+      "ALTER TABLE indexes DISABLE TRIGGER index_catalog_index_delete_is_forbidden"
+    ],
+    "statement": "DELETE FROM indexes WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "deleting index cannot be deleted",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)",
+      "UPDATE indexes SET state = 'deleting', version = version + 1, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main' AND state = 'archived'",
+      "DROP TRIGGER IF EXISTS index_catalog_index_delete_is_forbidden"
+    ],
+    "note": "index_catalog_index_delete_is_forbidden refuses every delete first in SQLite, so it is disabled to reach this trigger"
+  },
+  {
+    "name": "index_without_operation_delete_accepted",
+    "trigger": "deleting_index_with_operation_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "ALTER TABLE indexes DISABLE TRIGGER index_catalog_index_delete_is_forbidden"
+    ],
+    "statement": "DELETE FROM indexes WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "DROP TRIGGER IF EXISTS index_catalog_index_delete_is_forbidden"
+    ]
+  },
+  {
+    "name": "deleting_index_delete_firing_order",
+    "trigger": "deleting_index_with_operation_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)",
+      "UPDATE indexes SET state = 'deleting', version = version + 1, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main' AND state = 'archived'"
+    ],
+    "statement": "DELETE FROM indexes WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "deleting index cannot be deleted",
+    "sqlite_message": "index catalog identity cannot be deleted",
+    "note": "firing order: PostgreSQL runs deleting_index_with_operation_delete_is_forbidden before index_catalog_index_delete_is_forbidden (name order); SQLite runs the latter first. Both refuse the delete."
+  },
+  {
+    "name": "deleting_index_update_rejected",
+    "trigger": "deleting_index_with_operation_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)",
+      "UPDATE indexes SET state = 'deleting', version = version + 1, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main' AND state = 'archived'"
+    ],
+    "statement": "UPDATE indexes SET description = 'changed' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "deleting index is coordinator-owned"
+  },
+  {
+    "name": "deleting_index_noop_update_rejected",
+    "trigger": "deleting_index_with_operation_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)",
+      "UPDATE indexes SET state = 'deleting', version = version + 1, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main' AND state = 'archived'"
+    ],
+    "statement": "UPDATE indexes SET search_enabled = search_enabled WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "deleting index is coordinator-owned"
+  },
+  {
+    "name": "active_index_update_accepted",
+    "trigger": "deleting_index_with_operation_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET description = 'changed' WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "index_insert_counts_catalog",
+    "trigger": "index_catalog_after_index_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "accept",
+    "message": "",
+    "check_sql": "SELECT revision || ',' || physical_count FROM index_catalog_state WHERE singleton_id = 1",
+    "check_result": "2,1"
+  },
+  {
+    "name": "index_insert_two_rows_counts_catalog",
+    "trigger": "index_catalog_after_index_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_other', 'default', 1, 'other', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "accept",
+    "message": "",
+    "check_sql": "SELECT revision || ',' || physical_count FROM index_catalog_state WHERE singleton_id = 1",
+    "check_result": "3,2"
+  },
+  {
+    "name": "index_insert_without_catalog_state_rejected",
+    "trigger": "index_catalog_after_index_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "ALTER TABLE indexes DISABLE TRIGGER index_catalog_before_index_insert",
+      "ALTER TABLE index_catalog_state DISABLE TRIGGER USER",
+      "DELETE FROM index_catalog_state",
+      "ALTER TABLE index_catalog_state ENABLE TRIGGER USER"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog insert accounting failed",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "DROP TRIGGER IF EXISTS index_catalog_before_index_insert",
+      "DROP TRIGGER IF EXISTS index_catalog_state_transition_is_valid",
+      "DROP TRIGGER IF EXISTS index_catalog_state_delete_is_forbidden",
+      "DELETE FROM index_catalog_state"
+    ],
+    "note": "unreachable while index_catalog_before_index_insert is enabled"
+  },
+  {
+    "name": "index_update_counts_catalog",
+    "trigger": "index_catalog_after_index_update",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET description = 'changed' WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": "",
+    "check_sql": "SELECT revision || ',' || physical_count FROM index_catalog_state WHERE singleton_id = 1",
+    "check_result": "3,1"
+  },
+  {
+    "name": "index_update_without_catalog_state_rejected",
+    "trigger": "index_catalog_after_index_update",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "ALTER TABLE indexes DISABLE TRIGGER index_catalog_before_index_update",
+      "ALTER TABLE index_catalog_state DISABLE TRIGGER USER",
+      "DELETE FROM index_catalog_state",
+      "ALTER TABLE index_catalog_state ENABLE TRIGGER USER"
+    ],
+    "statement": "UPDATE indexes SET description = 'changed' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog update accounting failed",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "DROP TRIGGER IF EXISTS index_catalog_before_index_update",
+      "DROP TRIGGER IF EXISTS index_catalog_state_transition_is_valid",
+      "DROP TRIGGER IF EXISTS index_catalog_state_delete_is_forbidden",
+      "DELETE FROM index_catalog_state"
+    ],
+    "note": "unreachable while index_catalog_before_index_update is enabled"
+  },
+  {
+    "name": "index_insert_at_capacity_rejected",
+    "trigger": "index_catalog_before_index_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "ALTER TABLE index_catalog_state DISABLE TRIGGER USER",
+      "UPDATE index_catalog_state SET physical_count = 1024",
+      "ALTER TABLE index_catalog_state ENABLE TRIGGER USER"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog state is invalid or capacity is exhausted",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "DROP TRIGGER IF EXISTS index_catalog_state_transition_is_valid",
+      "DROP TRIGGER IF EXISTS index_catalog_state_delete_is_forbidden",
+      "UPDATE index_catalog_state SET physical_count = 1024"
+    ]
+  },
+  {
+    "name": "index_insert_revision_exhausted_rejected",
+    "trigger": "index_catalog_before_index_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "ALTER TABLE index_catalog_state DISABLE TRIGGER USER",
+      "UPDATE index_catalog_state SET revision = 9223372036854775807",
+      "ALTER TABLE index_catalog_state ENABLE TRIGGER USER"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog state is invalid or capacity is exhausted",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "DROP TRIGGER IF EXISTS index_catalog_state_transition_is_valid",
+      "DROP TRIGGER IF EXISTS index_catalog_state_delete_is_forbidden",
+      "UPDATE index_catalog_state SET revision = 9223372036854775807"
+    ]
+  },
+  {
+    "name": "index_insert_missing_catalog_state_rejected",
+    "trigger": "index_catalog_before_index_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "ALTER TABLE index_catalog_state DISABLE TRIGGER USER",
+      "DELETE FROM index_catalog_state",
+      "ALTER TABLE index_catalog_state ENABLE TRIGGER USER"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog state is invalid or capacity is exhausted",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "DROP TRIGGER IF EXISTS index_catalog_state_transition_is_valid",
+      "DROP TRIGGER IF EXISTS index_catalog_state_delete_is_forbidden",
+      "DELETE FROM index_catalog_state"
+    ]
+  },
+  {
+    "name": "index_insert_below_capacity_accepted",
+    "trigger": "index_catalog_before_index_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "ALTER TABLE index_catalog_state DISABLE TRIGGER USER",
+      "UPDATE index_catalog_state SET physical_count = 1023",
+      "ALTER TABLE index_catalog_state ENABLE TRIGGER USER"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "DROP TRIGGER IF EXISTS index_catalog_state_transition_is_valid",
+      "DROP TRIGGER IF EXISTS index_catalog_state_delete_is_forbidden",
+      "UPDATE index_catalog_state SET physical_count = 1023"
+    ],
+    "check_sql": "SELECT revision || ',' || physical_count FROM index_catalog_state WHERE singleton_id = 1",
+    "check_result": "2,1024"
+  },
+  {
+    "name": "index_update_with_zero_physical_count_rejected",
+    "trigger": "index_catalog_before_index_update",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "ALTER TABLE index_catalog_state DISABLE TRIGGER USER",
+      "UPDATE index_catalog_state SET physical_count = 0",
+      "ALTER TABLE index_catalog_state ENABLE TRIGGER USER"
+    ],
+    "statement": "UPDATE indexes SET description = 'changed' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog state is invalid",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "DROP TRIGGER IF EXISTS index_catalog_state_transition_is_valid",
+      "DROP TRIGGER IF EXISTS index_catalog_state_delete_is_forbidden",
+      "UPDATE index_catalog_state SET physical_count = 0"
+    ]
+  },
+  {
+    "name": "index_update_with_revision_exhausted_rejected",
+    "trigger": "index_catalog_before_index_update",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "ALTER TABLE index_catalog_state DISABLE TRIGGER USER",
+      "UPDATE index_catalog_state SET revision = 9223372036854775807",
+      "ALTER TABLE index_catalog_state ENABLE TRIGGER USER"
+    ],
+    "statement": "UPDATE indexes SET description = 'changed' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog state is invalid",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "DROP TRIGGER IF EXISTS index_catalog_state_transition_is_valid",
+      "DROP TRIGGER IF EXISTS index_catalog_state_delete_is_forbidden",
+      "UPDATE index_catalog_state SET revision = 9223372036854775807"
+    ]
+  },
+  {
+    "name": "index_update_with_valid_catalog_accepted",
+    "trigger": "index_catalog_before_index_update",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET description = 'changed' WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "index_insert_duplicate_id_rejected",
+    "trigger": "index_catalog_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'other', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog identity is already in use"
+  },
+  {
+    "name": "index_insert_duplicate_name_rejected",
+    "trigger": "index_catalog_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_other', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog identity is already in use"
+  },
+  {
+    "name": "index_insert_distinct_identity_accepted",
+    "trigger": "index_catalog_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_other', 'default', 1, 'other', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "index_insert_same_name_other_tenant_accepted",
+    "trigger": "index_catalog_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('other', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_other', 'other', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "accept",
+    "message": "",
+    "sqlite_expect": "reject",
+    "sqlite_message": "index catalog identity is already in use",
+    "note": "deliberate: PostgreSQL scopes index names per tenant (indexes_tenant_name_key); SQLite names were global"
+  },
+  {
+    "name": "index_insert_same_id_other_tenant_rejected",
+    "trigger": "index_catalog_identity_collision_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('other', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'other', 1, 'other', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog identity is already in use"
+  },
+  {
+    "name": "index_delete_rejected",
+    "trigger": "index_catalog_index_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "DELETE FROM indexes WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog identity cannot be deleted"
+  },
+  {
+    "name": "archived_index_delete_rejected",
+    "trigger": "index_catalog_index_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)"
+    ],
+    "statement": "DELETE FROM indexes WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog identity cannot be deleted"
+  },
+  {
+    "name": "index_delete_matching_no_row_accepted",
+    "trigger": "index_catalog_index_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "DELETE FROM indexes WHERE index_id = 'idx_missing'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "index_insert_empty_index_id_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_index_id_129_bytes_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_index_id_leading_space_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES (' idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_index_id_control_char_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx' || chr(1), 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_index_id_c1_control_char_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx' || chr(133), 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_empty_display_name_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', '', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_display_name_trailing_space_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main ', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_display_name_256_bytes_multibyte_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', repeat(chr(233), 128), '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_display_name_del_char_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main' || chr(127), '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_display_name_tab_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Ma' || chr(9) || 'in', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_description_8193_bytes_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', repeat('d', 8193), 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_description_control_char_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', 'desc' || chr(8), 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_description_vertical_tab_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', 'desc' || chr(11), 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_description_c1_control_char_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', 'desc' || chr(159), 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_default_sourcetype_256_bytes_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, repeat('s', 256), 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_default_sourcetype_leading_space_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, ' json', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_default_sourcetype_control_char_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, 'json' || chr(31), 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_created_at_zero_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 0, 0)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_created_at_past_year_9999_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 253402300800000000, 253402300800000000)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_updated_before_created_rejected",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 2000, 1999)",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_insert_index_id_128_bytes_accepted",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "index_insert_display_name_255_bytes_multibyte_accepted",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', repeat(chr(233), 127) || 'x', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "index_insert_display_name_nbsp_accepted",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main' || chr(160) || 'Index', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "index_insert_description_tab_newline_cr_accepted",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', 'a' || chr(9) || 'b' || chr(10) || 'c' || chr(13) || 'd', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "index_insert_description_8192_bytes_accepted",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', repeat('d', 8192), 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "index_insert_default_sourcetype_255_bytes_accepted",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, repeat('s', 255), 'active', 1000, 1000)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "index_insert_timestamps_at_upper_bound_accepted",
+    "trigger": "index_catalog_record_insert_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 253402300799999999, 253402300799999999)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "index_update_display_name_trailing_space_rejected",
+    "trigger": "index_catalog_record_update_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET display_name = 'Main ' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_update_description_control_char_rejected",
+    "trigger": "index_catalog_record_update_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET description = 'x' || chr(27) WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_update_sourcetype_too_long_rejected",
+    "trigger": "index_catalog_record_update_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET default_sourcetype = repeat('s', 256) WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_update_updated_before_created_rejected",
+    "trigger": "index_catalog_record_update_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET updated_at_unix_micro = 999 WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_update_created_at_zero_rejected",
+    "trigger": "index_catalog_record_update_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET created_at_unix_micro = 0 WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog record is invalid or unbounded"
+  },
+  {
+    "name": "index_update_bounded_fields_accepted",
+    "trigger": "index_catalog_record_update_is_bounded",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET display_name = 'Main index', description = 'line' || chr(10) || 'two', default_sourcetype = 'json', updated_at_unix_micro = 5000 WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "deleting_transition_without_operation_rejected",
+    "trigger": "index_deleting_transition_requires_operation",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET state = 'deleting', version = 2, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "deleting index transition requires a matching deletion operation"
+  },
+  {
+    "name": "active_to_deleting_without_operation_rejected",
+    "trigger": "index_deleting_transition_requires_operation",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET state = 'deleting', version = 2, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "deleting index transition requires a matching deletion operation"
+  },
+  {
+    "name": "deleting_transition_wrong_version_rejected",
+    "trigger": "index_deleting_transition_requires_operation",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "ALTER TABLE index_deletion_operations DISABLE TRIGGER USER",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)",
+      "ALTER TABLE index_deletion_operations ENABLE TRIGGER USER"
+    ],
+    "statement": "UPDATE indexes SET state = 'deleting', version = 3, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "deleting index transition requires a matching deletion operation",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "DROP TRIGGER IF EXISTS index_deletion_operation_insert_starts_deletion",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)"
+    ],
+    "note": "the core_ingest_3 deletion-operation insert trigger performs this transition itself; it is bypassed to drive the transition directly"
+  },
+  {
+    "name": "deleting_transition_wrong_timestamp_rejected",
+    "trigger": "index_deleting_transition_requires_operation",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "ALTER TABLE index_deletion_operations DISABLE TRIGGER USER",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)",
+      "ALTER TABLE index_deletion_operations ENABLE TRIGGER USER"
+    ],
+    "statement": "UPDATE indexes SET state = 'deleting', version = 2, updated_at_unix_micro = 2001 WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "deleting index transition requires a matching deletion operation",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "DROP TRIGGER IF EXISTS index_deletion_operation_insert_starts_deletion",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)"
+    ],
+    "note": "the core_ingest_3 deletion-operation insert trigger performs this transition itself; it is bypassed to drive the transition directly"
+  },
+  {
+    "name": "deleting_transition_matching_operation_accepted",
+    "trigger": "index_deleting_transition_requires_operation",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "ALTER TABLE index_deletion_operations DISABLE TRIGGER USER",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)",
+      "ALTER TABLE index_deletion_operations ENABLE TRIGGER USER"
+    ],
+    "statement": "UPDATE indexes SET state = 'deleting', version = 2, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "DROP TRIGGER IF EXISTS index_deletion_operation_insert_starts_deletion",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)"
+    ],
+    "note": "the core_ingest_3 deletion-operation insert trigger performs this transition itself; it is bypassed to drive the transition directly",
+    "check_sql": "SELECT state || ',' || version FROM indexes WHERE index_id = 'idx_main'",
+    "check_result": "deleting,2"
+  },
+  {
+    "name": "archive_transition_accepted",
+    "trigger": "index_deleting_transition_requires_operation",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET state = 'archived', version = 2, updated_at_unix_micro = 2000 WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "index_id_change_rejected",
+    "trigger": "indexes_id_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET index_id = 'idx_renamed' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index ID is immutable"
+  },
+  {
+    "name": "index_id_same_value_accepted",
+    "trigger": "indexes_id_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET index_id = 'idx_main' WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "index_name_change_rejected",
+    "trigger": "indexes_name_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET name = 'renamed' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index name is immutable"
+  },
+  {
+    "name": "index_name_same_value_accepted",
+    "trigger": "indexes_name_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET name = 'main' WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "tombstoned_index_rename_firing_order",
+    "trigger": "indexes_name_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_tombstones (index_id, name, deleted_version, deleted_at_unix_micro) VALUES ('idx_main', 'main', 1, 3000)"
+    ],
+    "statement": "UPDATE indexes SET name = 'renamed' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index name is immutable",
+    "sqlite_message": "tombstoned index is immutable",
+    "note": "firing order: PostgreSQL runs indexes_name_is_immutable before tombstoned_index_update_is_forbidden (name order); SQLite runs the latter first. Both refuse the update."
+  },
+  {
+    "name": "index_insert_sub_millisecond_retention_rejected",
+    "trigger": "indexes_retention_is_millisecond_aligned_on_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 1500000, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index retention must use whole milliseconds"
+  },
+  {
+    "name": "index_insert_negative_sub_millisecond_retention_rejected",
+    "trigger": "indexes_retention_is_millisecond_aligned_on_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', -1500000, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "reject",
+    "message": "index retention must use whole milliseconds"
+  },
+  {
+    "name": "index_insert_whole_millisecond_retention_accepted",
+    "trigger": "indexes_retention_is_millisecond_aligned_on_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 86400000000000, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "index_update_sub_millisecond_retention_rejected",
+    "trigger": "indexes_retention_is_millisecond_aligned_on_update",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET retention_nanoseconds = 1 WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index retention must use whole milliseconds"
+  },
+  {
+    "name": "index_update_whole_millisecond_retention_accepted",
+    "trigger": "indexes_retention_is_millisecond_aligned_on_update",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET retention_nanoseconds = 3000000 WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "tombstoned_index_delete_rejected",
+    "trigger": "tombstoned_index_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_tombstones (index_id, name, deleted_version, deleted_at_unix_micro) VALUES ('idx_main', 'main', 1, 3000)",
+      "ALTER TABLE indexes DISABLE TRIGGER index_catalog_index_delete_is_forbidden"
+    ],
+    "statement": "DELETE FROM indexes WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "tombstoned index cannot be deleted",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_tombstones (index_id, name, deleted_version, deleted_at_unix_micro) VALUES ('idx_main', 'main', 1, 3000)",
+      "DROP TRIGGER IF EXISTS index_catalog_index_delete_is_forbidden"
+    ],
+    "note": "index_catalog_index_delete_is_forbidden refuses every delete first, so it is disabled to reach this trigger"
+  },
+  {
+    "name": "untombstoned_index_delete_accepted",
+    "trigger": "tombstoned_index_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "ALTER TABLE indexes DISABLE TRIGGER index_catalog_index_delete_is_forbidden"
+    ],
+    "statement": "DELETE FROM indexes WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": "",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "DROP TRIGGER IF EXISTS index_catalog_index_delete_is_forbidden"
+    ]
+  },
+  {
+    "name": "tombstoned_index_delete_default_message",
+    "trigger": "tombstoned_index_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_tombstones (index_id, name, deleted_version, deleted_at_unix_micro) VALUES ('idx_main', 'main', 1, 3000)"
+    ],
+    "statement": "DELETE FROM indexes WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog identity cannot be deleted",
+    "note": "with every trigger enabled both engines report the catalog delete message"
+  },
+  {
+    "name": "tombstoned_index_update_rejected",
+    "trigger": "tombstoned_index_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_tombstones (index_id, name, deleted_version, deleted_at_unix_micro) VALUES ('idx_main', 'main', 1, 3000)"
+    ],
+    "statement": "UPDATE indexes SET description = 'changed' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "tombstoned index is immutable"
+  },
+  {
+    "name": "archived_index_update_accepted",
+    "trigger": "tombstoned_index_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET description = 'changed' WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "token_binding_change_rejected",
+    "trigger": "ingestion_token_collector_binding_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 'default', 1, 'Token tok_native', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, 'collector-1', 'native_collector')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET bound_collector_id = 'collector-2' WHERE ingestion_token_id = 'tok_native'",
+    "expect": "reject",
+    "message": "ingestion token collector binding is immutable"
+  },
+  {
+    "name": "token_binding_clear_rejected",
+    "trigger": "ingestion_token_collector_binding_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 'default', 1, 'Token tok_native', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, 'collector-1', 'native_collector')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET bound_collector_id = NULL WHERE ingestion_token_id = 'tok_native'",
+    "expect": "reject",
+    "message": "ingestion token collector binding is immutable"
+  },
+  {
+    "name": "token_binding_same_value_accepted",
+    "trigger": "ingestion_token_collector_binding_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 'default', 1, 'Token tok_native', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, 'collector-1', 'native_collector')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET bound_collector_id = 'collector-1' WHERE ingestion_token_id = 'tok_native'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "native_token_without_binding_rejected",
+    "trigger": "ingestion_token_collector_binding_is_required",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 'default', 1, 'Token tok_native', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, NULL, 'native_collector')",
+    "expect": "reject",
+    "message": "ingestion token collector binding is required"
+  },
+  {
+    "name": "native_token_with_binding_accepted",
+    "trigger": "ingestion_token_collector_binding_is_required",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 'default', 1, 'Token tok_native', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, 'collector-1', 'native_collector')",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "token_digest_change_rejected",
+    "trigger": "ingestion_token_digest_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 'default', 1, 'Token tok_native', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, 'collector-1', 'native_collector')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET token_digest = decode('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'hex') WHERE ingestion_token_id = 'tok_native'",
+    "expect": "reject",
+    "message": "ingestion token digest is immutable"
+  },
+  {
+    "name": "token_digest_same_value_accepted",
+    "trigger": "ingestion_token_digest_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 'default', 1, 'Token tok_native', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, 'collector-1', 'native_collector')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET token_digest = decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex') WHERE ingestion_token_id = 'tok_native'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "hec_token_with_binding_rejected",
+    "trigger": "ingestion_token_hec_collector_binding_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'hex'), 'active', 1000, 1000, NULL, 'collector-1', 'hec')",
+    "expect": "reject",
+    "message": "HEC ingestion token cannot have a collector binding"
+  },
+  {
+    "name": "hec_token_without_binding_accepted",
+    "trigger": "ingestion_token_hec_collector_binding_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "hec_token_bind_rejected",
+    "trigger": "ingestion_token_hec_collector_binding_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET bound_collector_id = 'collector-1' WHERE ingestion_token_id = 'tok_hec'",
+    "expect": "reject",
+    "message": "HEC ingestion token cannot have a collector binding"
+  },
+  {
+    "name": "hec_token_binding_null_update_accepted",
+    "trigger": "ingestion_token_hec_collector_binding_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET bound_collector_id = NULL WHERE ingestion_token_id = 'tok_hec'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "token_purpose_change_rejected",
+    "trigger": "ingestion_token_purpose_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 'default', 1, 'Token tok_native', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, 'collector-1', 'native_collector')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET purpose = 'hec' WHERE ingestion_token_id = 'tok_native'",
+    "expect": "reject",
+    "message": "ingestion token purpose is immutable"
+  },
+  {
+    "name": "hec_token_purpose_change_rejected",
+    "trigger": "ingestion_token_purpose_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET purpose = 'native_collector' WHERE ingestion_token_id = 'tok_hec'",
+    "expect": "reject",
+    "message": "ingestion token purpose is immutable"
+  },
+  {
+    "name": "token_purpose_same_value_accepted",
+    "trigger": "ingestion_token_purpose_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 'default', 1, 'Token tok_native', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, 'collector-1', 'native_collector')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET purpose = 'native_collector' WHERE ingestion_token_id = 'tok_native'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "token_purpose_and_binding_firing_order",
+    "trigger": "ingestion_token_purpose_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 'default', 1, 'Token tok_native', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, 'collector-1', 'native_collector')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET purpose = 'hec', bound_collector_id = 'collector-1' WHERE ingestion_token_id = 'tok_native'",
+    "expect": "reject",
+    "message": "HEC ingestion token cannot have a collector binding",
+    "sqlite_message": "ingestion token purpose is immutable",
+    "note": "firing order: PostgreSQL runs ingestion_token_hec_collector_binding_update_is_forbidden before ingestion_token_purpose_is_immutable (name order); SQLite runs the latter first. Both refuse the update."
+  },
+  {
+    "name": "revoked_token_reactivation_rejected",
+    "trigger": "revoked_ingestion_token_is_irreversible",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 'default', 1, 'Token tok_native', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'revoked', 1000, 1000, 2000, 'collector-1', 'native_collector')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET state = 'active', revoked_at_unix_micro = NULL WHERE ingestion_token_id = 'tok_native'",
+    "expect": "reject",
+    "message": "revoked ingestion token cannot be reactivated"
+  },
+  {
+    "name": "revoked_token_disable_rejected",
+    "trigger": "revoked_ingestion_token_is_irreversible",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 'default', 1, 'Token tok_native', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'revoked', 1000, 1000, 2000, 'collector-1', 'native_collector')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET state = 'disabled', revoked_at_unix_micro = NULL WHERE ingestion_token_id = 'tok_native'",
+    "expect": "reject",
+    "message": "revoked ingestion token cannot be reactivated"
+  },
+  {
+    "name": "revoked_token_same_state_accepted",
+    "trigger": "revoked_ingestion_token_is_irreversible",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 'default', 1, 'Token tok_native', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'revoked', 1000, 1000, 2000, 'collector-1', 'native_collector')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET state = 'revoked' WHERE ingestion_token_id = 'tok_native'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "active_token_revoke_accepted",
+    "trigger": "revoked_ingestion_token_is_irreversible",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 'default', 1, 'Token tok_native', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, 'collector-1', 'native_collector')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET state = 'revoked', revoked_at_unix_micro = 2000 WHERE ingestion_token_id = 'tok_native'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "hec_acknowledgment_change_rejected",
+    "trigger": "ingestion_token_hec_acknowledgment_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')",
+      "INSERT INTO ingestion_token_hec_profiles (ingestion_token_id, indexer_acknowledgment) VALUES ('tok_hec', 0)"
+    ],
+    "statement": "UPDATE ingestion_token_hec_profiles SET indexer_acknowledgment = 1 WHERE ingestion_token_id = 'tok_hec'",
+    "expect": "reject",
+    "message": "HEC token acknowledgment mode is immutable"
+  },
+  {
+    "name": "hec_acknowledgment_same_value_accepted",
+    "trigger": "ingestion_token_hec_acknowledgment_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')",
+      "INSERT INTO ingestion_token_hec_profiles (ingestion_token_id, indexer_acknowledgment) VALUES ('tok_hec', 0)"
+    ],
+    "statement": "UPDATE ingestion_token_hec_profiles SET indexer_acknowledgment = 0, default_host = 'web-01' WHERE ingestion_token_id = 'tok_hec'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "hec_profile_owner_change_rejected",
+    "trigger": "ingestion_token_hec_profile_owner_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')",
+      "INSERT INTO ingestion_token_hec_profiles (ingestion_token_id, indexer_acknowledgment) VALUES ('tok_hec', 0)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec_2', 'default', 1, 'Token tok_hec_2', 'osk_abcd1234', decode('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')"
+    ],
+    "statement": "UPDATE ingestion_token_hec_profiles SET ingestion_token_id = 'tok_hec_2' WHERE ingestion_token_id = 'tok_hec'",
+    "expect": "reject",
+    "message": "HEC token profile owner is immutable"
+  },
+  {
+    "name": "hec_profile_owner_same_value_accepted",
+    "trigger": "ingestion_token_hec_profile_owner_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')",
+      "INSERT INTO ingestion_token_hec_profiles (ingestion_token_id, indexer_acknowledgment) VALUES ('tok_hec', 0)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec_2', 'default', 1, 'Token tok_hec_2', 'osk_abcd1234', decode('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')"
+    ],
+    "statement": "UPDATE ingestion_token_hec_profiles SET ingestion_token_id = 'tok_hec' WHERE ingestion_token_id = 'tok_hec'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "hec_profile_for_native_token_rejected",
+    "trigger": "ingestion_token_hec_profile_requires_hec_purpose",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_native', 'default', 1, 'Token tok_native', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, 'collector-1', 'native_collector')"
+    ],
+    "statement": "INSERT INTO ingestion_token_hec_profiles (ingestion_token_id, indexer_acknowledgment) VALUES ('tok_native', 0)",
+    "expect": "reject",
+    "message": "HEC token profile requires an unbound HEC token"
+  },
+  {
+    "name": "hec_profile_for_missing_token_rejected",
+    "trigger": "ingestion_token_hec_profile_requires_hec_purpose",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)"
+    ],
+    "statement": "INSERT INTO ingestion_token_hec_profiles (ingestion_token_id, indexer_acknowledgment) VALUES ('tok_missing', 0)",
+    "expect": "reject",
+    "message": "HEC token profile requires an unbound HEC token"
+  },
+  {
+    "name": "hec_profile_for_bound_hec_token_rejected",
+    "trigger": "ingestion_token_hec_profile_requires_hec_purpose",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "ALTER TABLE ingestion_tokens DISABLE TRIGGER USER",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd', 'hex'), 'active', 1000, 1000, NULL, 'collector-1', 'hec')",
+      "ALTER TABLE ingestion_tokens ENABLE TRIGGER USER"
+    ],
+    "statement": "INSERT INTO ingestion_token_hec_profiles (ingestion_token_id, indexer_acknowledgment) VALUES ('tok_hec', 0)",
+    "expect": "reject",
+    "message": "HEC token profile requires an unbound HEC token",
+    "sqlite_setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "DROP TRIGGER IF EXISTS ingestion_token_hec_collector_binding_is_forbidden",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd', 'hex'), 'active', 1000, 1000, NULL, 'collector-1', 'hec')"
+    ],
+    "note": "a bound HEC token is planted with the token triggers bypassed"
+  },
+  {
+    "name": "hec_profile_for_unbound_hec_token_accepted",
+    "trigger": "ingestion_token_hec_profile_requires_hec_purpose",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')"
+    ],
+    "statement": "INSERT INTO ingestion_token_hec_profiles (ingestion_token_id, indexer_acknowledgment) VALUES ('tok_hec', 0)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "deletion_operation_insert_moves_index_to_deleting",
+    "trigger": "index_deleting_transition_requires_operation",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)",
+    "expect": "accept",
+    "message": "",
+    "depends_on_lanes": [
+      "core_ingest_3"
+    ],
+    "note": "index_deletion_operation_insert_starts_deletion (core_ingest_3) performs the archived-to-deleting transition, which must pass this lane's transition guard and advance the catalog revision",
+    "check_sql": "SELECT state || ',' || version || ',' || updated_at_unix_micro || ',' || (SELECT revision || ',' || physical_count FROM index_catalog_state WHERE singleton_id = 1) FROM indexes WHERE index_id = 'idx_main'",
+    "check_result": "deleting,2,2000,3,1"
+  },
+  {
+    "name": "operation_owned_deleting_index_update_rejected",
+    "trigger": "deleting_index_with_operation_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)"
+    ],
+    "statement": "UPDATE indexes SET description = 'changed' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "deleting index is coordinator-owned",
+    "depends_on_lanes": [
+      "core_ingest_3"
+    ],
+    "note": "the index reaches 'deleting' only through the core_ingest_3 deletion-operation insert trigger; without it the index stays archived and the update is accepted"
+  },
+  {
+    "name": "completed_deletion_index_update_rejected",
+    "trigger": "tombstoned_index_update_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)",
+      "INSERT INTO index_deletion_mutation_attempts (deletion_operation_id, correlation_id, tenant_id, clickhouse_database, clickhouse_table, clickhouse_table_uuid, protocol_version, created_at_unix_micro) VALUES ('op.idx-main', 'corr.idx-main', 'default', 'open_splunk', 'events', '0b6c3f4e-8d2a-4f1b-9c3e-5a7d9e1f2b4c', 1, 2500)",
+      "INSERT INTO index_data_deletion_completions (deletion_operation_id, correlation_id, index_id, index_name, archived_index_version, deleting_index_version, tenant_id, clickhouse_database, clickhouse_table, clickhouse_table_uuid, protocol_version, operation_created_at_unix_micro, attempt_created_at_unix_micro, completed_at_unix_micro) VALUES ('op.idx-main', 'corr.idx-main', 'idx_main', 'main', 1, 2, 'default', 'open_splunk', 'events', '0b6c3f4e-8d2a-4f1b-9c3e-5a7d9e1f2b4c', 1, 2000, 2500, 3000)"
+    ],
+    "statement": "UPDATE indexes SET description = 'changed' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "tombstoned index is immutable",
+    "depends_on_lanes": [
+      "core_ingest_2",
+      "core_ingest_3"
+    ],
+    "note": "the core_ingest_2 completion trigger tombstones the deleting index and removes its operation, so the coordinator-owned guard passes and the tombstone guard refuses the update"
+  },
+  {
+    "name": "completed_deletion_index_delete_rejected",
+    "trigger": "index_catalog_index_delete_is_forbidden",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'archived', 1000, 1000)",
+      "INSERT INTO index_deletion_operations (deletion_operation_id, index_id, index_name, tenant_id, archived_index_version, created_at_unix_micro) VALUES ('op.idx-main', 'idx_main', 'main', 'default', 1, 2000)",
+      "INSERT INTO index_deletion_mutation_attempts (deletion_operation_id, correlation_id, tenant_id, clickhouse_database, clickhouse_table, clickhouse_table_uuid, protocol_version, created_at_unix_micro) VALUES ('op.idx-main', 'corr.idx-main', 'default', 'open_splunk', 'events', '0b6c3f4e-8d2a-4f1b-9c3e-5a7d9e1f2b4c', 1, 2500)",
+      "INSERT INTO index_data_deletion_completions (deletion_operation_id, correlation_id, index_id, index_name, archived_index_version, deleting_index_version, tenant_id, clickhouse_database, clickhouse_table, clickhouse_table_uuid, protocol_version, operation_created_at_unix_micro, attempt_created_at_unix_micro, completed_at_unix_micro) VALUES ('op.idx-main', 'corr.idx-main', 'idx_main', 'main', 1, 2, 'default', 'open_splunk', 'events', '0b6c3f4e-8d2a-4f1b-9c3e-5a7d9e1f2b4c', 1, 2000, 2500, 3000)"
+    ],
+    "statement": "DELETE FROM indexes WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index catalog identity cannot be deleted",
+    "depends_on_lanes": [
+      "core_ingest_2",
+      "core_ingest_3"
+    ],
+    "note": "once the completion removes the operation, deleting_index_with_operation_delete_is_forbidden passes and the catalog delete guard refuses the delete; while the operation exists the deleting-index message wins"
+  },
+  {
+    "name": "catalog_state_guard_accepts_index_insert_accounting",
+    "trigger": "index_catalog_after_index_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_web', 'default', 1, 'web', 'Web', '', 0, 1, 1, '', 'active', 1000, 1000)",
+    "expect": "accept",
+    "message": "",
+    "depends_on_lanes": [
+      "core_ingest_2"
+    ],
+    "note": "this lane's insert accounting must satisfy index_catalog_state_transition_is_valid (core_ingest_2)",
+    "check_sql": "SELECT revision || ',' || physical_count FROM index_catalog_state WHERE singleton_id = 1",
+    "check_result": "3,2"
+  },
+  {
+    "name": "catalog_state_guard_accepts_index_update_accounting",
+    "trigger": "index_catalog_after_index_update",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET description = 'changed' WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": "",
+    "depends_on_lanes": [
+      "core_ingest_2"
+    ],
+    "note": "this lane's update accounting must satisfy index_catalog_state_transition_is_valid (core_ingest_2)",
+    "check_sql": "SELECT revision || ',' || physical_count FROM index_catalog_state WHERE singleton_id = 1",
+    "check_result": "3,1"
+  },
+  {
+    "name": "index_tenant_change_rejected",
+    "trigger": "indexes_tenant_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET tenant_id = 'other' WHERE index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "index tenant is immutable",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
+  },
+  {
+    "name": "index_tenant_unchanged_update_accepted",
+    "trigger": "indexes_tenant_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "UPDATE indexes SET tenant_id = 'default', description = 'same tenant' WHERE index_id = 'idx_main'",
+    "expect": "accept",
+    "message": "",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
+  },
+  {
+    "name": "ingestion_token_tenant_change_rejected",
+    "trigger": "ingestion_token_tenant_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET tenant_id = 'other' WHERE ingestion_token_id = 'tok_hec'",
+    "expect": "reject",
+    "message": "ingestion token tenant is immutable",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
+  },
+  {
+    "name": "ingestion_token_tenant_unchanged_update_accepted",
+    "trigger": "ingestion_token_tenant_is_immutable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')"
+    ],
+    "statement": "UPDATE ingestion_tokens SET tenant_id = 'default', description = 'same tenant' WHERE ingestion_token_id = 'tok_hec'",
+    "expect": "accept",
+    "message": "",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
+  },
+  {
+    "name": "ingestion_token_index_of_other_tenant_rejected",
+    "trigger": "ingestion_token_index_requires_same_tenant_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_other_main', 'other', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id) VALUES ('tok_hec', 'idx_other_main')",
+    "expect": "reject",
+    "message": "ingestion token index belongs to another tenant",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
+  },
+  {
+    "name": "ingestion_token_index_of_own_tenant_accepted",
+    "trigger": "ingestion_token_index_requires_same_tenant_insert",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_other_main', 'other', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)"
+    ],
+    "statement": "INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id) VALUES ('tok_hec', 'idx_main')",
+    "expect": "accept",
+    "message": "",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
+  },
+  {
+    "name": "ingestion_token_index_moved_to_other_tenant_rejected",
+    "trigger": "ingestion_token_index_requires_same_tenant_update",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_second', 'default', 1, 'second', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_other_main', 'other', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id) VALUES ('tok_hec', 'idx_main')"
+    ],
+    "statement": "UPDATE ingestion_token_indexes SET index_id = 'idx_other_main' WHERE ingestion_token_id = 'tok_hec' AND index_id = 'idx_main'",
+    "expect": "reject",
+    "message": "ingestion token index belongs to another tenant",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
+  },
+  {
+    "name": "ingestion_token_index_moved_within_tenant_accepted",
+    "trigger": "ingestion_token_index_requires_same_tenant_update",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('default', 1, 1), ('other', 1, 1)",
+      "INSERT INTO ingestion_tokens (ingestion_token_id, tenant_id, version, name, token_prefix, token_digest, state, created_at_unix_micro, updated_at_unix_micro, revoked_at_unix_micro, bound_collector_id, purpose) VALUES ('tok_hec', 'default', 1, 'Token tok_hec', 'osk_abcd1234', decode('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'hex'), 'active', 1000, 1000, NULL, NULL, 'hec')",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_main', 'default', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_second', 'default', 1, 'second', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, description, retention_nanoseconds, ingestion_enabled, search_enabled, default_sourcetype, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx_other_main', 'other', 1, 'main', 'Main', '', 0, 1, 1, '', 'active', 1000, 1000)",
+      "INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id) VALUES ('tok_hec', 'idx_main')"
+    ],
+    "statement": "UPDATE ingestion_token_indexes SET index_id = 'idx_second' WHERE ingestion_token_id = 'tok_hec' AND index_id = 'idx_main'",
+    "expect": "accept",
+    "message": "",
+    "note": "tenant guard with no SQLite counterpart (SQLite indexes and tokens had no tenant)"
+  }
+]
