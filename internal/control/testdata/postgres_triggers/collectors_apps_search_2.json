@@ -1,0 +1,1435 @@
+[
+  {
+    "name": "app_catalog_revision_delete_is_forbidden/reject",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)"
+    ],
+    "statement": "DELETE FROM app_catalog_revisions WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "app catalog revision authority cannot be deleted"
+  },
+  {
+    "name": "app_catalog_revision_delete_is_forbidden/accept_no_rows",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "DELETE FROM app_catalog_revisions WHERE tenant_id = 't1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "app_catalog_revision_initial_shape_is_exact/reject_no_app",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+    "expect": "reject",
+    "message": "app catalog revision authority must begin with its first app"
+  },
+  {
+    "name": "app_catalog_revision_initial_shape_is_exact/reject_revision_2",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 2)",
+    "expect": "reject",
+    "message": "app catalog revision authority must begin with its first app"
+  },
+  {
+    "name": "app_catalog_revision_initial_shape_is_exact/reject_app_of_other_tenant",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't2', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+    "expect": "reject",
+    "message": "app catalog revision authority must begin with its first app"
+  },
+  {
+    "name": "app_catalog_revision_initial_shape_is_exact/accept",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "app_catalog_revision_initial_shape_is_exact/accept_archived_app",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'archived', 1, 1, 1)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "app_catalog_revision_identity_collision_is_forbidden/reject",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+    "expect": "reject",
+    "message": "app catalog revision authority already exists"
+  },
+  {
+    "name": "app_catalog_revision_identity_collision_is_forbidden/reject_null_revision",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', NULL)",
+    "expect": "reject",
+    "message": "app catalog revision authority already exists"
+  },
+  {
+    "name": "app_catalog_revision_identity_collision_is_forbidden/order_initial_shape_wins_on_revision",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 2)",
+    "expect": "reject",
+    "message": "app catalog revision authority must begin with its first app"
+  },
+  {
+    "name": "app_catalog_revision_identity_collision_is_forbidden/order_initial_shape_wins_on_missing_app",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+      "DELETE FROM app_workspaces WHERE tenant_id = 't1'"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+    "expect": "reject",
+    "message": "app catalog revision authority must begin with its first app"
+  },
+  {
+    "name": "app_catalog_revision_identity_collision_is_forbidden/accept_other_tenant",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkQ', 't2', 1, 'other', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t2')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t2', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t2', 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "app_catalog_revision_provisions_knowledge_catalog_after_insert/reject_no_head_after_provisioning",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+    "expect": "reject",
+    "message": "app catalog tenant knowledge authority is incomplete or corrupt"
+  },
+  {
+    "name": "app_catalog_revision_provisions_knowledge_catalog_after_insert/reject_tenant_without_head",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+    "expect": "reject",
+    "message": "app catalog tenant knowledge prestate is incomplete or corrupt"
+  },
+  {
+    "name": "app_catalog_revision_provisions_knowledge_catalog_after_insert/reject_head_revision_mismatch",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id, catalog_revision) VALUES ('t1', 3)",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 2, decode('abababababababababababababababababababababababababababababababab', 'hex'))"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+    "expect": "reject",
+    "message": "app catalog tenant knowledge prestate is incomplete or corrupt"
+  },
+  {
+    "name": "app_catalog_revision_provisions_knowledge_catalog_after_insert/reject_ledger_bytes_mismatch",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id, projection_bytes) VALUES ('t1', 7)"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+    "expect": "reject",
+    "message": "app catalog tenant knowledge prestate is incomplete or corrupt"
+  },
+  {
+    "name": "app_catalog_revision_provisions_knowledge_catalog_after_insert/reject_ledger_below_projection_sum",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id, projection_bytes) VALUES ('t1', 0)",
+      "INSERT INTO knowledge_object_list_projections (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, description_present, description, index_selector_count, host_selector_count, source_selector_count, sourcetype_selector_count, selector_value_bytes, canonical_selector_bytes) VALUES ('t1', 'ko1', 1, 'app_0123456789abcdefghijkA', 'u1', 'field_alias', 'n', 'app', 'active', 1, 'abc', 0, 0, 0, 0, 0, 43)"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+    "expect": "reject",
+    "message": "app catalog tenant knowledge prestate is incomplete or corrupt"
+  },
+  {
+    "name": "app_catalog_revision_provisions_knowledge_catalog_after_insert/accept_ledger_equals_projection_sum",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id, projection_bytes) VALUES ('t1', 3)",
+      "INSERT INTO knowledge_object_list_projections (tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name, sharing_scope, state, description_present, description, index_selector_count, host_selector_count, source_selector_count, sourcetype_selector_count, selector_value_bytes, canonical_selector_bytes) VALUES ('t1', 'ko1', 1, 'app_0123456789abcdefghijkA', 'u1', 'field_alias', 'n', 'app', 'active', 1, 'abc', 0, 0, 0, 0, 0, 43)"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "app_catalog_revision_provisions_knowledge_catalog_after_insert/accept_full_prestate",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "app_catalog_revision_provisions_knowledge_catalog_after_insert/accept_creates_missing_ledger",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "app_catalog_revision_provisions_knowledge_catalog_after_insert/accept_multi_row_two_tenants",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkQ', 't2', 1, 'other', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t2')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t2', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1), ('t2', 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "app_catalog_revision_identity_collision_is_forbidden/reject_multi_row_same_tenant",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1), ('t1', 1)",
+    "expect": "reject",
+    "message": "app catalog revision authority already exists"
+  },
+  {
+    "name": "app_catalog_revision_provisions_knowledge_catalog_after_insert/reject_multi_row_second_tenant_corrupt",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkQ', 't2', 1, 'other', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t2')"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1), ('t2', 1)",
+    "expect": "reject",
+    "message": "app catalog tenant knowledge prestate is incomplete or corrupt"
+  },
+  {
+    "name": "app_catalog_revision_tenant_is_immutable/reject",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)"
+    ],
+    "statement": "UPDATE app_catalog_revisions SET tenant_id = 't2' WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "app catalog revision tenant is immutable"
+  },
+  {
+    "name": "app_catalog_revision_tenant_is_immutable/reject_with_valid_transition",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)"
+    ],
+    "statement": "UPDATE app_catalog_revisions SET tenant_id = 't2', revision = 2 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "app catalog revision tenant is immutable"
+  },
+  {
+    "name": "app_catalog_revision_tenant_is_immutable/accept_same_tenant",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)"
+    ],
+    "statement": "UPDATE app_catalog_revisions SET tenant_id = 't1' WHERE tenant_id = 't1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "app_catalog_revision_transition_is_exact/reject_skip",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)"
+    ],
+    "statement": "UPDATE app_catalog_revisions SET revision = 3 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "app catalog revision must advance by exactly one"
+  },
+  {
+    "name": "app_catalog_revision_transition_is_exact/reject_same",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)"
+    ],
+    "statement": "UPDATE app_catalog_revisions SET revision = revision WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "app catalog revision must advance by exactly one"
+  },
+  {
+    "name": "app_catalog_revision_transition_is_exact/reject_max",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)"
+    ],
+    "statement": "UPDATE app_catalog_revisions SET revision = 9223372036854775807 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "app catalog revision must advance by exactly one"
+  },
+  {
+    "name": "app_catalog_revision_transition_is_exact/order_transition_wins_over_tenant",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)"
+    ],
+    "statement": "UPDATE app_catalog_revisions SET tenant_id = 't2', revision = 5 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "app catalog revision must advance by exactly one"
+  },
+  {
+    "name": "app_catalog_revision_transition_is_exact/accept",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)"
+    ],
+    "statement": "UPDATE app_catalog_revisions SET revision = revision + 1 WHERE tenant_id = 't1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "app_catalog_revision_transition_is_exact/accept_twice",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('t1')",
+      "INSERT INTO knowledge_catalog_revision_heads (tenant_id, catalog_revision, state_token) VALUES ('t1', 0, decode('abababababababababababababababababababababababababababababababab', 'hex'))",
+      "INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('t1')",
+      "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+      "UPDATE app_catalog_revisions SET revision = 2 WHERE tenant_id = 't1'"
+    ],
+    "statement": "UPDATE app_catalog_revisions SET revision = 3 WHERE tenant_id = 't1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_before_fleet_insert/reject_fleet_without_marker",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "ALTER TABLE collector_catalog_revisions DISABLE TRIGGER collector_catalog_revision_marker_is_undeletable",
+      "DELETE FROM collector_catalog_revisions WHERE tenant_id = 't1'",
+      "ALTER TABLE collector_catalog_revisions ENABLE TRIGGER collector_catalog_revision_marker_is_undeletable"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c2', 1, NULL, 'enabled', 1, 1)",
+    "expect": "reject",
+    "message": "collector catalog fleet/runtime revision is missing"
+  },
+  {
+    "name": "collector_catalog_revision_before_fleet_insert/reject_runtime_without_marker",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, boot_epoch, stream_id, active_instance_id, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro) VALUES ('t1', 'c1', 1, 1, 'b1', 's1', 'i1', 'development', 'h', 'linux', 'arm64', 1, 1, 1)",
+      "ALTER TABLE collector_catalog_revisions DISABLE TRIGGER collector_catalog_revision_marker_is_undeletable",
+      "DELETE FROM collector_catalog_revisions WHERE tenant_id = 't1'",
+      "ALTER TABLE collector_catalog_revisions ENABLE TRIGGER collector_catalog_revision_marker_is_undeletable"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c2', 1, NULL, 'enabled', 1, 1)",
+    "expect": "reject",
+    "message": "collector catalog fleet/runtime revision is missing"
+  },
+  {
+    "name": "collector_catalog_revision_before_fleet_insert/accept_first_collector",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_before_fleet_insert/accept_other_tenant_fleet",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 'c1', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_insert/accept_creates_marker",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_insert/accept_advances_marker",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c2', 1, NULL, 'enabled', 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_insert/accept_marker_without_fleet",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_catalog_revisions (tenant_id, revision, fleet_count, runtime_count) VALUES ('t1', 7, 0, 0)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_insert/accept_capacity_minus_one",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_catalog_revisions (tenant_id, revision, fleet_count, runtime_count) VALUES ('t1', 9, 255, 0)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_insert/accept_multi_row",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1), ('t1', 'c2', 1, 'two', 'disabled', 1, 2)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_insert/accept_multi_row_two_tenants",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 'c0', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1), ('t2', 'c1', 1, NULL, 'enabled', 1, 1), ('t1', 'c2', 1, NULL, 'enabled', 1, 1), ('t1', 'c3', 1, NULL, 'enabled', 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_insert/accept_insert_select",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 'c2', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) SELECT 't1', collector_id, 1, NULL, 'enabled', 1, 1 FROM collector_fleet WHERE tenant_id = 't2'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_insert/reject_capacity_mid_statement",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_catalog_revisions (tenant_id, revision, fleet_count, runtime_count) VALUES ('t1', 9, 255, 0)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1), ('t1', 'c2', 1, NULL, 'enabled', 1, 1)",
+    "expect": "reject",
+    "message": "collector fleet capacity exhausted"
+  },
+  {
+    "name": "collector_catalog_revision_before_fleet_insert/reject_multi_row_fleet_without_marker",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "ALTER TABLE collector_catalog_revisions DISABLE TRIGGER collector_catalog_revision_marker_is_undeletable",
+      "DELETE FROM collector_catalog_revisions WHERE tenant_id = 't1'",
+      "ALTER TABLE collector_catalog_revisions ENABLE TRIGGER collector_catalog_revision_marker_is_undeletable"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c2', 1, NULL, 'enabled', 1, 1), ('t1', 'c3', 1, NULL, 'enabled', 1, 1)",
+    "expect": "reject",
+    "message": "collector catalog fleet/runtime revision is missing"
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_insert/accept_on_conflict_do_nothing",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1), ('t1', 'c2', 1, NULL, 'enabled', 1, 1) ON CONFLICT (tenant_id, collector_id) DO NOTHING",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_update/accept_upsert_do_update",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1), ('t1', 'c2', 1, NULL, 'enabled', 1, 1) ON CONFLICT (tenant_id, collector_id) DO UPDATE SET admin_version = excluded.admin_version + 1",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_update/reject_upsert_backward_admin_version",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 5, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1) ON CONFLICT (tenant_id, collector_id) DO UPDATE SET admin_version = excluded.admin_version",
+    "expect": "reject",
+    "message": "collector administrator version cannot move backward"
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_insert/reject_capacity",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_catalog_revisions (tenant_id, revision, fleet_count, runtime_count) VALUES ('t1', 9, 256, 0)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+    "expect": "reject",
+    "message": "collector fleet capacity exhausted"
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_insert/reject_revision_exhausted",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_catalog_revisions (tenant_id, revision, fleet_count, runtime_count) VALUES ('t1', 9223372036854775807, 3, 0)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+    "expect": "reject",
+    "message": "collector catalog revision exhausted"
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_insert/reject_exhausted_beats_capacity",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_catalog_revisions (tenant_id, revision, fleet_count, runtime_count) VALUES ('t1', 9223372036854775807, 256, 0)"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+    "expect": "reject",
+    "message": "collector catalog revision exhausted"
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_update/accept",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "UPDATE collector_fleet SET admin_version = 2 WHERE collector_id = 'c1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_update/accept_noop_update",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "UPDATE collector_fleet SET display_name = display_name WHERE collector_id = 'c1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_update/accept_two_rows",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c2', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "UPDATE collector_fleet SET administrative_state = 'disabled' WHERE tenant_id = 't1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_update/reject_missing_marker",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "ALTER TABLE collector_catalog_revisions DISABLE TRIGGER collector_catalog_revision_marker_is_undeletable",
+      "DELETE FROM collector_catalog_revisions WHERE tenant_id = 't1'",
+      "ALTER TABLE collector_catalog_revisions ENABLE TRIGGER collector_catalog_revision_marker_is_undeletable"
+    ],
+    "statement": "UPDATE collector_fleet SET admin_version = 2 WHERE collector_id = 'c1'",
+    "expect": "reject",
+    "message": "collector catalog fleet/runtime revision is missing"
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_update/reject_revision_exhausted",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "UPDATE collector_catalog_revisions SET revision = 9223372036854775807 WHERE tenant_id = 't1'"
+    ],
+    "statement": "UPDATE collector_fleet SET admin_version = 2 WHERE collector_id = 'c1'",
+    "expect": "reject",
+    "message": "collector catalog revision exhausted"
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_delete/accept",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c2', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "DELETE FROM collector_fleet WHERE collector_id = 'c1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_delete/accept_all_rows",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c2', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "DELETE FROM collector_fleet WHERE tenant_id = 't1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_delete/accept_cascades_runtime",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, boot_epoch, stream_id, active_instance_id, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro) VALUES ('t1', 'c1', 1, 1, 'b1', 's1', 'i1', 'development', 'h', 'linux', 'arm64', 1, 1, 1)"
+    ],
+    "statement": "DELETE FROM collector_fleet WHERE collector_id = 'c1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_delete/reject_underflow",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "UPDATE collector_catalog_revisions SET fleet_count = 0 WHERE tenant_id = 't1'"
+    ],
+    "statement": "DELETE FROM collector_fleet WHERE collector_id = 'c1'",
+    "expect": "reject",
+    "message": "collector catalog fleet count underflow"
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_delete/reject_revision_exhausted",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "UPDATE collector_catalog_revisions SET revision = 9223372036854775807 WHERE tenant_id = 't1'"
+    ],
+    "statement": "DELETE FROM collector_fleet WHERE collector_id = 'c1'",
+    "expect": "reject",
+    "message": "collector catalog revision exhausted"
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_delete/reject_exhausted_beats_underflow",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "UPDATE collector_catalog_revisions SET revision = 9223372036854775807, fleet_count = 0 WHERE tenant_id = 't1'"
+    ],
+    "statement": "DELETE FROM collector_fleet WHERE collector_id = 'c1'",
+    "expect": "reject",
+    "message": "collector catalog revision exhausted"
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_delete/reject_missing_marker",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "ALTER TABLE collector_catalog_revisions DISABLE TRIGGER collector_catalog_revision_marker_is_undeletable",
+      "DELETE FROM collector_catalog_revisions WHERE tenant_id = 't1'",
+      "ALTER TABLE collector_catalog_revisions ENABLE TRIGGER collector_catalog_revision_marker_is_undeletable"
+    ],
+    "statement": "DELETE FROM collector_fleet WHERE collector_id = 'c1'",
+    "expect": "reject",
+    "message": "collector catalog fleet/runtime revision is missing"
+  },
+  {
+    "name": "collector_fleet_admin_version_is_monotonic/reject",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 5, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "UPDATE collector_fleet SET admin_version = 4 WHERE collector_id = 'c1'",
+    "expect": "reject",
+    "message": "collector administrator version cannot move backward"
+  },
+  {
+    "name": "collector_fleet_admin_version_is_monotonic/accept_same",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 5, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "UPDATE collector_fleet SET admin_version = 5 WHERE collector_id = 'c1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_fleet_admin_version_is_monotonic/accept_jump",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 5, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "UPDATE collector_fleet SET admin_version = 50 WHERE collector_id = 'c1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_fleet_admin_version_is_monotonic/order_wins_over_identity",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 5, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "UPDATE collector_fleet SET collector_id = 'c9', admin_version = 1 WHERE collector_id = 'c1'",
+    "expect": "reject",
+    "message": "collector administrator version cannot move backward"
+  },
+  {
+    "name": "collector_fleet_identity_is_immutable/reject_collector_id",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "UPDATE collector_fleet SET collector_id = 'c9' WHERE collector_id = 'c1'",
+    "expect": "reject",
+    "message": "collector fleet identity is immutable"
+  },
+  {
+    "name": "collector_fleet_identity_is_immutable/reject_tenant_id",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "UPDATE collector_fleet SET tenant_id = 't2' WHERE collector_id = 'c1'",
+    "expect": "reject",
+    "message": "collector fleet identity is immutable"
+  },
+  {
+    "name": "collector_fleet_identity_is_immutable/reject_case_change",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "UPDATE collector_fleet SET collector_id = 'C1' WHERE collector_id = 'c1'",
+    "expect": "reject",
+    "message": "collector fleet identity is immutable"
+  },
+  {
+    "name": "collector_fleet_identity_is_immutable/accept_same_values",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "UPDATE collector_fleet SET tenant_id = 't1', collector_id = 'c1' WHERE collector_id = 'c1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "collector_catalog_revision_marker_is_undeletable/reject",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)"
+    ],
+    "statement": "DELETE FROM collector_catalog_revisions WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "collector catalog fleet/runtime revision marker cannot be deleted"
+  },
+  {
+    "name": "collector_catalog_revision_marker_is_undeletable/reject_empty_fleet",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_catalog_revisions (tenant_id, revision, fleet_count, runtime_count) VALUES ('t1', 1, 0, 0)"
+    ],
+    "statement": "DELETE FROM collector_catalog_revisions",
+    "expect": "reject",
+    "message": "collector catalog fleet/runtime revision marker cannot be deleted"
+  },
+  {
+    "name": "collector_catalog_revision_marker_is_undeletable/accept_no_rows",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "DELETE FROM collector_catalog_revisions WHERE tenant_id = 't1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/reject_missing_app",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'app_ZYXWVUTSRQPONMLKJIH_-w', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "reject",
+    "message": "canonical saved-search app does not exist"
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/reject_last_char_g",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'app_0123456789abcdefghijkg', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "reject",
+    "message": "canonical saved-search app does not exist"
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/accept_existing_app",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'app_0123456789abcdefghijkA', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/accept_legacy_namespace",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'search', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/accept_empty_app",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', '', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/accept_last_char_not_canonical",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'app_0123456789abcdefghijkB', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/accept_bad_body_char",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'app_0123456789abcdefghi.kA', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/accept_non_ascii_body",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'app_0123456789abcdefghiékA', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/accept_length_25",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'app_0123456789abcdefghijA', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/accept_length_27",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'app_0123456789abcdefghijklA', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/accept_uppercase_prefix",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'APP_0123456789abcdefghijkA', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/accept_already_used",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'app_0123456789abcdefghijkA', 'u1', 1, decode('01', 'hex'), 1, 1)",
+      "DELETE FROM app_workspaces WHERE app_id = 'app_0123456789abcdefghijkA'"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss2', 't1', 1, 'n2', 'app_0123456789abcdefghijkA', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/reject_app_of_other_tenant",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't2', 1, 'search', 'App', 0, 'active', 1, 1, NULL)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'app_0123456789abcdefghijkA', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "reject",
+    "message": "canonical saved-search app does not exist"
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/reject_multi_row_first_new",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'a', 'app_ZYXWVUTSRQPONMLKJIH_-w', 'u1', 1, decode('01', 'hex'), 1, 1), ('ss2', 't1', 1, 'b', 'app_ZYXWVUTSRQPONMLKJIH_-w', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "reject",
+    "message": "canonical saved-search app does not exist"
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/accept_multi_row_existing_app",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'a', 'app_0123456789abcdefghijkA', 'u1', 1, decode('01', 'hex'), 1, 1), ('ss2', 't1', 1, 'b', 'app_0123456789abcdefghijkA', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "canonical_saved_search_app_exists_update/reject",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'search', 'u1', 1, decode('01', 'hex'), 1, 1)"
+    ],
+    "statement": "UPDATE saved_searches SET app_id = 'app_ZYXWVUTSRQPONMLKJIH_-w' WHERE saved_search_id = 'ss1'",
+    "expect": "reject",
+    "message": "canonical saved-search app does not exist"
+  },
+  {
+    "name": "canonical_saved_search_app_exists_update/accept_existing_app",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'search', 'u1', 1, decode('01', 'hex'), 1, 1)"
+    ],
+    "statement": "UPDATE saved_searches SET app_id = 'app_0123456789abcdefghijkA' WHERE saved_search_id = 'ss1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "canonical_saved_search_app_exists_update/accept_unchanged_used_app",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'app_0123456789abcdefghijkA', 'u1', 1, decode('01', 'hex'), 1, 1)",
+      "DELETE FROM app_workspaces WHERE app_id = 'app_0123456789abcdefghijkA'"
+    ],
+    "statement": "UPDATE saved_searches SET app_id = 'app_0123456789abcdefghijkA' WHERE saved_search_id = 'ss1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "canonical_saved_search_app_exists_update/accept_other_column",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'search', 'u1', 1, decode('01', 'hex'), 1, 1)"
+    ],
+    "statement": "UPDATE saved_searches SET name = 'renamed' WHERE saved_search_id = 'ss1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "app_default_indexes_require_searchable_index_insert/reject_missing_index",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)"
+    ],
+    "statement": "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('t1', 'app_0123456789abcdefghijkA', 'idx1')",
+    "expect": "reject",
+    "message": "app default index is not searchable"
+  },
+  {
+    "name": "app_default_indexes_require_searchable_index_insert/reject_search_disabled",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx1', 't1', 1, 'main', 'Index', 1, 0, 'active', 1, 1)"
+    ],
+    "statement": "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('t1', 'app_0123456789abcdefghijkA', 'idx1')",
+    "expect": "reject",
+    "message": "app default index is not searchable"
+  },
+  {
+    "name": "app_default_indexes_require_searchable_index_insert/reject_archived",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx1', 't1', 1, 'main', 'Index', 1, 1, 'archived', 1, 1)"
+    ],
+    "statement": "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('t1', 'app_0123456789abcdefghijkA', 'idx1')",
+    "expect": "reject",
+    "message": "app default index is not searchable"
+  },
+  {
+    "name": "app_default_indexes_require_searchable_index_insert/accept",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx1', 't1', 1, 'main', 'Index', 1, 1, 'active', 1, 1)"
+    ],
+    "statement": "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('t1', 'app_0123456789abcdefghijkA', 'idx1')",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "app_default_indexes_require_searchable_index_update/reject_to_unsearchable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx1', 't1', 1, 'main', 'Index', 1, 1, 'active', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx2', 't1', 1, 'second', 'Index', 1, 0, 'active', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx3', 't1', 1, 'third', 'Index', 1, 1, 'active', 1, 1)",
+      "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('t1', 'app_0123456789abcdefghijkA', 'idx1')"
+    ],
+    "statement": "UPDATE app_default_indexes SET index_id = 'idx2' WHERE index_id = 'idx1'",
+    "expect": "reject",
+    "message": "app default index is not searchable"
+  },
+  {
+    "name": "app_default_indexes_require_searchable_index_update/reject_to_missing_index",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx1', 't1', 1, 'main', 'Index', 1, 1, 'active', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx2', 't1', 1, 'second', 'Index', 1, 0, 'active', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx3', 't1', 1, 'third', 'Index', 1, 1, 'active', 1, 1)",
+      "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('t1', 'app_0123456789abcdefghijkA', 'idx1')"
+    ],
+    "statement": "UPDATE app_default_indexes SET index_id = 'idx9' WHERE index_id = 'idx1'",
+    "expect": "reject",
+    "message": "app default index is not searchable"
+  },
+  {
+    "name": "app_default_indexes_require_searchable_index_update/accept_to_searchable",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx1', 't1', 1, 'main', 'Index', 1, 1, 'active', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx2', 't1', 1, 'second', 'Index', 1, 0, 'active', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx3', 't1', 1, 'third', 'Index', 1, 1, 'active', 1, 1)",
+      "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('t1', 'app_0123456789abcdefghijkA', 'idx1')"
+    ],
+    "statement": "UPDATE app_default_indexes SET index_id = 'idx3' WHERE index_id = 'idx1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "app_default_indexes_require_searchable_index_update/accept_same_values",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx1', 't1', 1, 'main', 'Index', 1, 1, 'active', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx2', 't1', 1, 'second', 'Index', 1, 0, 'active', 1, 1)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx3', 't1', 1, 'third', 'Index', 1, 1, 'active', 1, 1)",
+      "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('t1', 'app_0123456789abcdefghijkA', 'idx1')"
+    ],
+    "statement": "UPDATE app_default_indexes SET app_id = app_id WHERE index_id = 'idx1'",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "app_catalog_revision_provisions_knowledge_catalog_after_insert/integrated_first_app",
+    "depends_on_lanes": [
+      "collectors_apps_search_1",
+      "knowledge_catalog_2"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)"
+    ],
+    "statement": "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+    "expect": "accept",
+    "message": "",
+    "check_sql": "SELECT format('%s|%s|%s|%s|%s', authority.revision, tenant.catalog_revision, head.catalog_revision, octet_length(head.state_token), ledger.projection_bytes) FROM app_catalog_revisions AS authority JOIN knowledge_catalog_tenants AS tenant USING (tenant_id) JOIN knowledge_catalog_revision_heads AS head USING (tenant_id) JOIN knowledge_projection_tenant_ledgers AS ledger USING (tenant_id) WHERE authority.tenant_id = 't1'",
+    "check_result": "1|0|0|32|0"
+  },
+  {
+    "name": "app_catalog_revision_transition_is_exact/integrated_second_app_advances",
+    "depends_on_lanes": [
+      "collectors_apps_search_1",
+      "knowledge_catalog_2"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)"
+    ],
+    "statement": "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkQ', 't1', 1, 'second', 'App', 0, 'active', 1, 1, NULL)",
+    "expect": "accept",
+    "message": "",
+    "check_sql": "SELECT revision::text FROM app_catalog_revisions WHERE tenant_id = 't1'",
+    "check_result": "2"
+  },
+  {
+    "name": "app_catalog_revision_transition_is_exact/integrated_reject_skip",
+    "depends_on_lanes": [
+      "collectors_apps_search_1",
+      "knowledge_catalog_2"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)"
+    ],
+    "statement": "UPDATE app_catalog_revisions SET revision = revision + 2 WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "app catalog revision must advance by exactly one"
+  },
+  {
+    "name": "app_catalog_revision_delete_is_forbidden/integrated_reject",
+    "depends_on_lanes": [
+      "collectors_apps_search_1",
+      "knowledge_catalog_2"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)"
+    ],
+    "statement": "DELETE FROM app_catalog_revisions WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "app catalog revision authority cannot be deleted"
+  },
+  {
+    "name": "app_catalog_revision_identity_collision_is_forbidden/integrated_reject_after_first_app",
+    "depends_on_lanes": [
+      "collectors_apps_search_1",
+      "knowledge_catalog_2"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t1', 1)",
+    "expect": "reject",
+    "message": "app catalog revision authority already exists"
+  },
+  {
+    "name": "app_catalog_revision_initial_shape_is_exact/integrated_reject_tenant_without_app",
+    "depends_on_lanes": [
+      "collectors_apps_search_1",
+      "knowledge_catalog_2"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)"
+    ],
+    "statement": "INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('t2', 1)",
+    "expect": "reject",
+    "message": "app catalog revision authority must begin with its first app"
+  },
+  {
+    "name": "app_catalog_revision_tenant_is_immutable/integrated_reject",
+    "depends_on_lanes": [
+      "collectors_apps_search_1",
+      "knowledge_catalog_2"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t2', 1, 1)"
+    ],
+    "statement": "UPDATE app_catalog_revisions SET tenant_id = 't2' WHERE tenant_id = 't1'",
+    "expect": "reject",
+    "message": "app catalog revision tenant is immutable"
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/integrated_accept_existing_app",
+    "depends_on_lanes": [
+      "collectors_apps_search_1",
+      "knowledge_catalog_2"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'app_0123456789abcdefghijkA', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "canonical_saved_search_app_exists_insert/integrated_reject_missing_app",
+    "depends_on_lanes": [
+      "collectors_apps_search_1",
+      "knowledge_catalog_2"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)"
+    ],
+    "statement": "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'app_0123456789abcdefghijkg', 'u1', 1, decode('01', 'hex'), 1, 1)",
+    "expect": "reject",
+    "message": "canonical saved-search app does not exist"
+  },
+  {
+    "name": "app_default_indexes_require_searchable_index_insert/integrated_accept",
+    "depends_on_lanes": [
+      "collectors_apps_search_1",
+      "knowledge_catalog_2"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx1', 't1', 1, 'main', 'Index', 1, 1, 'active', 1, 1)"
+    ],
+    "statement": "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('t1', 'app_0123456789abcdefghijkA', 'idx1')",
+    "expect": "accept",
+    "message": ""
+  },
+  {
+    "name": "app_default_indexes_require_searchable_index_insert/integrated_reject_search_disabled",
+    "depends_on_lanes": [
+      "collectors_apps_search_1",
+      "knowledge_catalog_2"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO app_workspaces (app_id, tenant_id, version, slug, display_name, default_time_range_present, state, created_at_unix_micro, updated_at_unix_micro, archived_at_unix_micro) VALUES ('app_0123456789abcdefghijkA', 't1', 1, 'search', 'App', 0, 'active', 1, 1, NULL)",
+      "INSERT INTO indexes (index_id, tenant_id, version, name, display_name, ingestion_enabled, search_enabled, state, created_at_unix_micro, updated_at_unix_micro) VALUES ('idx1', 't1', 1, 'main', 'Index', 1, 0, 'active', 1, 1)"
+    ],
+    "statement": "INSERT INTO app_default_indexes (tenant_id, app_id, index_id) VALUES ('t1', 'app_0123456789abcdefghijkA', 'idx1')",
+    "expect": "reject",
+    "message": "app default index is not searchable"
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_update/integrated_shares_marker_with_runtime",
+    "depends_on_lanes": [
+      "collectors_apps_search_1"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, boot_epoch, stream_id, active_instance_id, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro) VALUES ('t1', 'c1', 1, 1, 'b1', 's-b1', 'i-b1', 'development', 'h', 'linux', 'arm64', 1, 1, 1)"
+    ],
+    "statement": "UPDATE collector_fleet SET display_name = 'renamed' WHERE collector_id = 'c1'",
+    "expect": "accept",
+    "message": "",
+    "check_sql": "SELECT format('%s|%s|%s', revision, fleet_count, runtime_count) FROM collector_catalog_revisions WHERE tenant_id = 't1'",
+    "check_result": "3|1|1"
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_delete/integrated_cascades_runtime_counts",
+    "depends_on_lanes": [
+      "collectors_apps_search_1"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, boot_epoch, stream_id, active_instance_id, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro) VALUES ('t1', 'c1', 1, 1, 'b1', 's-b1', 'i-b1', 'development', 'h', 'linux', 'arm64', 1, 1, 1)"
+    ],
+    "statement": "DELETE FROM collector_fleet WHERE collector_id = 'c1'",
+    "expect": "accept",
+    "message": "",
+    "check_sql": "SELECT format('%s|%s|%s', revision, fleet_count, runtime_count) FROM collector_catalog_revisions WHERE tenant_id = 't1'",
+    "check_result": "4|0|0"
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_insert/integrated_tenant_reuse_after_cascade",
+    "depends_on_lanes": [
+      "collectors_apps_search_1"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, boot_epoch, stream_id, active_instance_id, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro) VALUES ('t1', 'c1', 1, 1, 'b1', 's-b1', 'i-b1', 'development', 'h', 'linux', 'arm64', 1, 1, 1)",
+      "DELETE FROM collector_fleet WHERE collector_id = 'c1'"
+    ],
+    "statement": "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+    "expect": "accept",
+    "message": "",
+    "check_sql": "SELECT format('%s|%s|%s', revision, fleet_count, runtime_count) FROM collector_catalog_revisions WHERE tenant_id = 't1'",
+    "check_result": "5|1|0"
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_delete/integrated_cascade_runtime_underflow_wins",
+    "depends_on_lanes": [
+      "collectors_apps_search_1"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, boot_epoch, stream_id, active_instance_id, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro) VALUES ('t1', 'c1', 1, 1, 'b1', 's-b1', 'i-b1', 'development', 'h', 'linux', 'arm64', 1, 1, 1)",
+      "UPDATE collector_catalog_revisions SET runtime_count = 0 WHERE tenant_id = 't1'"
+    ],
+    "statement": "DELETE FROM collector_fleet WHERE collector_id = 'c1'",
+    "expect": "reject",
+    "message": "collector catalog runtime count underflow"
+  },
+  {
+    "name": "collector_catalog_revision_after_fleet_delete/integrated_reject_fleet_underflow_after_cascade",
+    "depends_on_lanes": [
+      "collectors_apps_search_1"
+    ],
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1)",
+      "INSERT INTO collector_fleet (tenant_id, collector_id, admin_version, display_name, administrative_state, first_seen_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 'c1', 1, NULL, 'enabled', 1, 1)",
+      "INSERT INTO collector_runtime (tenant_id, collector_id, telemetry_revision, lease_generation, boot_epoch, stream_id, active_instance_id, source_revision, hostname, operating_system, architecture, started_at_unix_micro, connected_at_unix_micro, last_seen_at_unix_micro) VALUES ('t1', 'c1', 1, 1, 'b1', 's-b1', 'i-b1', 'development', 'h', 'linux', 'arm64', 1, 1, 1)",
+      "UPDATE collector_catalog_revisions SET fleet_count = 0 WHERE tenant_id = 't1'"
+    ],
+    "statement": "DELETE FROM collector_fleet WHERE collector_id = 'c1'",
+    "expect": "reject",
+    "message": "collector catalog fleet count underflow"
+  },
+  {
+    "name": "saved_search_tenant_is_immutable/reject_move_to_other_tenant",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1), ('t2', 1, 1)",
+      "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'search', 'u1', 1, decode('01', 'hex'), 1, 1)"
+    ],
+    "statement": "UPDATE saved_searches SET tenant_id = 't2' WHERE saved_search_id = 'ss1'",
+    "expect": "reject",
+    "message": "saved search tenant is immutable"
+  },
+  {
+    "name": "saved_search_tenant_is_immutable/accept_same_tenant",
+    "setup_sql": [
+      "INSERT INTO tenants (tenant_id, created_at_unix_micro, updated_at_unix_micro) VALUES ('t1', 1, 1), ('t2', 1, 1)",
+      "INSERT INTO saved_searches (saved_search_id, tenant_id, version, name, app_id, owner_id, sharing_scope, definition_proto, created_at_unix_micro, updated_at_unix_micro) VALUES ('ss1', 't1', 1, 'n1', 'search', 'u1', 1, decode('01', 'hex'), 1, 1)"
+    ],
+    "statement": "UPDATE saved_searches SET tenant_id = 't1', version = 2 WHERE saved_search_id = 'ss1'",
+    "expect": "accept",
+    "message": "",
+    "check_sql": "SELECT tenant_id || ',' || version FROM saved_searches WHERE saved_search_id = 'ss1'",
+    "check_result": "t1,2"
+  }
+]
