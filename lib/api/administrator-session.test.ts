@@ -165,16 +165,16 @@ function goPath(token: string, constants: GoConstants): string {
 }
 
 /**
- * The paths `handler.go` puts into `administratorRoutes`: every element of a
- * `for _, path := range []string{…}` whose body writes the map, and every
- * direct `administratorRoutes[x] = struct{}{}`.
+ * The paths `browserAPIRoutes` in `api_routes.go` puts into
+ * `administratorRoutes`: every element of a `for _, path := range []string{…}`
+ * whose body writes the map, and every direct `administratorRoutes[x] = struct{}{}`.
  */
 function goAdministratorRoutes(sources: Map<string, string>, constants: GoConstants): Set<string> {
-  const handler = sources.get("handler.go") ?? "";
-  const start = handler.indexOf("administratorRoutes := make(");
-  const end = handler.indexOf("api.administratorRoutes = administratorRoutes", start);
-  assert.ok(start >= 0 && end > start, "handler.go no longer builds administratorRoutes the way this test reads it");
-  const region = handler.slice(start, end);
+  const table = sources.get("api_routes.go") ?? "";
+  const start = table.indexOf("administratorRoutes := make(");
+  const end = table.indexOf("return apiRoutes, administratorRoutes", start);
+  assert.ok(start >= 0 && end > start, "api_routes.go no longer builds administratorRoutes the way this test reads it");
+  const region = table.slice(start, end);
   const routes = new Set<string>();
   for (const [, list, body] of region.matchAll(/for _, path := range \[\]string\{([^}]*)\}\s*\{([^}]*)\}/gu)) {
     if (!body.includes("administratorRoutes[path]")) continue;
