@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.27.0"
+  GO_VERSION: "1.27.3"
   OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e
 
 concurrency:
