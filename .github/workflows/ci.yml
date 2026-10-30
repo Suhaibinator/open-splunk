@@ -149,7 +149,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
         with:
-          version: v2.13.1
+          version: v2.15.0
           # The inherited inventory is clean; enforce the complete Go tree on
           # every push rather than retaining a historical diff-only baseline.
           args: --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
@@ -1053,10 +1053,10 @@ jobs:
           test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$OPEN_SPLUNK_SERVER_IMAGE")" = "linux/arm64"
           test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$OPEN_SPLUNK_COLLECTOR_IMAGE")" = "linux/arm64"
 
-          # Local image IDs digest the runtime config; the ordered RootFS diff IDs
-          # independently cover canonical filesystem content without attestations.
-          server_config_digest="$(docker image inspect --format '{{.Id}}' "$OPEN_SPLUNK_SERVER_IMAGE")"
-          collector_config_digest="$(docker image inspect --format '{{.Id}}' "$OPEN_SPLUNK_COLLECTOR_IMAGE")"
+          # Export the actual platform config: containerd image IDs may digest an
+          # index containing per-build attestations. Keep the independent layer check.
+          server_config_digest="$(node scripts/oci-runtime-config-digest.mjs linux/arm64 "$OPEN_SPLUNK_SERVER_IMAGE")"
+          collector_config_digest="$(node scripts/oci-runtime-config-digest.mjs linux/arm64 "$OPEN_SPLUNK_COLLECTOR_IMAGE")"
           server_layer_digests="$(docker image inspect --format '{{json .RootFS.Layers}}' "$OPEN_SPLUNK_SERVER_IMAGE")"
           collector_layer_digests="$(docker image inspect --format '{{json .RootFS.Layers}}' "$OPEN_SPLUNK_COLLECTOR_IMAGE")"
 
@@ -1079,9 +1079,9 @@ jobs:
           OPEN_SPLUNK_OCI_NO_CACHE=1 \
             make oci
           test "$server_config_digest" = \
-            "$(docker image inspect --format '{{.Id}}' "$reproducible_server_image")"
+            "$(node scripts/oci-runtime-config-digest.mjs linux/arm64 "$reproducible_server_image")"
           test "$collector_config_digest" = \
-            "$(docker image inspect --format '{{.Id}}' "$reproducible_collector_image")"
+            "$(node scripts/oci-runtime-config-digest.mjs linux/arm64 "$reproducible_collector_image")"
           test "$server_layer_digests" = \
             "$(docker image inspect --format '{{json .RootFS.Layers}}' "$reproducible_server_image")"
           test "$collector_layer_digests" = \

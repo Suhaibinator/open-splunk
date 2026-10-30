@@ -54,6 +54,7 @@ npx --no-install playwright install chromium
 | `build-oci.sh` | Local OCI build/identity/architecture verification. |
 | `publish-release.sh` | CI-only GHCR and GitHub Release publication. |
 | `run-go-race-shard.sh` | CI race-test sharding with explicit package coverage. |
+| `oci-runtime-config-digest.mjs` | Platform config digest for OCI reproducibility, independent of attestation indexes. |
 | `verify-elf-architecture.mjs` | Linux ELF target verification. |
 | `strict-json.mjs` | Duplicate-key-rejecting JSON support for build checks. |
 
