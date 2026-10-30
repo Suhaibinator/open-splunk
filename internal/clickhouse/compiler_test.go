@@ -5382,11 +5382,10 @@ func assertFinalOrderDirections(t *testing.T, sql string, want ...string) {
 	t.Helper()
 
 	const orderMarker = "ORDER BY "
-	orderStart := strings.LastIndex(sql, orderMarker)
-	if orderStart < 0 {
+	_, clause, found := strings.CutLast(sql, orderMarker)
+	if !found {
 		t.Fatalf("compiled SQL has no ORDER BY clause:\n%s", sql)
 	}
-	clause := sql[orderStart+len(orderMarker):]
 	if limitStart := strings.Index(clause, " LIMIT "); limitStart >= 0 {
 		clause = clause[:limitStart]
 	}

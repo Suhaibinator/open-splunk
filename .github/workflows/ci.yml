@@ -149,7 +149,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
         with:
-          version: v2.15.0
+          version: v2.14.0
           # The inherited inventory is clean; enforce the complete Go tree on
           # every push rather than retaining a historical diff-only baseline.
           args: --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
