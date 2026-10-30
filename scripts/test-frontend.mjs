@@ -25,6 +25,7 @@ const scriptTests = [
   "run-development.test.mjs",
   "build-release.test.mjs",
   "build-oci.test.mjs",
+  "oci-runtime-config-digest.test.mjs",
 ];
 const testFiles = [
   path.join("app", "_components", "product-shell-help.mount.test.tsx"),
