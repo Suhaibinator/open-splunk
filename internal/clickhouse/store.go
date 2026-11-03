@@ -833,6 +833,9 @@ func (s *Store) storeGrouped(
 		if lookupErr != nil {
 			if ctx.Err() != nil {
 				s.waiterCancellations.Add(1)
+				// database/sql may roll back the read transaction before Commit
+				// observes cancellation, returning sql.ErrTxDone instead.
+				return ingest.StoreResult{}, ctx.Err()
 			}
 			return ingest.StoreResult{}, lookupErr
 		}
