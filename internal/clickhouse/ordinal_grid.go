@@ -63,9 +63,18 @@ type bucketCountGrid struct {
 // grid-to-counts LEFT JOIN. Callers must append the grid bind values with
 // appendOrdinalGridArgs in the same order.
 func writeBucketCountGridSQL(sql *strings.Builder, g bucketCountGrid) {
+	writeBucketCountGridExpressionsSQL(sql, g, epochFloorBucketNumberSQL(g.ticks), ordinalGridSQL(g.ordinal, g.bucketNumber), nil)
+}
+
+func writeBucketCountGridExpressionsSQL(
+	sql *strings.Builder,
+	g bucketCountGrid,
+	bucketKeySQL, gridSQL string,
+	writeProjection func(*strings.Builder),
+) {
 	sql.WriteString(g.counts)
 	sql.WriteString(" AS (SELECT ")
-	sql.WriteString(epochFloorBucketNumberSQL(g.ticks))
+	sql.WriteString(bucketKeySQL)
 	sql.WriteString(" AS ")
 	sql.WriteString(g.bucketNumber)
 	sql.WriteString(", count() AS ")
@@ -78,13 +87,16 @@ func writeBucketCountGridSQL(sql *strings.Builder, g bucketCountGrid) {
 
 	sql.WriteString(g.grid)
 	sql.WriteString(" AS (")
-	sql.WriteString(ordinalGridSQL(g.ordinal, g.bucketNumber))
+	sql.WriteString(gridSQL)
 	sql.WriteString(") SELECT ")
 	sql.WriteString(g.grid)
 	sql.WriteString(".")
 	sql.WriteString(g.ordinal)
 	sql.WriteString(" AS ")
 	sql.WriteString(g.ordinal)
+	if writeProjection != nil {
+		writeProjection(sql)
+	}
 	sql.WriteString(", ifNull(")
 	sql.WriteString(g.counts)
 	sql.WriteString(".")

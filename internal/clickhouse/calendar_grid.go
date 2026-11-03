@@ -151,52 +151,10 @@ func (spec timechartGridSpec) writeCalendarBucketCountGridSQL(
 	g bucketCountGrid,
 	eventTime string,
 ) {
-	sql.WriteString(g.counts)
-	sql.WriteString(" AS (SELECT ")
-	sql.WriteString(spec.bucketKeySQL(eventTime, g.ticks))
-	sql.WriteString(" AS ")
-	sql.WriteString(g.bucketNumber)
-	sql.WriteString(", count() AS ")
-	sql.WriteString(g.count)
-	sql.WriteString(" FROM ")
-	sql.WriteString(g.countsSource)
-	sql.WriteString(" GROUP BY ")
-	sql.WriteString(g.bucketNumber)
-	sql.WriteString("), ")
-
-	sql.WriteString(g.grid)
-	sql.WriteString(" AS (")
-	sql.WriteString(spec.gridSQL(g.ordinal, g.bucketNumber))
-	sql.WriteString(") SELECT ")
-	sql.WriteString(g.grid)
-	sql.WriteString(".")
-	sql.WriteString(g.ordinal)
-	sql.WriteString(" AS ")
-	sql.WriteString(g.ordinal)
-	spec.writeBucketProjection(sql, g.grid, g.bucketNumber)
-	sql.WriteString(", ifNull(")
-	sql.WriteString(g.counts)
-	sql.WriteString(".")
-	sql.WriteString(g.count)
-	sql.WriteString(", toUInt64(0)) AS ")
-	sql.WriteString(g.count)
-	sql.WriteString(" FROM ")
-	sql.WriteString(g.grid)
-	sql.WriteString(" LEFT JOIN ")
-	sql.WriteString(g.counts)
-	sql.WriteString(" ON ")
-	sql.WriteString(g.counts)
-	sql.WriteString(".")
-	sql.WriteString(g.bucketNumber)
-	sql.WriteString(" = ")
-	sql.WriteString(g.grid)
-	sql.WriteString(".")
-	sql.WriteString(g.bucketNumber)
-	sql.WriteString(" ORDER BY ")
-	sql.WriteString(g.grid)
-	sql.WriteString(".")
-	sql.WriteString(g.ordinal)
-	sql.WriteString(" ASC")
+	writeBucketCountGridExpressionsSQL(
+		sql, g, spec.bucketKeySQL(eventTime, g.ticks), spec.gridSQL(g.ordinal, g.bucketNumber),
+		func(sql *strings.Builder) { spec.writeBucketProjection(sql, g.grid, g.bucketNumber) },
+	)
 }
 
 func fixedTimechartGridSpec(

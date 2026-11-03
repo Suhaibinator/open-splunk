@@ -15,6 +15,23 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 )
 
+func requireClickHouseIntegration(t *testing.T) {
+	t.Helper()
+	if os.Getenv("OPEN_SPLUNK_CLICKHOUSE_INTEGRATION") != "1" {
+		t.Skip("set OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 to run the Docker integration test")
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("docker CLI is unavailable: %v", err)
+	}
+	image, err := testsupport.ResolvePinnedClickHouseImage(
+		os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"),
+	)
+	if err != nil {
+		t.Fatalf("resolve pinned ClickHouse image: %v", err)
+	}
+	t.Logf("ClickHouse image: %s", image)
+}
+
 // startClickHouseStoreFixture starts the repository's shared pinned container,
 // applies the real migrations, and returns a query connection and store writer.
 func startClickHouseStoreFixture(

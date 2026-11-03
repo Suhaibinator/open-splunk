@@ -97,7 +97,6 @@ const (
 	maximumIdentityBytes                       = uint64(2*maximumAccessIDBytes + maximumSearchIDBytes)
 	maximumColumnMetadata                      = uint64(maximumColumns)*metadataPerColumnBytes + uint64(maximumColumnBytes)
 	maximumLegacyJobMetadataExcludingDirectory = metadataBaseBytes + metadataIdentitySlots + maximumIdentityBytes + maximumColumnMetadata + metadataStorageFixed
-	maximumJobMetadataExcludingDirectory       = maximumLegacyJobMetadataExcludingDirectory + metadataKnowledgeSummaryMaximum
 )
 
 var errArtifactStorage = errors.New("export artifact storage operation failed")

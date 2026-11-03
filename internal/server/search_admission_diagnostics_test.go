@@ -54,7 +54,7 @@ func TestSearchAdmissionLogsReasonWithoutChangingHTTPContract(t *testing.T) {
 			}
 			fields := entries[0].ContextMap()
 			if fields["failure_reason"] != test.reason || fields["failure_stage"] != "visibility_snapshot" ||
-				fields["clickhouse_code"] != int64(47) || fields["path"] != route {
+				fields["clickhouse_code"] != int32(47) || fields["path"] != route {
 				t.Fatalf("unexpected diagnostic fields: %v", fields)
 			}
 			if strings.Contains(fmt.Sprint(logs.All()), "private-") || strings.Contains(response.Body.String(), "private-") {

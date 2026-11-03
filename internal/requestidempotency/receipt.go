@@ -516,45 +516,6 @@ func MarkTargetTerminalInTransaction(
 	return mapDatabaseError(ctx, result.Error)
 }
 
-// ExtendRetentionInTransaction moves a receipt fence forward. Identity,
-// request digest, target and accounting bytes remain immutable.
-func ExtendRetentionInTransaction(
-	ctx context.Context,
-	tx *gorm.DB,
-	intent Intent,
-	until time.Time,
-) error {
-	if ctx == nil || !activeTransaction(tx) || validateIntentIdentity(intent) != nil {
-		return ErrInvalid
-	}
-	canonicalUntil, err := canonicalTime(until)
-	if err != nil {
-		return ErrInvalid
-	}
-	result := tx.WithContext(ctx).Exec(
-		`UPDATE api_mutation_receipts
-		 SET retain_until_unix_micro = MAX(retain_until_unix_micro, ?)
-		 WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
-		   AND route = ? AND client_request_id = ?
-		   AND canonical_version = ? AND request_sha256 = ?`,
-		canonicalUntil.UnixMicro(),
-		intent.TenantID,
-		intent.ActorKind,
-		intent.ActorID,
-		intent.Route,
-		intent.ClientRequestID,
-		intent.CanonicalVersion,
-		intent.RequestSHA256[:],
-	)
-	if result.Error != nil {
-		return mapDatabaseError(ctx, result.Error)
-	}
-	if result.RowsAffected != 1 {
-		return ErrUnavailable
-	}
-	return nil
-}
-
 func validateIntentIdentity(intent Intent) error {
 	if intent.CanonicalVersion == 0 || intent.CanonicalVersion > math.MaxUint16 ||
 		!validIdentity(intent.TenantID, 255) ||

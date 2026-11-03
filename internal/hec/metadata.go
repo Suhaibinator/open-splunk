@@ -191,62 +191,17 @@ func ParseEpochNanoseconds(text string) (int64, error) {
 }
 
 func validEpochGrammar(text string) bool {
-	position := 0
-	if text[position] == '-' {
-		position++
-		if position == len(text) {
-			return false
-		}
+	if !jsonnumber.Valid(text) {
+		return false
 	}
-	if text[position] == '0' {
-		position++
-		if position < len(text) && asciiDigit(text[position]) {
-			return false
-		}
-	} else {
-		if text[position] < '1' || text[position] > '9' {
-			return false
-		}
-		for position < len(text) && asciiDigit(text[position]) {
-			position++
-		}
+	position := strings.IndexAny(text, "eE")
+	if position < 0 {
+		return true
 	}
-	if position < len(text) && text[position] == '.' {
-		position++
-		start := position
-		for position < len(text) && asciiDigit(text[position]) {
-			position++
-		}
-		if position == start {
-			return false
-		}
-	}
-	if position < len(text) && (text[position] == 'e' || text[position] == 'E') {
-		position++
-		if position < len(text) && (text[position] == '+' || text[position] == '-') {
-			position++
-		}
-		if position == len(text) {
-			return false
-		}
-		if text[position] == '0' {
-			position++
-			if position < len(text) && asciiDigit(text[position]) {
-				return false
-			}
-		} else {
-			if text[position] < '1' || text[position] > '9' {
-				return false
-			}
-			for position < len(text) && asciiDigit(text[position]) {
-				position++
-			}
-		}
-	}
-	return position == len(text)
+	// HEC also requires a canonical exponent without leading zeros.
+	exponent := strings.TrimLeft(text[position+1:], "+-")
+	return len(exponent) == 1 || exponent[0] != '0'
 }
-
-func asciiDigit(value byte) bool { return value >= '0' && value <= '9' }
 
 func timeToUnixNanoseconds(value time.Time) (int64, error) {
 	value = value.UTC()

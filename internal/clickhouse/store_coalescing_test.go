@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"path/filepath"
@@ -127,12 +128,14 @@ func TestGroupedStoreCancellationLeavesDurableReservationForReconciliation(t *te
 	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), sequencer)
 	store.coalescing = true
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
 		_, err := store.Store(ctx, distinctStoreBatch("cancel-wait", 1))
 		done <- err
 	}()
 	waitForPendingReservations(t, sequencer, 1)
+	waitForNativeWaiters(t, store.commitWaiters, 1)
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled Store error = %v, want context.Canceled", err)
@@ -153,6 +156,50 @@ func TestGroupedStoreCancellationLeavesDurableReservationForReconciliation(t *te
 	if connection.batch.sendCalls != 1 {
 		t.Fatalf("physical sends = %d, want 1", connection.batch.sendCalls)
 	}
+}
+
+func TestGroupedStoreCancellationDuringLookupPreservesContextError(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	sequencer := &cancelGroupedLookupSequencer{SQLiteSequencer: openStoreGroupSequencer(t), cancel: cancel}
+	connection := &fakeStoreConnection{batch: &fakeWriteBatch{}}
+	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), sequencer)
+	store.coalescing = true
+	_, err := store.Store(ctx, distinctStoreBatch("cancel-lookup", 1))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled lookup error = %v, want context.Canceled", err)
+	}
+	if got := store.commitWaiters.size(); got != 0 {
+		t.Fatalf("waiters after canceled lookup = %d, want 0", got)
+	}
+	if got := store.HECReconciliationTelemetry().NativeWaiterCancellations; got != 1 {
+		t.Fatalf("native waiter cancellations = %d, want 1", got)
+	}
+	usage, err := sequencer.PendingUsage(t.Context())
+	if err != nil || usage.Reservations != 1 {
+		t.Fatalf("pending usage after canceled lookup = %+v error=%v", usage, err)
+	}
+	if err := store.ReconcilePending(t.Context()); err != nil {
+		t.Fatalf("reconcile canceled lookup: %v", err)
+	}
+	if connection.batch.sendCalls != 1 {
+		t.Fatalf("physical sends = %d, want 1", connection.batch.sendCalls)
+	}
+}
+
+type cancelGroupedLookupSequencer struct {
+	*visibility.SQLiteSequencer
+	cancel context.CancelFunc
+}
+
+func (sequencer *cancelGroupedLookupSequencer) Lookup(ctx context.Context, batchKey, sequenceKey string, digest [32]byte) (visibility.Reservation, bool, error) {
+	reservation, found, err := sequencer.SQLiteSequencer.Lookup(ctx, batchKey, sequenceKey, digest)
+	if err == nil && found && !reservation.AlreadyCommitted && !reservation.Rejected {
+		sequencer.cancel()
+		return visibility.Reservation{}, false, sql.ErrTxDone
+	}
+	return reservation, found, err
 }
 
 func TestGroupedStorePollsDurableOutcomeWhenCommitWakeIsLost(t *testing.T) {

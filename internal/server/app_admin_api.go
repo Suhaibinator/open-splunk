@@ -1494,12 +1494,7 @@ type serializedCreateAppCodec = boundedProtoCodec[
 ]
 
 func newSerializedCreateAppCodec() *serializedCreateAppCodec {
-	return newAppAdministrationCodec(
-		codec.NewProtoCodec[
-			*opensplunk.CreateAppRequest,
-			*opensplunk.CreateAppResponse,
-		](),
-	)
+	return newAppAdministrationCodec[*opensplunk.CreateAppRequest, *opensplunk.CreateAppResponse]()
 }
 
 type serializedGetAppResponse = boundedProtoResponse[*opensplunk.GetAppResponse]
@@ -1510,12 +1505,7 @@ type serializedGetAppCodec = boundedProtoCodec[
 ]
 
 func newSerializedGetAppCodec() *serializedGetAppCodec {
-	return newAppAdministrationCodec(
-		codec.NewProtoCodec[
-			*opensplunk.GetAppRequest,
-			*opensplunk.GetAppResponse,
-		](),
-	)
+	return newAppAdministrationCodec[*opensplunk.GetAppRequest, *opensplunk.GetAppResponse]()
 }
 
 type serializedListAppsResponse = boundedProtoResponse[*opensplunk.ListAppsResponse]
@@ -1526,12 +1516,7 @@ type serializedListAppsCodec = boundedProtoCodec[
 ]
 
 func newSerializedListAppsCodec() *serializedListAppsCodec {
-	return newAppAdministrationCodec(
-		codec.NewProtoCodec[
-			*opensplunk.ListAppsRequest,
-			*opensplunk.ListAppsResponse,
-		](),
-	)
+	return newAppAdministrationCodec[*opensplunk.ListAppsRequest, *opensplunk.ListAppsResponse]()
 }
 
 type serializedUpdateAppResponse = boundedProtoResponse[*opensplunk.UpdateAppResponse]
@@ -1542,12 +1527,7 @@ type serializedUpdateAppCodec = boundedProtoCodec[
 ]
 
 func newSerializedUpdateAppCodec() *serializedUpdateAppCodec {
-	return newAppAdministrationCodec(
-		codec.NewProtoCodec[
-			*opensplunk.UpdateAppRequest,
-			*opensplunk.UpdateAppResponse,
-		](),
-	)
+	return newAppAdministrationCodec[*opensplunk.UpdateAppRequest, *opensplunk.UpdateAppResponse]()
 }
 
 type serializedSetAppStateResponse = boundedProtoResponse[*opensplunk.SetAppStateResponse]
@@ -1558,12 +1538,7 @@ type serializedSetAppStateCodec = boundedProtoCodec[
 ]
 
 func newSerializedSetAppStateCodec() *serializedSetAppStateCodec {
-	return newAppAdministrationCodec(
-		codec.NewProtoCodec[
-			*opensplunk.SetAppStateRequest,
-			*opensplunk.SetAppStateResponse,
-		](),
-	)
+	return newAppAdministrationCodec[*opensplunk.SetAppStateRequest, *opensplunk.SetAppStateResponse]()
 }
 
 type serializedDeleteAppResponse = boundedProtoResponse[*opensplunk.DeleteAppResponse]
@@ -1574,22 +1549,19 @@ type serializedDeleteAppCodec = boundedProtoCodec[
 ]
 
 func newSerializedDeleteAppCodec() *serializedDeleteAppCodec {
-	return newAppAdministrationCodec(
-		codec.NewProtoCodec[
-			*opensplunk.DeleteAppRequest,
-			*opensplunk.DeleteAppResponse,
-		](),
-	)
+	return newAppAdministrationCodec[*opensplunk.DeleteAppRequest, *opensplunk.DeleteAppResponse]()
 }
 
 func newAppAdministrationCodec[
-	Request any,
+	Request interface {
+		proto.Message
+		*RequestMessage
+	},
 	Response proto.Message,
-](
-	inner codec.Codec[Request, Response],
-) *boundedProtoCodec[Request, Response] {
+	RequestMessage any,
+]() *boundedProtoCodec[Request, Response] {
 	return newBoundedProtoCodec(
-		inner,
+		codec.NewProtoCodec[Request, Response](),
 		boundedProtoCodecOptions{
 			stateError:   "app response serialization state is invalid",
 			messageError: "app response message is invalid",

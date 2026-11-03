@@ -11,7 +11,7 @@ import {
 import { RetainedResultStatus } from "@/gen/ts/open_splunk/search";
 import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import { OpenSplunkApiClient } from "@/lib/api/open-splunk-client";
-import type { ProtobufTransport } from "@/lib/api/protobuf-transport";
+import { HttpError, type ProtobufTransport } from "@/lib/api/protobuf-transport";
 import type { SystemBootstrapModel } from "@/lib/api/system-bootstrap";
 
 import {
@@ -22,6 +22,11 @@ import {
   AlertCreationSession,
   AlertSecretIssuanceController,
   createServerAlert,
+  deleteServerAlert,
+  listServerAlerts,
+  listServerAlertRuns,
+  runServerAlert,
+  testServerAlertWebhook,
 } from "./server-alerts";
 
 const now = new Date("2026-08-29T12:00:00Z");
@@ -218,4 +223,36 @@ test("alert run adapter accepts a pending retained job before expiry is assigned
   assert.equal(run.searchJobId, "job-pending");
   assert.equal(run.searchJobExpiresAt, null);
   assert.equal(run.retainedResultState, "pending");
+});
+
+
+test("alert operations retain feature gating and optional-route error mapping", async () => {
+  const features = new Set<ServerFeature>();
+  const bootstrap = { ...alertsBootstrap(), features };
+  const alert = adaptServerAlert(rawAlert());
+  let requests = 0;
+  const operations = (status: number) => {
+    const client = new OpenSplunkApiClient({
+      async post() {
+        requests += 1;
+        throw new HttpError({ status, message: "request failed", url: "/api/alerts" });
+      },
+    } as unknown as ProtobufTransport);
+    return [
+      () => listServerAlerts(client, bootstrap),
+      () => listServerAlertRuns(client, bootstrap, alert.id),
+      () => runServerAlert(client, bootstrap, alert.id),
+      () => testServerAlertWebhook(client, bootstrap, alert.id),
+      () => deleteServerAlert(client, bootstrap, alert),
+    ];
+  };
+  await Promise.all(operations(404).map(async (operation) => {
+    assert.deepEqual(await operation(), { status: "unavailable", reason: "feature-not-advertised" });
+  }));
+  assert.equal(requests, 0);
+  features.add(ServerFeature.SERVER_FEATURE_ALERTS);
+  await Promise.all([404, 405, 501].flatMap((status) => operations(status).map(async (operation) => {
+    assert.deepEqual(await operation(), { status: "unavailable", reason: "route-unavailable" });
+  })));
+  await Promise.all(operations(500).map((operation) => assert.rejects(operation(), HttpError)));
 });

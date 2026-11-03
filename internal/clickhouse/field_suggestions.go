@@ -885,6 +885,10 @@ func writePrerequisiteFieldSuggestionRows(
 }
 
 func writePrerequisiteFieldSuggestionObservations(sql *strings.Builder) {
+	writePrerequisiteFieldMetadataObservations(sql, "startsWith(tupleElement(field_metadata, 1), CAST(? AS String)) AND NOT has(CAST(? AS Array(String)), tupleElement(field_metadata, 1)) AND NOT arrayExists(prefix -> tupleElement(field_metadata, 1) = prefix OR startsWith(tupleElement(field_metadata, 1), concat(prefix, '.')), CAST(? AS Array(String))) AND CAST(? AS Bool)")
+}
+
+func writePrerequisiteFieldMetadataObservations(sql *strings.Builder, filterSQL string) {
 	q := quoteIdentifier
 	fields := []string{
 		fieldSuggestionObservedKind,
@@ -910,7 +914,7 @@ func writePrerequisiteFieldSuggestionObservations(sql *strings.Builder) {
 	sql.WriteString(q(fieldSuggestionRowInvalid))
 	sql.WriteString(")], arrayMap(field_metadata -> tuple(toUInt8(1), tupleElement(field_metadata, 1), toUInt8(0)), arrayFilter(field_metadata -> ")
 	sql.WriteString(q(fieldSuggestionRowInvalid))
-	sql.WriteString(" = 0 AND startsWith(tupleElement(field_metadata, 1), CAST(? AS String)) AND NOT has(CAST(? AS Array(String)), tupleElement(field_metadata, 1)) AND NOT arrayExists(prefix -> tupleElement(field_metadata, 1) = prefix OR startsWith(tupleElement(field_metadata, 1), concat(prefix, '.')), CAST(? AS Array(String))) AND CAST(? AS Bool), ")
+	sql.WriteString(" = 0 AND " + filterSQL + ", ")
 	sql.WriteString(q(fieldSuggestionDynamicMetadata))
 	sql.WriteString("))) AS ")
 	sql.WriteString(q(fieldSuggestionObservation))

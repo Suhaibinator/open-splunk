@@ -1,7 +1,6 @@
 package searchanalysis
 
 import (
-	"container/heap"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -734,30 +733,9 @@ func (service *FieldService) runFieldFlight(
 		if !validUntil.IsZero() && !now.Before(validUntil) {
 			err = searchjobs.ErrExpired
 			entry = nil
-		} else if entry.retained > service.catalog.maxBytes {
+		} else if !service.catalog.publish(entry, now, service.cacheTTL, validUntil) {
 			err = ErrFieldAnalysisCapacity
 			entry = nil
-		} else {
-			generation, allocated := service.catalog.allocateGeneration()
-			if !allocated {
-				err = ErrFieldAnalysisCapacity
-				entry = nil
-			} else {
-				entry.generation = generation
-				entry.expiresAt = now.Add(service.cacheTTL)
-				if !validUntil.IsZero() && validUntil.Before(entry.expiresAt) {
-					entry.expiresAt = validUntil
-				}
-				entry.element = service.catalog.lru.PushFront(entry)
-				service.catalog.entries[key] = entry
-				service.catalog.bytes += entry.retained
-				heap.Push(&service.catalog.expirations, entry)
-				service.catalog.enforceBounds()
-				if service.catalog.entries[key] != entry {
-					err = ErrFieldAnalysisCapacity
-					entry = nil
-				}
-			}
 		}
 	}
 	flight.entry = entry

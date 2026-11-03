@@ -281,7 +281,7 @@ func buildTimechartFieldMeasure(
 			Range:   aggregate.InputRange,
 		}
 	}
-	input, inputErr := resolveStatsInputField(aggregate.Input, aggregate.InputRange, aggregate.InputQuoted)
+	input, inputErr := resolveAuthoredField(aggregate.Input, aggregate.InputRange, aggregate.InputQuoted)
 	if inputErr != nil {
 		return AggregateMeasure{}, inputErr
 	}

@@ -485,6 +485,7 @@ func backendHECSlowCompressedBody(t *testing.T) []byte {
 
 type backendHECSlowClient struct {
 	connection net.Conn
+	response   *bufio.Reader
 	started    time.Time
 }
 
@@ -549,15 +550,45 @@ func openBackendHECSlowClient(
 			"Content-Encoding: gzip\r\n"+
 			"X-Splunk-Request-Channel: %s\r\n"+
 			"Transfer-Encoding: chunked\r\n"+
-			"Connection: close\r\n\r\n"+
-			"%x\r\n",
+			"Expect: 100-continue\r\n"+
+			"Connection: close\r\n\r\n",
 		address,
 		credential,
 		channel,
-		len(compressed),
 	); err != nil {
 		_ = connection.Close()
 		return nil, fmt.Errorf("write slow HEC request headers: %w", err)
+	}
+	if err := request.Flush(); err != nil {
+		_ = connection.Close()
+		return nil, fmt.Errorf("flush slow HEC request headers: %w", err)
+	}
+	if err := connection.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		_ = connection.Close()
+		return nil, fmt.Errorf("bound slow HEC admission read: %w", err)
+	}
+	// The listener sends Continue only when the admitted handler reads the body.
+	// Wait before opening the next client so the busy probe cannot claim a slot
+	// while a slow client is still authenticating and cause that client to fail.
+	responseReader := bufio.NewReader(connection)
+	response, err := http.ReadResponse(responseReader, &http.Request{Method: http.MethodPost})
+	if err != nil {
+		_ = connection.Close()
+		return nil, fmt.Errorf("read slow HEC admission response: %w", err)
+	}
+	if response.StatusCode != http.StatusContinue {
+		_ = connection.Close()
+		_ = response.Body.Close()
+		return nil, fmt.Errorf("slow HEC admission status = %d, want 100", response.StatusCode)
+	}
+	_ = response.Body.Close()
+	if err := connection.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		_ = connection.Close()
+		return nil, fmt.Errorf("bound slow HEC body write: %w", err)
+	}
+	if _, err := fmt.Fprintf(request, "%x\r\n", len(compressed)); err != nil {
+		_ = connection.Close()
+		return nil, fmt.Errorf("write slow HEC chunk size: %w", err)
 	}
 	if _, err := request.Write(compressed); err != nil {
 		_ = connection.Close()
@@ -575,7 +606,7 @@ func openBackendHECSlowClient(
 		_ = connection.Close()
 		return nil, fmt.Errorf("bound slow HEC response read: %w", err)
 	}
-	return &backendHECSlowClient{connection: connection, started: started}, nil
+	return &backendHECSlowClient{connection: connection, response: responseReader, started: started}, nil
 }
 
 func closeBackendHECSlowClients(clients []*backendHECSlowClient) {
@@ -589,7 +620,7 @@ func closeBackendHECSlowClients(clients []*backendHECSlowClient) {
 func (client *backendHECSlowClient) wait(index int) backendHECSlowClientResult {
 	result := backendHECSlowClientResult{index: index}
 	response, err := http.ReadResponse(
-		bufio.NewReader(client.connection),
+		client.response,
 		&http.Request{Method: http.MethodPost},
 	)
 	if err != nil {

@@ -780,16 +780,16 @@ func validateParallelResolutionSemantics(ctx context.Context, winners []resoluti
 			if knowledge.SelectorsProvablyDisjoint(left.semantics.selector, right.semantics.selector) {
 				continue
 			}
-			if dependencyFieldsIntersect(
+			if knowledge.FieldsIntersect(
 				left.semantics.dependency.outputFields,
 				right.semantics.dependency.outputFields,
 			) {
 				return fmt.Errorf("%w: active same-stage definitions may write the same destination", ErrCorrupt)
 			}
-			if dependencyFieldsIntersect(
+			if knowledge.FieldsIntersect(
 				left.semantics.dependency.outputFields,
 				right.semantics.dependency.inputFields,
-			) || dependencyFieldsIntersect(
+			) || knowledge.FieldsIntersect(
 				right.semantics.dependency.outputFields,
 				left.semantics.dependency.inputFields,
 			) {
@@ -940,7 +940,7 @@ func validateWinningResolutionDependency(
 	if source.semantics.dependency.stage <= target.semantics.dependency.stage {
 		return fmt.Errorf("%w: winning dependency does not point to an earlier stage", ErrCorrupt)
 	}
-	if !dependencyFieldsIntersect(
+	if !knowledge.FieldsIntersect(
 		source.semantics.dependency.inputFields,
 		target.semantics.dependency.outputFields,
 	) {

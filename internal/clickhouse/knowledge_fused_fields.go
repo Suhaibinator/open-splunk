@@ -39,7 +39,6 @@ const (
 	knowledgeFieldBindingNamesElement               = 5
 	knowledgeFieldBindingTypesElement               = 6
 	knowledgeFieldBindingMetadataVersionElement     = 7
-	knowledgeFieldBindingWroteElement               = 8
 	knowledgeFieldBindingSelectorInputBytesElement  = 9
 	knowledgeFieldBindingSelectorQueryUnitsElement  = 10
 	knowledgeFieldBindingAliasCopyBytesElement      = 11

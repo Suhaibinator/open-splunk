@@ -316,7 +316,7 @@ func buildStatsCommand(
 						Range:   aggregate.InputRange,
 					}
 				}
-				input, inputErr := resolveStatsInputField(
+				input, inputErr := resolveAuthoredField(
 					aggregate.Input,
 					aggregate.InputRange,
 					aggregate.InputQuoted,
@@ -411,7 +411,7 @@ func buildStatsCommand(
 							Range:   aggregate.InputRange,
 						}
 					}
-					input, inputErr := resolveStatsInputField(
+					input, inputErr := resolveAuthoredField(
 						aggregate.Input,
 						aggregate.InputRange,
 						aggregate.InputQuoted,

@@ -878,34 +878,5 @@ func finalizePrerequisiteStatsWildcardInventory(
 }
 
 func writePrerequisiteStatsWildcardObservations(sql *strings.Builder) {
-	q := quoteIdentifier
-	fields := []string{
-		fieldSuggestionObservedKind,
-		fieldSuggestionObservedName,
-		fieldSuggestionObservedInvalid,
-	}
-	sql.WriteString(q(fieldSuggestionObservationsCTE))
-	sql.WriteString(" AS (SELECT ")
-	for index, name := range fields {
-		if index > 0 {
-			sql.WriteString(", ")
-		}
-		sql.WriteString("tupleElement(")
-		sql.WriteString(q(fieldSuggestionObservation))
-		sql.WriteString(", ")
-		sql.WriteString(strconv.Itoa(index + 1))
-		sql.WriteString(") AS ")
-		sql.WriteString(q(name))
-	}
-	sql.WriteString(" FROM ")
-	sql.WriteString(q(fieldSuggestionRowsCTE))
-	sql.WriteString(" ARRAY JOIN arrayConcat([tuple(toUInt8(0), CAST('' AS String), ")
-	sql.WriteString(q(fieldSuggestionRowInvalid))
-	sql.WriteString(")], arrayMap(field_metadata -> tuple(toUInt8(1), tupleElement(field_metadata, 1), toUInt8(0)), arrayFilter(field_metadata -> ")
-	sql.WriteString(q(fieldSuggestionRowInvalid))
-	sql.WriteString(" = 0 AND NOT has(CAST(? AS Array(String)), tupleElement(field_metadata, 1)) AND NOT arrayExists(prefix -> tupleElement(field_metadata, 1) = prefix OR startsWith(tupleElement(field_metadata, 1), concat(prefix, '.')), CAST(? AS Array(String))) AND CAST(? AS Bool) AND arrayExists(wildcard_re -> match(tupleElement(field_metadata, 1), wildcard_re), CAST(? AS Array(String))), ")
-	sql.WriteString(q(fieldSuggestionDynamicMetadata))
-	sql.WriteString("))) AS ")
-	sql.WriteString(q(fieldSuggestionObservation))
-	sql.WriteString(" UNION ALL SELECT toUInt8(0), CAST('' AS String), toUInt8(0))")
+	writePrerequisiteFieldMetadataObservations(sql, "NOT has(CAST(? AS Array(String)), tupleElement(field_metadata, 1)) AND NOT arrayExists(prefix -> tupleElement(field_metadata, 1) = prefix OR startsWith(tupleElement(field_metadata, 1), concat(prefix, '.')), CAST(? AS Array(String))) AND CAST(? AS Bool) AND arrayExists(wildcard_re -> match(tupleElement(field_metadata, 1), wildcard_re), CAST(? AS Array(String)))")
 }

@@ -76,7 +76,7 @@ func buildStatsSparklineMeasure(
 			}
 		}
 		var inputErr error
-		input, inputErr = resolveStatsInputField(
+		input, inputErr = resolveAuthoredField(
 			spec.Input,
 			spec.InputRange,
 			spec.InputQuoted,

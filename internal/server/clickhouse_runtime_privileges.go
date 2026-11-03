@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -95,7 +96,7 @@ var clickHouseMigrationGrantAllowlist = []clickHouseGrant{
 	},
 }
 
-var clickHouseDeletionWorkerGrantAllowlist = []clickHouseGrant{
+var clickHouseDeletionWorkerRequiredGrants = []clickHouseGrant{
 	{
 		target: "open_splunk.events",
 		privileges: []string{
@@ -107,73 +108,23 @@ var clickHouseDeletionWorkerGrantAllowlist = []clickHouseGrant{
 		target:     "system.mutations",
 		privileges: []string{"SELECT"},
 	},
-	{
-		target:     "system.tables",
-		privileges: []string{"SELECT"},
-	},
 }
+
+var clickHouseDeletionWorkerGrantAllowlist = slices.Concat(
+	clickHouseDeletionWorkerRequiredGrants,
+	[]clickHouseGrant{{target: "system.tables", privileges: []string{"SELECT"}}},
+)
 
 // clickHouseApplicationRequiredGrants is the combined capability set used by
 // the normal single-account server. Unlike the dedicated recovery principals,
 // an operator-managed application account may have broader grants; CHECK
 // GRANT verifies that every required operation is available without imposing
 // an exact allowlist on that external account.
-var clickHouseApplicationRequiredGrants = []clickHouseGrant{
-	{
-		target:     "open_splunk.*",
-		privileges: []string{"CREATE DATABASE", "SHOW TABLES"},
-	},
-	{
-		target: "open_splunk.events",
-		privileges: []string{
-			"ALTER ADD COLUMN",
-			"ALTER ADD CONSTRAINT",
-			"ALTER ADD INDEX",
-			"CREATE TABLE",
-		},
-	},
-	{
-		target: "open_splunk.schema_migrations",
-		privileges: []string{
-			"CREATE TABLE",
-			"INSERT",
-			"SELECT",
-		},
-	},
-	{
-		target:     "open_splunk.recovery_sets",
-		privileges: []string{"CREATE TABLE"},
-	},
-	{
-		target:     "open_splunk.recovery_archive_markers",
-		privileges: []string{"CREATE TABLE"},
-	},
-	{
-		target:     "system.tables",
-		privileges: []string{"SELECT"},
-	},
-	{
-		target:     "open_splunk.events",
-		privileges: []string{"INSERT", "SELECT"},
-	},
-	{
-		target: "system.parts",
-		privileges: []string{
-			"SELECT(active, bytes_on_disk, database, rows, `table`)",
-		},
-	},
-	{
-		target: "open_splunk.events",
-		privileges: []string{
-			"ALTER DELETE",
-			"SELECT(index_name, tenant_id)",
-		},
-	},
-	{
-		target:     "system.mutations",
-		privileges: []string{"SELECT"},
-	},
-}
+var clickHouseApplicationRequiredGrants = slices.Concat(
+	clickHouseMigrationGrantAllowlist,
+	clickHouseRuntimeGrantAllowlist,
+	clickHouseDeletionWorkerRequiredGrants,
+)
 
 var clickHouseBackupGrantAllowlist = []clickHouseGrant{
 	{

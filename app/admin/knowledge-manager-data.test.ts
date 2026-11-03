@@ -75,8 +75,6 @@ import {
   adaptKnowledgeUpdateResponse,
   adaptKnowledgeValidationResponse,
   createKnowledgeMutationClient,
-  createKnowledgeObject,
-  deleteKnowledgeObject,
   knowledgeDetailRequest,
   knowledgeUpdateRequest,
   knowledgeValidateRequest,
@@ -95,11 +93,6 @@ import {
   loadKnowledgeRelationshipPage,
   mergeKnowledgeContinuation,
   mergeKnowledgeRelationshipContinuation,
-  prepareKnowledgeObjectQuarantine,
-  quarantineKnowledgeObject,
-  setKnowledgeObjectState,
-  updateKnowledgeObject,
-  validateKnowledgeObject,
   type KnowledgeLifecycleStateFilter,
   type KnowledgeDetailQuery,
   type KnowledgeListQuery,
@@ -554,15 +547,15 @@ test("knowledge mutation client sends the five exact generated-protobuf authorit
     fetch: fetchImplementation,
   });
   assert.equal(fetches, 0, "client construction must be traffic-free");
-  const created = await createKnowledgeObject(client, fixtures.create);
-  const validated = await validateKnowledgeObject(client, fixtures.validate);
-  const updated = await updateKnowledgeObject(client, fixtures.update, {
+  const created = await client.create(fixtures.create);
+  const validated = await client.validate(fixtures.validate);
+  const updated = await client.update(fixtures.update, {
     currentKnowledgeObject: current.update,
   });
-  const stated = await setKnowledgeObjectState(client, fixtures.setState, {
+  const stated = await client.setState(fixtures.setState, {
     currentKnowledgeObject: current.setState,
   });
-  const deleted = await deleteKnowledgeObject(client, fixtures.delete);
+  const deleted = await client.delete(fixtures.delete);
 
   assert.equal(created.knowledgeObject.version, 1n);
   assert.equal(validated.result.valid, true);
@@ -643,15 +636,15 @@ test("knowledge mutation adapters reject request mismatches and malformed succes
     },
   });
 
-  await assert.rejects(createKnowledgeObject(client, fixtures.create), TypeError);
-  await assert.rejects(validateKnowledgeObject(client, fixtures.validate), TypeError);
-  await assert.rejects(updateKnowledgeObject(client, fixtures.update, {
+  await assert.rejects(client.create(fixtures.create), TypeError);
+  await assert.rejects(client.validate(fixtures.validate), TypeError);
+  await assert.rejects(client.update(fixtures.update, {
     currentKnowledgeObject: current.update,
   }), TypeError);
-  await assert.rejects(setKnowledgeObjectState(client, fixtures.setState, {
+  await assert.rejects(client.setState(fixtures.setState, {
     currentKnowledgeObject: current.setState,
   }), TypeError);
-  await assert.rejects(deleteKnowledgeObject(client, fixtures.delete), TypeError);
+  await assert.rejects(client.delete(fixtures.delete), TypeError);
 });
 
 test("quarantine preparation and execution bind the signed plan and ordered cascade", async () => {
@@ -775,14 +768,12 @@ test("quarantine client uses both protected routes without exposing its token in
       ).finish(), { status: 200, headers: { "Content-Type": PROTOBUF_CONTENT_TYPE } });
     },
   });
-  const preparation = await prepareKnowledgeObjectQuarantine(
-    client,
+  const preparation = await client.prepareQuarantine(
     PrepareKnowledgeObjectQuarantineRequest.fromPartial({
       knowledgeObjectId: "ko-quarantine-root",
     }),
   );
-  const receipt = await quarantineKnowledgeObject(
-    client,
+  const receipt = await client.quarantine(
     QuarantineKnowledgeObjectRequest.fromPartial({
       recoveryToken,
       clientRequestId: "browser-quarantine-request-0002",
@@ -1229,7 +1220,7 @@ test("knowledge mutation preflight is traffic-free and cancellation reaches fetc
     intent: KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
   });
   await assert.rejects(
-    validateKnowledgeObject(client, updateValidationWithoutAuthority),
+    client.validate(updateValidationWithoutAuthority),
     TypeError,
   );
   const cardinalityInvalidCandidate = ValidateKnowledgeObjectRequest.fromPartial({
@@ -1261,7 +1252,7 @@ test("knowledge mutation preflight is traffic-free and cancellation reaches fetc
   assert.equal(fetches, 0);
 
   const controller = new AbortController();
-  const pending = validateKnowledgeObject(client, fixtures.validate, {
+  const pending = client.validate(fixtures.validate, {
     signal: controller.signal,
   });
   controller.abort();
@@ -1286,27 +1277,27 @@ test("every knowledge mutation client response is streaming-bounded before decod
   });
 
   await assert.rejects(
-    createKnowledgeObject(client, fixtures.create),
+    client.create(fixtures.create),
     ProtobufResponseTooLargeError,
   );
   await assert.rejects(
-    validateKnowledgeObject(client, fixtures.validate),
+    client.validate(fixtures.validate),
     ProtobufResponseTooLargeError,
   );
   await assert.rejects(
-    updateKnowledgeObject(client, fixtures.update, {
+    client.update(fixtures.update, {
       currentKnowledgeObject: current.update,
     }),
     ProtobufResponseTooLargeError,
   );
   await assert.rejects(
-    setKnowledgeObjectState(client, fixtures.setState, {
+    client.setState(fixtures.setState, {
       currentKnowledgeObject: current.setState,
     }),
     ProtobufResponseTooLargeError,
   );
   await assert.rejects(
-    deleteKnowledgeObject(client, fixtures.delete),
+    client.delete(fixtures.delete),
     ProtobufResponseTooLargeError,
   );
   const quarantinePreparation = {
@@ -1317,8 +1308,7 @@ test("every knowledge mutation client response is streaming-bounded before decod
     tenantCatalogRevision: 1n,
   };
   await assert.rejects(
-    prepareKnowledgeObjectQuarantine(
-      client,
+    client.prepareQuarantine(
       PrepareKnowledgeObjectQuarantineRequest.fromPartial({
         knowledgeObjectId: quarantinePreparation.rootKnowledgeObjectId,
       }),
@@ -1326,8 +1316,7 @@ test("every knowledge mutation client response is streaming-bounded before decod
     ProtobufResponseTooLargeError,
   );
   await assert.rejects(
-    quarantineKnowledgeObject(
-      client,
+    client.quarantine(
       QuarantineKnowledgeObjectRequest.fromPartial({
         recoveryToken: quarantinePreparation.recoveryToken,
         clientRequestId: "browser-quarantine-bounded-0001",
@@ -2115,12 +2104,25 @@ test("unknown control and query enums fail closed before a List request", async 
   assert.equal(knowledgeSortChoiceFromControlValue("created-descending"), "created-descending");
   assert.equal(knowledgeSortChoiceFromControlValue("name-sideways"), undefined);
 
+  const invalidValues = ["constructor", "__proto__", "toString", { toString: () => "all" }];
+  for (const value of invalidValues) {
+    const controlValue = value as string;
+    assert.equal(knowledgeObjectTypeFilterFromControlValue(controlValue), undefined);
+    assert.equal(knowledgeLifecycleStateFilterFromControlValue(controlValue), undefined);
+    assert.equal(knowledgeSharingScopeFilterFromControlValue(controlValue), undefined);
+    assert.equal(knowledgeSortChoiceFromControlValue(controlValue), undefined);
+  }
   const invalidQueries: KnowledgeListQuery[] = [
     { ...query(), objectType: "future-object-type" as never },
     { ...query(), lifecycleState: "future-state" as never },
     { ...query(), sharingScope: "future-sharing" as never },
     { ...query(), sort: "future-sort" as never },
   ];
+  for (const value of invalidValues) {
+    for (const key of ["objectType", "lifecycleState", "sharingScope", "sort"] as const) {
+      invalidQueries.push({ ...query(), [key]: value } as KnowledgeListQuery);
+    }
+  }
   await Promise.all(invalidQueries.map(async (invalidQuery) => {
     assert.throws(() => knowledgeListRequest(invalidQuery), TypeError);
     let listCalls = 0;

@@ -1,7 +1,6 @@
 package searchanalysis
 
 import (
-	"container/heap"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -326,30 +325,9 @@ func (service *FieldService) runFieldSummaryFlight(
 		case !now.Before(snapshot.ExpiresAt):
 			err = searchjobs.ErrExpired
 			entry = nil
-		case entry.retained > service.summary.maxBytes:
+		case !service.summary.publish(entry, now, service.summaryCacheTTL, snapshot.ExpiresAt):
 			err = ErrFieldAnalysisCapacity
 			entry = nil
-		default:
-			generation, allocated := service.summary.allocateGeneration()
-			if !allocated {
-				err = ErrFieldAnalysisCapacity
-				entry = nil
-				break
-			}
-			entry.generation = generation
-			entry.expiresAt = now.Add(service.summaryCacheTTL)
-			if snapshot.ExpiresAt.Before(entry.expiresAt) {
-				entry.expiresAt = snapshot.ExpiresAt
-			}
-			entry.element = service.summary.lru.PushFront(entry)
-			service.summary.entries[key] = entry
-			service.summary.bytes += entry.retained
-			heap.Push(&service.summary.expirations, entry)
-			service.summary.enforceBounds()
-			if service.summary.entries[key] != entry {
-				err = ErrFieldAnalysisCapacity
-				entry = nil
-			}
 		}
 	}
 	flight.entry = entry

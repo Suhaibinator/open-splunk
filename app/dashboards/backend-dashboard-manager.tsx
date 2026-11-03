@@ -112,6 +112,8 @@ async function fetchDashboardCatalog(
   return { available: true as const, bootstrap, dashboards: response.dashboards, selectedApp };
 }
 
+type AvailableDashboardCatalog = Extract<Awaited<ReturnType<typeof fetchDashboardCatalog>>, { available: true }>;
+
 function newPanel(appId: string, indexName: string, row: number): DashboardPanel {
   return {
     panelId: panelID(),
@@ -201,6 +203,40 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
     }
   }, [stopPanelRun]);
 
+  const applyCatalog = useCallback((result: AvailableDashboardCatalog, mode: DashboardLoadMode) => {
+    setApps(result.bootstrap.apps);
+    setAppAdminAvailable(result.bootstrap.features.has(ServerFeature.SERVER_FEATURE_APP_ADMIN));
+    setLoadedCatalog(true);
+    if (!result.selectedApp) {
+      setAppID("");
+      setAppName("Dashboard workspace");
+      setIndexNames([]);
+      setDashboards([]);
+      selectedIDRef.current = "";
+      setSelectedID("");
+      setDraft(null);
+      setPanelResults({});
+      setInvalidPanelIDs(new Set());
+      return;
+    }
+    const retainedID = mode === "switch" ? "" : selectedIDRef.current;
+    const nextSelected = result.dashboards.find((dashboard) => dashboard.dashboardId === retainedID)
+      ?? result.dashboards[0]
+      ?? null;
+    setAvailable(true);
+    setAppID(result.selectedApp.appId);
+    setAppName(result.selectedApp.displayName || result.selectedApp.slug || "Dashboard workspace");
+    setIndexNames(result.bootstrap.indexes.filter((index) => index.searchable).map((index) => index.name));
+    setDefaultSearchTimeoutMs(result.bootstrap.limits.defaultSearchTimeoutMs);
+    setDashboards(result.dashboards);
+    selectedIDRef.current = nextSelected?.dashboardId ?? "";
+    setSelectedID(selectedIDRef.current);
+    setDraft(nextSelected?.definition ? cloneDashboardDefinition(nextSelected.definition) : null);
+    setPanelResults({});
+    setInvalidPanelIDs(new Set());
+    replaceBackendAppId(result.selectedApp.appId);
+  }, []);
+
   const load = useCallback(async (
     preferredAppId: string | undefined,
     mode: DashboardLoadMode,
@@ -220,39 +256,9 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
         throw new Error("The backend no longer advertises persisted dashboard support.");
       }
       if (generation !== loadGeneration.current) return false;
-      setApps(result.bootstrap.apps);
-      setAppAdminAvailable(result.bootstrap.features.has(ServerFeature.SERVER_FEATURE_APP_ADMIN));
-      setLoadedCatalog(true);
-      if (!result.selectedApp) {
-        stopAllPanelRuns("Dashboard app catalog is empty");
-        setAppID("");
-        setAppName("Dashboard workspace");
-        setIndexNames([]);
-        setDashboards([]);
-        selectedIDRef.current = "";
-        setSelectedID("");
-        setDraft(null);
-        setPanelResults({});
-        setInvalidPanelIDs(new Set());
-        return true;
-      }
-      const retainedID = mode === "switch" ? "" : selectedIDRef.current;
-      const nextSelected = result.dashboards.find((dashboard) => dashboard.dashboardId === retainedID)
-        ?? result.dashboards[0]
-        ?? null;
-      if (mode !== "initial") stopAllPanelRuns(mode === "switch" ? "Dashboard app changed" : "Dashboards reloaded");
-      setAvailable(true);
-      setAppID(result.selectedApp.appId);
-      setAppName(result.selectedApp.displayName || result.selectedApp.slug || "Dashboard workspace");
-      setIndexNames(result.bootstrap.indexes.filter((index) => index.searchable).map((index) => index.name));
-      setDefaultSearchTimeoutMs(result.bootstrap.limits.defaultSearchTimeoutMs);
-      setDashboards(result.dashboards);
-      selectedIDRef.current = nextSelected?.dashboardId ?? "";
-      setSelectedID(selectedIDRef.current);
-      setDraft(nextSelected?.definition ? cloneDashboardDefinition(nextSelected.definition) : null);
-      setPanelResults({});
-      setInvalidPanelIDs(new Set());
-      replaceBackendAppId(result.selectedApp.appId);
+      if (!result.selectedApp) stopAllPanelRuns("Dashboard app catalog is empty");
+      else if (mode !== "initial") stopAllPanelRuns(mode === "switch" ? "Dashboard app changed" : "Dashboards reloaded");
+      applyCatalog(result, mode);
       return true;
     } catch (requestError) {
       if (!controller.signal.aborted && generation === loadGeneration.current) {
@@ -267,7 +273,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
         if (mode === "switch") setSwitchingAppID(null);
       }
     }
-  }, [client, stopAllPanelRuns]);
+  }, [applyCatalog, client, stopAllPanelRuns]);
 
   const beginLoad = useCallback((preferredAppId: string | undefined, mode: DashboardLoadMode) => {
     if (mode === "initial") setLoading(true);
@@ -290,36 +296,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
         setAvailable(false);
         return;
       }
-      setApps(result.bootstrap.apps);
-      setAppAdminAvailable(result.bootstrap.features.has(ServerFeature.SERVER_FEATURE_APP_ADMIN));
-      setLoadedCatalog(true);
-      if (!result.selectedApp) {
-        setAppID("");
-        setAppName("Dashboard workspace");
-        setIndexNames([]);
-        setDashboards([]);
-        selectedIDRef.current = "";
-        setSelectedID("");
-        setDraft(null);
-        setPanelResults({});
-        setInvalidPanelIDs(new Set());
-        return;
-      }
-      const nextSelected = result.dashboards.find((dashboard) => dashboard.dashboardId === selectedIDRef.current)
-        ?? result.dashboards[0]
-        ?? null;
-      setAvailable(true);
-      setAppID(result.selectedApp.appId);
-      replaceBackendAppId(result.selectedApp.appId);
-      setAppName(result.selectedApp.displayName || result.selectedApp.slug || "Dashboard workspace");
-      setIndexNames(result.bootstrap.indexes.filter((index) => index.searchable).map((index) => index.name));
-      setDefaultSearchTimeoutMs(result.bootstrap.limits.defaultSearchTimeoutMs);
-      setDashboards(result.dashboards);
-      selectedIDRef.current = nextSelected?.dashboardId ?? "";
-      setSelectedID(selectedIDRef.current);
-      setDraft(nextSelected?.definition ? cloneDashboardDefinition(nextSelected.definition) : null);
-      setPanelResults({});
-      setInvalidPanelIDs(new Set());
+      applyCatalog(result, "initial");
     }).catch((requestError: unknown) => {
       if (!controller.signal.aborted && generation === loadGeneration.current) {
         setError(dashboardLoadError(errorMessage(requestError), "initial", preferredAppId));
@@ -340,7 +317,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
       }
       runs.clear();
     };
-  }, [client]);
+  }, [applyCatalog, client]);
 
   useEffect(() => {
     if (!dirty) return;

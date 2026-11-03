@@ -180,7 +180,7 @@ func convertStatsGroupFields(
 			}
 		}
 		seen[field.Name] = struct{}{}
-		resolved, err := resolveStatsInputField(field.Name, field.Range, field.Quoted)
+		resolved, err := resolveAuthoredField(field.Name, field.Range, field.Quoted)
 		if err != nil {
 			return nil, err
 		}

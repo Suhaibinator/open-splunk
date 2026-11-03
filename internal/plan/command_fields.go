@@ -112,15 +112,7 @@ func convertFieldsCommand(command *spl.FieldsCommand) ([]FieldRef, []ProjectFiel
 				Code: "SPL_UNSUPPORTED_FIELD_PATTERN", Message: "fields selector has inconsistent wildcard metadata", Range: sourceRange,
 			}
 		}
-		var (
-			field FieldRef
-			err   error
-		)
-		if quoted {
-			field, err = ResolveQuotedField(name, sourceRange)
-		} else {
-			field, err = ResolveField(name, sourceRange)
-		}
+		field, err := resolveAuthoredField(name, sourceRange, quoted)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -301,15 +293,7 @@ func convertSortFields(fields []spl.SortField) ([]SortKey, error) {
 		if fieldRange == (spl.Range{}) {
 			fieldRange = field.Range
 		}
-		var (
-			ref      FieldRef
-			fieldErr error
-		)
-		if field.Quoted {
-			ref, fieldErr = ResolveQuotedField(field.Field, fieldRange)
-		} else {
-			ref, fieldErr = ResolveField(field.Field, fieldRange)
-		}
+		ref, fieldErr := resolveAuthoredField(field.Field, fieldRange, field.Quoted)
 		if fieldErr != nil {
 			return nil, fieldErr
 		}
@@ -360,15 +344,7 @@ func convertTableFields(command *spl.TableCommand) ([]FieldRef, error) {
 			}
 		}
 		seen[name] = struct{}{}
-		var (
-			field FieldRef
-			err   error
-		)
-		if command.QuotedFields[index] {
-			field, err = ResolveQuotedField(name, command.FieldRanges[index])
-		} else {
-			field, err = ResolveField(name, command.FieldRanges[index])
-		}
+		field, err := resolveAuthoredField(name, command.FieldRanges[index], command.QuotedFields[index])
 		if err != nil {
 			return nil, err
 		}
@@ -441,7 +417,7 @@ func ResolveQuotedField(name string, sourceRange spl.Range) (FieldRef, error) {
 	return FieldRef{Name: name, Path: []string{name}, Range: sourceRange}, nil
 }
 
-func resolveStatsInputField(
+func resolveAuthoredField(
 	name string,
 	sourceRange spl.Range,
 	quoted bool,

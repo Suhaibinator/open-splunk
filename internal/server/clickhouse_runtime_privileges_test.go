@@ -51,9 +51,18 @@ func TestValidateClickHouseApplicationPrivilegesAcceptsUnifiedAccount(t *testing
 	); err != nil {
 		t.Fatalf("ValidateClickHouseApplicationPrivileges() error = %v", err)
 	}
-	wantQueries := []string{clickHouseVersionQuery}
-	for _, grant := range clickHouseApplicationRequiredGrants {
-		wantQueries = append(wantQueries, clickHouseGrantCheckQuery(grant))
+	wantQueries := []string{
+		clickHouseVersionQuery,
+		"CHECK GRANT CREATE DATABASE, SHOW TABLES ON open_splunk.*",
+		"CHECK GRANT ALTER ADD COLUMN, ALTER ADD CONSTRAINT, ALTER ADD INDEX, CREATE TABLE ON open_splunk.events",
+		"CHECK GRANT CREATE TABLE, INSERT, SELECT ON open_splunk.schema_migrations",
+		"CHECK GRANT CREATE TABLE ON open_splunk.recovery_sets",
+		"CHECK GRANT CREATE TABLE ON open_splunk.recovery_archive_markers",
+		"CHECK GRANT SELECT ON system.tables",
+		"CHECK GRANT INSERT, SELECT ON open_splunk.events",
+		"CHECK GRANT SELECT(active, bytes_on_disk, database, rows, `table`) ON system.parts",
+		"CHECK GRANT ALTER DELETE, SELECT(index_name, tenant_id) ON open_splunk.events",
+		"CHECK GRANT SELECT ON system.mutations",
 	}
 	if got := connection.queriesSnapshot(); !reflect.DeepEqual(got, wantQueries) {
 		t.Fatalf("queries = %#v, want %#v", got, wantQueries)

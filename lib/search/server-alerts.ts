@@ -360,10 +360,9 @@ export async function listServerAlerts(
   bootstrap: SystemBootstrapModel,
   options: ProtobufRequestOptions & { appId?: string; text?: string; pageSize?: number } = {},
 ): Promise<OptionalFeatureResult<CursorPageCollection<ServerAlert>>> {
-  if (!supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_ALERTS)) return featureNotAdvertised;
-  const pageSize = options.pageSize ?? Math.min(50, bootstrap.limits.maximumPageSize || 50);
-  try {
-    const value = await collectCursorPages<ServerAlert>({
+  return requiredAlertFeature(bootstrap, async () => {
+    const pageSize = options.pageSize ?? Math.min(50, bootstrap.limits.maximumPageSize || 50);
+    return collectCursorPages<ServerAlert>({
       label: "Alerts",
       maximumPages: 256,
       fetchPage: async ({ pageToken, includeTotalSize }) => {
@@ -375,11 +374,7 @@ export async function listServerAlerts(
         return { items: response.alerts.map(adaptServerAlert), page: response.page };
       },
     });
-    return { status: "available", value };
-  } catch (error) {
-    if (isOptionalRouteUnavailable(error)) return optionalRouteUnavailable;
-    throw error;
-  }
+  });
 }
 
 async function requiredAlertFeature<T>(
@@ -441,15 +436,11 @@ export async function runServerAlert(
   alertId: string,
   options?: ProtobufRequestOptions,
 ): Promise<OptionalFeatureResult<ServerAlertRun>> {
-  if (!supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_ALERTS)) return featureNotAdvertised;
-  try {
+  return requiredAlertFeature(bootstrap, async () => {
     const response = await client.alerts.run({ alertId }, options);
     if (response.run === undefined) throw new TypeError("The server returned an empty alert run.");
-    return { status: "available", value: adaptServerAlertRun(response.run) };
-  } catch (error) {
-    if (isOptionalRouteUnavailable(error)) return optionalRouteUnavailable;
-    throw error;
-  }
+    return adaptServerAlertRun(response.run);
+  });
 }
 
 export interface TestWebhookResult {
@@ -464,18 +455,14 @@ export async function testServerAlertWebhook(
   alertId: string,
   options?: ProtobufRequestOptions,
 ): Promise<OptionalFeatureResult<TestWebhookResult>> {
-  if (!supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_ALERTS)) return featureNotAdvertised;
-  try {
+  return requiredAlertFeature(bootstrap, async () => {
     const response = await client.alerts.testWebhook({ alertId }, options);
-    return { status: "available", value: {
+    return {
       delivered: response.delivered,
       deliveryId: response.deliveryId,
       failureCategory: response.failureCategory?.trim() || null,
-    } };
-  } catch (error) {
-    if (isOptionalRouteUnavailable(error)) return optionalRouteUnavailable;
-    throw error;
-  }
+    };
+  });
 }
 
 export async function rotateServerAlertSecret(
@@ -499,15 +486,11 @@ export async function deleteServerAlert(
   alert: ServerAlert,
   options?: ProtobufRequestOptions,
 ): Promise<OptionalFeatureResult<string>> {
-  if (!supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_ALERTS)) return featureNotAdvertised;
-  try {
+  return requiredAlertFeature(bootstrap, async () => {
     const response = await client.alerts.delete({ alertId: alert.id, expectedVersion: alert.version }, options);
     if (response.alertId !== alert.id) throw new TypeError("The server deleted a different alert.");
-    return { status: "available", value: response.alertId };
-  } catch (error) {
-    if (isOptionalRouteUnavailable(error)) return optionalRouteUnavailable;
-    throw error;
-  }
+    return response.alertId;
+  });
 }
 
 export async function listServerAlertRuns(
@@ -516,10 +499,9 @@ export async function listServerAlertRuns(
   alertId: string,
   options: ProtobufRequestOptions & { pageSize?: number } = {},
 ): Promise<OptionalFeatureResult<CursorPageCollection<ServerAlertRun>>> {
-  if (!supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_ALERTS)) return featureNotAdvertised;
-  const pageSize = options.pageSize ?? Math.min(100, bootstrap.limits.maximumPageSize || 100);
-  try {
-    const value = await collectCursorPages<ServerAlertRun>({
+  return requiredAlertFeature(bootstrap, async () => {
+    const pageSize = options.pageSize ?? Math.min(100, bootstrap.limits.maximumPageSize || 100);
+    return collectCursorPages<ServerAlertRun>({
       label: "Alert runs",
       maximumPages: 128,
       fetchPage: async ({ pageToken, includeTotalSize }) => {
@@ -527,11 +509,7 @@ export async function listServerAlertRuns(
         return { items: response.runs.map(adaptServerAlertRun), page: response.page };
       },
     });
-    return { status: "available", value };
-  } catch (error) {
-    if (isOptionalRouteUnavailable(error)) return optionalRouteUnavailable;
-    throw error;
-  }
+  });
 }
 
 export function alertRunOutcomeLabel(outcome: AlertRunOutcome): string {

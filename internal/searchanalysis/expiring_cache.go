@@ -56,9 +56,8 @@ func (entries *expiryHeap[K, V]) Pop() any {
 
 // expiringCache is a bounded TTL cache with LRU eviction and a deadline heap.
 // It carries no lock of its own: every method requires the owning service's
-// mutex to be held, and publication (assigning generation/expiresAt/element,
-// inserting into entries, adding to bytes, and pushing onto expirations) stays
-// with the caller that also owns the single-flight bookkeeping.
+// mutex to be held. The caller owns expiry validation and single-flight
+// bookkeeping; publish owns insertion and capacity enforcement.
 type expiringCache[K comparable, V any] struct {
 	entries        map[K]*cacheEntry[K, V]
 	lru            list.List
@@ -90,6 +89,29 @@ func (cache *expiringCache[K, V]) expire(now time.Time) {
 		}
 		cache.remove(entry)
 	}
+}
+
+// publish retains a new entry if capacity permits. validUntil caps the TTL
+// when nonzero; the caller has already checked that this deadline is live.
+func (cache *expiringCache[K, V]) publish(entry *cacheEntry[K, V], now time.Time, ttl time.Duration, validUntil time.Time) bool {
+	if entry.retained > cache.maxBytes {
+		return false
+	}
+	generation, allocated := cache.allocateGeneration()
+	if !allocated {
+		return false
+	}
+	entry.generation = generation
+	entry.expiresAt = now.Add(ttl)
+	if !validUntil.IsZero() && validUntil.Before(entry.expiresAt) {
+		entry.expiresAt = validUntil
+	}
+	entry.element = cache.lru.PushFront(entry)
+	cache.entries[entry.key] = entry
+	cache.bytes += entry.retained
+	heap.Push(&cache.expirations, entry)
+	cache.enforceBounds()
+	return cache.entries[entry.key] == entry
 }
 
 // enforceBounds evicts least-recently-used entries until both the entry-count
