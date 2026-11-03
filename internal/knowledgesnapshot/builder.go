@@ -33,7 +33,6 @@ const (
 
 	MaximumExecutableObjects        = 256
 	MaximumShadows                  = 512
-	MaximumWarnings                 = MaximumShadows
 	MaximumCanonicalBytes           = 4 << 20
 	MaximumCandidateDefinitionBytes = 8 << 20
 	MaximumDependencyNodes          = 256
