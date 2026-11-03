@@ -358,9 +358,9 @@ test("CI declares every core and catalog shard exactly once", async (t) => {
   }
 
   const core = rows.filter((row) => row.mode === "race-core");
-  assert.equal(core.length, 8);
-  assert.deepEqual(core.map((row) => Number(row.shard_index)).toSorted(), [0, 1, 2, 3, 4, 5, 6, 7]);
-  assert.ok(core.every((row) => row.shard_count === "8"));
+  assert.equal(core.length, 12);
+  assert.deepEqual(core.map((row) => Number(row.shard_index)).toSorted((left, right) => left - right), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  assert.ok(core.every((row) => row.shard_count === "12"));
   assert.ok(core.every((row) => row.job_timeout_minutes === "60"));
   // Exercise the actual workflow coordinates, preserving whole-package race
   // coverage and proving the expanded matrix neither skips nor repeats work.
@@ -387,7 +387,7 @@ test("CI declares every core and catalog shard exactly once", async (t) => {
   assert.ok(catalog.every((row) => row.shard_count === "4"));
   assert.ok(catalog.every((row) => row.job_timeout_minutes === "45"));
   assert.equal(rows.filter((row) => row.mode === "coverage").length, 1);
-  assert.equal(rows.length, 13);
+  assert.equal(rows.length, 17);
   assert.match(goTestWorkflow, /strategy:\n {6}fail-fast: false/);
   assert.match(goTestWorkflow, /strategy:\n {6}fail-fast: false\n {6}max-parallel: 5/);
   assert.match(goTestWorkflow, /scripts\/run-go-race-shard\.sh core\n {10}\$\{\{ matrix\.shard_index \}\}\n {10}\$\{\{ matrix\.shard_count \}\}/);
