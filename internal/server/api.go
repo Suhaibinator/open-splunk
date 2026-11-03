@@ -331,6 +331,7 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 		}
 	}
 	if err != nil {
+		handler.logSearchAdmissionFailure(request, resolved.AppID, err)
 		if contextErr := historyRerunContextError(
 			request.Context(),
 			err,

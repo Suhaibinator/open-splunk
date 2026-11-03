@@ -2317,6 +2317,10 @@ func TestCreateVisibilitySnapshotFailureIsSafeAndCreatesNoJob(t *testing.T) {
 	if !errors.Is(err, ErrStorageUnavailable) {
 		t.Fatalf("Create() error = %v, want ErrStorageUnavailable", err)
 	}
+	diagnostic, ok := errors.AsType[*AdmissionError](err)
+	if !ok || diagnostic.Stage != "visibility_snapshot" || diagnostic.Cause == nil || diagnostic.Cause.Error() != "tcp://admin:password@db.internal" {
+		t.Fatalf("missing private snapshot diagnostic: %v", err)
+	}
 	for _, secret := range []string{"password", "admin", "db.internal"} {
 		if strings.Contains(err.Error(), secret) {
 			t.Fatalf("Create() leaked %q in %q", secret, err)
@@ -2350,6 +2354,13 @@ func TestVisibilitySnapshotHasManagerOwnedTimeout(t *testing.T) {
 	_, err := manager.Create(context.Background(), validRequest())
 	if !errors.Is(err, ErrStorageUnavailable) {
 		t.Fatalf("Create() error = %v, want ErrStorageUnavailable", err)
+	}
+	diagnostic, ok := errors.AsType[*AdmissionError](err)
+	if !ok || diagnostic.Stage != "visibility_snapshot" || !errors.Is(diagnostic.Cause, context.DeadlineExceeded) {
+		t.Fatalf("missing internal timeout diagnostic: %v", err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("internal deadline escaped as a caller deadline")
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("visibility timeout took %v", elapsed)

@@ -782,7 +782,17 @@ func (manager *Manager) create(
 	ctx context.Context,
 	request CreateRequest,
 	intent *requestidempotency.Intent,
-) (Job, error) {
+) (job Job, resultErr error) {
+	stage := "validation"
+	defer func() {
+		if errors.Is(resultErr, ErrCapacity) || errors.Is(resultErr, ErrClosed) ||
+			errors.Is(resultErr, ErrStorageUnavailable) || errors.Is(resultErr, ErrJournalUnavailable) ||
+			errors.Is(resultErr, ErrKnowledgeUnavailable) || errors.Is(resultErr, ErrQueueFull) {
+			if _, ok := errors.AsType[*AdmissionError](resultErr); !ok {
+				resultErr = &AdmissionError{Stage: stage, Err: resultErr}
+			}
+		}
+	}()
 	if ctx == nil {
 		return Job{}, errors.New("create search job: context is nil")
 	}
@@ -801,6 +811,7 @@ func (manager *Manager) create(
 	if request.RetentionLifetime > 0 {
 		admittedLimits.ResultRetention = request.RetentionLifetime
 	}
+	stage = "job_capacity"
 	if err := manager.beginOperation(); err != nil {
 		return Job{}, err
 	}
@@ -812,6 +823,7 @@ func (manager *Manager) create(
 	if manager.ctx.Err() != nil {
 		return Job{}, ErrClosed
 	}
+	stage = "knowledge"
 	if err := manager.rejectUnavailableAuthoredLookupAdmission(ctx, request); err != nil {
 		return Job{}, err
 	}
@@ -874,6 +886,7 @@ func (manager *Manager) create(
 			return Job{}, err
 		}
 	}
+	stage = "metadata_capacity"
 	metadataBytes, err := retainedNormalizedJobMetadataReservation(id, request)
 	if err != nil || metadataBytes > manager.maxMetadataBytes {
 		return Job{}, ErrCapacity
@@ -941,6 +954,7 @@ func (manager *Manager) create(
 	}
 	created := cloneJob(entry.job)
 	journalAdmitted := false
+	stage = "journal"
 	if manager.journal != nil {
 		if err := manager.admitJournal(ctx, created, intent); err != nil {
 			cancel()
@@ -959,6 +973,7 @@ func (manager *Manager) create(
 		}
 	}()
 
+	stage = "publish"
 	manager.mu.Lock()
 	if manager.closed {
 		manager.mu.Unlock()
@@ -1010,23 +1025,26 @@ func (manager *Manager) captureVisibility(ctx context.Context) (uint64, error) {
 	case manager.snapshotGate <- struct{}{}:
 		defer func() { <-manager.snapshotGate }()
 	case <-snapshotContext.Done():
-		return 0, manager.snapshotAdmissionError(ctx)
+		return 0, manager.snapshotAdmissionError(ctx, snapshotContext.Err())
 	}
 	visibilityCutoff, err := manager.snapshotter.VisibilityCutoff(snapshotContext)
 	if err != nil || snapshotContext.Err() != nil {
-		return 0, manager.snapshotAdmissionError(ctx)
+		if err == nil {
+			err = snapshotContext.Err()
+		}
+		return 0, manager.snapshotAdmissionError(ctx, err)
 	}
 	return visibilityCutoff, nil
 }
 
-func (manager *Manager) snapshotAdmissionError(callerContext context.Context) error {
+func (manager *Manager) snapshotAdmissionError(callerContext context.Context, cause error) error {
 	if err := callerContext.Err(); err != nil {
 		return err
 	}
 	if manager.ctx.Err() != nil {
 		return ErrClosed
 	}
-	return fmt.Errorf("capture search visibility: %w", ErrStorageUnavailable)
+	return &AdmissionError{Stage: "visibility_snapshot", Err: ErrStorageUnavailable, Cause: cause}
 }
 
 func (manager *Manager) beginOperation() error {
@@ -1188,7 +1206,7 @@ func (manager *Manager) admitJournal(
 		errors.Is(err, requestidempotency.ErrCorrupt) {
 		return err
 	}
-	return fmt.Errorf("create search job: %w", ErrJournalUnavailable)
+	return &AdmissionError{Stage: "journal", Err: ErrJournalUnavailable, Cause: err}
 }
 
 func (manager *Manager) finalizeJournal(job Job) {

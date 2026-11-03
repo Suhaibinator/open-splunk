@@ -422,7 +422,7 @@ func (manager *Manager) safeKnowledgeAdmissionError(caller context.Context, err 
 	if errors.Is(err, ErrCapacity) ||
 		errors.Is(err, control.ErrCapacityExceeded) ||
 		errors.Is(err, knowledgesnapshot.ErrResourceLimit) {
-		return ErrCapacity
+		return &AdmissionError{Stage: "knowledge", Err: ErrCapacity, Cause: err}
 	}
-	return ErrKnowledgeUnavailable
+	return &AdmissionError{Stage: "knowledge", Err: ErrKnowledgeUnavailable, Cause: err}
 }

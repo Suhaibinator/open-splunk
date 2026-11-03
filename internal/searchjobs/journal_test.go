@@ -61,6 +61,10 @@ func TestJournalAdmissionFailureIsSafeAndLeavesNoManagerState(t *testing.T) {
 	if !errors.Is(err, ErrJournalUnavailable) {
 		t.Fatalf("Create() error = %v, want ErrJournalUnavailable", err)
 	}
+	diagnostic, ok := errors.AsType[*AdmissionError](err)
+	if !ok || diagnostic.Stage != "journal" || diagnostic.Cause != journalCause {
+		t.Fatalf("missing journal admission diagnostic: %v", err)
+	}
 	if strings.Contains(err.Error(), "top-secret") {
 		t.Fatalf("Create() leaked journal detail: %v", err)
 	}
