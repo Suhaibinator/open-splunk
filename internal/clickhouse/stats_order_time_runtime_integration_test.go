@@ -3,8 +3,6 @@ package clickhouse
 import (
 	"context"
 	"math"
-	"os"
-	"os/exec"
 	"reflect"
 	"testing"
 	"time"
@@ -12,26 +10,13 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
-	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // TestStatsOrderAndTimeAgainstClickHouse is opt-in because it starts the
 // digest-pinned production ClickHouse image and applies the real schema.
 func TestStatsOrderAndTimeAgainstClickHouse(t *testing.T) {
-	if os.Getenv("OPEN_SPLUNK_CLICKHOUSE_INTEGRATION") != "1" {
-		t.Skip("set OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 to run the Docker integration test")
-	}
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("docker CLI is unavailable: %v", err)
-	}
-	image, err := testsupport.ResolvePinnedClickHouseImage(
-		os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"),
-	)
-	if err != nil {
-		t.Fatalf("resolve pinned ClickHouse image: %v", err)
-	}
-	t.Logf("ClickHouse image: %s", image)
+	requireClickHouseIntegration(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()

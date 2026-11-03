@@ -1007,12 +1007,7 @@ type serializedListCollectorsCodec = boundedProtoCodec[
 ]
 
 func newSerializedListCollectorsCodec() *serializedListCollectorsCodec {
-	return newCollectorAdministrationCodec(
-		codec.NewProtoCodec[
-			*opensplunk.ListCollectorsRequest,
-			*opensplunk.ListCollectorsResponse,
-		](),
-	)
+	return newCollectorAdministrationCodec[*opensplunk.ListCollectorsRequest, *opensplunk.ListCollectorsResponse]()
 }
 
 type serializedGetCollectorResponse = boundedProtoResponse[*opensplunk.GetCollectorResponse]
@@ -1023,12 +1018,7 @@ type serializedGetCollectorCodec = boundedProtoCodec[
 ]
 
 func newSerializedGetCollectorCodec() *serializedGetCollectorCodec {
-	return newCollectorAdministrationCodec(
-		codec.NewProtoCodec[
-			*opensplunk.GetCollectorRequest,
-			*opensplunk.GetCollectorResponse,
-		](),
-	)
+	return newCollectorAdministrationCodec[*opensplunk.GetCollectorRequest, *opensplunk.GetCollectorResponse]()
 }
 
 type serializedUpdateCollectorResponse = boundedProtoResponse[*opensplunk.UpdateCollectorResponse]
@@ -1039,12 +1029,7 @@ type serializedUpdateCollectorCodec = boundedProtoCodec[
 ]
 
 func newSerializedUpdateCollectorCodec() *serializedUpdateCollectorCodec {
-	return newCollectorAdministrationCodec(
-		codec.NewProtoCodec[
-			*opensplunk.UpdateCollectorRequest,
-			*opensplunk.UpdateCollectorResponse,
-		](),
-	)
+	return newCollectorAdministrationCodec[*opensplunk.UpdateCollectorRequest, *opensplunk.UpdateCollectorResponse]()
 }
 
 type serializedSetCollectorEnabledResponse = boundedProtoResponse[*opensplunk.SetCollectorEnabledResponse]
@@ -1055,22 +1040,19 @@ type serializedSetCollectorEnabledCodec = boundedProtoCodec[
 ]
 
 func newSerializedSetCollectorEnabledCodec() *serializedSetCollectorEnabledCodec {
-	return newCollectorAdministrationCodec(
-		codec.NewProtoCodec[
-			*opensplunk.SetCollectorEnabledRequest,
-			*opensplunk.SetCollectorEnabledResponse,
-		](),
-	)
+	return newCollectorAdministrationCodec[*opensplunk.SetCollectorEnabledRequest, *opensplunk.SetCollectorEnabledResponse]()
 }
 
 func newCollectorAdministrationCodec[
-	Request any,
+	Request interface {
+		proto.Message
+		*RequestMessage
+	},
 	Response proto.Message,
-](
-	inner codec.Codec[Request, Response],
-) *boundedProtoCodec[Request, Response] {
+	RequestMessage any,
+]() *boundedProtoCodec[Request, Response] {
 	return newBoundedProtoCodec(
-		inner,
+		codec.NewProtoCodec[Request, Response](),
 		boundedProtoCodecOptions{
 			stateError:   "collector response serialization state is invalid",
 			messageError: "collector response message is invalid",

@@ -31,13 +31,6 @@ import {
 import { joinedPatterns, lines } from "./knowledge-lookup-text";
 import type { KnowledgeManagerAppOption } from "./knowledge-manager-feature";
 import {
-  createKnowledgeObject,
-  deleteKnowledgeObject,
-  prepareKnowledgeObjectQuarantine,
-  quarantineKnowledgeObject,
-  setKnowledgeObjectState,
-  updateKnowledgeObject,
-  validateKnowledgeObject,
   type KnowledgeMutationClient,
   type KnowledgeQuarantinePreparation,
   type KnowledgeValidationReceipt,
@@ -485,7 +478,7 @@ export function KnowledgeMutationEditor({
           ? KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION
           : KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
       });
-      const receipt = await validateKnowledgeObject(client, request, {
+      const receipt = await client.validate(request, {
         signal: controller.signal,
         currentKnowledgeObject,
       });
@@ -520,13 +513,13 @@ export function KnowledgeMutationEditor({
     setEditorState({ state: "saving" });
     try {
       if (currentKnowledgeObject === undefined) {
-        await createKnowledgeObject(client, CreateKnowledgeObjectRequest.fromPartial({
+        await client.create(CreateKnowledgeObjectRequest.fromPartial({
           definition: candidate.definition,
           initialState: KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DRAFT,
           clientRequestId: knowledgeBrowserClientRequestId(),
         }), { signal: controller.signal });
       } else {
-        await updateKnowledgeObject(client, UpdateKnowledgeObjectRequest.fromPartial({
+        await client.update(UpdateKnowledgeObjectRequest.fromPartial({
           knowledgeObjectId: currentKnowledgeObject.knowledgeObjectId,
           expectedVersion: currentKnowledgeObject.version,
           definition: candidate.definition,
@@ -873,7 +866,7 @@ export function KnowledgeObjectMutationControls({
     requestRef.current = controller;
     setActionState("working");
     try {
-      await setKnowledgeObjectState(client, SetKnowledgeObjectStateRequest.fromPartial({
+      await client.setState(SetKnowledgeObjectStateRequest.fromPartial({
         knowledgeObjectId: currentKnowledgeObject.knowledgeObjectId,
         expectedVersion: currentKnowledgeObject.version,
         state: targetState,
@@ -900,7 +893,7 @@ export function KnowledgeObjectMutationControls({
     requestRef.current = controller;
     setActionState("working");
     try {
-      await deleteKnowledgeObject(client, DeleteKnowledgeObjectRequest.fromPartial({
+      await client.delete(DeleteKnowledgeObjectRequest.fromPartial({
         knowledgeObjectId: currentKnowledgeObject.knowledgeObjectId,
         expectedVersion: currentKnowledgeObject.version,
         clientRequestId: knowledgeBrowserClientRequestId(),
@@ -1024,8 +1017,7 @@ export function KnowledgeQuarantineControl({
     setPreparation(null);
     setControlState("preparing");
     try {
-      const result = await prepareKnowledgeObjectQuarantine(
-        client,
+      const result = await client.prepareQuarantine(
         PrepareKnowledgeObjectQuarantineRequest.fromPartial({ knowledgeObjectId }),
         { signal: controller.signal },
       );
@@ -1059,8 +1051,7 @@ export function KnowledgeQuarantineControl({
     requestRef.current = controller;
     setControlState("quarantining");
     try {
-      await quarantineKnowledgeObject(
-        client,
+      await client.quarantine(
         QuarantineKnowledgeObjectRequest.fromPartial({
           recoveryToken: preparation.recoveryToken,
           clientRequestId: knowledgeBrowserClientRequestId(),

@@ -2,8 +2,6 @@ package knowledgecatalog
 
 import (
 	"fmt"
-	"slices"
-	"sort"
 
 	"gorm.io/gorm"
 
@@ -376,7 +374,7 @@ func (validator *dependencySemanticValidator) validateGraphSemantics(
 		if targetSemantics.stage >= semantics.stage {
 			return fmt.Errorf("%w: dependency points to a same or later stage", ErrCorrupt)
 		}
-		if !dependencyFieldsIntersect(semantics.inputFields, targetSemantics.outputFields) {
+		if !knowledge.FieldsIntersect(semantics.inputFields, targetSemantics.outputFields) {
 			return fmt.Errorf("%w: dependency field identity disagrees with definitions", ErrCorrupt)
 		}
 		if !knowledge.SelectorImplies(semantics.selector, targetSemantics.selector) {
@@ -530,36 +528,10 @@ func dependencySemanticsFromDefinition(
 }
 
 func normalizedDependencyFields(fields []string) []string {
-	normalized := append([]string(nil), fields...)
-	sort.Strings(normalized)
-	normalized = compactNonemptyStrings(normalized)
-	return slices.Clip(normalized)
-}
-
-func compactNonemptyStrings(values []string) []string {
-	write := 0
-	for _, value := range values {
-		if value == "" || write > 0 && values[write-1] == value {
-			continue
-		}
-		values[write] = value
-		write++
+	if len(fields) == 0 {
+		return nil
 	}
-	return values[:write]
-}
-
-func dependencyFieldsIntersect(left, right []string) bool {
-	for leftIndex, rightIndex := 0, 0; leftIndex < len(left) && rightIndex < len(right); {
-		switch {
-		case left[leftIndex] < right[rightIndex]:
-			leftIndex++
-		case left[leftIndex] > right[rightIndex]:
-			rightIndex++
-		default:
-			return true
-		}
-	}
-	return false
+	return knowledge.CanonicalFields(fields)
 }
 
 func calculatedDependencyAnalysis(expression string) (spl.ScalarExpressionAnalysis, error) {

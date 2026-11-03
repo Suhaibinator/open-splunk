@@ -90,15 +90,7 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				Message: "scalar field expression is missing",
 			}
 		}
-		var (
-			field FieldRef
-			err   error
-		)
-		if expression.Quoted {
-			field, err = ResolveQuotedField(expression.Field, expression.Range)
-		} else {
-			field, err = ResolveField(expression.Field, expression.Range)
-		}
+		field, err := resolveAuthoredField(expression.Field, expression.Range, expression.Quoted)
 		if err != nil {
 			return nil, err
 		}

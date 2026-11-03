@@ -2,15 +2,12 @@ package clickhouse
 
 import (
 	"context"
-	"os"
-	"os/exec"
 	"slices"
 	"testing"
 	"time"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
-	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 )
 
 // TestSPLSemanticInvariantsAgainstClickHouse checks pairs of SPL pipelines
@@ -18,19 +15,7 @@ import (
 // deliberately cross-feature: the same Dynamic values pass through eval,
 // rename, fields, search, where, and multivalue scalar lowering.
 func TestSPLSemanticInvariantsAgainstClickHouse(t *testing.T) {
-	if os.Getenv("OPEN_SPLUNK_CLICKHOUSE_INTEGRATION") != "1" {
-		t.Skip("set OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 to run the Docker integration test")
-	}
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("docker CLI is unavailable: %v", err)
-	}
-	image, err := testsupport.ResolvePinnedClickHouseImage(
-		os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"),
-	)
-	if err != nil {
-		t.Fatalf("resolve pinned ClickHouse image: %v", err)
-	}
-	t.Logf("ClickHouse image: %s", image)
+	requireClickHouseIntegration(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()

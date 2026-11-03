@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"net"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,12 +16,9 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -214,43 +210,7 @@ func TestRuntimePrunedRevokedCollectorTokenRemainsUnauthorized(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	listener := bufconn.Listen(1 << 20)
-	grpcServer := grpc.NewServer()
-	opensplunk.RegisterCollectorIngestServiceServer(grpcServer, service)
-	serveDone := make(chan error, 1)
-	go func() {
-		serveDone <- grpcServer.Serve(listener)
-	}()
-	t.Cleanup(func() {
-		grpcServer.Stop()
-		if err := listener.Close(); err != nil {
-			t.Error(err)
-		}
-		select {
-		case err := <-serveDone:
-			if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
-				t.Errorf("serve collector: %v", err)
-			}
-		case <-time.After(time.Second):
-			t.Error("collector gRPC server did not stop")
-		}
-	})
-
-	connection, err := grpc.NewClient(
-		"passthrough:///runtime-pruned-token",
-		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
-			return listener.Dial()
-		}),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := connection.Close(); err != nil {
-			t.Error(err)
-		}
-	})
+	connection := newRuntimeCollectorConnection(t, service)
 	streamContext, cancelStream := context.WithTimeout(
 		metadata.NewOutgoingContext(
 			context.Background(),

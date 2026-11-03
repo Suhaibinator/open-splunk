@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"reflect"
 	"slices"
 	"strings"
@@ -19,7 +17,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
-	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 )
 
 // TestStatsInventoryPinnedRuntimeAgainstClickHouse executes the stats
@@ -29,19 +26,7 @@ import (
 // pins; internal/spl/stats_inventory_evidence_test.go refuses a ledger flip
 // that is not backed by one of these subtests.
 func TestStatsInventoryPinnedRuntimeAgainstClickHouse(t *testing.T) {
-	if os.Getenv("OPEN_SPLUNK_CLICKHOUSE_INTEGRATION") != "1" {
-		t.Skip("set OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 to run the Docker integration test")
-	}
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("docker CLI is unavailable: %v", err)
-	}
-	image, err := testsupport.ResolvePinnedClickHouseImage(
-		os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"),
-	)
-	if err != nil {
-		t.Fatalf("resolve pinned ClickHouse image: %v", err)
-	}
-	t.Logf("ClickHouse image: %s", image)
+	requireClickHouseIntegration(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()

@@ -534,62 +534,6 @@ export function knowledgeQuarantineRequest(
   return cloneBoundedMutationRequest(QuarantineKnowledgeObjectRequest, request);
 }
 
-export async function createKnowledgeObject(
-  client: KnowledgeMutationClient,
-  submitted: CreateKnowledgeObjectRequestMessage,
-  options?: ProtobufRequestOptions,
-): Promise<KnowledgeObjectMutationReceipt> {
-  return client.create(submitted, options);
-}
-
-export async function validateKnowledgeObject(
-  client: KnowledgeMutationClient,
-  submitted: ValidateKnowledgeObjectRequestMessage,
-  options?: KnowledgeValidationRequestOptions,
-): Promise<KnowledgeValidationReceipt> {
-  return client.validate(submitted, options);
-}
-
-export async function updateKnowledgeObject(
-  client: KnowledgeMutationClient,
-  submitted: UpdateKnowledgeObjectRequestMessage,
-  options: KnowledgeCurrentObjectMutationOptions,
-): Promise<KnowledgeObjectMutationReceipt> {
-  return client.update(submitted, options);
-}
-
-export async function setKnowledgeObjectState(
-  client: KnowledgeMutationClient,
-  submitted: SetKnowledgeObjectStateRequestMessage,
-  options: KnowledgeCurrentObjectMutationOptions,
-): Promise<KnowledgeObjectMutationReceipt> {
-  return client.setState(submitted, options);
-}
-
-export async function deleteKnowledgeObject(
-  client: KnowledgeMutationClient,
-  submitted: DeleteKnowledgeObjectRequestMessage,
-  options?: ProtobufRequestOptions,
-): Promise<KnowledgeDeleteReceipt> {
-  return client.delete(submitted, options);
-}
-
-export async function prepareKnowledgeObjectQuarantine(
-  client: KnowledgeMutationClient,
-  submitted: PrepareKnowledgeObjectQuarantineRequestMessage,
-  options?: ProtobufRequestOptions,
-): Promise<KnowledgeQuarantinePreparation> {
-  return client.prepareQuarantine(submitted, options);
-}
-
-export async function quarantineKnowledgeObject(
-  client: KnowledgeMutationClient,
-  submitted: QuarantineKnowledgeObjectRequestMessage,
-  options: KnowledgeQuarantineMutationOptions,
-): Promise<KnowledgeQuarantineReceipt> {
-  return client.quarantine(submitted, options);
-}
-
 export async function adaptKnowledgeCreateResponse(
   response: CreateKnowledgeObjectResponseMessage,
   request: CreateKnowledgeObjectRequestMessage,
@@ -1064,48 +1008,85 @@ export interface KnowledgeListQuery {
   pageToken: string | null;
 }
 
+const KNOWLEDGE_OBJECT_TYPE_FILTERS: Readonly<Record<KnowledgeObjectTypeFilter, readonly KnowledgeObjectType[]>> = {
+  all: [],
+  "field-extraction": [KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION],
+  "field-alias": [KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS],
+  "calculated-field": [KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD],
+};
+
+const KNOWLEDGE_LIFECYCLE_STATE_FILTERS: Readonly<Record<KnowledgeLifecycleStateFilter, readonly KnowledgeObjectState[]>> = {
+  all: [],
+  draft: [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DRAFT],
+  active: [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_ACTIVE],
+  disabled: [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DISABLED],
+  quarantined: [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_QUARANTINED],
+  deleted: [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DELETED],
+};
+
+const KNOWLEDGE_SHARING_SCOPE_FILTERS: Readonly<Record<KnowledgeSharingScopeFilter, readonly SharingScope[]>> = {
+  all: [],
+  private: [SharingScope.SHARING_SCOPE_PRIVATE],
+  app: [SharingScope.SHARING_SCOPE_APP],
+  global: [SharingScope.SHARING_SCOPE_GLOBAL],
+};
+
+const KNOWLEDGE_SORTS: Readonly<Record<KnowledgeSortChoice, {
+  sortBy: KnowledgeObjectSortBy;
+  sortDirection: SortDirection;
+}>> = {
+  "name-ascending": {
+    sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_NAME,
+    sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
+  },
+  "updated-descending": {
+    sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_UPDATED_AT,
+    sortDirection: SortDirection.SORT_DIRECTION_DESCENDING,
+  },
+  "created-descending": {
+    sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_CREATED_AT,
+    sortDirection: SortDirection.SORT_DIRECTION_DESCENDING,
+  },
+  "object-type-ascending": {
+    sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_OBJECT_TYPE,
+    sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
+  },
+};
+
+function isKnowledgeControlValue<Key extends string>(
+  values: Readonly<Record<Key, unknown>>,
+  value: string,
+): value is Key {
+  return typeof value === "string" && Object.hasOwn(values, value);
+}
+
+function canonicalKnowledgeControlValue<Value>(
+  values: Readonly<Record<string, Value>>,
+  value: string,
+  label: string,
+): Value {
+  if (!isKnowledgeControlValue(values, value)) {
+    throw new TypeError(`Knowledge ${label} is outside the browser contract.`);
+  }
+  return values[value];
+}
+
 export function knowledgeObjectTypeFilterFromControlValue(
   value: string,
 ): KnowledgeObjectTypeFilter | undefined {
-  switch (value) {
-    case "all":
-    case "field-extraction":
-    case "field-alias":
-    case "calculated-field":
-      return value;
-    default:
-      return undefined;
-  }
+  return isKnowledgeControlValue(KNOWLEDGE_OBJECT_TYPE_FILTERS, value) ? value : undefined;
 }
 
 export function knowledgeLifecycleStateFilterFromControlValue(
   value: string,
 ): KnowledgeLifecycleStateFilter | undefined {
-  switch (value) {
-    case "all":
-    case "draft":
-    case "active":
-    case "disabled":
-    case "quarantined":
-    case "deleted":
-      return value;
-    default:
-      return undefined;
-  }
+  return isKnowledgeControlValue(KNOWLEDGE_LIFECYCLE_STATE_FILTERS, value) ? value : undefined;
 }
 
 export function knowledgeSharingScopeFilterFromControlValue(
   value: string,
 ): KnowledgeSharingScopeFilter | undefined {
-  switch (value) {
-    case "all":
-    case "private":
-    case "app":
-    case "global":
-      return value;
-    default:
-      return undefined;
-  }
+  return isKnowledgeControlValue(KNOWLEDGE_SHARING_SCOPE_FILTERS, value) ? value : undefined;
 }
 
 /** Trims only the protocol-pinned ASCII edge whitespace before commit. */
@@ -1120,15 +1101,7 @@ export function knowledgeTextFilterFromDraft(
 export function knowledgeSortChoiceFromControlValue(
   value: string,
 ): KnowledgeSortChoice | undefined {
-  switch (value) {
-    case "name-ascending":
-    case "updated-descending":
-    case "created-descending":
-    case "object-type-ascending":
-      return value;
-    default:
-      return undefined;
-  }
+  return isKnowledgeControlValue(KNOWLEDGE_SORTS, value) ? value : undefined;
 }
 
 export function boundedKnowledgePageSize(configuredMaximum: number): number {
@@ -1166,10 +1139,10 @@ export function knowledgeListRequest(query: KnowledgeListQuery) {
   ) {
     throw new TypeError("Knowledge page token is outside the browser contract.");
   }
-  const objectTypeFilters = canonicalKnowledgeObjectTypeFilter(query.objectType);
-  const stateFilters = canonicalKnowledgeLifecycleStateFilter(query.lifecycleState);
-  const sharingScopeFilters = canonicalKnowledgeSharingScopeFilter(query.sharingScope);
-  const sort = canonicalKnowledgeSort(query.sort);
+  const objectTypeFilters = [...canonicalKnowledgeControlValue(KNOWLEDGE_OBJECT_TYPE_FILTERS, query.objectType, "object type filter")];
+  const stateFilters = [...canonicalKnowledgeControlValue(KNOWLEDGE_LIFECYCLE_STATE_FILTERS, query.lifecycleState, "lifecycle state filter")];
+  const sharingScopeFilters = [...canonicalKnowledgeControlValue(KNOWLEDGE_SHARING_SCOPE_FILTERS, query.sharingScope, "sharing scope filter")];
+  const sort = canonicalKnowledgeControlValue(KNOWLEDGE_SORTS, query.sort, "sort choice");
   return ListKnowledgeObjectsRequest.fromPartial({
     page: {
       pageSize: query.pageSize,
@@ -1186,91 +1159,6 @@ export function knowledgeListRequest(query: KnowledgeListQuery) {
     sortBy: sort.sortBy,
     sortDirection: sort.sortDirection,
   });
-}
-
-function canonicalKnowledgeSharingScopeFilter(
-  value: KnowledgeSharingScopeFilter,
-): SharingScope[] {
-  switch (value) {
-    case "all":
-      return [];
-    case "private":
-      return [SharingScope.SHARING_SCOPE_PRIVATE];
-    case "app":
-      return [SharingScope.SHARING_SCOPE_APP];
-    case "global":
-      return [SharingScope.SHARING_SCOPE_GLOBAL];
-    default:
-      throw new TypeError("Knowledge sharing scope filter is outside the browser contract.");
-  }
-}
-
-function canonicalKnowledgeObjectTypeFilter(
-  value: KnowledgeObjectTypeFilter,
-): KnowledgeObjectType[] {
-  switch (value) {
-    case "all":
-      return [];
-    case "field-extraction":
-      return [KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION];
-    case "field-alias":
-      return [KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS];
-    case "calculated-field":
-      return [KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD];
-    default:
-      throw new TypeError("Knowledge object type filter is outside the browser contract.");
-  }
-}
-
-function canonicalKnowledgeLifecycleStateFilter(
-  value: KnowledgeLifecycleStateFilter,
-): KnowledgeObjectState[] {
-  switch (value) {
-    case "all":
-      return [];
-    case "draft":
-      return [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DRAFT];
-    case "active":
-      return [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_ACTIVE];
-    case "disabled":
-      return [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DISABLED];
-    case "quarantined":
-      return [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_QUARANTINED];
-    case "deleted":
-      return [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DELETED];
-    default:
-      throw new TypeError("Knowledge lifecycle state filter is outside the browser contract.");
-  }
-}
-
-function canonicalKnowledgeSort(value: KnowledgeSortChoice): {
-  sortBy: KnowledgeObjectSortBy;
-  sortDirection: SortDirection;
-} {
-  switch (value) {
-    case "name-ascending":
-      return {
-        sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_NAME,
-        sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
-      };
-    case "updated-descending":
-      return {
-        sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_UPDATED_AT,
-        sortDirection: SortDirection.SORT_DIRECTION_DESCENDING,
-      };
-    case "created-descending":
-      return {
-        sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_CREATED_AT,
-        sortDirection: SortDirection.SORT_DIRECTION_DESCENDING,
-      };
-    case "object-type-ascending":
-      return {
-        sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_OBJECT_TYPE,
-        sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
-      };
-    default:
-      throw new TypeError("Knowledge sort choice is outside the browser contract.");
-  }
 }
 
 export async function loadKnowledgePage(
