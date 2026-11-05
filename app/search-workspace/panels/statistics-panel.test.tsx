@@ -4,10 +4,10 @@ import test from "node:test";
 import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { ColumnSemanticType } from "@/gen/ts/open_splunk/result";
+import { ColumnSemanticType, ResultRow, ResultSchema, ResultSetKind } from "@/gen/ts/open_splunk/result";
 import { ValueType } from "@/gen/ts/open_splunk/value";
 import type { TimelinePoint } from "@/lib/demo/search-data";
-import type { WorkspaceStatistic, WorkspaceStatisticsTable } from "@/lib/search/backend-data";
+import { adaptSearchResults, type WorkspaceStatistic, type WorkspaceStatisticsTable } from "@/lib/search/backend-data";
 
 import { StatisticsColumnLayoutStore } from "./statistics-column-layout";
 import { StatisticsPanel } from "./statistics-panel";
@@ -153,4 +153,40 @@ test("timechart statistics preserve all-null rows and only legacy rows fall back
   assert.match(markup, /<time dateTime="2026-01-01T01:00:00Z">1:00 AM<\/time><\/td><td class="numeric-cell">—<\/td>/u);
   assert.match(markup, /<time dateTime="2026-01-01T02:00:00Z">2:00 AM<\/time><\/td><td class="numeric-cell">7<\/td>/u);
   assert.equal((markup.match(/<tr/gu) ?? []).length, 4);
+});
+
+test("backend table projections render raw payloads and authoritative row counts", () => {
+  const schema = ResultSchema.fromPartial({
+    schemaId: "slow-query-table",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [
+      { fieldName: "elapsed_ms", valueType: ValueType.VALUE_TYPE_UINT64 },
+      { fieldName: "message", valueType: ValueType.VALUE_TYPE_STRING },
+      { fieldName: "_raw", valueType: ValueType.VALUE_TYPE_STRING, semanticType: ColumnSemanticType.COLUMN_SEMANTIC_TYPE_RAW },
+    ],
+  });
+  const adapted = adaptSearchResults(schema, [ResultRow.fromPartial({
+    rowId: "slow-query",
+    ordinal: 0n,
+    cells: [
+      { kind: { $case: "uint64Value", value: 2500n } },
+      { kind: { $case: "stringValue", value: "slow query" } },
+      { kind: { $case: "stringValue", value: '<script>alert("raw")</script>' } },
+    ],
+  })]);
+  const markup = renderStatisticsPanel(null, {
+    genericStatisticsTable: adapted.statisticsTable,
+    sortedGenericStatisticsRows: adapted.statisticsTable?.rows ?? [],
+    sortedStatistics: adapted.statistics,
+    statisticsRows: adapted.statistics,
+    submittedQuery: "index=main | sort 50 -num(elapsed_ms) | table elapsed_ms message _raw",
+  });
+
+  assert.match(markup, /aria-label="Resize elapsed_ms column"/u);
+  assert.match(markup, /aria-label="Resize _raw column"/u);
+  assert.match(markup, /slow query/u);
+  assert.match(markup, /&lt;script&gt;alert\(&quot;raw&quot;\)&lt;\/script&gt;/u);
+  assert.match(markup, /Showing 1–1/u);
+  assert.doesNotMatch(markup, /Showing 0 rows|avg\(duration_ms\)|<script>/u);
 });

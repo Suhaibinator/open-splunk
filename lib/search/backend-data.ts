@@ -830,15 +830,13 @@ export function adaptSearchResults(
   switch (schema.resultKind) {
     case ResultSetKind.RESULT_SET_KIND_STATISTICS: {
       const transformedStatistics = statisticsFromRows(schema, rows);
-      const hasRawEventColumn = schema.columns.some((column) =>
-        column.semanticType === ColumnSemanticType.COLUMN_SEMANTIC_TYPE_RAW
-        || column.fieldName === "_raw"
-      );
       return {
         events: [],
         fields: [],
         statistics: transformedStatistics.rows,
-        statisticsTable: hasRawEventColumn ? null : statisticsTableFromRows(schema, rows),
+        // A table projection may explicitly include _raw. The server result
+        // kind, not any individual column, selects the presentation.
+        statisticsTable: statisticsTableFromRows(schema, rows),
         statisticDimension: transformedStatistics.dimension === "result"
           ? "level"
           : transformedStatistics.dimension,
