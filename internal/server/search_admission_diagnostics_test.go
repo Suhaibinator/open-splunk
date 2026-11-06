@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,6 +11,12 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
+	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
+	"github.com/Suhaibinator/open-splunk/internal/lookupservice"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -108,5 +115,72 @@ func TestSearchAdmissionInternalDeadlineRemainsServiceUnavailable(t *testing.T) 
 	handler.logSearchAdmissionFailure(newAPIRequest(t.Context()), "search", searchjobs.ErrInvalidSPL)
 	if logs.Len() != 1 {
 		t.Fatal("caller cancellation or invalid SPL emitted an availability warning")
+	}
+}
+
+func TestSearchAdmissionKnowledgeCauseDetailsAreSafe(t *testing.T) {
+	for _, test := range []struct {
+		cause error
+		class string
+	}{
+		{knowledgecatalog.ErrCorrupt, "knowledge_catalog_corrupt"},
+		{lookupcatalog.ErrCorrupt, "lookup_catalog_corrupt"},
+		{lookupasset.ErrCorrupt, "lookup_asset_corrupt"},
+		{knowledgesnapshot.ErrInvalidInput, "knowledge_snapshot_invalid"},
+		{knowledgesnapshot.ErrResourceLimit, "knowledge_snapshot_limit"},
+		{control.ErrCapacityExceeded, "capacity_exhausted"},
+		{control.ErrNotFound, "dependency_not_found"},
+		{control.ErrInvalidArgument, "dependency_invalid_argument"},
+		{lookupservice.ErrUnavailable, "lookup_unavailable"},
+		{searchjobs.ErrKnowledgeUnavailable, "knowledge_contract_invalid"},
+		{&plan.Diagnostic{Code: "SPL_QUERY_TOO_COMPLEX", Message: "private-sql", Suggestions: []string{"private-suggestion"}}, "spl_compilation"},
+	} {
+		t.Run(test.class, func(t *testing.T) {
+			core, logs := observer.New(zapcore.DebugLevel)
+			handler := &apiHandler{logger: zap.New(core)}
+			err := &searchjobs.AdmissionError{Stage: "knowledge", Step: "query_compile", Err: searchjobs.ErrKnowledgeUnavailable,
+				Cause: fmt.Errorf("private-path: %w", test.cause)}
+			handler.logSearchAdmissionFailure(newAPIRequest(t.Context()), "app", err)
+			if logs.Len() != 1 {
+				t.Fatalf("logs = %v", logs.All())
+			}
+			fields := logs.All()[0].ContextMap()
+			if fields["failure_step"] != "query_compile" || fields["cause_class"] != test.class {
+				t.Fatalf("diagnostics = %v", fields)
+			}
+			if test.class == "spl_compilation" && fields["diagnostic_code"] != "SPL_QUERY_TOO_COMPLEX" {
+				t.Fatalf("missing compiler code: %v", fields)
+			}
+			if strings.Contains(fmt.Sprint(logs.All()), "private-") || strings.Contains(mapSearchJobError(err).Error(), "private-") {
+				t.Fatal("private cause leaked")
+			}
+		})
+	}
+}
+
+func TestSearchAdmissionLogsWrappedSQLiteResultCodes(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err = database.ExecContext(t.Context(), "CREATE TABLE private_table (value TEXT UNIQUE)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.ExecContext(t.Context(), "INSERT INTO private_table VALUES ('private-value'), ('private-value')"); err == nil {
+		t.Fatal("expected unique constraint error")
+	}
+	core, logs := observer.New(zapcore.DebugLevel)
+	handler := &apiHandler{logger: zap.New(core)}
+	handler.logSearchAdmissionFailure(newAPIRequest(t.Context()), "app", &searchjobs.AdmissionError{
+		Stage: "knowledge", Step: "catalog_resolve", Err: searchjobs.ErrKnowledgeUnavailable,
+		Cause: fmt.Errorf("private-path: %w", err),
+	})
+	fields := logs.All()[0].ContextMap()
+	if fields["cause_class"] != "sqlite_error" || fields["sqlite_code"] != int64(19) || fields["sqlite_extended_code"] != int64(2067) {
+		t.Fatalf("SQLite diagnostics = %v", fields)
+	}
+	if strings.Contains(fmt.Sprint(logs.All()), "private") {
+		t.Fatal("SQLite error text leaked")
 	}
 }
