@@ -174,7 +174,16 @@ func (s *Service) processBatchWithDeferredAuthority(
 		), nil
 	}
 	if rejection := s.validateBatchPolicy(batch, receivedAt, uncompressedBytes); rejection != nil {
-		if state.repackRequest && state.supportsRepacking && len(batch.GetEvents()) > 1 &&
+		// Node limits are not advertised in Ready. A capable peer can receive
+		// this durable fence on an ordinary batch and use its existing fallback
+		// bisection even when the original fits the advertised byte/count limits.
+		repackingRequested := state.repackRequest
+		for _, violation := range rejection.GetViolations() {
+			if violation.GetCode() == batchValueLimitViolation {
+				repackingRequested = true
+			}
+		}
+		if repackingRequested && state.supportsRepacking && len(batch.GetEvents()) > 1 &&
 			(rejection.GetCode() == opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS ||
 				rejection.GetCode() == opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE) {
 			rejection.Code = opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_REPACK_REQUIRED
@@ -927,6 +936,13 @@ func (s *Service) validateBatchPolicy(batch *opensplunk.EventBatch, receivedAt t
 	actualBytes := uncompressedBytes
 	if actualBytes > s.config.Limits.MaxBatchBytes || batch.GetUncompressedSizeBytes() > s.config.Limits.MaxBatchBytes {
 		return batchRejection(batch, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE, "batch exceeds the configured size limit", "uncompressed_size_bytes", "batch_size_limit")
+	}
+	budget := batchValueBudget{remaining: HardMaxBatchValueNodes}
+	for _, event := range batch.GetEvents() {
+		if !budget.consumeObject(event.GetFields(), 1) {
+			return batchRejection(batch, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
+				"batch exceeds the typed value node limit", "events", batchValueLimitViolation)
+		}
 	}
 	return nil
 }
