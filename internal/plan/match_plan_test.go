@@ -237,6 +237,8 @@ func TestScalarFunctionBooleanTraitsRemainInParity(t *testing.T) {
 		{spl.ScalarFunctionSHA512, ScalarFunctionSHA512, false},
 		{spl.ScalarFunctionTypeOf, ScalarFunctionTypeOf, false},
 		{spl.ScalarFunctionCIDRMatch, ScalarFunctionCIDRMatch, true},
+		{spl.ScalarFunctionTrue, ScalarFunctionTrue, true},
+		{spl.ScalarFunctionFalse, ScalarFunctionFalse, true},
 	}
 	if len(functions) != int(spl.ScalarFunctionCount) {
 		t.Fatalf(

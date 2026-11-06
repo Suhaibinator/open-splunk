@@ -1216,7 +1216,7 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 		"c", "dc", "distinct_count", "estdc", "estdc_error", "values", "list", "min", "max",
 		"median", "mode", "first", "last", "earliest", "latest", "earliest_time",
 		"latest_time", "rate", "sum", "avg", "mean", "range", "sumsq", "stdev",
-		"stdevp", "var", "varp", "if", "case", "in", "now", "strftime",
+		"stdevp", "var", "varp", "if", "case", "in", "true", "false", "now", "strftime",
 		"strptime", "relative_time", "tonumber", "tostring", "replace", "isnull",
 		"isnotnull", "coalesce", "lower", "upper", "len", "length", "round",
 		"ceil", "ceiling", "floor", "mvcount", "mvsort", "split", "mvappend",

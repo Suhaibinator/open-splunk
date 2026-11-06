@@ -641,7 +641,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 		return p.parseNumericScalarCall(name, functionName, arguments)
 	case "mvcount", "mvsort", "split", "mvappend", "mvdedup", "mvindex", "mvjoin", "mvzip", "mvfind":
 		return p.parseMultivalueScalarCall(name, functionName, arguments)
-	case "match", "like", "cidrmatch":
+	case "match", "like", "cidrmatch", "true", "false":
 		return p.parsePredicateScalarCall(name, functionName, arguments)
 	default:
 		return nil, &Diagnostic{

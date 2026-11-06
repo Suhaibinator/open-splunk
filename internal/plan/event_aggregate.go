@@ -293,6 +293,8 @@ func validEventAggregateNativeMVCall(expression *ScalarCallExpression) bool {
 		}
 	}
 	switch expression.Function {
+	case ScalarFunctionTrue, ScalarFunctionFalse:
+		return len(expression.Arguments) == 0
 	case ScalarFunctionSplit, ScalarFunctionMVJoin:
 		return len(expression.Arguments) == 2 && boundedDelimiter(expression.Arguments[1])
 	case ScalarFunctionMVAppend:
@@ -371,7 +373,9 @@ func validEventAggregateScalarFunction(function ScalarFunction) bool {
 		ScalarFunctionSHA256,
 		ScalarFunctionSHA512,
 		ScalarFunctionTypeOf,
-		ScalarFunctionCIDRMatch:
+		ScalarFunctionCIDRMatch,
+		ScalarFunctionTrue,
+		ScalarFunctionFalse:
 		return true
 	default:
 		return false

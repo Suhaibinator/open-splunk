@@ -496,6 +496,10 @@ func authoredFuzzCanonicalFunctionName(function ScalarFunction) (string, bool) {
 		return "match", true
 	case ScalarFunctionLike:
 		return "like", true
+	case ScalarFunctionTrue:
+		return "true", true
+	case ScalarFunctionFalse:
+		return "false", true
 	case ScalarFunctionNow:
 		return "now", true
 	case ScalarFunctionStrftime:
