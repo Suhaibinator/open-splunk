@@ -15,6 +15,35 @@ the complete lookup family and is likewise emitted only alongside field
 knowledge. Capabilities are runtime readiness signals, not authorization or
 caller-selectable profiles.
 
+## Search admission diagnostics
+
+A `503: search service is unavailable` response can mean that knowledge
+preparation failed before a search job was created. It does not by itself mean
+that ClickHouse is offline. The `search admission rejected` warning retains
+`failure_reason=knowledge_unavailable` and `failure_stage=knowledge`, with a
+`failure_step` that identifies the operation:
+
+- `catalog_resolve` and `resolution_validate`: load the authorized catalog and
+  check the resolver's returned scope and authority.
+- `lookup_resolve` and `lookup_bind`: resolve lookup assets and bind them to the
+  query plan.
+- `prelude_inject` and `query_compile`: apply field knowledge and compile the
+  complete query. A compiler rejection includes `diagnostic_code`, such as
+  `SPL_QUERY_TOO_COMPLEX`, without its potentially private message.
+- `compiled_clone`, `compiled_size`, `snapshot_finalize`, `snapshot_validate`,
+  and `metadata_size`: validate and retain the sealed execution snapshot.
+- `plan_validation` and steps prefixed with `inventory_`: check the wildcard
+  aggregate plan, discover its fields, and validate its scope and budget.
+
+`cause_class` distinguishes catalog/asset corruption, invalid snapshots,
+capacity limits, missing dependencies, compiler diagnostics, and database or
+transport errors. SQLite failures include `sqlite_code` (primary result) and
+`sqlite_extended_code`; ClickHouse exceptions include `clickhouse_code`.
+Unknown causes retain `cause_class=other`, but still have the operation label.
+Logs omit raw error messages, SPL, generated SQL, lookup contents, and database
+paths. These fields diagnose rejected admission; failures after execution
+starts are reported separately as `search failed`.
+
 ## Security and identity
 
 Knowledge is resolved after authentication, app authorization, effective-index

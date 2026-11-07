@@ -7,6 +7,8 @@ package searchjobs
 // failure into a caller cancellation through errors.Is.
 type AdmissionError struct {
 	Stage string
+	// Step is a fixed operation label, never an error message or user input.
+	Step  string
 	Err   error
 	Cause error
 }
