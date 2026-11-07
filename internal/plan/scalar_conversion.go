@@ -27,6 +27,8 @@ type scalarFunctionSpec struct {
 // with variable arity carry no exactArity and validate their operand counts
 // individually in convertScalarExpressionUnchecked.
 var scalarFunctionSpecs = map[spl.ScalarFunction]scalarFunctionSpec{
+	spl.ScalarFunctionTrue:         {name: "true", plan: ScalarFunctionTrue, arguments: 0, exactArity: true},
+	spl.ScalarFunctionFalse:        {name: "false", plan: ScalarFunctionFalse, arguments: 0, exactArity: true},
 	spl.ScalarFunctionConcat:       {name: "concatenation", plan: ScalarFunctionConcat},
 	spl.ScalarFunctionNow:          {name: "now", plan: ScalarFunctionNow, arguments: 0, exactArity: true},
 	spl.ScalarFunctionStrftime:     {name: "strftime", plan: ScalarFunctionStrftime, arguments: 2, exactArity: true},

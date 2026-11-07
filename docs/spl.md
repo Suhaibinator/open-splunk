@@ -222,8 +222,9 @@ lineage do not use that optimization.
 `where` and conditional predicates use explicit Boolean operators with
 precedence `NOT`, `AND`, then `OR`. Quoted text is a literal and bare names are
 fields. Supported scalar functions include `isnull`, `isnotnull`, `replace`,
-`tonumber`, `if`, `coalesce`, `nullif`, `case`, period concatenation, `lower`,
-`upper`, `trim`/`ltrim`/`rtrim`, `urldecode`, `md5`/`sha1`/`sha256`/`sha512`,
+`tonumber`, `if`, `coalesce`, `nullif`, `case`, `true`, `false`, period
+concatenation, `lower`, `upper`, `trim`/`ltrim`/`rtrim`, `urldecode`,
+`md5`/`sha1`/`sha256`/`sha512`,
 `len`/`length`, `substr`, `tostring`, `typeof`, `round`, `ceil`/`ceiling`,
 `floor`, `abs`, `sqrt`, `exp`, `ln`, `log`, `pow`, `pi`, `cidrmatch`,
 `mvcount`, `mvsort`, `split`, `mvappend`, `mvdedup`, `mvindex`, `mvjoin`,
@@ -231,6 +232,13 @@ fields. Supported scalar functions include `isnull`, `isnotnull`, `replace`,
 `strptime`.
 
 The scalar function pack follows these contracts:
+
+- `true()` and `false()` take no arguments and return Boolean constants. Use
+  `true()` as the final `case` predicate to supply a fallback, for example
+  `case(match(sql, "FOR UPDATE"), "row lock", true(), substr(sql, 1, 80))`.
+  They also work in `if`, `where`, and `count(eval(...))` predicates. Like
+  other Boolean-returning functions, consume them in a predicate or an explicit
+  conversion such as `tostring(true())`, rather than assigning them directly.
 
 - `SPL-REPLACE-PATH-001`: `replace` supports consuming RE2 patterns and
   `/BODY(?=/|$)` path-boundary lookahead. `BODY` must always consume text,

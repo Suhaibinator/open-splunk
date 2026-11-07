@@ -500,6 +500,20 @@
       "highlight_requires_call": true
     },
     {
+      "name": "true",
+      "insertion": "true()",
+      "detail": "Return Boolean true; use as the final case predicate for a fallback.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "false",
+      "insertion": "false()",
+      "detail": "Return Boolean false in a predicate or Boolean conversion.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
       "name": "now",
       "insertion": "now()",
       "detail": "Return the fixed search-start Unix second.",

@@ -824,6 +824,8 @@ const (
 	ScalarFunctionSHA512
 	ScalarFunctionTypeOf
 	ScalarFunctionCIDRMatch
+	ScalarFunctionTrue
+	ScalarFunctionFalse
 	ScalarFunctionCount
 )
 
@@ -832,7 +834,7 @@ const (
 func (function ScalarFunction) ReturnsBoolean() bool {
 	switch function {
 	case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch,
-		ScalarFunctionLike, ScalarFunctionCIDRMatch:
+		ScalarFunctionLike, ScalarFunctionCIDRMatch, ScalarFunctionTrue, ScalarFunctionFalse:
 		return true
 	default:
 		return false

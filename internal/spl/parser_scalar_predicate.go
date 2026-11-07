@@ -10,6 +10,14 @@ import (
 func (p *parser) parsePredicateScalarCall(name token, functionName string, arguments []ScalarExpr) (ScalarExpr, error) {
 	var function ScalarFunction
 	switch functionName {
+	case "true", "false":
+		if len(arguments) != 0 {
+			return nil, invalidEvalArity(name.sourceRange, functionName+" requires no arguments")
+		}
+		function = ScalarFunctionTrue
+		if functionName == "false" {
+			function = ScalarFunctionFalse
+		}
 	case "match":
 		function = ScalarFunctionMatch
 		if len(arguments) != 2 {

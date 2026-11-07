@@ -103,6 +103,14 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compiledScalar{}, errors.New("compile ClickHouse scalar expression: missing call expression")
 		}
 		switch expression.Function {
+		case plan.ScalarFunctionTrue, plan.ScalarFunctionFalse:
+			if len(expression.Arguments) != 0 {
+				return compiledScalar{}, errors.New("compile ClickHouse Boolean constant: expected no arguments")
+			}
+			return compileScalarValue(&plan.ScalarLiteralExpression{
+				Value: plan.Value{Kind: plan.ValueKindBool, Bool: expression.Function == plan.ScalarFunctionTrue},
+				Range: expression.Range,
+			}, state)
 		case plan.ScalarFunctionNow:
 			return compileNowScalar(expression, state)
 		case plan.ScalarFunctionStrftime:
@@ -2695,7 +2703,7 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 		expectedArguments := 0
 		hasExactArity := false
 		switch expression.Function {
-		case plan.ScalarFunctionNow:
+		case plan.ScalarFunctionNow, plan.ScalarFunctionTrue, plan.ScalarFunctionFalse:
 			hasExactArity = true
 		case plan.ScalarFunctionToNumber,
 			plan.ScalarFunctionIsNull,
