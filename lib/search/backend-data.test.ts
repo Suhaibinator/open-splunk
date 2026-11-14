@@ -611,15 +611,11 @@ test("statistics adaptation skips event-only projections", () => {
   );
 });
 
-test("statistics adaptation does not decode raw event payloads", () => {
-  let rawValueReads = 0;
-  const guardedRawValue: TypedValue = {
+test("statistics adaptation retains object-valued raw columns without creating events", () => {
+  const rawValue: TypedValue = {
     kind: {
       $case: "objectValue",
-      get value() {
-        rawValueReads += 1;
-        return { fields: [] };
-      },
+      value: { fields: [{ name: "message", value: stringValue("slow query") }] },
     },
   };
   const schema: ResultSchema = {
@@ -646,14 +642,52 @@ test("statistics adaptation does not decode raw event payloads", () => {
   };
 
   const adapted = adaptSearchResults(schema, [
-    row("error", 0n, [guardedRawValue, stringValue("ERROR"), uint64Value(2n)]),
+    row("error", 0n, [rawValue, stringValue("ERROR"), uint64Value(2n)]),
   ]);
 
-  assert.equal(rawValueReads, 0);
+  assert.deepEqual(adapted.events, []);
+  assert.deepEqual(adapted.fields, []);
+  assert.deepEqual(adapted.timeline, []);
   assert.equal(adapted.statistics[0]?.level, "ERROR");
   assert.equal(adapted.statistics[0]?.count, 2);
-  assert.equal(adapted.statisticsTable, null);
+  assert.deepEqual(adapted.statisticsTable?.columns.map(({ fieldName }) => fieldName), ["_raw", "level", "count"]);
+  assert.deepEqual(adapted.statisticsTable?.rows[0]?.values, {
+    _raw: { message: "slow query" },
+    level: "ERROR",
+    count: 2,
+  });
 });
+
+for (const [fieldName, semanticType] of [
+  ["_raw", ColumnSemanticType.COLUMN_SEMANTIC_TYPE_UNSPECIFIED],
+  ["original_event", ColumnSemanticType.COLUMN_SEMANTIC_TYPE_RAW],
+] as const) {
+  test(`statistics adaptation preserves raw text identified by ${fieldName}`, () => {
+    const schema: ResultSchema = {
+      schemaId: "slow-query-table",
+      revision: 1n,
+      resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+      columns: [
+        column("elapsed_ms", ValueType.VALUE_TYPE_UINT64),
+        column("message", ValueType.VALUE_TYPE_STRING),
+        column(fieldName, ValueType.VALUE_TYPE_STRING, semanticType),
+      ],
+    };
+    const raw = '{"elapsed_ms":2500,"message":"SELECT <query>"}';
+    const adapted = adaptSearchResults(schema, [
+      row("slow", 0n, [uint64Value(2500n), stringValue("SELECT <query>"), stringValue(raw)]),
+      row("missing", 1n, [uint64Value(1500n), stringValue("missing raw"), missingValue()]),
+    ]);
+
+    assert.deepEqual(adapted.statisticsTable?.columns.map(({ fieldName: name }) => name), ["elapsed_ms", "message", fieldName]);
+    assert.deepEqual(adapted.statisticsTable?.rows.map(({ values }) => values), [
+      { elapsed_ms: 2500, message: "SELECT <query>", [fieldName]: raw },
+      { elapsed_ms: 1500, message: "missing raw", [fieldName]: null },
+    ]);
+    assert.deepEqual(adapted.events, []);
+    assert.deepEqual(adapted.statistics, []);
+  });
+}
 
 test("event adaptation builds only the event projection", () => {
   const schema: ResultSchema = {
