@@ -521,6 +521,16 @@ func TestKnowledgeAdmissionFailuresAreSynchronousSafeAndSideEffectFree(t *testin
 			if !errors.Is(err, test.want) {
 				t.Fatalf("Create() error = %v, want %v", err, test.want)
 			}
+			if test.wantResolvers != 0 {
+				diagnostic, ok := errors.AsType[*AdmissionError](err)
+				if !ok || diagnostic.Stage != "knowledge" || diagnostic.Step != "resolve_catalog" ||
+					diagnostic.Elapsed <= 0 || !errors.Is(diagnostic.Cause, privateCause) {
+					t.Fatalf("resolver diagnostic = %#v", diagnostic)
+				}
+				if errors.Is(err, privateCause) {
+					t.Fatal("private resolver cause entered public error chain")
+				}
+			}
 			if strings.Contains(err.Error(), "secret") || ids.Load() != 0 || journals.Load() != 0 {
 				t.Fatalf("failed admission leaked/committed err=%v ids=%d journals=%d", err, ids.Load(), journals.Load())
 			}
@@ -597,6 +607,35 @@ func TestKnowledgeAdmissionRejectsResolverScopeDivergence(t *testing.T) {
 	_, err := manager.Create(context.Background(), request)
 	if !errors.Is(err, ErrKnowledgeUnavailable) || ids.Load() != 0 {
 		t.Fatalf("Create(divergent resolver) = %v, IDs=%d, want fail-closed pre-ID", err, ids.Load())
+	}
+	diagnostic, ok := errors.AsType[*AdmissionError](err)
+	if !ok || diagnostic.Step != "validate_resolution" || diagnostic.Elapsed <= 0 || diagnostic.Cause != nil {
+		t.Fatalf("divergent resolution diagnostic = %#v", diagnostic)
+	}
+	assertEmptyManagerAdmissionState(t, manager)
+}
+
+func TestKnowledgeAdmissionDistinguishesLookupFailureFromCatalogResolution(t *testing.T) {
+	resolver, appID := newEmptyKnowledgeResolver(t)
+	privateCause := errors.New("private lookup SQL and asset path")
+	manager := newTestManager(t, Config{
+		Executor:          executorFunc(func(context.Context, clickhouse.CompiledQuery, ResultSink) error { return nil }),
+		KnowledgeResolver: resolver,
+		LookupResolver: lookupResolverFunc(func(context.Context, LookupAdmissionResolutionScope) ([]clickhouse.LookupResolution, error) {
+			return nil, privateCause
+		}),
+		CleanupInterval: -1,
+	})
+	request := validRequest()
+	request.AppID = appID
+	_, err := manager.Create(t.Context(), request)
+	diagnostic, ok := errors.AsType[*AdmissionError](err)
+	if !errors.Is(err, ErrKnowledgeUnavailable) || !ok || diagnostic.Step != "resolve_lookups" ||
+		diagnostic.Elapsed <= 0 || !errors.Is(diagnostic.Cause, privateCause) {
+		t.Fatalf("lookup failure diagnostic = %#v, error = %v", diagnostic, err)
+	}
+	if errors.Is(err, privateCause) || strings.Contains(err.Error(), "private") {
+		t.Fatal("lookup cause entered the public error contract")
 	}
 	assertEmptyManagerAdmissionState(t, manager)
 }

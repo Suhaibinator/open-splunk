@@ -222,6 +222,49 @@ runtime coverage must reach the production resolver, planner, compiler,
 ClickHouse executor, retained lifecycle, inspection/history/export, and browser
 boundaries.
 
+## Diagnosing search admission failures
+
+A `search admission rejected` warning with `failure_stage=knowledge` means
+preparation failed before the search job was admitted. The HTTP response remains
+503 with `search service is unavailable`; the router may also log that response.
+Count admission warnings or HTTP requests when measuring failures, rather than
+counting both records as separate incidents.
+
+`admission_step` identifies the failing preparation step, such as
+`resolve_catalog`, `resolve_lookups`, or `compile`. `admission_elapsed_ms` covers
+the entire knowledge preparation stage. Catalog resolver failures also include
+`resolution_step`, `resolution_elapsed_ms`, and `resolution_attempts`. Resolution
+has a 250 ms budget including connection acquisition, reads, hydration, and
+retries; only SQLite busy/locked errors receive up to three attempts.
+
+Use these fields to choose the next investigation:
+
+| Evidence | Next check |
+| --- | --- |
+| `resolution_step=begin_snapshot`, `cause_class=context_deadline`, pool in use at its maximum | Check shared connection demand and long transactions. |
+| `sqlite_primary_code=5` or `6` | Check SQLite busy/locked contention; `sqlite_code` retains the extended numeric code. |
+| `cause_class=catalog_corrupt` | Inspect catalog integrity using the supported management and recovery procedures. |
+| `cause_class=catalog_not_found` | Check whether the authorized app or lookup still exists and is active. |
+| A deadline is reported at a later resolution step | Correlate catalog size, CPU scheduling, storage latency, and concurrent control-plane activity. |
+
+`control_db_pool_open`, `control_db_pool_in_use`, `control_db_pool_idle`, and
+`control_db_pool_max_open` describe the shared database pool when resolution
+fails. `control_db_pool_wait_count_delta` and
+`control_db_pool_wait_duration_ms_delta` measure pool-wide counter changes
+during that resolution interval. They include other requests and background
+workers, can overlap across failures, and are not the failed request's own wait
+time. A context deadline alone does not establish a network timeout.
+
+Capture nearby heartbeat, audit, and maintenance warnings together with host
+CPU and disk-latency measurements for the same interval. Repeated requests need
+client-side investigation separately. These diagnostics omit raw errors, SQL,
+SPL, definitions, database paths, and secrets; retain that boundary when adding
+instrumentation. Reproduce shared-pool starvation and recovery locally with:
+
+```sh
+go test ./internal/server -run '^TestSearchAdmissionSharedPoolTimeoutDiagnosticsAndRecovery$' -count=1
+```
+
 ## Deliberate exclusions
 
 The current baseline does not implement event types, tags, macros, workflow

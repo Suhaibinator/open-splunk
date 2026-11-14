@@ -2,6 +2,7 @@ package knowledgecatalog
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"slices"
 
@@ -21,6 +22,7 @@ type Options struct {
 // Store reads migration-owned catalog tables without changing schema.
 type Store struct {
 	orm            *gorm.DB
+	database       *sql.DB
 	cursorKey      []byte
 	resolutionGate *control.AdmissionGate
 }
@@ -37,7 +39,8 @@ func New(database *control.DB, options Options) (*Store, error) {
 		return nil, fmt.Errorf("construct knowledge resolver admission: %w", err)
 	}
 	return &Store{
-		orm: database.GORMDB(), cursorKey: slices.Clone(options.CursorKey), resolutionGate: gate,
+		orm: database.GORMDB(), database: database.SQLDB(),
+		cursorKey: slices.Clone(options.CursorKey), resolutionGate: gate,
 	}, nil
 }
 
