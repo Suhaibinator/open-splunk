@@ -327,7 +327,7 @@ These are local preflight timings, not native-query or end-to-end latency.
 The measured fixtures are retained as benchmarks; run the current candidate with:
 
 ```sh
-GOTOOLCHAIN=go1.27.1 GOMAXPROCS=2 go test ./internal/clickhouse -run '^$' \
+GOTOOLCHAIN=go1.27.4 GOMAXPROCS=2 go test ./internal/clickhouse -run '^$' \
   -bench '^BenchmarkTimechartRelationPreflight(Scalar|WideMixed|WideScalar)$' \
   -benchtime=500x -count=7 -benchmem
 ```
