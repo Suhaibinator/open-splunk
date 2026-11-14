@@ -13,7 +13,11 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
+	"github.com/Suhaibinator/open-splunk/internal/lookupservice"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -118,21 +122,36 @@ func TestSearchAdmissionInternalDeadlineRemainsServiceUnavailable(t *testing.T) 
 	}
 }
 
-func TestSearchAdmissionClassifiesCatalogFailuresWithoutPrivateText(t *testing.T) {
+func TestSearchAdmissionClassifiesKnowledgeFailuresWithoutPrivateText(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
 		name  string
 		cause error
 	}{
-		{"catalog_corrupt", knowledgecatalog.ErrCorrupt},
-		{"catalog_corrupt", lookupcatalog.ErrCorrupt},
+		{"knowledge_catalog_corrupt", knowledgecatalog.ErrCorrupt},
+		{"lookup_catalog_corrupt", lookupcatalog.ErrCorrupt},
+		{"lookup_asset_corrupt", lookupasset.ErrCorrupt},
+		{"knowledge_snapshot_invalid", knowledgesnapshot.ErrInvalidInput},
+		{"knowledge_snapshot_limit", knowledgesnapshot.ErrResourceLimit},
 		{"catalog_conflict", lookupcatalog.ErrConflict},
-		{"catalog_not_found", control.ErrNotFound},
-		{"catalog_not_found", lookupcatalog.ErrNotFound},
-		{"invalid_argument", control.ErrInvalidArgument},
-		{"invalid_argument", lookupcatalog.ErrInvalid},
-		{"catalog_capacity", control.ErrCapacityExceeded},
-		{"catalog_capacity", lookupcatalog.ErrCapacity},
+		{"dependency_not_found", control.ErrNotFound},
+		{"dependency_not_found", lookupcatalog.ErrNotFound},
+		{"dependency_not_found", lookupasset.ErrNotFound},
+		{"dependency_not_found", lookupservice.ErrNotFound},
+		{"dependency_invalid_argument", control.ErrInvalidArgument},
+		{"dependency_invalid_argument", lookupcatalog.ErrInvalid},
+		{"dependency_invalid_argument", lookupasset.ErrInvalidArgument},
+		{"dependency_invalid_argument", lookupservice.ErrInvalid},
+		{"capacity_exhausted", control.ErrCapacityExceeded},
+		{"capacity_exhausted", lookupcatalog.ErrCapacity},
+		{"capacity_exhausted", lookupasset.ErrResourceLimit},
+		{"capacity_exhausted", lookupservice.ErrResourceLimit},
+		{"capacity_exhausted", searchjobs.ErrCapacity},
+		{"lookup_unavailable", lookupservice.ErrUnavailable},
+		{"knowledge_contract_invalid", searchjobs.ErrKnowledgeUnavailable},
+		{"spl_compilation", &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX", Message: "private-sql", Suggestions: []string{"private-suggestion"},
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			core, logs := observer.New(zapcore.DebugLevel)
@@ -140,15 +159,18 @@ func TestSearchAdmissionClassifiesCatalogFailuresWithoutPrivateText(t *testing.T
 			err := &searchjobs.AdmissionError{
 				Stage: "knowledge", Err: searchjobs.ErrKnowledgeUnavailable,
 				Cause: fmt.Errorf("private-definition private-path: %w", test.cause),
-				Step:  "resolve_catalog", Elapsed: 275 * time.Millisecond,
+				Step:  "query_compile", Elapsed: 275 * time.Millisecond,
 			}
 			handler.logSearchAdmissionFailure(newAPIRequest(t.Context()), "search", err)
 			fields := logs.All()[0].ContextMap()
-			if fields["cause_class"] != test.name || fields["admission_step"] != "resolve_catalog" ||
+			if fields["cause_class"] != test.name || fields["failure_step"] != "query_compile" ||
 				fields["admission_elapsed_ms"] != float64(275) {
 				t.Fatalf("unexpected safe diagnostic fields: %v", fields)
 			}
-			if strings.Contains(fmt.Sprint(logs.All()), "private-") || errors.Is(err, test.cause) {
+			if test.name == "spl_compilation" && fields["diagnostic_code"] != "SPL_QUERY_TOO_COMPLEX" {
+				t.Fatalf("compiler diagnostic code missing: %v", fields)
+			}
+			if strings.Contains(fmt.Sprint(logs.All()), "private-") || errors.Is(err, err.Cause) {
 				t.Fatal("private cause leaked through logging or the public error chain")
 			}
 		})
@@ -180,8 +202,8 @@ func TestSearchAdmissionLogsTypedSQLiteCodeWithoutDriverMessage(t *testing.T) {
 		Cause: fmt.Errorf("private-query: %w", cause),
 	})
 	fields := logs.All()[0].ContextMap()
-	if fields["cause_class"] != "sqlite_error" || fields["sqlite_code"] != int64(2067) ||
-		fields["sqlite_primary_code"] != int64(19) {
+	if fields["cause_class"] != "sqlite_error" || fields["sqlite_code"] != int64(19) ||
+		fields["sqlite_extended_code"] != int64(2067) {
 		t.Fatalf("unexpected SQLite classification: %v", fields)
 	}
 	if strings.Contains(fmt.Sprint(logs.All()), "private") {

@@ -215,7 +215,7 @@ func TestSearchAdmissionSharedPoolTimeoutDiagnosticsAndRecovery(t *testing.T) {
 		fields["cause_deadline"] != true || fields["cause_canceled"] != false {
 		t.Fatalf("timeout classification = %v", fields)
 	}
-	if fields["admission_step"] != "resolve_catalog" || fields["resolution_step"] != "begin_snapshot" ||
+	if fields["failure_step"] != "catalog_resolve" || fields["resolution_step"] != "begin_snapshot" ||
 		fields["resolution_attempts"] != int64(1) {
 		t.Fatalf("timeout steps/attempts = %v", fields)
 	}

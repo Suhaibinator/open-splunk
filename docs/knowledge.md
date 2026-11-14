@@ -230,9 +230,20 @@ preparation failed before the search job was admitted. The HTTP response remains
 Count admission warnings or HTTP requests when measuring failures, rather than
 counting both records as separate incidents.
 
-`admission_step` identifies the failing preparation step, such as
-`resolve_catalog`, `resolve_lookups`, or `compile`. `admission_elapsed_ms` covers
-the entire knowledge preparation stage. Catalog resolver failures also include
+`failure_step` identifies the failing preparation operation:
+
+- `catalog_resolve`, `resolution_validate`, `lookup_resolve`, and `lookup_bind`
+  load and validate authorized catalog and lookup authority.
+- `prelude_inject` and `query_compile` apply field knowledge and compile the
+  complete query. Compiler rejections include a safe `diagnostic_code`, such as
+  `SPL_UNSUPPORTED_IF_BRANCH_TYPE`, without the potentially private message.
+- `compiled_clone`, `compiled_size`, `snapshot_finalize`, `snapshot_validate`,
+  and `metadata_size` validate and retain the sealed execution snapshot.
+- `plan_validation` and steps prefixed with `inventory_` check the wildcard
+  aggregate plan, discover its fields, and validate its scope and budget.
+
+`admission_elapsed_ms` covers the entire knowledge preparation stage.
+Catalog resolver failures also include
 `resolution_step`, `resolution_elapsed_ms`, and `resolution_attempts`. Resolution
 has a 250 ms budget including connection acquisition, reads, hydration, and
 retries; only SQLite busy/locked errors receive up to three attempts.
@@ -242,9 +253,11 @@ Use these fields to choose the next investigation:
 | Evidence | Next check |
 | --- | --- |
 | `resolution_step=begin_snapshot`, `cause_class=context_deadline`, pool in use at its maximum | Check shared connection demand and long transactions. |
-| `sqlite_primary_code=5` or `6` | Check SQLite busy/locked contention; `sqlite_code` retains the extended numeric code. |
-| `cause_class=catalog_corrupt` | Inspect catalog integrity using the supported management and recovery procedures. |
-| `cause_class=catalog_not_found` | Check whether the authorized app or lookup still exists and is active. |
+| `sqlite_code=5` or `6` | Check SQLite busy/locked contention; `sqlite_extended_code` retains the extended numeric code. |
+| `cause_class=knowledge_catalog_corrupt`, `lookup_catalog_corrupt`, or `lookup_asset_corrupt` | Inspect catalog or asset integrity using the supported management and recovery procedures. |
+| `cause_class=dependency_not_found` | Check whether the authorized app or lookup still exists and is active. |
+| `cause_class=knowledge_snapshot_invalid` or `knowledge_contract_invalid` | Check the failing validation step and persisted authority. |
+| `cause_class=spl_compilation` | Use `diagnostic_code` to identify the compiler rejection without exposing the query. |
 | A deadline is reported at a later resolution step | Correlate catalog size, CPU scheduling, storage latency, and concurrent control-plane activity. |
 
 `control_db_pool_open`, `control_db_pool_in_use`, `control_db_pool_idle`, and
@@ -254,6 +267,13 @@ fails. `control_db_pool_wait_count_delta` and
 during that resolution interval. They include other requests and background
 workers, can overlap across failures, and are not the failed request's own wait
 time. A context deadline alone does not establish a network timeout.
+
+`cause_class` also distinguishes invalid dependencies, capacity limits, lookup
+conflicts, and unavailable lookup services. SQLite codes remain available when
+the resolver replaces a driver error with a deadline error; the deadline remains
+the primary cause classification. Unknown causes retain `cause_class=other`
+alongside their operation label. Failures after execution starts are reported
+separately as `search failed`.
 
 Capture nearby heartbeat, audit, and maintenance warnings together with host
 CPU and disk-latency measurements for the same interval. Repeated requests need

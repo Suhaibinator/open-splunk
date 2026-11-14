@@ -523,7 +523,7 @@ func TestKnowledgeAdmissionFailuresAreSynchronousSafeAndSideEffectFree(t *testin
 			}
 			if test.wantResolvers != 0 {
 				diagnostic, ok := errors.AsType[*AdmissionError](err)
-				if !ok || diagnostic.Stage != "knowledge" || diagnostic.Step != "resolve_catalog" ||
+				if !ok || diagnostic.Stage != "knowledge" || diagnostic.Step != "catalog_resolve" ||
 					diagnostic.Elapsed <= 0 || !errors.Is(diagnostic.Cause, privateCause) {
 					t.Fatalf("resolver diagnostic = %#v", diagnostic)
 				}
@@ -609,7 +609,8 @@ func TestKnowledgeAdmissionRejectsResolverScopeDivergence(t *testing.T) {
 		t.Fatalf("Create(divergent resolver) = %v, IDs=%d, want fail-closed pre-ID", err, ids.Load())
 	}
 	diagnostic, ok := errors.AsType[*AdmissionError](err)
-	if !ok || diagnostic.Step != "validate_resolution" || diagnostic.Elapsed <= 0 || diagnostic.Cause != nil {
+	if !ok || diagnostic.Step != "resolution_validate" || diagnostic.Elapsed <= 0 ||
+		!errors.Is(diagnostic.Cause, ErrKnowledgeUnavailable) {
 		t.Fatalf("divergent resolution diagnostic = %#v", diagnostic)
 	}
 	assertEmptyManagerAdmissionState(t, manager)
@@ -630,7 +631,7 @@ func TestKnowledgeAdmissionDistinguishesLookupFailureFromCatalogResolution(t *te
 	request.AppID = appID
 	_, err := manager.Create(t.Context(), request)
 	diagnostic, ok := errors.AsType[*AdmissionError](err)
-	if !errors.Is(err, ErrKnowledgeUnavailable) || !ok || diagnostic.Step != "resolve_lookups" ||
+	if !errors.Is(err, ErrKnowledgeUnavailable) || !ok || diagnostic.Step != "lookup_resolve" ||
 		diagnostic.Elapsed <= 0 || !errors.Is(diagnostic.Cause, privateCause) {
 		t.Fatalf("lookup failure diagnostic = %#v, error = %v", diagnostic, err)
 	}

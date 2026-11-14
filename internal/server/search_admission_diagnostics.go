@@ -12,7 +12,11 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
+	"github.com/Suhaibinator/open-splunk/internal/lookupservice"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"go.uber.org/zap"
 	"modernc.org/sqlite"
@@ -45,7 +49,7 @@ func (handler *apiHandler) logSearchAdmissionFailure(request *http.Request, appI
 	}
 	if diagnostic, ok := errors.AsType[*searchjobs.AdmissionError](err); ok && diagnostic.Step != "" {
 		fields = append(fields,
-			zap.String("admission_step", diagnostic.Step),
+			zap.String("failure_step", diagnostic.Step),
 			zap.Float64("admission_elapsed_ms", float64(diagnostic.Elapsed)/1e6),
 		)
 	}
@@ -54,6 +58,9 @@ func (handler *apiHandler) logSearchAdmissionFailure(request *http.Request, appI
 			zap.String("cause_type", reflect.TypeOf(cause).String()),
 			zap.Bool("cause_deadline", errors.Is(cause, context.DeadlineExceeded)),
 			zap.Bool("cause_canceled", errors.Is(cause, context.Canceled)))
+		if diagnostic, ok := errors.AsType[*plan.Diagnostic](cause); ok {
+			fields = append(fields, zap.String("diagnostic_code", diagnostic.Code))
+		}
 		if networkError, ok := errors.AsType[net.Error](cause); ok &&
 			!errors.Is(cause, context.DeadlineExceeded) && !errors.Is(cause, context.Canceled) {
 			fields = append(fields, zap.Bool("cause_network_timeout", networkError.Timeout()))
@@ -91,8 +98,8 @@ func searchResolutionDiagnosticFields(cause error) []zap.Field {
 	}
 	if hasSQLiteCode {
 		fields = append(fields,
-			zap.Int("sqlite_code", sqliteCode),
-			zap.Int("sqlite_primary_code", sqliteCode&0xff),
+			zap.Int("sqlite_code", sqliteCode&0xff),
+			zap.Int("sqlite_extended_code", sqliteCode),
 		)
 	}
 	return fields
@@ -114,17 +121,36 @@ func searchAdmissionCauseClass(cause error) string {
 		return "clickhouse_acquire_timeout"
 	case errors.Is(cause, clickhousedriver.ErrConnectionClosed):
 		return "clickhouse_connection_closed"
-	case errors.Is(cause, knowledgecatalog.ErrCorrupt), errors.Is(cause, lookupcatalog.ErrCorrupt):
-		return "catalog_corrupt"
+	case errors.Is(cause, knowledgecatalog.ErrCorrupt):
+		return "knowledge_catalog_corrupt"
+	case errors.Is(cause, lookupcatalog.ErrCorrupt):
+		return "lookup_catalog_corrupt"
+	case errors.Is(cause, lookupasset.ErrCorrupt):
+		return "lookup_asset_corrupt"
+	case errors.Is(cause, knowledgesnapshot.ErrInvalidInput):
+		return "knowledge_snapshot_invalid"
+	case errors.Is(cause, knowledgesnapshot.ErrResourceLimit):
+		return "knowledge_snapshot_limit"
 	case errors.Is(cause, lookupcatalog.ErrConflict):
 		return "catalog_conflict"
-	case errors.Is(cause, control.ErrNotFound), errors.Is(cause, lookupcatalog.ErrNotFound):
-		return "catalog_not_found"
-	case errors.Is(cause, control.ErrInvalidArgument), errors.Is(cause, lookupcatalog.ErrInvalid):
-		return "invalid_argument"
-	case errors.Is(cause, control.ErrCapacityExceeded), errors.Is(cause, lookupcatalog.ErrCapacity):
-		return "catalog_capacity"
+	case errors.Is(cause, control.ErrCapacityExceeded), errors.Is(cause, lookupcatalog.ErrCapacity),
+		errors.Is(cause, lookupasset.ErrResourceLimit), errors.Is(cause, lookupservice.ErrResourceLimit),
+		errors.Is(cause, searchjobs.ErrCapacity):
+		return "capacity_exhausted"
+	case errors.Is(cause, control.ErrNotFound), errors.Is(cause, lookupcatalog.ErrNotFound),
+		errors.Is(cause, lookupasset.ErrNotFound), errors.Is(cause, lookupservice.ErrNotFound):
+		return "dependency_not_found"
+	case errors.Is(cause, control.ErrInvalidArgument), errors.Is(cause, lookupcatalog.ErrInvalid),
+		errors.Is(cause, lookupasset.ErrInvalidArgument), errors.Is(cause, lookupservice.ErrInvalid):
+		return "dependency_invalid_argument"
+	case errors.Is(cause, lookupservice.ErrUnavailable):
+		return "lookup_unavailable"
+	case errors.Is(cause, searchjobs.ErrKnowledgeUnavailable):
+		return "knowledge_contract_invalid"
 	default:
+		if _, ok := errors.AsType[*plan.Diagnostic](cause); ok {
+			return "spl_compilation"
+		}
 		if sqliteError, ok := errors.AsType[*sqlite.Error](cause); ok {
 			switch sqliteError.Code() & 0xff {
 			case 5:
