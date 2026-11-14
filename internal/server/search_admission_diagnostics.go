@@ -10,8 +10,16 @@ import (
 	"syscall"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
+	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
+	"github.com/Suhaibinator/open-splunk/internal/lookupservice"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"go.uber.org/zap"
+	"modernc.org/sqlite"
 )
 
 // Log before HTTP mapping discards the admission category. Never log the SPL
@@ -39,19 +47,62 @@ func (handler *apiHandler) logSearchAdmissionFailure(request *http.Request, appI
 		zap.String("path", request.URL.Path),
 		zap.String("method", request.Method),
 	}
+	if diagnostic, ok := errors.AsType[*searchjobs.AdmissionError](err); ok && diagnostic.Step != "" {
+		fields = append(fields,
+			zap.String("failure_step", diagnostic.Step),
+			zap.Float64("admission_elapsed_ms", float64(diagnostic.Elapsed)/1e6),
+		)
+	}
 	if cause != nil {
 		fields = append(fields, zap.String("cause_class", searchAdmissionCauseClass(cause)),
 			zap.String("cause_type", reflect.TypeOf(cause).String()),
 			zap.Bool("cause_deadline", errors.Is(cause, context.DeadlineExceeded)),
 			zap.Bool("cause_canceled", errors.Is(cause, context.Canceled)))
-		if networkError, ok := errors.AsType[net.Error](cause); ok {
+		if diagnostic, ok := errors.AsType[*plan.Diagnostic](cause); ok {
+			fields = append(fields, zap.String("diagnostic_code", diagnostic.Code))
+		}
+		if networkError, ok := errors.AsType[net.Error](cause); ok &&
+			!errors.Is(cause, context.DeadlineExceeded) && !errors.Is(cause, context.Canceled) {
 			fields = append(fields, zap.Bool("cause_network_timeout", networkError.Timeout()))
 		}
 		if exception, ok := errors.AsType[*clickhousedriver.Exception](cause); ok {
 			fields = append(fields, zap.Int32("clickhouse_code", exception.Code))
 		}
+		fields = append(fields, searchResolutionDiagnosticFields(cause)...)
 	}
 	handler.logger.Warn("search admission rejected", fields...)
+}
+
+func searchResolutionDiagnosticFields(cause error) []zap.Field {
+	var fields []zap.Field
+	sqliteCode, hasSQLiteCode := 0, false
+	if sqliteError, ok := errors.AsType[*sqlite.Error](cause); ok {
+		sqliteCode, hasSQLiteCode = sqliteError.Code(), true
+	}
+	if diagnostic, ok := knowledgecatalog.ResolutionDiagnosticsFromError(cause); ok {
+		fields = append(fields,
+			zap.String("resolution_step", diagnostic.Step),
+			zap.Float64("resolution_elapsed_ms", float64(diagnostic.Elapsed)/1e6),
+			zap.Int("resolution_attempts", diagnostic.Attempts),
+			zap.Int("control_db_pool_open", diagnostic.Pool.OpenConnections),
+			zap.Int("control_db_pool_in_use", diagnostic.Pool.InUse),
+			zap.Int("control_db_pool_idle", diagnostic.Pool.Idle),
+			zap.Int("control_db_pool_max_open", diagnostic.Pool.MaxOpenConnections),
+			// These deltas include every user of this shared pool during Resolve.
+			zap.Int64("control_db_pool_wait_count_delta", diagnostic.PoolWaitCountDelta),
+			zap.Float64("control_db_pool_wait_duration_ms_delta", float64(diagnostic.PoolWaitDurationDelta)/1e6),
+		)
+		if diagnostic.HasSQLiteCode {
+			sqliteCode, hasSQLiteCode = diagnostic.SQLiteCode, true
+		}
+	}
+	if hasSQLiteCode {
+		fields = append(fields,
+			zap.Int("sqlite_code", sqliteCode&0xff),
+			zap.Int("sqlite_extended_code", sqliteCode),
+		)
+	}
+	return fields
 }
 
 func searchAdmissionCauseClass(cause error) string {
@@ -70,7 +121,46 @@ func searchAdmissionCauseClass(cause error) string {
 		return "clickhouse_acquire_timeout"
 	case errors.Is(cause, clickhousedriver.ErrConnectionClosed):
 		return "clickhouse_connection_closed"
+	case errors.Is(cause, knowledgecatalog.ErrCorrupt):
+		return "knowledge_catalog_corrupt"
+	case errors.Is(cause, lookupcatalog.ErrCorrupt):
+		return "lookup_catalog_corrupt"
+	case errors.Is(cause, lookupasset.ErrCorrupt):
+		return "lookup_asset_corrupt"
+	case errors.Is(cause, knowledgesnapshot.ErrInvalidInput):
+		return "knowledge_snapshot_invalid"
+	case errors.Is(cause, knowledgesnapshot.ErrResourceLimit):
+		return "knowledge_snapshot_limit"
+	case errors.Is(cause, lookupcatalog.ErrConflict):
+		return "catalog_conflict"
+	case errors.Is(cause, control.ErrCapacityExceeded), errors.Is(cause, lookupcatalog.ErrCapacity),
+		errors.Is(cause, lookupasset.ErrResourceLimit), errors.Is(cause, lookupservice.ErrResourceLimit),
+		errors.Is(cause, searchjobs.ErrCapacity):
+		return "capacity_exhausted"
+	case errors.Is(cause, control.ErrNotFound), errors.Is(cause, lookupcatalog.ErrNotFound),
+		errors.Is(cause, lookupasset.ErrNotFound), errors.Is(cause, lookupservice.ErrNotFound):
+		return "dependency_not_found"
+	case errors.Is(cause, control.ErrInvalidArgument), errors.Is(cause, lookupcatalog.ErrInvalid),
+		errors.Is(cause, lookupasset.ErrInvalidArgument), errors.Is(cause, lookupservice.ErrInvalid):
+		return "dependency_invalid_argument"
+	case errors.Is(cause, lookupservice.ErrUnavailable):
+		return "lookup_unavailable"
+	case errors.Is(cause, searchjobs.ErrKnowledgeUnavailable):
+		return "knowledge_contract_invalid"
 	default:
+		if _, ok := errors.AsType[*plan.Diagnostic](cause); ok {
+			return "spl_compilation"
+		}
+		if sqliteError, ok := errors.AsType[*sqlite.Error](cause); ok {
+			switch sqliteError.Code() & 0xff {
+			case 5:
+				return "sqlite_busy"
+			case 6:
+				return "sqlite_locked"
+			default:
+				return "sqlite_error"
+			}
+		}
 		if _, ok := errors.AsType[*clickhousedriver.Exception](cause); ok {
 			return "clickhouse_exception"
 		}

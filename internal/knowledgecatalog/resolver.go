@@ -183,15 +183,39 @@ func (resolution Resolution) Finalize(compiled clickhouse.CompiledQuery) (knowle
 func (resolver *Resolver) Resolve(
 	ctx context.Context,
 	scope ResolutionScope,
-) (Resolution, error) {
+) (resolved Resolution, returnedErr error) {
 	if resolver == nil || resolver.store == nil || resolver.store.orm == nil {
 		return Resolution{}, fmt.Errorf("%w: knowledge resolver is unavailable", control.ErrInvalidArgument)
 	}
 	if ctx == nil {
 		return Resolution{}, fmt.Errorf("%w: knowledge resolver context is nil", control.ErrInvalidArgument)
 	}
+	started := time.Now()
 	limited, cancel := context.WithTimeout(ctx, MaximumResolutionDuration)
 	defer cancel()
+	var initialPool sql.DBStats
+	if resolver.store.database != nil {
+		initialPool = resolver.store.database.Stats()
+	}
+	step := "normalize_scope"
+	attempts := 0
+	defer func() {
+		if returnedErr == nil {
+			return
+		}
+		diagnostics := resolutionErrorDiagnostics(returnedErr)
+		if diagnostics.Step == "" || step == "retry_backoff" {
+			diagnostics.Step = step
+		}
+		diagnostics.Elapsed = time.Since(started)
+		diagnostics.Attempts = attempts
+		if resolver.store.database != nil {
+			diagnostics.Pool = resolver.store.database.Stats()
+			diagnostics.PoolWaitCountDelta = diagnostics.Pool.WaitCount - initialPool.WaitCount
+			diagnostics.PoolWaitDurationDelta = diagnostics.Pool.WaitDuration - initialPool.WaitDuration
+		}
+		returnedErr = &resolutionDiagnosticsError{cause: returnedErr, diagnostics: diagnostics}
+	}()
 
 	normalized, err := normalizeResolutionScope(scope)
 	if err != nil {
@@ -200,6 +224,7 @@ func (resolver *Resolver) Resolve(
 	if err := limited.Err(); err != nil {
 		return Resolution{}, err
 	}
+	step = "acquire_gate"
 	if resolver.gate == nil || !resolver.gate.TryAcquire() {
 		if err := limited.Err(); err != nil {
 			return Resolution{}, err
@@ -209,18 +234,21 @@ func (resolver *Resolver) Resolve(
 	defer resolver.gate.Release()
 
 	for attempt := 1; attempt <= MaximumResolutionAttempts; attempt++ {
-		resolved, resolveErr := resolver.attempt(limited, normalized)
+		attempts = attempt
+		step = "resolve_snapshot"
+		candidate, resolveErr := resolver.attempt(limited, normalized)
 		if resolveErr == nil {
-			return resolved, nil
+			return candidate, nil
 		}
 		if err := limited.Err(); err != nil {
-			return Resolution{}, copyCatalogErrorMetadata(err, resolveErr)
+			return Resolution{}, copyResolutionErrorMetadata(err, resolveErr)
 		}
 		if attempt == MaximumResolutionAttempts || !resolverSQLiteBusyOrLocked(resolveErr) {
 			return Resolution{}, resolveErr
 		}
+		step = "retry_backoff"
 		if err := resolver.backoff(limited, resolutionRetryDelay(attempt)); err != nil {
-			return Resolution{}, copyCatalogErrorMetadata(err, resolveErr)
+			return Resolution{}, copyResolutionErrorMetadata(err, resolveErr)
 		}
 	}
 	panic("unreachable knowledge resolver retry loop")
@@ -250,25 +278,37 @@ func (resolver *Resolver) resolveOnce(
 	ctx context.Context,
 	scope normalizedResolutionScope,
 ) (resolved Resolution, returnedErr error) {
+	step := "begin_snapshot"
+	defer func() {
+		if returnedErr == nil {
+			return
+		}
+		diagnostics := resolutionErrorDiagnostics(returnedErr)
+		diagnostics.Step = step
+		returnedErr = &resolutionDiagnosticsError{cause: returnedErr, diagnostics: diagnostics}
+	}()
 	tx := resolver.store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
-		return Resolution{}, mapError(ctx.Err(), "begin resolution", tx.Error)
+		return Resolution{}, mapResolutionError(ctx.Err(), "begin resolution", tx.Error)
 	}
 	defer finishReadTransaction(tx, &returnedErr)
 
 	// This is deliberately the first SQLite read: it establishes the WAL
 	// snapshot whose exact raw state commitment is re-read at the end.
+	step = "read_catalog"
 	catalog, err := readCatalogState(tx, scope.tenantID)
 	if err != nil {
-		return Resolution{}, mapError(ctx.Err(), "read resolution catalog authority", err)
+		return Resolution{}, mapResolutionError(ctx.Err(), "read resolution catalog authority", err)
 	}
+	step = "authorize_app"
 	app, found, err := readActiveResolutionApp(tx, scope.tenantID, scope.appID)
 	if err != nil {
-		return Resolution{}, mapError(ctx.Err(), "authorize resolution app", err)
+		return Resolution{}, mapResolutionError(ctx.Err(), "authorize resolution app", err)
 	}
 	if !found {
 		return Resolution{}, control.ErrNotFound
 	}
+	step = "validate_catalog"
 	if !catalog.found {
 		return Resolution{}, fmt.Errorf("%w: active app has no knowledge catalog authority", ErrCorrupt)
 	}
@@ -282,14 +322,16 @@ func (resolver *Resolver) resolveOnce(
 		ownerID:        scope.principalID,
 		readableAppIDs: []string{scope.appID},
 	}
+	step = "count_candidates"
 	activeCount, err := readBoundedActiveResolutionCount(tx, readScope)
 	if err != nil {
-		return Resolution{}, mapError(ctx.Err(), "count active resolution candidates", err)
+		return Resolution{}, mapResolutionError(ctx.Err(), "count active resolution candidates", err)
 	}
 	if activeCount > MaximumResolutionCandidates {
 		return Resolution{}, fmt.Errorf("%w: active knowledge catalog exceeds its resolution bound", ErrCorrupt)
 	}
 
+	step = "read_candidates"
 	query := applyActiveResolutionProjectionAuthorization(baseProjectionQuery(tx), readScope).
 		Order("projection.knowledge_object_id ASC")
 	projections, err := readProjectionRecordsBounded(
@@ -298,20 +340,22 @@ func (resolver *Resolver) resolveOnce(
 		knowledgesnapshot.MaximumCandidateDefinitionBytes,
 	)
 	if err != nil {
-		return Resolution{}, mapError(ctx.Err(), "read active resolution candidates", err)
+		return Resolution{}, mapResolutionError(ctx.Err(), "read active resolution candidates", err)
 	}
 	if len(projections) > MaximumResolutionCandidates || int64(len(projections)) != activeCount {
 		return Resolution{}, fmt.Errorf("%w: active resolution projection coverage disagrees", ErrCorrupt)
 	}
 
+	step = "hydrate_candidates"
 	objects, hydrated, err := objectsFromProjectionsWithAuthorities(
 		tx,
 		projections,
 		resolutionHydrationBudget,
 	)
 	if err != nil {
-		return Resolution{}, mapError(ctx.Err(), "validate active resolution candidates", err)
+		return Resolution{}, mapResolutionError(ctx.Err(), "validate active resolution candidates", err)
 	}
+	step = "resolve_precedence"
 	var staticCharges ResolutionStaticCharges
 	input, err := resolveCandidatePrecedence(
 		ctx,
@@ -324,8 +368,9 @@ func (resolver *Resolver) resolveOnce(
 		&staticCharges,
 	)
 	if err != nil {
-		return Resolution{}, mapError(ctx.Err(), "resolve active knowledge candidates", err)
+		return Resolution{}, mapResolutionError(ctx.Err(), "resolve active knowledge candidates", err)
 	}
+	step = "prepare_authority"
 	authority, err := knowledgesnapshot.Prepare(input)
 	if err != nil {
 		if errors.Is(err, knowledgesnapshot.ErrResourceLimit) {
@@ -337,16 +382,18 @@ func (resolver *Resolver) resolveOnce(
 		return Resolution{}, fmt.Errorf("%w: independently derived static charges disagree", ErrCorrupt)
 	}
 
+	step = "recheck_app"
 	finalApp, found, err := readActiveResolutionApp(tx, scope.tenantID, scope.appID)
 	if err != nil {
-		return Resolution{}, mapError(ctx.Err(), "re-read resolution app authority", err)
+		return Resolution{}, mapResolutionError(ctx.Err(), "re-read resolution app authority", err)
 	}
 	if !found || finalApp != app {
 		return Resolution{}, fmt.Errorf("%w: app authority changed inside one read snapshot", ErrCorrupt)
 	}
+	step = "recheck_catalog"
 	finalCatalog, err := readCatalogState(tx, scope.tenantID)
 	if err != nil {
-		return Resolution{}, mapError(ctx.Err(), "re-read resolution catalog authority", err)
+		return Resolution{}, mapResolutionError(ctx.Err(), "re-read resolution catalog authority", err)
 	}
 	if !finalCatalog.equal(catalog) {
 		return Resolution{}, fmt.Errorf("%w: catalog authority changed inside one read snapshot", ErrCorrupt)
@@ -354,8 +401,9 @@ func (resolver *Resolver) resolveOnce(
 	if err := ctx.Err(); err != nil {
 		return Resolution{}, err
 	}
+	step = "commit_snapshot"
 	if err := tx.Commit().Error; err != nil {
-		return Resolution{}, mapError(ctx.Err(), "commit resolution", err)
+		return Resolution{}, mapResolutionError(ctx.Err(), "commit resolution", err)
 	}
 	return Resolution{authority: authority}, nil
 }
