@@ -213,6 +213,8 @@ func TestGroupedStorePollsDurableOutcomeWhenCommitWakeIsLost(t *testing.T) {
 	)
 	store.coalescing = true
 	store.retryAfter = 10 * time.Millisecond
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	batch := distinctStoreBatch("lost-commit-wake", 1)
 	type outcome struct {
 		result ingest.StoreResult
@@ -220,10 +222,18 @@ func TestGroupedStorePollsDurableOutcomeWhenCommitWakeIsLost(t *testing.T) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		result, err := store.Store(context.Background(), batch)
+		result, err := store.Store(ctx, batch)
 		done <- outcome{result: result, err: err}
 	}()
 	waitForPendingReservations(t, sequencer, 1)
+	waitForNativeWaiters(t, store.commitWaiters, 1)
+	// A pending reservation and registered waiter can still hold the staging
+	// attempt lease. Wait for Store to release it before this fixture's single
+	// manual group acquisition; otherwise the reservation is not yet eligible.
+	if err := store.writeAdmission.freeze(ctx); err != nil {
+		t.Fatalf("wait for staging to finish: %v", err)
+	}
+	store.writeAdmission.releaseFreeze()
 
 	attemptID := strings.Repeat("w", 32)
 	limits := store.writeGroupLimits
