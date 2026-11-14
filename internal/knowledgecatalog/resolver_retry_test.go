@@ -81,8 +81,14 @@ func TestResolverRetriesBusyExactlyThreeAttemptsWithPureBackoff(t *testing.T) {
 		return nil
 	}
 
-	if _, err := resolver.Resolve(t.Context(), testResolutionScope("main")); !errors.Is(err, busyErr) {
+	_, err := resolver.Resolve(t.Context(), testResolutionScope("main"))
+	if !errors.Is(err, busyErr) {
 		t.Fatalf("Resolve(always BUSY) error = %v, want original SQLite BUSY", err)
+	}
+	diagnostics, found := ResolutionDiagnosticsFromError(err)
+	if !found || diagnostics.Attempts != MaximumResolutionAttempts ||
+		!diagnostics.HasSQLiteCode || diagnostics.SQLiteCode&0xff != 5 {
+		t.Fatalf("BUSY resolution diagnostics = %+v, found %v", diagnostics, found)
 	}
 	if got := attempts.Load(); got != MaximumResolutionAttempts {
 		t.Fatalf("Resolve(always BUSY) attempts = %d, want %d", got, MaximumResolutionAttempts)
@@ -195,6 +201,14 @@ func TestResolverSoleConnectionExhaustionHonorsBoundAndReleasesGate(t *testing.T
 	if elapsed > MaximumResolutionDuration+150*time.Millisecond {
 		_ = held.Close()
 		t.Fatalf("Resolve(sole connection held) took %v, fixed bound is %v", elapsed, MaximumResolutionDuration)
+	}
+	diagnostics, found := ResolutionDiagnosticsFromError(err)
+	if !found || diagnostics.Step != "begin_snapshot" || diagnostics.Attempts != 1 ||
+		diagnostics.Pool.MaxOpenConnections != 1 || diagnostics.Pool.InUse != 1 ||
+		diagnostics.PoolWaitCountDelta != 1 || diagnostics.PoolWaitDurationDelta <= 0 ||
+		diagnostics.Elapsed <= 0 || diagnostics.HasSQLiteCode {
+		_ = held.Close()
+		t.Fatalf("pool exhaustion diagnostics = %+v, found %v", diagnostics, found)
 	}
 	if err := held.Close(); err != nil {
 		t.Fatalf("release sole SQLite connection: %v", err)
