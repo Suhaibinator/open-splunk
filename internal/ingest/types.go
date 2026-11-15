@@ -30,6 +30,12 @@ const (
 	HardMaxIDBytes           uint32 = protocolid.MaximumBytes
 	HardMaxInFlightBatches   uint32 = 64
 	HardMaxStreamsPerSubject uint32 = 16
+	// HardMaxEventValueNodes bounds all scalar and composite TypedValue nodes
+	// in one event, independently of encoded bytes and object-field limits.
+	HardMaxEventValueNodes uint32 = 16_384
+	// HardMaxBatchValueNodes bounds retained normalized trees and validation
+	// work across an entire fresh batch or transport-neutral request.
+	HardMaxBatchValueNodes uint32 = 4 * HardMaxEventValueNodes
 	// HardMaxDurable*Bytes mirror the bounded server-owned replay formats. A
 	// source batch can grow during configured redaction and rejection reporting,
 	// so normalized representations are checked independently.

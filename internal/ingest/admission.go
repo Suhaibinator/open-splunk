@@ -152,6 +152,13 @@ func (preparer *AdmissionPreparer) Prepare(request AdmissionRequest) (StoreBatch
 		return StoreBatch{}, err
 	}
 
+	budget := batchValueBudget{remaining: HardMaxBatchValueNodes}
+	for _, candidate := range request.Events {
+		if !budget.consumeObject(candidate.Event.GetFields(), 1) {
+			return StoreBatch{}, fmt.Errorf("%w: typed value node limit exceeded", ErrAdmissionRequestTooLarge)
+		}
+	}
+
 	seenEventIDs := make(map[string]struct{}, len(request.Events))
 	storedEvents := make([]*StoredEvent, 0, len(request.Events))
 	retentionByIndex := make(map[string]time.Duration)
