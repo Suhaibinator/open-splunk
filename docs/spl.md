@@ -383,6 +383,7 @@ The cumulative command surface is:
 | `makemv` | literal-delimiter String splitting (`SPL-MAKEMV-001`) |
 | `mvexpand` | bounded ordered native-list expansion (`SPL-MVEXPAND-001`) |
 | `nomv` | newline-separated display without changing the typed list (`SPL-NOMV-001`) |
+| `join` | match a projected subsearch on explicit string keys |
 | `lookup` | immutable exact CSV enrichment (`SPL-LOOKUP-SYNTAX-001`) |
 
 Command fields are exact and case-sensitive. The `__os_` namespace is private;
@@ -541,6 +542,27 @@ generated-SQL, memory, and result limits. Automatic lookups run after
 calculated fields and before the base predicate; they are deterministic and
 cannot depend on another lookup.
 
+### Joining a filtered event search
+
+```spl
+| fields trace_id
+| join type=left trace_id
+    [ search level=error | fields trace_id, error, stage ]
+| stats count BY error, stage
+```
+
+One `join` per search can read the same authorized event snapshot as the
+main pipeline. Supply one or more space-separated, case-sensitive string
+keys. End the bracketed base search with `fields` or `table`, listing every
+key and the fields to import. The join imports only explicitly listed
+fields. A present right-side field replaces its left-side counterpart.
+
+The default `type=inner` keeps matching rows. Both `type=left` and
+`type=outer` preserve unmatched left rows. Missing and null keys have no
+match. The subsearch considers its newest 50,000 events in the established
+event order, then takes the first match for each key (`max=1`).
+See the [Splunk join reference](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.6/search-commands/join).
+
 ## Diagnostics, security, and unsupported surface
 
 Diagnostics use half-open UTF-8 byte ranges over authored source and stable
@@ -550,7 +572,7 @@ execution/unsupported-value categories. Generated SQL, arguments, raw backend
 errors, event values, and private definitions are never public diagnostic
 text.
 
-Subsearches, joins, generating commands, external calls, mutation commands,
+Other subsearch forms, key autodetection, multiple matches per left row, generating commands, external calls, mutation commands,
 unbounded row generation, `inputlookup`, `outputlookup`, mutable/external URL
 or scripted lookups, fuzzy/CIDR/temporal lookup matching, multivalue lookup
 keys, automatic lookup chaining, and arbitrary Splunk configuration execution

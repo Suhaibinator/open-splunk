@@ -2,6 +2,25 @@
   "format_version": 1,
   "cases": [
     {
+      "id": "join.left-keyed-subsearch",
+      "command": "join",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.6/search-commands/join",
+        "release": "10.6",
+        "section": "Optional arguments",
+        "kind": "grammar-derived",
+        "fragment": "join type=left host [ search level=error | fields host, service ]",
+        "verified_on": "2026-11-21",
+        "reviewed_evidence": "Use either outer or left to specify a left outer join."
+      },
+      "query": "index=main | table host | join type=left host [ search level=error | fields host, service ]",
+      "expect": {
+        "support": "executable",
+        "commands": ["table", "join"],
+        "facets": {"fields": "host, service", "keys": "host", "type": "left"}
+      }
+    },
+    {
       "id": "search.base-membership",
       "command": "search",
       "source": {

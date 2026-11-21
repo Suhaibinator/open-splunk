@@ -140,3 +140,11 @@ test("closed and nested membership expressions do not reuse candidate context", 
     assert.notEqual(completionContextAt(source, source.length)?.stage, "value");
   }
 });
+
+test("the editor accepts a multiline trace join followed by statistics", () => {
+  const query = `| fields trace_id
+| join type=left trace_id
+  [ search index=gradethis message="request rejected by sanitizer" | fields trace_id, stage, error, verification_code_length, min_code_length, max_code_length ]
+| stats count BY error, verification_code_length, min_code_length, max_code_length`;
+  assert.equal(getQueryDiagnostic(query), null);
+});

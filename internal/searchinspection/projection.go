@@ -620,6 +620,11 @@ func describeAuthoredOperator(
 		for index, assignment := range concrete.Assignments {
 			outputs[index] = assignment.Destination.Name
 		}
+	case *plan.Join:
+		if concrete == nil || len(concrete.Outputs) > spl.MaximumExplicitProjectionFields {
+			return "", nil, spl.Range{}, invalidProjection("logical Join has invalid outputs")
+		}
+		outputs = fieldRefNames(concrete.Outputs)
 	case *plan.Lookup:
 		if concrete == nil || len(concrete.Outputs) == 0 ||
 			len(concrete.Outputs) > spl.MaximumLookupOutputs {

@@ -106,6 +106,12 @@ func ValidateTimelineEligibility(query *Query) error {
 			if operator.Output.Name == "_time" {
 				return timelineTimeDiagnostic(operator.Range)
 			}
+		case *Join:
+			for _, field := range operator.Outputs {
+				if field.Name == "_time" {
+					return timelineTimeDiagnostic(field.Range)
+				}
+			}
 		case *Lookup:
 			if !validLookupContract(operator) {
 				return timelinePipelineDiagnostic(operator.Range)

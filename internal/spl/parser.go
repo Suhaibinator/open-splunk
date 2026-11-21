@@ -128,9 +128,11 @@ func (p *parser) parseQuery() (*Query, error) {
 	)
 
 	stage := 0
+	commandCount := 0
 	for p.match(tokenPipe) {
 		stage++
-		if stage > maxPipelineCommands {
+		commandCount++
+		if commandCount > maxPipelineCommands {
 			return nil, &Diagnostic{
 				Code:    "SPL_QUERY_TOO_COMPLEX",
 				Message: fmt.Sprintf("search contains more than %d pipeline commands", maxPipelineCommands),
@@ -140,6 +142,12 @@ func (p *parser) parseQuery() (*Query, error) {
 		command, err := p.parseCommand(stage)
 		if err != nil {
 			return nil, err
+		}
+		if _, ok := command.(*JoinCommand); ok {
+			commandCount += 2 // The right-hand search and its explicit projection.
+			if commandCount > maxPipelineCommands {
+				return nil, &Diagnostic{Code: "SPL_QUERY_TOO_COMPLEX", Message: "join subsearch exceeds the pipeline command limit", Range: command.SourceRange()}
+			}
 		}
 		query.Commands = append(query.Commands, command)
 		query.parsedEvalPredicatePrefixes = append(
@@ -215,6 +223,8 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return p.parseNoMVCommand(nameToken)
 	case "spath":
 		return p.parseSpathCommand(nameToken)
+	case "join":
+		return p.parseJoinCommand(nameToken)
 	case "lookup":
 		return p.parseLookupCommand(nameToken)
 	case "rename":
@@ -1082,7 +1092,7 @@ func (p *parser) canStartWhereOperand() bool {
 }
 
 func (p *parser) atCommandEnd() bool {
-	return p.current().kind == tokenPipe || p.current().kind == tokenEOF
+	return p.current().kind == tokenPipe || p.current().kind == tokenEOF || p.current().kind == tokenJoinClose
 }
 
 func (p *parser) isKeyword(keyword string) bool {

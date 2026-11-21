@@ -299,6 +299,11 @@ func positiveIndexReferences(
 			if command != nil && command.Output == "index" {
 				return references
 			}
+		case *spl.JoinCommand:
+			if command != nil && slices.ContainsFunc(command.Fields, func(f spl.ExactCommandField) bool { return f.Name == "index" }) &&
+				!slices.ContainsFunc(command.Keys, func(f spl.ExactCommandField) bool { return f.Name == "index" }) {
+				return references
+			}
 		case *spl.LookupCommand:
 			if command == nil ||
 				(command.OutputMode == spl.LookupOutputModeOverwrite &&
