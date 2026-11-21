@@ -39,7 +39,7 @@ func ValidateFieldAnalysisEligibility(query *Query) error {
 			}
 		case *Filter, *RegexFilter, *Extend, *Strcat, *FillNull, *RowTotal,
 			*OrderedDelta, *MakeMultivalue, *NoMultivalue, *Extract, *ExtractJSON, *Rename,
-			*Lookup, *AutomaticLookupGroup, *TimeBucket, *NumericBucket, *Sort, *Deduplicate, *Limit, *Reverse,
+			*Join, *Lookup, *AutomaticLookupGroup, *TimeBucket, *NumericBucket, *Sort, *Deduplicate, *Limit, *Reverse,
 			*ConditionalExtract, *ConditionalExtractJSON, *CopyFieldAlias, *ParallelExtend:
 			// These preserve source-event identity while changing the final
 			// relation, schema, values, or order consumed by field analysis.

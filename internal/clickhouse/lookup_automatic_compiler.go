@@ -89,7 +89,7 @@ func compileAutomaticLookupGroup(
 			len(stage.lookup.operator.Keys),
 		)
 		for keyIndex, key := range stage.lookup.operator.Keys {
-			valueSQL, eligibleSQL, keyArgs, err := compileLookupKey(key, frozenState)
+			valueSQL, eligibleSQL, keyArgs, err := compileExactStringKey(key.EventField, frozenState)
 			if err != nil {
 				return compiledRelation{}, compileState{}, nil, compiledKnowledgePrelude{}, fmt.Errorf(
 					"compile ClickHouse automatic lookup key %d.%d: %w",

@@ -3538,6 +3538,12 @@
       "summary": "All authored, retained, and knowledge search surfaces use the current cumulative contract.",
       "cases": [
         {
+          "name": "left join with an explicit subsearch projection",
+          "profile": "AuthoredExpressionProfile",
+          "source": "| fields trace_id | join type=left trace_id [ search level=error | fields trace_id, error ] | stats count BY error",
+          "expect": {"parse": "accept"}
+        },
+        {
           "name": "authored arithmetic",
           "profile": "AuthoredExpressionProfile",
           "source": "index=main | eval value=1+2",

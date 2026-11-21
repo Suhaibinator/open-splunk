@@ -300,6 +300,12 @@ func officialFacets(t *testing.T, source string, command spl.Command) map[string
 		return map[string]string{"field": command.Field, "limit": limit}
 	case *spl.NoMVCommand:
 		return map[string]string{"field": command.Field}
+	case *spl.JoinCommand:
+		kind := "inner"
+		if command.Left {
+			kind = "left"
+		}
+		return map[string]string{"keys": exactFields(command.Keys), "fields": exactFields(command.Fields), "type": kind}
 	case *spl.LookupCommand:
 		keys := make([]string, len(command.Keys))
 		for index, key := range command.Keys {

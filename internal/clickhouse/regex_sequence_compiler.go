@@ -76,6 +76,10 @@ func regexFilterPatternRange(operator *plan.RegexFilter) spl.Range {
 
 func (budget *authoredRegexProgramBudget) visitOperator(operator plan.Operator) error {
 	switch operator := operator.(type) {
+	case *plan.Join:
+		if operator != nil {
+			return budget.visitExpressionRoot(operator.Filter)
+		}
 	case *plan.Filter:
 		if operator != nil {
 			return budget.visitExpressionRoot(operator.Expression)

@@ -51,6 +51,7 @@ func ClassifyResultShape(query *Query) ResultShape {
 			*NoMVCommand,
 			*SpathCommand,
 			*LookupCommand,
+			*JoinCommand,
 			*RenameCommand,
 			*FieldsCommand,
 			*SortCommand,

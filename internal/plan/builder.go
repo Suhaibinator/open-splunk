@@ -534,6 +534,18 @@ commands:
 				Range:  command.Range,
 			})
 			publishOutputFieldAndTrackTime(command.Output)
+		case *spl.JoinCommand:
+			op, err := buildJoin(command, scope)
+			if err != nil {
+				return nil, err
+			}
+			if inputFields != nil {
+				return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_JOIN_SYNTAX", Message: "join needs the original event source and cannot follow a runtime-wide timechart", Range: op.Range}
+			}
+			result.Operators = append(result.Operators, op)
+			for _, field := range op.Outputs {
+				publishOutputFieldAndTrackTime(field.Name)
+			}
 		case *spl.LookupCommand:
 			operator, buildErr := buildLookupCommand(command, outputSchemaKnown)
 			if buildErr != nil {

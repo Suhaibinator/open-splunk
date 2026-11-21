@@ -514,8 +514,8 @@ jobs:
         env:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
         run: >-
-          go test ./internal/queryexec ./internal/searchinspection ./internal/server
-          -run '^(TestGradeThis(Corpus|InspectionService)AgainstClickHouse|TestSearchInspectionRouteGradeThisAgainstClickHouse)$'
+          go test ./internal/clickhouse ./internal/queryexec ./internal/searchinspection ./internal/server
+          -run '^(TestSanitizerJoinAgainstClickHouse|TestGradeThis(Corpus|InspectionService)AgainstClickHouse|TestSearchInspectionRouteGradeThisAgainstClickHouse)$'
           -count=1
           -timeout=6m
           -p=1

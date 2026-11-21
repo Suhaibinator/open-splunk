@@ -83,6 +83,7 @@ var AllowedFacets = map[string][]string{
 	"fields":      {"mode", "names"},
 	"fillnull":    {"fields", "value"},
 	"head":        {"count"},
+	"join":        {"fields", "keys", "type"},
 	"lookup":      {"definition", "keys", "output_mode", "outputs"},
 	"makemv":      {"allow_empty", "delimiter", "field"},
 	"mvexpand":    {"field", "limit"},

@@ -825,7 +825,7 @@ func compileLookupStageWithOptions(
 			}
 		} else {
 			var compileErr error
-			valueSQL, eligibleSQL, valueArgs, compileErr = compileLookupKey(key, state)
+			valueSQL, eligibleSQL, valueArgs, compileErr = compileExactStringKey(key.EventField, state)
 			if compileErr != nil {
 				return compiledRelation{}, compileState{}, nil, 0, compileErr
 			}
@@ -962,11 +962,11 @@ func compileLookupStageWithOptions(
 	return outputRelation, next, compiledArgs, 1, nil
 }
 
-func compileLookupKey(
-	key plan.LookupKey,
+func compileExactStringKey(
+	key plan.FieldRef,
 	state compileState,
 ) (valueSQL, eligibleSQL string, args []any, err error) {
-	field, known, err := resolveCompiledField(key.EventField, state)
+	field, known, err := resolveCompiledField(key, state)
 	if err != nil {
 		return "", "", nil, err
 	}

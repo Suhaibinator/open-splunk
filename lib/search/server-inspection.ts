@@ -65,6 +65,7 @@ const AUTHORED_OPERATORS = new Set([
   "Extract",
   "ExtractJSON",
   "Rename",
+  "Join",
   "Lookup",
   "Aggregate",
   "EventAggregate",

@@ -99,6 +99,10 @@ func (c Compiler) compileWithFinalizerContext(
 	relation = knowledge.relation
 	state = knowledge.state
 	args = knowledge.args
+	relation, state, args, err = prepareJoinSource(query.Operators, relation, state, args)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
 
 	aliasSequence := 0
 	lookupStageIndex := 0
@@ -254,6 +258,11 @@ func (c Compiler) compileWithFinalizerContext(
 			relation = relation.selectFrom(filterSQL, operator.Range)
 			args = append(args, predicateArgs...)
 			state = nextState
+		case *plan.Join:
+			relation, state, args, err = compileJoin(relation, state, knowledge, args, operator)
+			if err != nil {
+				return CompiledQuery{}, err
+			}
 		case *plan.RegexFilter:
 			predicate, predicateArgs, compileErr := compileRegexFilter(operator, state)
 			if compileErr != nil {

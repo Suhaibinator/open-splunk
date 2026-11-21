@@ -30,7 +30,8 @@ test("pipeline commands are browser-supported through the shared catalog", () =>
     assert.equal(isScalarExpressionPipelineCommand(command), false, command);
   }
 
-  for (const unsupported of ["transaction", "join", "map", "subsearch"]) {
+  assert.equal(isSupportedSplPipelineCommand("join"), true);
+  for (const unsupported of ["transaction", "map", "subsearch"]) {
     assert.equal(isSupportedSplPipelineCommand(unsupported), false, unsupported);
   }
 });
@@ -175,4 +176,14 @@ test("single quotes remain ordinary punctuation outside scalar command stages", 
   assert.equal(structure.unclosedQuote, null);
   assert.equal(structure.pipes.length, 1);
   assert.equal(splitSplPipeline(source)[0], `index=main O'Reilly `);
+});
+
+test("a projected join subsearch stays within its outer pipeline stage", () => {
+  const query = '| fields trace_id | join type=left trace_id [ search message="] |" | fields trace_id, error] | stats count BY error';
+  assert.deepEqual(splitSplPipeline(query).map(stage => stage.trim()), [
+    "",
+    "fields trace_id",
+    'join type=left trace_id [ search message="] |" | fields trace_id, error]',
+    "stats count BY error",
+  ]);
 });
