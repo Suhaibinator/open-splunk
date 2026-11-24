@@ -17,6 +17,8 @@ const (
 	tokenQuotedField
 	tokenScalarComposite
 	tokenPipe
+	tokenJoinOpen
+	tokenJoinClose
 	tokenLeftParen
 	tokenRightParen
 	tokenComma
@@ -54,7 +56,8 @@ type lexer struct {
 	line   int
 	column int
 
-	quotedFields bool
+	quotedFields  bool
+	joinDelimiter byte // Recognize brackets only inside an authored join.
 }
 
 func lex(source string) ([]token, error) {
@@ -68,6 +71,13 @@ func lexWithQuotedFields(source string, quotedFields bool) ([]token, error) {
 		tok, err := l.next()
 		if err != nil {
 			return nil, err
+		}
+		if l.joinDelimiter == 0 && len(tokens) > 0 && tokens[len(tokens)-1].kind == tokenPipe && tok.kind == tokenWord && strings.EqualFold(tok.text, "join") {
+			l.joinDelimiter = '['
+		} else if tok.kind == tokenJoinOpen {
+			l.joinDelimiter = ']'
+		} else if tok.kind == tokenJoinClose || (tok.kind == tokenPipe && l.joinDelimiter == '[') {
+			l.joinDelimiter = 0
 		}
 		tokens = append(tokens, tok)
 		if tok.kind == tokenEOF {
@@ -83,6 +93,14 @@ func (l *lexer) next() (token, error) {
 		return token{kind: tokenEOF, sourceRange: Range{Start: start, End: start}}, nil
 	}
 
+	if l.joinDelimiter != 0 && l.source[l.offset] == l.joinDelimiter {
+		kind := tokenJoinOpen
+		if l.joinDelimiter == ']' {
+			kind = tokenJoinClose
+		}
+		l.advanceASCII()
+		return l.single(kind, string(l.joinDelimiter), start), nil
+	}
 	switch l.source[l.offset] {
 	case '|':
 		l.advanceASCII()
@@ -281,7 +299,7 @@ func (l *lexer) scanString(start Position) (token, error) {
 
 func (l *lexer) scanWord(start Position) (token, error) {
 	startOffset := l.offset
-	scan := scanScalarWordBoundary(l.source, start, l.quotedFields)
+	scan := scanScalarWordBoundary(l.source, start, l.quotedFields, l.joinDelimiter)
 	l.offset = scan.end.Offset
 	l.line = scan.end.Line
 	l.column = scan.end.Column
@@ -320,7 +338,7 @@ type scalarWordScan struct {
 func scanScalarWordBoundary(
 	source string,
 	start Position,
-	quotedFields bool,
+	quotedFields bool, joinDelimiter byte,
 ) scalarWordScan {
 	position := start
 	segmentStart := start.Offset
@@ -349,7 +367,7 @@ func scanScalarWordBoundary(
 		}
 
 		if value == '.' && concatenationDotAt(source, position.Offset) ||
-			isDelimiter(value) {
+			isDelimiter(value) || (joinDelimiter != 0 && value == joinDelimiter) {
 			break
 		}
 		r, width := utf8.DecodeRuneInString(source[position.Offset:])

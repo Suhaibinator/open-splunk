@@ -501,7 +501,7 @@ next'+right`,
 				test.source,
 				len(prefix)+len(test.wantText),
 			)
-			scan := scanScalarWordBoundary(test.source, start, test.quotedFields)
+			scan := scanScalarWordBoundary(test.source, start, test.quotedFields, 0)
 			if scan.composite != test.composite || scan.end != wantEnd {
 				t.Fatalf(
 					"boundary = composite %v end %#v, want %v %#v",

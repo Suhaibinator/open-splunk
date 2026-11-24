@@ -71,6 +71,13 @@
       "documentation": "Extracts one typed value from a JSON document at an explicit dotted path such as response.status. input names the JSON field and output the destination field."
     },
     {
+      "name": "join",
+      "insertion": "join type=left trace_id [ search level=error | fields trace_id, message ]",
+      "detail": "Join events to the first matching row of a projected subsearch.",
+      "syntax": "join [type=inner|left|outer] [max=1] <keys> [ search <predicate> | fields <keys>, <outputs> ]",
+      "documentation": "Matches exact string keys. A left or outer join keeps unmatched rows. The subsearch can use fields or table to select the keys and the values to bring into the main search."
+    },
+    {
       "name": "lookup",
       "insertion": "lookup service_catalog service_id AS service_key OUTPUTNEW owner tier",
       "detail": "Enrich rows from one visible exact-match lookup definition with bounded keys and outputs.",

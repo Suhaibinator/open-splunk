@@ -1154,7 +1154,7 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 
 	wantCommands := []string{
 		"search", "where", "eval", "rename", "fields", "table", "sort",
-		"dedup", "rex", "spath", "lookup", "bin", "bucket", "head", "tail", "regex",
+		"dedup", "rex", "spath", "join", "lookup", "bin", "bucket", "head", "tail", "regex",
 		"reverse", "accum", "strcat", "addinfo", "fillnull", "addtotals", "delta",
 		"makemv", "mvexpand", "nomv", "stats", "eventstats", "streamstats", "top", "rare",
 		"timechart", "chart",

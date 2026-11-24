@@ -599,6 +599,14 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 			return err
 		}
 		return analyzer.addField(operator.Input, depth+1)
+	case *Join:
+		if err := analyzer.addFields(operator.Keys, depth+1); err != nil {
+			return err
+		}
+		if err := analyzer.addFields(operator.Outputs, depth+1); err != nil {
+			return err
+		}
+		return analyzer.visitExpression(operator.Filter, depth+1)
 	case *Lookup:
 		return analyzer.visitLookup(operator, depth+1)
 	case *AutomaticLookupGroup:

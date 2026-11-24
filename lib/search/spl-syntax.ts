@@ -40,7 +40,6 @@ export const SPL_KEYWORDS = SHARED_SPL_COMPLETION_CATALOG.keywords;
 
 export const UNSUPPORTED_SPL_PIPELINE_COMMANDS = [
   "transaction",
-  "join",
   "map",
   "subsearch",
 ] as const;
@@ -172,6 +171,8 @@ export function scanSplStructure(spl: string): SplStructure {
   const quotes: SplStructure["quotes"] = [];
   const scalarStageRanges: SplOffsetRange[] = [];
   let activeQuote: '"' | "'" | null = null;
+  let joinHeader = false;
+  let inJoinSearch = false;
   let quoteOffset = -1;
   let scalarStageStart: number | null = null;
   const countEvalScan: { state: CountEvalScanState | null } = { state: null };
@@ -202,6 +203,15 @@ export function scanSplStructure(spl: string): SplStructure {
     ) {
       activeQuote = character;
       quoteOffset = offset;
+      continue;
+    }
+    if (joinHeader && character === "[") {
+      joinHeader = false;
+      inJoinSearch = true;
+      continue;
+    }
+    if (inJoinSearch) {
+      if (character === "]") inJoinSearch = false;
       continue;
     }
     const currentCountEvalState = countEvalScan.state;
@@ -256,6 +266,7 @@ export function scanSplStructure(spl: string): SplStructure {
       pipes.push(offset);
       const nextStageStart = offset + 1;
       const command = pipelineCommandAt(spl, nextStageStart);
+      joinHeader = command === "join";
       scalarStageStart = command !== null && isScalarExpressionPipelineCommand(command)
         ? nextStageStart
         : null;

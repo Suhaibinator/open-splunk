@@ -249,6 +249,7 @@ func supportedInspectionOperator(value string) bool {
 		"Extract",
 		"ExtractJSON",
 		"Rename",
+		"Join",
 		"Lookup",
 		"AutomaticLookupGroup",
 		"Aggregate",

@@ -209,6 +209,20 @@ func TestGradeThisCorpusAgainstClickHouse(t *testing.T) {
 		})
 	}
 	gradeThisAssertInspectionCorpusEvidence(t, searches, evidence)
+	t.Run("join errors by trace", func(t *testing.T) {
+		const source = `| fields trace_id
+| join type=left trace_id [search index=gradethis message="Database request failed" | fields trace_id, error]
+| stats count BY error | sort 0 -count`
+		job, page := queryIntegrationRunGradeThisSearchRange(t, ctx, executor, fixture.profile.IndexTime, "gradethis-join", source, fixture.profile.BaseTime, fixture.profile.BaseTime.Add(15*time.Minute))
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("join job = %v, failure = %+v", job.State, job.Failure)
+		}
+		queryIntegrationAssertColumns(t, page, []string{"error", "count"})
+		gradeThisAssertRows(t, page.Rows, [][]searchjobs.Value{
+			{searchjobs.StringValue("dial tcp 192.0.2.200:5432: connection refused"), searchjobs.UnsignedValue(2)},
+			{searchjobs.StringValue("context deadline exceeded"), searchjobs.UnsignedValue(1)},
+		})
+	})
 }
 
 type gradeThisDecodedFixture struct {
