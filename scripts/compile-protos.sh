@@ -1,124 +1,104 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 umask 022
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROTO_DIR="$REPO_ROOT/proto"
 GEN_OUT="$REPO_ROOT/gen"
-GO_OUT="$REPO_ROOT/gen/go"
-TS_OUT="$REPO_ROOT/gen/ts"
 BUF_BIN="$REPO_ROOT/node_modules/.bin/buf"
-GO_PLUGIN="$REPO_ROOT/.cache/proto-tools/protoc-gen-go"
-GO_GRPC_PLUGIN="$REPO_ROOT/.cache/proto-tools/protoc-gen-go-grpc"
 export BUF_CACHE_DIR="${BUF_CACHE_DIR:-$REPO_ROOT/.cache/buf}"
 
-if [[ $# -ne 0 ]]; then
-  echo "error: partial protobuf compilation is not supported" >&2
-  echo "hint: run 'make proto' to regenerate every contract" >&2
+case "$#:${1:-}" in
+  0:) set -- go ts ;;
+  1:--go-only) set -- go ;;
+  1:--typescript-only) set -- ts ;;
+  *)
+    echo "usage: $0 [--go-only | --typescript-only]" >&2
+    exit 1
+    ;;
+esac
+
+if [ ! -x "$BUF_BIN" ]; then
+  echo "error: Buf is missing; run 'npm ci --include=dev'" >&2
   exit 1
 fi
+for language do
+  case "$language" in
+    go)
+      if [ ! -x "$REPO_ROOT/.cache/proto-tools/protoc-gen-go" ] ||
+        [ ! -x "$REPO_ROOT/.cache/proto-tools/protoc-gen-go-grpc" ]; then
+        echo "error: Go protobuf plugins are missing; run 'make proto-tools'" >&2
+        exit 1
+      fi
+      ;;
+    ts)
+      if [ ! -x "$REPO_ROOT/node_modules/.bin/protoc-gen-ts_proto" ]; then
+        echo "error: ts-proto is missing; run 'npm ci --include=dev'" >&2
+        exit 1
+      fi
+      ;;
+  esac
+done
 
-if [[ ! -x "$BUF_BIN" ||
-  ! -x "$REPO_ROOT/node_modules/.bin/protoc-gen-ts_proto" ||
-  ! -x "$GO_PLUGIN" ||
-  ! -x "$GO_GRPC_PLUGIN" ]]; then
-  echo "error: pinned protobuf tools are not installed in the repository" >&2
-  echo "hint: run 'make proto-tools'" >&2
-  exit 1
-fi
-
-PROTO_FILES=()
-while IFS= read -r proto_file; do
-  PROTO_FILES+=("$proto_file")
-done < <(find "$PROTO_DIR" -type f -name '*.proto' | sort)
-
-if [[ ${#PROTO_FILES[@]} -eq 0 ]]; then
+first_proto="$(find "$PROTO_DIR" -type f -name '*.proto' -print -quit)"
+if [ -z "$first_proto" ]; then
   echo "No protobuf sources found under $PROTO_DIR; nothing to generate."
   exit 0
 fi
 
-if [[ -L "$GEN_OUT" ]]; then
+if [ -L "$GEN_OUT" ]; then
   echo "error: protobuf output directory is a symbolic link: $GEN_OUT" >&2
   exit 1
 fi
-if [[ -e "$GEN_OUT" && ! -d "$GEN_OUT" ]]; then
+if [ -e "$GEN_OUT" ] && [ ! -d "$GEN_OUT" ]; then
   echo "error: protobuf output path is not a directory: $GEN_OUT" >&2
   exit 1
 fi
 mkdir -p "$GEN_OUT"
 
-# Buf resolves its inputs, relative plugin paths, and template outputs from the
-# current working directory. Always anchor those inputs to the repository even
-# when this script is invoked by absolute path from elsewhere.
+# Buf resolves relative plugin paths and inputs from the working directory.
 cd "$REPO_ROOT"
 
-# Generate and validate a complete replacement before touching the checked-in
-# trees. The final directory swaps retain hand-written files and roll back both
-# languages if publication fails after either swap.
+# Validate all selected outputs before publishing any of them. Retain
+# handwritten files and restore the old trees if a directory swap fails.
 GENERATION_LOCK=""
-GENERATION_LOCK_OWNER=""
 TRANSACTION_ROOT="$(mktemp -d "$GEN_OUT/.proto-generation.XXXXXX")"
 STAGED_ROOT="$TRANSACTION_ROOT/staged"
-STAGED_GO="$STAGED_ROOT/gen/go"
-STAGED_TS="$STAGED_ROOT/gen/ts"
-NEXT_GO="$TRANSACTION_ROOT/next-go"
-NEXT_TS="$TRANSACTION_ROOT/next-ts"
-OLD_GO="$TRANSACTION_ROOT/old-go"
-OLD_TS="$TRANSACTION_ROOT/old-ts"
 PUBLISHING=0
 
 cleanup() {
-  local exit_status=$?
-  local rollback_failed=0
+  exit_status=$?
+  rollback_failed=0
   trap - EXIT
   set +e
-  if [[ $exit_status -ne 0 && $PUBLISHING -eq 1 ]]; then
-    if [[ -d "$OLD_TS" ]]; then
-      if [[ -d "$TS_OUT" ]]; then
-        if ! mv "$TS_OUT" "$TRANSACTION_ROOT/failed-ts"; then
-          echo "error: could not move the partially published TypeScript tree during rollback" >&2
-          rollback_failed=1
-        fi
+  if [ "$exit_status" -ne 0 ] && [ "$PUBLISHING" -eq 1 ]; then
+    for language in ts go; do
+      old_output="$TRANSACTION_ROOT/old-$language"
+      output="$GEN_OUT/$language"
+      if [ ! -d "$old_output" ]; then
+        continue
       fi
-      if [[ ! -e "$TS_OUT" ]]; then
-        if ! mv "$OLD_TS" "$TS_OUT"; then
-          echo "error: could not restore the previous TypeScript protobuf tree" >&2
-          rollback_failed=1
-        fi
-      else
-        echo "error: TypeScript protobuf rollback destination is still occupied" >&2
+      if [ -d "$output" ] && ! mv "$output" "$TRANSACTION_ROOT/failed-$language"; then
+        echo "error: could not move the partially published protobuf tree at $output" >&2
         rollback_failed=1
       fi
-    fi
-    if [[ -d "$OLD_GO" ]]; then
-      if [[ -d "$GO_OUT" ]]; then
-        if ! mv "$GO_OUT" "$TRANSACTION_ROOT/failed-go"; then
-          echo "error: could not move the partially published Go tree during rollback" >&2
-          rollback_failed=1
-        fi
-      fi
-      if [[ ! -e "$GO_OUT" ]]; then
-        if ! mv "$OLD_GO" "$GO_OUT"; then
-          echo "error: could not restore the previous Go protobuf tree" >&2
-          rollback_failed=1
-        fi
-      else
-        echo "error: Go protobuf rollback destination is still occupied" >&2
+      if [ -e "$output" ] || ! mv "$old_output" "$output"; then
+        echo "error: could not restore the previous protobuf tree at $output" >&2
         rollback_failed=1
       fi
-    fi
+    done
   fi
-  if [[ $rollback_failed -eq 0 ]]; then
+  if [ "$rollback_failed" -eq 0 ]; then
     rm -rf "$TRANSACTION_ROOT"
   else
     echo "error: protobuf rollback is incomplete; preserved recovery data at $TRANSACTION_ROOT" >&2
   fi
-  if [[ -n "$GENERATION_LOCK" ]]; then
-    if [[ -L "$GENERATION_LOCK" || ! -d "$GENERATION_LOCK" ]]; then
+  if [ -n "$GENERATION_LOCK" ]; then
+    if [ -L "$GENERATION_LOCK" ] || [ ! -d "$GENERATION_LOCK" ]; then
       echo "error: protobuf generation lock changed while held: $GENERATION_LOCK" >&2
       exit_status=1
     else
-      rm -f "$GENERATION_LOCK_OWNER"
+      rm -f "$GENERATION_LOCK/owner.$$"
       if ! rmdir "$GENERATION_LOCK"; then
         echo "error: could not release protobuf generation lock $GENERATION_LOCK" >&2
         exit_status=1
@@ -129,127 +109,133 @@ cleanup() {
 }
 trap cleanup EXIT
 
-generation_lock_candidate="$GEN_OUT/.proto-generation.lock"
-if ! mkdir "$generation_lock_candidate"; then
-  echo "error: another protobuf generation is running, or a stale lock exists at $generation_lock_candidate" >&2
+lock_candidate="$GEN_OUT/.proto-generation.lock"
+if ! mkdir "$lock_candidate"; then
+  echo "error: another protobuf generation is running, or a stale lock exists at $lock_candidate" >&2
   exit 1
 fi
-GENERATION_LOCK="$generation_lock_candidate"
-GENERATION_LOCK_OWNER="$GENERATION_LOCK/owner.$$"
-if ! : >"$GENERATION_LOCK_OWNER"; then
+GENERATION_LOCK="$lock_candidate"
+if ! : >"$GENERATION_LOCK/owner.$$"; then
   rmdir "$GENERATION_LOCK"
   GENERATION_LOCK=""
-  GENERATION_LOCK_OWNER=""
   echo "error: could not initialize protobuf generation lock" >&2
   exit 1
 fi
 
-# No process may inspect or create a language output tree before holding the
-# lock: a publisher temporarily removes each tree while atomically swapping it.
-for output_directory in "$GO_OUT" "$TS_OUT"; do
-  if [[ -L "$output_directory" ]]; then
-    echo "error: protobuf output directory is a symbolic link: $output_directory" >&2
-    exit 1
-  fi
-  if [[ -e "$output_directory" && ! -d "$output_directory" ]]; then
-    echo "error: protobuf output path is not a directory: $output_directory" >&2
-    exit 1
-  fi
-  mkdir -p "$output_directory"
-done
-
-if [[ -n "$(find "$GO_OUT" "$TS_OUT" -type l -print -quit)" ]]; then
-  echo "error: protobuf output trees must not contain symbolic links" >&2
-  exit 1
-fi
-
-"$BUF_BIN" generate \
-  --template "$REPO_ROOT/buf.gen.yaml" \
-  --output "$STAGED_ROOT"
-
-if [[ ! -d "$STAGED_GO" || ! -d "$STAGED_TS" ]]; then
-  echo "error: protobuf generators did not create both output trees" >&2
-  exit 1
-fi
-if [[ -n "$(find "$STAGED_GO" "$STAGED_TS" -type l -print -quit)" ]]; then
-  echo "error: protobuf generators produced a symbolic link" >&2
-  exit 1
-fi
-
-for proto_file in "${PROTO_FILES[@]}"; do
-  relative_proto="${proto_file#"$PROTO_DIR/"}"
-  generated_stem="${relative_proto%.proto}"
-  if [[ ! -f "$STAGED_GO/$generated_stem.pb.go" ]]; then
-    echo "error: missing generated Go message file for $relative_proto" >&2
-    exit 1
-  fi
-  if [[ ! -f "$STAGED_TS/$generated_stem.ts" ]]; then
-    echo "error: missing generated TypeScript message file for $relative_proto" >&2
-    exit 1
-  fi
-  if grep -Eq '^[[:space:]]*service[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*[{]' "$proto_file" &&
-    [[ ! -f "$STAGED_GO/$generated_stem"_grpc.pb.go ]]; then
-    echo "error: missing generated Go gRPC file for $relative_proto" >&2
-    exit 1
-  fi
-done
-for expected_typescript_output in \
-  "google/protobuf/duration.ts" \
-  "google/protobuf/field_mask.ts" \
-  "google/protobuf/timestamp.ts" \
-  "index.google.protobuf.ts" \
-  "index.google.ts" \
-  "index.open_splunk.ts" \
-  "index.ts"; do
-  if [[ ! -f "$STAGED_TS/$expected_typescript_output" ]]; then
-    echo "error: missing generated TypeScript support file $expected_typescript_output" >&2
-    exit 1
-  fi
-done
-
-strip_typescript_lint_headers() {
-  local generated_file filtered_file lint_header
-  lint_header='/* eslint-''disable */'
-
-  while IFS= read -r -d '' generated_file; do
-    filtered_file="$TRANSACTION_ROOT/typescript-without-lint-header"
-    if ! awk -v lint_header="$lint_header" '$0 != lint_header' "$generated_file" >"$filtered_file"; then
-      echo "error: could not remove generated TypeScript lint header from $generated_file" >&2
-      return 1
-    fi
-    if ! cp "$filtered_file" "$generated_file"; then
-      echo "error: could not publish sanitized generated TypeScript file $generated_file" >&2
-      return 1
-    fi
-    rm -f "$filtered_file"
-  done < <(find "$STAGED_TS" -type f -name '*.ts' -print0)
+validate_messages() {
+  find "$PROTO_DIR" -type f -name '*.proto' -exec sh -ec '
+    proto_dir=$1
+    staged=$2
+    extension=$3
+    shift 3
+    for proto_file do
+      relative_proto=${proto_file#"$proto_dir/"}
+      stem=${relative_proto%.proto}
+      if [ ! -f "$staged/$stem$extension" ]; then
+        echo "error: missing generated $extension message file for $relative_proto" >&2
+        exit 1
+      fi
+      if [ "$extension" = .pb.go ] &&
+        grep -Eq "^[[:space:]]*service[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*[{]" "$proto_file" &&
+        [ ! -f "$staged/${stem}_grpc.pb.go" ]; then
+        echo "error: missing generated Go gRPC file for $relative_proto" >&2
+        exit 1
+      fi
+    done
+  ' sh "$PROTO_DIR" "$1" "$2" {} +
 }
 
-strip_typescript_lint_headers
-
-copy_preserved_files() {
-  local source_root=$1
-  local destination_root=$2
-  local generated_pattern=$3
-  local source_path relative_path destination_path
-
-  while IFS= read -r -d '' source_path; do
-    relative_path="${source_path#"$source_root/"}"
-    destination_path="$destination_root/$relative_path"
-    mkdir -p "$(dirname "$destination_path")"
-    cp -p "$source_path" "$destination_path"
-  done < <(find "$source_root" -type f ! -name "$generated_pattern" -print0)
+sanitize_typescript() {
+  find "$1" -type f -name '*.ts' -exec sh -ec '
+    filtered_file=$1
+    lint_header=$2
+    shift 2
+    for generated_file do
+      if ! awk -v lint_header="$lint_header" '\''$0 != lint_header'\'' "$generated_file" >"$filtered_file"; then
+        echo "error: could not remove generated TypeScript lint header from $generated_file" >&2
+        exit 1
+      fi
+      cp "$filtered_file" "$generated_file"
+    done
+  ' sh "$TRANSACTION_ROOT/typescript-without-lint-header" '/* eslint-''disable */' {} +
 }
 
-mkdir "$NEXT_GO" "$NEXT_TS"
-copy_preserved_files "$GO_OUT" "$NEXT_GO" '*.pb.go'
-copy_preserved_files "$TS_OUT" "$NEXT_TS" '*.ts'
-cp -R "$STAGED_GO/." "$NEXT_GO/"
-cp -R "$STAGED_TS/." "$NEXT_TS/"
+stage_output() (
+  language=$1
+  output="$GEN_OUT/$language"
+  staged="$STAGED_ROOT/gen/$language"
+  next="$TRANSACTION_ROOT/next-$language"
+
+  # Take the lock before inspecting the output, which another publisher
+  # temporarily removes during its directory swap.
+  if [ -L "$output" ]; then
+    echo "error: protobuf output directory is a symbolic link: $output" >&2
+    exit 1
+  fi
+  if [ -e "$output" ] && [ ! -d "$output" ]; then
+    echo "error: protobuf output path is not a directory: $output" >&2
+    exit 1
+  fi
+  mkdir -p "$output"
+  if [ -n "$(find "$output" -type l -print -quit)" ]; then
+    echo "error: protobuf output trees must not contain symbolic links" >&2
+    exit 1
+  fi
+
+  case "$language" in
+    go) template=buf.gen.yaml; extension=.pb.go ;;
+    ts) template=buf.gen.ts.yaml; extension=.ts ;;
+  esac
+  "$BUF_BIN" generate --template "$REPO_ROOT/$template" --output "$STAGED_ROOT"
+  if [ ! -d "$staged" ]; then
+    echo "error: protobuf generator did not create $staged" >&2
+    exit 1
+  fi
+  if [ -n "$(find "$staged" -type l -print -quit)" ]; then
+    echo "error: protobuf generator produced a symbolic link" >&2
+    exit 1
+  fi
+  validate_messages "$staged" "$extension"
+
+  if [ "$language" = ts ]; then
+    for expected in \
+      google/protobuf/duration.ts \
+      google/protobuf/field_mask.ts \
+      google/protobuf/timestamp.ts \
+      index.google.protobuf.ts \
+      index.google.ts \
+      index.open_splunk.ts \
+      index.ts; do
+      if [ ! -f "$staged/$expected" ]; then
+        echo "error: missing generated TypeScript support file $expected" >&2
+        exit 1
+      fi
+    done
+    sanitize_typescript "$staged"
+  fi
+
+  mkdir "$next"
+  find "$output" -type f ! -name "*$extension" -exec sh -ec '
+    source_root=$1
+    destination_root=$2
+    shift 2
+    for source_path do
+      relative_path=${source_path#"$source_root/"}
+      destination="$destination_root/$relative_path"
+      mkdir -p "$(dirname "$destination")"
+      cp -p "$source_path" "$destination"
+    done
+  ' sh "$output" "$next" {} +
+  cp -R "$staged/." "$next/"
+)
+
+for language do
+  stage_output "$language"
+done
 
 PUBLISHING=1
-mv "$GO_OUT" "$OLD_GO"
-mv "$NEXT_GO" "$GO_OUT"
-mv "$TS_OUT" "$OLD_TS"
-mv "$NEXT_TS" "$TS_OUT"
+for language do
+  mv "$GEN_OUT/$language" "$TRANSACTION_ROOT/old-$language"
+  mv "$TRANSACTION_ROOT/next-$language" "$GEN_OUT/$language"
+done
 PUBLISHING=0

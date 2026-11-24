@@ -9,6 +9,7 @@ coverage.out
 *.tsbuildinfo
 npm-debug.log*
 /test-results/
+/gen/ts/**/*.ts
 
 # Next.js static export is generated before the Go server build.
 /out/*

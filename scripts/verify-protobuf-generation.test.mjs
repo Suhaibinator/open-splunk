@@ -13,9 +13,9 @@ const verifier = path.join(workspace, "scripts", "verify-protobuf-generation.sh"
 async function fixture(t, makeBody) {
   const directory = await mkdtemp(path.join(tmpdir(), "open-splunk-protobuf-verify-test-"));
   await mkdir(path.join(directory, "proto"));
-  await mkdir(path.join(directory, "gen"));
+  await mkdir(path.join(directory, "gen", "go"), { recursive: true });
   await writeFile(path.join(directory, "proto", "schema.proto"), "edited schema\n");
-  await writeFile(path.join(directory, "gen", "schema.pb.go"), "edited output\n");
+  await writeFile(path.join(directory, "gen", "go", "schema.pb.go"), "edited output\n");
   await writeFile(path.join(directory, "make"), `#!/usr/bin/env bash
 set -euo pipefail
 ${makeBody}
@@ -42,10 +42,18 @@ test "$1" = build
 });
 
 test("rejects generation that changes the current protobuf snapshot", async (t) => {
-  const result = await fixture(t, "printf '%s\\n' changed >gen/schema.pb.go");
+  const result = await fixture(t, "printf '%s\\n' changed >gen/go/schema.pb.go");
   assert.notEqual(result.code, 0);
   assert.match(result.stdout, /edited output/u);
   assert.match(result.stdout, /changed/u);
+});
+
+test("accepts a build that creates ignored TypeScript bindings", async (t) => {
+  const result = await fixture(t, `
+mkdir gen/ts
+printf '%s\\n' generated >gen/ts/schema.ts
+`);
+  assert.equal(result.code, 0, result.stderr);
 });
 
 test("requires a command that generates protobuf output", async () => {

@@ -606,6 +606,9 @@ test("Docker context is a deny-by-default source allowlist", async () => {
     "!go.sum",
     "!package.json",
     "!package-lock.json",
+    "!buf.yaml",
+    "!buf.gen.ts.yaml",
+    "!scripts/compile-protos.sh",
     "!app/**/*.tsx",
     "!cmd/**/*.go",
     "!gen/**/*.go",
@@ -628,6 +631,7 @@ test("Docker context is a deny-by-default source allowlist", async () => {
     "!app/**",
     "!cmd/**",
     "!internal/**",
+    "!gen/**/*.ts",
   ]) {
     assert.ok(!rules.includes(forbidden), `unsafe Docker context rule ${forbidden}`);
   }
@@ -1130,7 +1134,7 @@ test("OCI build rejects unsafe identity, platform, and image references", async 
 // UI COPY instructions and the context allowlist, without running an OCI build.
 // Checking the staged compiler output catches missing docs as well as missing
 // build-only modules; checking repository files alone would miss this boundary.
-test("the OCI UI stage can compile every canonical Help source from its filtered context", async (t) => {
+test("the OCI UI stage can generate TypeScript and compile Help from its filtered context", async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), "open-splunk-oci-help-"));
   t.after(() => rm(root, { force: true, recursive: true }));
   const dockerfile = await readFile(path.join(workspace, "Dockerfile"), "utf8");
@@ -1152,6 +1156,10 @@ test("the OCI UI stage can compile every canonical Help source from its filtered
   };
   const sourcePaths = [
     "scripts/build-ui.mjs", "scripts/build-ui-output.mjs", "scripts/build-help.mjs",
+    "scripts/compile-protos.sh", "package.json", "buf.yaml", "buf.gen.ts.yaml",
+    ...(await readdir(path.join(workspace, "proto"), { recursive: true }))
+      .filter((filename) => filename.endsWith(".proto"))
+      .map((filename) => `proto/${filename}`),
     "lib/help/documentation-registry.mjs", ...DOCUMENTATION_REGISTRY.map((entry) => entry.sourcePath),
   ];
   await Promise.all(sourcePaths.map(async (sourcePath) => {
@@ -1174,6 +1182,11 @@ test("the OCI UI stage can compile every canonical Help source from its filtered
   const bundle = await buildHelpDocumentation({ root });
   assert.equal(bundle.documents.length, DOCUMENTATION_REGISTRY.filter((entry) => entry.published).length);
   await symlink(path.join(workspace, "node_modules"), path.join(root, "node_modules"), "dir");
+  const bindings = path.join(root, "gen/ts/open_splunk/search.ts");
+  await assert.rejects(access(bindings, constants.F_OK), { code: "ENOENT" });
+  const generatedBindings = spawnSync("npm", ["run", "proto:ts"], { cwd: root, encoding: "utf8" });
+  assert.equal(generatedBindings.status, 0, generatedBindings.stderr);
+  assert.match(await readFile(bindings, "utf8"), /export interface SearchDefinition/u);
   const alias = `${root}-alias`;
   await symlink(root, alias, "dir");
   t.after(() => rm(alias, { force: true }));

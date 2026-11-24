@@ -18,14 +18,16 @@ COPY docs ./docs
 COPY configs/examples ./configs/examples
 COPY deploy ./deploy
 COPY gen/go/README.md ./gen/go/README.md
-COPY gen/ts ./gen/ts
+COPY gen/ts/README.md ./gen/ts/README.md
 COPY integration/README.md ./integration/README.md
 COPY internal/hec/testdata/compatibility/README.md ./internal/hec/testdata/compatibility/README.md
 COPY internal/spl/completion_catalog.json ./internal/spl/completion_catalog.json
 COPY lib ./lib
 COPY migrations/README.md ./migrations/README.md
 COPY public ./public
-COPY scripts/README.md scripts/build-ui.mjs scripts/build-ui-output.mjs scripts/build-help.mjs ./scripts/
+COPY proto ./proto
+COPY buf.yaml buf.gen.ts.yaml ./
+COPY scripts/README.md scripts/build-ui.mjs scripts/build-ui-output.mjs scripts/build-help.mjs scripts/compile-protos.sh ./scripts/
 COPY next-env.d.ts next.config.ts tsconfig.json ./
 RUN env \
       CI=1 \

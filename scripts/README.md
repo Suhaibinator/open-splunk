@@ -13,6 +13,8 @@ otherwise.
 | `make dev-clickhouse` / `make dev-down` | Start or stop reusable development ClickHouse. |
 | `make run` | Build the embedded backend-mode UI/server and run the development server. |
 | `make proto` | Lint and regenerate all Go and TypeScript protobuf output. |
+| `make proto-go` | Lint the schemas and regenerate the checked-in Go protobuf output. |
+| `npm run proto:ts` | Generate the ignored TypeScript bindings with the locked npm tools. |
 | `make build` | Build the UI-backed server and native collector. |
 | `make build-loggen` | Build the separate test/benchmark log generator. |
 | `make docs-check` | Validate the owned Markdown set, links, anchors, and documentation naming rules. |

@@ -28,11 +28,12 @@ func assertBrowserFeatureCompletion(
 		return
 	}
 
+	stagedRepository := buildBackendFrontend(t, ctx, repository)
 	browserContext, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	command := exec.CommandContext(
 		browserContext,
-		filepath.Join(repository, "node_modules", ".bin", "playwright"),
+		filepath.Join(stagedRepository, "node_modules", ".bin", "playwright"),
 		"test",
 		"integration/feature_completion.spec.ts",
 		"--workers=1",
@@ -40,7 +41,7 @@ func assertBrowserFeatureCompletion(
 		"--output="+filepath.Join(repository, "test-results", "feature-completion"),
 	)
 	configureProcessGroup(command)
-	command.Dir = repository
+	command.Dir = stagedRepository
 	environment := os.Environ()
 	for _, flag := range browserE2EModeFlags {
 		environment = environmentWithValue(environment, flag, "0")

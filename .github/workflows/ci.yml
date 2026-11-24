@@ -53,16 +53,16 @@ jobs:
       - name: Install protobuf generators
         run: make proto-tools
 
-      - name: Format, lint, and generate contracts
-        run: make proto
+      - name: Format, lint, and regenerate Go bindings
+        run: make proto-go
 
       - name: Verify generated code is current
         run: |
-          proto_changes="$(git status --porcelain --untracked-files=all -- proto gen)"
+          proto_changes="$(git status --porcelain --untracked-files=all -- proto gen/go)"
           if [[ -n "${proto_changes}" ]]; then
-            echo "::error::Generated protobuf code is stale. Run 'make proto' and commit the result."
-            git status --short -- proto gen
-            git diff -- proto gen
+            echo "::error::Generated Go protobuf code is stale. Run 'make proto-go' and commit the result."
+            git status --short -- proto gen/go
+            git diff -- proto gen/go
             exit 1
           fi
 

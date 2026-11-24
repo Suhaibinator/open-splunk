@@ -11,14 +11,20 @@
     "fsevents@2.3.2": true
   },
   "scripts": {
+    "proto:ts": "sh scripts/compile-protos.sh --typescript-only",
+    "predev": "npm run proto:ts",
     "dev": "next dev --turbopack",
+    "prebuild": "npm run proto:ts",
     "build": "node scripts/build-ui.mjs",
     "lint": "oxlint . && npm run lint:css",
     "test:contracts": "playwright test --config=playwright.contracts.config.ts",
+    "pretest:dashboards": "npm run proto:ts",
     "test:dashboards": "playwright test --config=playwright.dashboards.config.ts",
+    "pretest:frontend": "npm run proto:ts",
     "test:frontend": "node scripts/test-frontend.mjs",
     "test:workspace": "playwright test --config=playwright.workspace.config.ts",
     "check:docs": "node scripts/check-docs.mjs",
+    "pretypecheck": "npm run proto:ts",
     "typecheck": "tsc --noEmit",
     "//lint:css": "Errors, and part of `npm run lint`, since Phase 5. It fails on a colour, a type size, a radius, a shadow, a stacking layer, a font stack, an off-canon breakpoint or an `!important` written anywhere but app/styles/tokens-*.css, which is what makes \"a theme is a one-file edit\" a checked claim rather than a convention. .stylelintrc.json carries the two commented allowlists it keeps: the token files, which are the one place a value belongs, and the two stylesheets whose `!important` no specificity can replace.",
     "lint:css": "stylelint \"app/**/*.css\""

@@ -96,12 +96,14 @@ make verify
 ```
 
 `make test` remains the faster unit, lint, type, and stylesheet-contract loop.
-`make verify` additionally checks generated protobufs, production builds,
+`make verify` additionally checks the checked-in Go protobuf bindings, production builds,
 workspace behavior, Go vet, and the Linux CI lint configuration.
 
-`make proto` lints and compiles every schema under `proto/` into
-`gen/go/open_splunk` and `gen/ts/open_splunk`. Generation uses pinned Buf and
-plugin versions; generated files are never edited manually.
+`make proto` lints the schemas under `proto/` and regenerates both sets of
+bindings. Commit the Go output in `gen/go/` after schema changes. Frontend
+builds, development, and type checks generate the ignored TypeScript bindings
+in `gen/ts/` with the locked npm tools. Run `npm run proto:ts` to generate those
+bindings on their own.
 
 `make build` exports the backend-mode UI, generates/verifies the embedded asset
 manifest, and links one build identity into the server and collector. Build the
