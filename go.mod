@@ -9,7 +9,7 @@ require (
 	github.com/Suhaibinator/SRouter v1.8.1
 	github.com/ebitengine/purego v0.11.3
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/shopspring/decimal v1.6.0
 	go.uber.org/zap v1.28.0
