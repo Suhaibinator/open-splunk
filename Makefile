@@ -1,4 +1,4 @@
-.PHONY: build release oci build-ui build-server build-collector build-loggen dev-tools dev-build-server dev-clickhouse dev-down run docs-check go-lint-tools lint proto proto-lint proto-tools release-go-deps test verify clean
+.PHONY: build release oci build-ui build-server build-collector build-loggen dev-tools dev-build-server dev-clickhouse dev-down run docs-check go-lint-tools lint proto proto-go proto-lint proto-tools release-go-deps test verify clean
 
 override PROTOC_GEN_GO_VERSION := v1.36.12
 override PROTOC_GEN_GO_GRPC_VERSION := v1.6.2
@@ -131,7 +131,7 @@ oci:
 			OPEN_SPLUNK_REPOSITORY_ROOT="$$repo_root" \
 			bash "$$launcher"
 
-build-ui: proto
+build-ui: proto-go
 	env \
 		LANG=C \
 		LC_ALL=C \
@@ -155,12 +155,12 @@ build-server: build-ui
 	$(GO_TOOL_ENV) go build -buildvcs=false -trimpath -ldflags "$(GO_BUILD_LDFLAGS)" -o build/open-splunk-server ./cmd/open-splunk-server
 	chmod 0755 build/open-splunk-server
 
-build-collector: proto
+build-collector: proto-go
 	mkdir -p build
 	$(GO_TOOL_ENV) go build -buildvcs=false -trimpath -ldflags "$(GO_BUILD_LDFLAGS)" -o build/open-splunk-collector ./cmd/open-splunk-collector
 	chmod 0755 build/open-splunk-collector
 
-build-loggen: proto
+build-loggen: proto-go
 	mkdir -p build
 	$(GO_TOOL_ENV) go build -buildvcs=false -trimpath -ldflags "$(GO_BUILD_LDFLAGS)" -o build/open-splunk-loggen ./cmd/open-splunk-loggen
 	chmod 0755 build/open-splunk-loggen
@@ -192,7 +192,10 @@ run: dev-tools dev-build-server
 	./scripts/run-development.sh "$(DEVELOPMENT_ENV_FILE)"
 
 proto: proto-lint
-	bash scripts/compile-protos.sh
+	sh scripts/compile-protos.sh
+
+proto-go: proto-lint
+	sh scripts/compile-protos.sh --go-only
 
 proto-lint:
 	BUF_CACHE_DIR="$(PROTO_LINT_CACHE)" npx --no-install buf format --diff --exit-code

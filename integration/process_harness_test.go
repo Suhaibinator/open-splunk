@@ -573,12 +573,16 @@ var backendFrontendStageRootFiles = []string{
 	"AGENTS.md",
 	"CLAUDE.md",
 	"README.md",
+	"buf.gen.ts.yaml",
+	"buf.yaml",
+	filepath.Join("gen", "ts", "README.md"),
 	"go.mod",
 	"go.sum",
 	"next-env.d.ts",
 	"next.config.ts",
 	"package-lock.json",
 	"package.json",
+	"playwright.palette-smoke.config.ts",
 	"tsconfig.json",
 	"webui.go",
 }
@@ -591,7 +595,6 @@ var backendFrontendStageDirectories = []string{
 	"deploy",
 	"docs",
 	filepath.Join("gen", "go"),
-	filepath.Join("gen", "ts"),
 	"integration",
 	"internal",
 	"lib",
@@ -1078,11 +1081,12 @@ func runBrowserVerticalSpec(
 	config browserVerticalSpecConfig,
 ) {
 	t.Helper()
+	stagedRepository := buildBackendFrontend(t, ctx, repository)
 	browserContext, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	command := exec.CommandContext(
 		browserContext,
-		filepath.Join(repository, "node_modules", ".bin", "playwright"),
+		filepath.Join(stagedRepository, "node_modules", ".bin", "playwright"),
 		"test",
 		"integration/browser_vertical.spec.ts",
 		"--workers=1",
@@ -1091,7 +1095,7 @@ func runBrowserVerticalSpec(
 		"--output="+filepath.Join(repository, "test-results", config.outputDirectory),
 	)
 	configureProcessGroup(command)
-	command.Dir = repository
+	command.Dir = stagedRepository
 	environment := os.Environ()
 	for _, flag := range browserE2EModeFlags {
 		environment = environmentWithValue(environment, flag, "0")

@@ -196,5 +196,6 @@ source tree:
 - Plaintext ingestion tokens and download grants are one-time or short-lived
   secrets and must not be logged.
 
-Regenerate and validate the complete surface with `make proto`. Generated
-files are full-rebuild artifacts and must not be edited manually.
+Regenerate and validate the complete surface with `make proto`, then commit
+the generated Go bindings. Frontend builds generate the TypeScript bindings
+from the schemas using the locked npm dependencies.

@@ -320,11 +320,12 @@ func mintPaletteSmokeAdministratorToken(t *testing.T) string {
 
 func runPaletteSmokeSpec(t *testing.T, ctx context.Context, repository, baseURL, token string) {
 	t.Helper()
+	stagedRepository := buildBackendFrontend(t, ctx, repository)
 	browserContext, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	command := exec.CommandContext(
 		browserContext,
-		filepath.Join(repository, "node_modules", ".bin", "playwright"),
+		filepath.Join(stagedRepository, "node_modules", ".bin", "playwright"),
 		"test",
 		"--config=playwright.palette-smoke.config.ts",
 		"--workers=1",
@@ -332,7 +333,7 @@ func runPaletteSmokeSpec(t *testing.T, ctx context.Context, repository, baseURL,
 		"--output="+filepath.Join(repository, "test-results", "palette-smoke"),
 	)
 	configureProcessGroup(command)
-	command.Dir = repository
+	command.Dir = stagedRepository
 	environment := environmentWithValue(os.Environ(), "OPEN_SPLUNK_PALETTE_SMOKE_BASE_URL", baseURL)
 	environment = environmentWithValue(environment, "OPEN_SPLUNK_PALETTE_SMOKE_ADMINISTRATOR_TOKEN", token)
 	command.Env = environment
