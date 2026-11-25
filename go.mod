@@ -4,7 +4,7 @@ go 1.27.4
 
 require (
 	fortio.org/safecast v1.2.0
-	github.com/ClickHouse/ch-go v0.75.0
+	github.com/ClickHouse/ch-go v0.76.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.51.0
 	github.com/Suhaibinator/SRouter v1.8.1
 	github.com/ebitengine/purego v0.11.3
@@ -30,7 +30,7 @@ require (
 	github.com/go-faster/errors v0.8.0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
-	github.com/klauspost/compress v1.20.3 // indirect
+	github.com/klauspost/compress v1.20.4 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-sqlite3 v1.14.53 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
@@ -43,7 +43,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261104224025-d1e00e9f33ab // indirect
 	modernc.org/libc v1.80.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
