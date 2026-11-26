@@ -3,7 +3,7 @@ import { useId, useMemo, useState } from "react";
 import { EXAMPLE_DRAFTS, type ExampleDraft, exampleDraftSpl } from "@/lib/search/example-drafts";
 
 import { AppIcon } from "../../_components/app-icon";
-import { Modal } from "../../_components/modal";
+import { Modal, type ModalReturnFocus } from "../../_components/modal";
 
 import {
   KEYBOARD_SHORTCUTS,
@@ -27,7 +27,7 @@ export interface SplReferenceDialogProps {
   onClose: () => void;
   /** Adds one catalog entry to the editor; the workspace decides where. */
   onInsert: (entry: SplReferenceEntry) => void;
-  returnFocus?: HTMLElement | null;
+  returnFocus?: ModalReturnFocus;
   sections?: readonly SplReferenceSection[];
 }
 
@@ -178,7 +178,7 @@ export interface ExamplesDialogProps {
   onClose: () => void;
   /** Places the example in the editor as a draft; the workspace never runs it. */
   onUse: (example: ExampleDraft) => void;
-  returnFocus?: HTMLElement | null;
+  returnFocus?: ModalReturnFocus;
 }
 
 export function ExamplesDialog({
