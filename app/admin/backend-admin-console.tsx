@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import Link from "next/link";
 
 import { SortDirection, type PageResponse } from "@/gen/ts/open_splunk/common";
@@ -199,6 +199,11 @@ function subscribeToTokenRecoveryEnvironment(listener: () => void): () => void {
     window.removeEventListener("online", listener);
     window.removeEventListener("offline", listener);
   };
+}
+
+async function observeTokenRecoveryResult<T>(request: Promise<T>) {
+  const value = await request;
+  return { value, checkedAt: Date.now() };
 }
 
 function tokenRecoveryEnvironmentSnapshot(): boolean {
@@ -508,16 +513,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     tokenRecoveryEnvironmentSnapshot,
     () => true,
   );
-  const [observedTokenRecoveryEnvironmentReady, setObservedTokenRecoveryEnvironmentReady] =
-    useState(tokenRecoveryEnvironmentReady);
-  if (observedTokenRecoveryEnvironmentReady !== tokenRecoveryEnvironmentReady) {
-    setObservedTokenRecoveryEnvironmentReady(tokenRecoveryEnvironmentReady);
-    if (
-      tokenRecoveryEnvironmentReady
-      && tokenRecoveryOwnership === "owned"
-      && tokenRecoveryNextCheckAt !== null
-    ) setTokenRecoveryNextCheckAt(Date.now());
-  }
+  const tokenRecoveryWasReadyRef = useRef(tokenRecoveryEnvironmentReady);
   const [tokenRecoveryAcquireGeneration, setTokenRecoveryAcquireGeneration] = useState(0);
   const [tokenRecoveryStartup] = useState(() => new TokenRecoveryStartupController());
   const tokenRecoveryStartupSnapshot = useSyncExternalStore(
@@ -569,11 +565,19 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     generation: number;
     pageToken: string;
   } | null>(null);
-  tokenNavigationProtectionActiveRef.current = tokenNavigationProtectionActive;
-  tokenCreateRecoveryRef.current = tokenCreateRecovery;
-  issuedTokenRecoveryRef.current = issuedTokenRecovery;
-  unreadableTokenCreateRecoveryRef.current = unreadableTokenCreateRecovery;
-  tokenRecoveryCheckingRef.current = tokenRecoveryChecking;
+  useLayoutEffect(() => {
+    tokenNavigationProtectionActiveRef.current = tokenNavigationProtectionActive;
+    tokenCreateRecoveryRef.current = tokenCreateRecovery;
+    issuedTokenRecoveryRef.current = issuedTokenRecovery;
+    unreadableTokenCreateRecoveryRef.current = unreadableTokenCreateRecovery;
+    tokenRecoveryCheckingRef.current = tokenRecoveryChecking;
+  }, [
+    issuedTokenRecovery,
+    tokenCreateRecovery,
+    tokenNavigationProtectionActive,
+    tokenRecoveryChecking,
+    unreadableTokenCreateRecovery,
+  ]);
   if (observedTokenRecoveryStartupSnapshot !== tokenRecoveryStartupSnapshot) {
     const observedRecord = "record" in observedTokenRecoveryStartupSnapshot
       ? observedTokenRecoveryStartupSnapshot.record
@@ -597,9 +601,9 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         setTokenCreateGuardStorageState("available");
         setTokenCreateGuardStorageError(null);
         if (
-          tokenCreateRecoveryRef.current !== null
-          || issuedTokenRecoveryRef.current !== null
-          || unreadableTokenCreateRecoveryRef.current !== null
+          tokenCreateRecovery !== null
+          || issuedTokenRecovery !== null
+          || unreadableTokenCreateRecovery !== null
         ) {
           setTokenRecoveryOwnership("lost");
           setTokenRecoveryOwnershipError(
@@ -691,6 +695,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   }, []);
 
   useEffect(() => {
+    const { client: requestClient } = activeLoadInput;
     indexPageRequestGenerationRef.current += 1;
     tokenPageRequestGenerationRef.current += 1;
     indexLoadMoreRequestRef.current?.controller.abort();
@@ -702,7 +707,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     indexSeenPageTokensRef.current = new Set();
     tokenSeenPageTokensRef.current = new Set();
     const bootstrapStartedMonotonicMs = performance.now();
-    void getSystemBootstrap(client, undefined, { signal: controller.signal }).then(
+    void getSystemBootstrap(requestClient, undefined, { signal: controller.signal }).then(
       (value) => {
         if (!current) return;
         const bootstrapReceivedMonotonicMs = performance.now();
@@ -720,7 +725,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           setHECState("unavailable");
           return;
         }
-        void client.hec.getOperationalSnapshot({}, { signal: controller.signal }).then(
+        void requestClient.hec.getOperationalSnapshot({}, { signal: controller.signal }).then(
           (snapshot) => {
             if (!current) return;
             setHECSnapshot(snapshot);
@@ -744,7 +749,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     );
     // Omitting page_size lets each independently available route choose a safe
     // server-side default even when bootstrap cannot advertise limits.
-    void loadIndexPage(client, undefined, controller.signal).then(
+    void loadIndexPage(requestClient, undefined, controller.signal).then(
       (result) => {
         if (!current) return;
         setIndexState(result.state);
@@ -761,7 +766,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         setIndexError(errorMessage(error));
       },
     );
-    void loadTokenPage(client, undefined, controller.signal).then(
+    void loadTokenPage(requestClient, undefined, controller.signal).then(
       (result) => {
         if (!current) return;
         setTokenState(result.state);
@@ -783,7 +788,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       current = false;
       controller.abort();
     };
-  }, [client, loadGeneration]);
+  }, [activeLoadInput]);
 
   useEffect(() => {
     componentMountedRef.current = true;
@@ -802,6 +807,14 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       tokenGuardLeaseRef.current?.release();
       tokenGuardLeaseRef.current = null;
     };
+  }, []);
+
+  const releaseTokenGuardLease = useCallback((expectedAttemptId?: string) => {
+    const lease = tokenGuardLeaseRef.current;
+    if (lease === null) return;
+    if (expectedAttemptId !== undefined && lease.attemptId !== expectedAttemptId) return;
+    tokenGuardLeaseRef.current = null;
+    lease.release();
   }, []);
 
   useEffect(() => {
@@ -915,7 +928,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       });
     }
     return subscribeTokenCreateGuard(canonicalApiBaseUrl, handleTokenGuardStorage);
-  }, [normalizedApiBaseUrl]);
+  }, [normalizedApiBaseUrl, releaseTokenGuardLease]);
 
   useEffect(() => {
     if (!tokenNavigationProtectionActive) return;
@@ -1003,14 +1016,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     });
     tokenGuardLeaseRef.current = { attemptId, promise, release };
     return promise;
-  }
-
-  function releaseTokenGuardLease(expectedAttemptId?: string) {
-    const lease = tokenGuardLeaseRef.current;
-    if (lease === null) return;
-    if (expectedAttemptId !== undefined && lease.attemptId !== expectedAttemptId) return;
-    tokenGuardLeaseRef.current = null;
-    lease.release();
   }
 
   function hasTokenGuardLockContext(attemptId: string): boolean {
@@ -1680,9 +1685,9 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     return { token, plaintext: response.replayed ? null : response.plaintextToken };
   }
 
-  function scheduleNextTokenRecoveryCheck(delayMs?: number) {
+  function scheduleNextTokenRecoveryCheck(delayMs?: number, advanceBackoff = true) {
     const delay = delayMs ?? tokenRecoveryPollDelayMs(tokenRecoveryPollAttemptRef.current);
-    tokenRecoveryPollAttemptRef.current += 1;
+    if (advanceBackoff) tokenRecoveryPollAttemptRef.current += 1;
     setTokenRecoveryNextCheckAt(Date.now() + delay);
   }
 
@@ -1695,10 +1700,11 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     recovery: TokenCreateRecovery,
     token: IngestionToken,
     plaintext: string | null,
+    checkedAt: number,
   ) {
     if (!requireTokenGuardOwnership(recovery)) return;
     stopAutomaticTokenRecovery();
-    setTokenRecoveryLastCheckedAt(Date.now());
+    setTokenRecoveryLastCheckedAt(checkedAt);
     storeTokenSnapshot(token);
     if (tokenIsTerminallySafe(token)) {
       if (!clearTokenCreateGuard(recovery.attemptId, recovery.ownerId)) return;
@@ -1727,7 +1733,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     if (tokenRecoveryCheckingRef.current) return;
     if (!requireTokenGuardOwnership(recovery)) return;
     if (recovery.clientRequestId !== undefined && authoritativeServerNowMs() === undefined) {
-      setTokenRecoveryNextCheckAt(Date.now() + 1_000);
+      scheduleNextTokenRecoveryCheck(1_000, false);
       return;
     }
     if (tokenCreateNeedsCatalogRecovery(recovery, authoritativeServerNowMs())) {
@@ -1756,9 +1762,9 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     tokenRecoveryCheckingRef.current = true;
     setTokenRecoveryChecking(true);
     try {
-      const receipt = await replayTokenCreate(recovery);
+      const { value: receipt, checkedAt } = await observeTokenRecoveryResult(replayTokenCreate(recovery));
       if (!tokenRecoveryOperationIsCurrent(operationGeneration, recovery)) return;
-      applyTokenCreateReceipt(recovery, receipt.token, receipt.plaintext);
+      applyTokenCreateReceipt(recovery, receipt.token, receipt.plaintext, checkedAt);
     } catch (error) {
       if (!tokenRecoveryOperationIsCurrent(operationGeneration, recovery)) return;
       const failedRecovery: TokenCreateRecovery = {
@@ -1875,13 +1881,15 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     tokenRecoveryCheckingRef.current = true;
     setTokenRecoveryChecking(true);
     try {
-      const snapshot = await listTokensForCreateSafety(client, undefined);
+      const { value: snapshot, checkedAt } = await observeTokenRecoveryResult(
+        listTokensForCreateSafety(client, undefined),
+      );
       if (
         !componentMountedRef.current
         || tokenRecoveryOperationGenerationRef.current !== operationGeneration
         || !requireUnreadableTokenGuardOwnership(recovery)
       ) return;
-      setTokenRecoveryLastCheckedAt(Date.now());
+      setTokenRecoveryLastCheckedAt(checkedAt);
       for (const token of snapshot) storeTokenSnapshot(token);
       const candidates = snapshot.filter((token) => !tokenIsTerminallySafe(token));
       if (candidates.length > 0) {
@@ -2031,9 +2039,9 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       if (!persistTokenCreateGuard(nextRecovery, null)) return;
       setTokenCreateRecovery(nextRecovery);
       try {
-        const receipt = await replayTokenCreate(nextRecovery);
+        const { value: receipt, checkedAt } = await observeTokenRecoveryResult(replayTokenCreate(nextRecovery));
         if (!tokenRecoveryOperationIsCurrent(operationGeneration, nextRecovery)) return;
-        applyTokenCreateReceipt(nextRecovery, receipt.token, receipt.plaintext);
+        applyTokenCreateReceipt(nextRecovery, receipt.token, receipt.plaintext, checkedAt);
       } catch (error) {
         if (!tokenRecoveryOperationIsCurrent(operationGeneration, nextRecovery)) return;
         const failedRecovery: TokenCreateRecovery = {
@@ -2937,10 +2945,15 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     }
   });
 
-  const startPersistedTokenRecovery = useEffectEvent(() => {
-    if (normalizedApiBaseUrl === null) return;
+  const tokenRecoveryStartupOptions = useMemo(() => ({
+    client,
+    apiBaseUrl: normalizedApiBaseUrl,
+    generation: tokenRecoveryAcquireGeneration,
+  }), [client, normalizedApiBaseUrl, tokenRecoveryAcquireGeneration]);
+
+  const startPersistedTokenRecovery = useEffectEvent((canonicalApiBaseUrl: string) => {
     return tokenRecoveryStartup.start(
-      normalizedApiBaseUrl,
+      canonicalApiBaseUrl,
       authoritativeServerNowMs() ?? null,
       {
         onCleanup: () => {
@@ -2953,10 +2966,10 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     );
   });
 
-  useEffect(
-    () => startPersistedTokenRecovery(),
-    [client, normalizedApiBaseUrl, tokenRecoveryAcquireGeneration, tokenRecoveryStartup],
-  );
+  useEffect(() => {
+    if (tokenRecoveryStartupOptions.apiBaseUrl === null) return;
+    return startPersistedTokenRecovery(tokenRecoveryStartupOptions.apiBaseUrl);
+  }, [tokenRecoveryStartupOptions]);
 
   const runScheduledTokenRecovery = useEffectEvent(() => {
     if (tokenRecoveryOwnership !== "owned" || tokenRecoveryCheckingRef.current) return;
@@ -2978,6 +2991,8 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   }, [serverClockAnchor]);
 
   useEffect(() => {
+    const resumed = !tokenRecoveryWasReadyRef.current && tokenRecoveryEnvironmentReady;
+    tokenRecoveryWasReadyRef.current = tokenRecoveryEnvironmentReady;
     if (
       tokenRecoveryNextCheckAt === null
       || tokenRecoveryOwnership !== "owned"
@@ -2985,7 +3000,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     ) return;
     const timeout = window.setTimeout(
       () => runScheduledTokenRecovery(),
-      Math.max(0, tokenRecoveryNextCheckAt - Date.now()),
+      resumed ? 0 : Math.max(0, tokenRecoveryNextCheckAt - Date.now()),
     );
     return () => window.clearTimeout(timeout);
   }, [

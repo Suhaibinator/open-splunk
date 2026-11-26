@@ -53,6 +53,37 @@ test("a backend launch supersedes the prior job and resets reconciliation state"
   });
 });
 
+test("the rendered search snapshot tracks job and cancel transitions", () => {
+  const running = new RunningSearchController();
+  const initial = running.getSnapshot();
+  const snapshots = [initial];
+  const unsubscribe = running.subscribe(() => snapshots.push(running.getSnapshot()));
+  const generation = running.beginGeneration();
+  const job = {
+    searchJobId: "job-1",
+    stateVersion: 1n,
+    progress: { stateVersion: 1n } as SearchProgress,
+  } as SearchJob;
+
+  running.adoptAuthoritativeJob(generation, job);
+  running.beginCancel();
+  running.resetBackendRun(() => undefined);
+
+  assert.deepEqual(snapshots, [
+    { generation: 0, job: null, cancelPending: false },
+    { generation, job: null, cancelPending: false },
+    { generation, job, cancelPending: false },
+    { generation, job, cancelPending: true },
+    { generation, job: null, cancelPending: false },
+  ]);
+  const resetSnapshot = running.getSnapshot();
+  running.clearJob();
+  assert.equal(running.getSnapshot(), resetSnapshot);
+  unsubscribe();
+  running.beginGeneration();
+  assert.equal(snapshots.length, 5);
+});
+
 test("cancel completion cannot clear a newer search generation", () => {
   const running = new RunningSearchController();
   const canceledGeneration = running.beginGeneration();

@@ -1,7 +1,9 @@
-import { type ReactNode, useEffect, useEffectEvent, useId, useRef } from "react";
+import { type ReactNode, type RefObject, useEffect, useEffectEvent, useId, useRef } from "react";
 
 import { installModalSurface } from "./modal-surface";
 import { AppIcon } from "./app-icon";
+
+export type ModalReturnFocus = HTMLElement | RefObject<HTMLElement | null> | null;
 
 interface ModalProps {
   title: string;
@@ -11,7 +13,7 @@ interface ModalProps {
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
-  returnFocus?: HTMLElement | null;
+  returnFocus?: ModalReturnFocus;
   initialFocus?: string;
 }
 
@@ -36,7 +38,10 @@ export function Modal({
   useEffect(() => {
     const dialog = dialogRef.current;
     if (dialog === null) return;
-    const capturedReturnFocus = returnFocus
+    const focusTarget = returnFocus !== null && "current" in returnFocus
+      ? returnFocus.current
+      : returnFocus;
+    const capturedReturnFocus = focusTarget
       ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     return installModalSurface({
       container: dialog,

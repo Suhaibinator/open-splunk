@@ -5,7 +5,7 @@ import { AlertConditionOperator } from "@/gen/ts/open_splunk/alert";
 import { type AlertFormErrors, type AlertFormValue, validateAlertForm } from "@/lib/search/alert-form";
 
 import { FieldNote, fieldControlProps } from "../_components/field-validation";
-import { Modal } from "../_components/modal";
+import { Modal, type ModalReturnFocus } from "../_components/modal";
 import { alertWizardInitialFocus, ONE_TIME_SECRET_NAVIGATION_BLOCKED_MESSAGE } from "./alerts-ui-state";
 import { Select, SelectOption } from "../_components/select";
 
@@ -26,7 +26,7 @@ interface AlertWizardProps {
   validateSchedule: (value: AlertFormValue, signal: AbortSignal) => Promise<AlertFormErrors>;
   onClose: () => void;
   onSubmit: (value: AlertFormValue) => void;
-  returnFocus?: HTMLElement | null;
+  returnFocus?: ModalReturnFocus;
   title?: string;
   submitLabel?: string;
 }

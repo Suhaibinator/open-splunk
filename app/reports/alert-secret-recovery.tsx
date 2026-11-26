@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { Modal } from "../_components/modal";
+import { Modal, type ModalReturnFocus } from "../_components/modal";
 import { ONE_TIME_SECRET_NAVIGATION_BLOCKED_MESSAGE } from "./alerts-ui-state";
 
 interface AlertSecretRecoveryProps {
@@ -8,7 +8,7 @@ interface AlertSecretRecoveryProps {
   navigationBlocked?: boolean;
   secret: string;
   onClose: () => void;
-  returnFocus?: HTMLElement | null;
+  returnFocus?: ModalReturnFocus;
 }
 
 type SecretAcknowledgement = "discarded" | "pending" | "saved";

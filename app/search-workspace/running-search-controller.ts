@@ -21,6 +21,12 @@ export type RunningPreviewStatus =
   | "finalizing"
   | "finalization-error";
 
+interface RunningSearchSnapshot {
+  readonly generation: number;
+  readonly job: SearchJob | null;
+  readonly cancelPending: boolean;
+}
+
 export class RunningSearchController {
   private abortController: AbortController | null = null;
   private cancelPending = false;
@@ -39,8 +45,30 @@ export class RunningSearchController {
   private socket: SearchWebSocketClient | null = null;
   private timers: number[] = [];
 
+  private readonly listeners = new Set<() => void>();
+  private snapshot: RunningSearchSnapshot = { generation: 0, job: null, cancelPending: false };
+
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  };
+
+  getSnapshot = (): RunningSearchSnapshot => this.snapshot;
+
+  private publishSnapshot() {
+    const { generation, job, cancelPending } = this;
+    if (
+      this.snapshot.generation === generation
+      && this.snapshot.job === job
+      && this.snapshot.cancelPending === cancelPending
+    ) return;
+    this.snapshot = { generation, job, cancelPending };
+    for (const listener of this.listeners) listener();
+  }
+
   beginGeneration(): number {
     this.generation += 1;
+    this.publishSnapshot();
     return this.generation;
   }
 
@@ -51,9 +79,9 @@ export class RunningSearchController {
     this.stopLiveUpdates();
     const controller = new AbortController();
     this.abortController = controller;
-    this.clearJob();
     this.cancelPending = false;
     this.cancelRequested = false;
+    this.clearJob();
     return { controller, supersededJobId };
   }
 
@@ -61,6 +89,7 @@ export class RunningSearchController {
     if (this.cancelPending) return null;
     this.cancelPending = true;
     this.cancelRequested = true;
+    this.publishSnapshot();
     return this.generation;
   }
 
@@ -101,6 +130,7 @@ export class RunningSearchController {
     this.jobVersion = job.stateVersion;
     this.progressRevision = decision.state;
     this.job = job;
+    this.publishSnapshot();
     return decision.state;
   }
 
@@ -118,6 +148,7 @@ export class RunningSearchController {
     if (this.generation !== generation) return;
     this.cancelPending = false;
     this.cancelRequested = false;
+    this.publishSnapshot();
   }
 
   isCurrent(generation: number, searchJobId?: string): boolean {
@@ -164,6 +195,7 @@ export class RunningSearchController {
     this.jobVersion = 0n;
     this.liveUpdateEpoch = 0n;
     this.progressRevision = null;
+    this.publishSnapshot();
   }
 
   abortRequest() {
