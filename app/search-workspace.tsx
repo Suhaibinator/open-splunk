@@ -856,6 +856,7 @@ export function SearchWorkspace({
   const [query, setQuery] = useState(initialWorkspaceQuery);
   const [submittedQuery, setSubmittedQuery] = useState(initialWorkspaceQuery);
   const [defaultSearchQuery, setDefaultSearchQuery] = useState(initialWorkspaceQuery);
+  const [initialLaunchPending, setInitialLaunchPending] = useState(true);
   const [backendBootstrap, backendBootstrapRef, setBackendBootstrap] =
     useWorkspaceValue<BackendBootstrapState | null>(null);
   const backendBootstrapModel = backendBootstrap?.response ?? null;
@@ -7482,6 +7483,8 @@ export function SearchWorkspace({
     let cleanup: (() => void) | undefined;
     const timer = window.setTimeout(() => {
       cleanup = launchInitialSearch();
+      // Unlock the composer in the same render that applies the URL draft.
+      setInitialLaunchPending(false);
     }, 0);
     return () => {
       window.clearTimeout(timer);
@@ -7911,6 +7914,7 @@ export function SearchWorkspace({
         highlightRef={highlightRef}
         historyAnnouncement={historyAnnouncement}
         historyRecallable={historyRecallable}
+        initialLaunchPending={initialLaunchPending}
         isRunning={isRunning}
         launchPending={persistedLaunchPending}
         modal={modal}

@@ -58,6 +58,7 @@ interface SearchComposerProps {
   highlightRef: RefObject<HTMLPreElement | null>;
   historyAnnouncement: string | null;
   historyRecallable: boolean;
+  initialLaunchPending: boolean;
   isRunning: boolean;
   launchPending: boolean;
   modal: ModalName | null;
@@ -110,6 +111,7 @@ export function SearchComposer({
   highlightRef,
   historyAnnouncement,
   historyRecallable,
+  initialLaunchPending,
   isRunning,
   launchPending,
   modal,
@@ -144,6 +146,7 @@ export function SearchComposer({
   onTimePickerSectionChange,
   onTimeRangeChange,
 }: SearchComposerProps) {
+  const controlsPending = initialLaunchPending || launchPending;
   const mobileTimePicker = useSyncExternalStore(subscribePhoneViewport, phoneViewportSnapshot, () => false);
   const localTimeZone = useSyncExternalStore(
     subscribeToStableBrowserValue,
@@ -182,7 +185,7 @@ export function SearchComposer({
 
   return (
     <>
-      <section className="search-composer" aria-label="SPL search" aria-busy={launchPending}>
+      <section className="search-composer" aria-label="SPL search" aria-busy={controlsPending}>
         <SearchEditor
           completionIndex={completionIndex}
           completionOpen={completionOpen}
@@ -194,7 +197,7 @@ export function SearchComposer({
           highlightRef={highlightRef}
           historyAnnouncement={historyAnnouncement}
           historyRecallable={historyRecallable}
-          launchPending={launchPending}
+          launchPending={controlsPending}
           modal={modal}
           platform={platform}
           problems={problems}
@@ -219,7 +222,7 @@ export function SearchComposer({
             aria-haspopup="dialog"
             aria-expanded={modal === "time"}
             aria-controls={modal === "time" ? "time-range-popover" : undefined}
-            disabled={launchPending}
+            disabled={controlsPending}
             onClick={() => {
               onCompletionOpenChange(false);
               if (modal === "time") {
@@ -323,7 +326,7 @@ export function SearchComposer({
           data-testid="run-search"
           aria-label={launchPending ? "Opening persisted search" : isRunning ? "Cancel search" : "Run search"}
           aria-keyshortcuts={isRunning && !launchPending ? "Escape" : undefined}
-          disabled={launchPending || (!isRunning && runDisabledReason !== null)}
+          disabled={controlsPending || (!isRunning && runDisabledReason !== null)}
           title={!isRunning && runDisabledReason !== null ? runDisabledReason : undefined}
           onClick={(event) => {
             if (isRunning) {
